@@ -1,0 +1,40 @@
+# PR #579: feat(text): update indexes with exact literal deltas
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+Updates to a dataset currently require rebuilding its entire text index. This
+adds `TextIndex::with_delta(next, added, removed)`: it validates the effective
+literal delta against the indexed source generation, analyzes changed documents
+and merges their postings into retained lexical and surface tables.
+
+Canonical identifiers, source evidence, fingerprints and exact BM25F statistics
+match a fresh build. Retained grams, pronunciation codes and unchanged token
+buffers are reused. The API consumes the index; preserving a snapshot requires
+an explicit clone. Source scans, sorting, hashing and table merges still visit
+retained data, so this does not claim sublinear total update work.
+
+Validation: 353 text-package tests in 33 suites; 195 chained fresh-build
+comparisons across lexical, Han and surface-disabled configurations; exact
+changed-document analysis counts and allocation retention; the public delta,
+ranking, substring, empty and nonliteral-coverage case executed natively and in
+WASM under Node; strict affected compilation and helper census. Normal commit
+hooks pass. No timing measurements were used. Final integration qualification
+and hosted material review remain pending.
+
+Closes #538.
+
+
+<!-- This is an auto-generated comment: release notes by coderabbit.ai -->
+
+## Summary by CodeRabbit
+
+* **New Features**
+  * Update text indexes from additions and removals without rebuilding unchanged documents. Updated indexes preserve the results and statistics of a fresh build.
+  * Replace or remove documents in surface indexes, with updated search data and results.
+  * Invalid or inconsistent updates now return clear errors.
+* **Documentation**
+  * Added guidance on incremental text-index updates, including how changes affect results, identifiers, and existing snapshots.
+
+<!-- end of auto-generated comment: release notes by coderabbit.ai -->

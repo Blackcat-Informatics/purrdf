@@ -1,0 +1,50 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 5m 27s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-sparql-eval/8ea4f0ac3efe4e92/out/numeric_wasm_determinism-8ea4f0ac3efe4e92)
+
+running 3 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test any_uri_casts_keep_their_primitive_domain_on_this_target ... ok
+determinism-digest case=sparql-numeric-transcript digest=3704a65139127bbd corpus_len=2822
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/operator_mapping_spec.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-sparql-eval/8ddf68a6f36ae030/out/operator_mapping_spec-8ddf68a6f36ae030)
+
+running 23 tests
+test a_duration_cast_with_no_component_of_the_target_is_its_zero ... ok
+test a_cast_the_table_marks_never_allowed_is_an_error ... ok
+test a_having_condition_is_a_constraint ... ok
+test a_cast_from_a_datatype_outside_the_table_is_an_error ... ok
+test a_temporal_or_binary_cast_the_table_forbids_is_an_error ... ok
+test a_triple_term_holding_nan_is_unequal_to_itself ... ok
+test a_string_cast_collapses_white_space_for_a_non_string_target ... ok
+test boolean_keywords_match_case_insensitively ... ok
+test derived_numeric_and_boolean_sources_cast_to_numeric_and_boolean_targets ... ok
+test duration_and_binary_casts_convert_by_value ... ok
+test date_time_casts_keep_their_components_and_timezone ... ok
+test any_uri_casts_preserve_the_primitive_row ... ok
+test nan_against_a_non_number_stays_a_type_error ... ok
+test nan_comparisons_filter_rows_and_answer_in ... ok
+test every_cast_the_table_allows_still_casts ... ok
+test group_by_and_order_by_need_a_condition ... ok
+test nan_equality_against_a_non_number_answers_as_a_number_does ... ok
+test nan_does_not_order_against_itself ... ok
+test nan_equals_nothing_not_even_itself_while_same_term_holds ... ok
+test nan_sorts_after_every_number_and_min_max_follow_the_sort ... ok
+test numbers_booleans_and_calendar_values_cast_to_no_binary_or_duration ... ok
+test string_derived_and_date_time_stamp_sources_cast_to_calendar_targets ... ok
+test nan_against_a_number_compares_false_and_differs_true ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

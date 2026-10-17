@@ -1,0 +1,30 @@
+# Issue #538: purrdf-text: update a TextIndex by delta instead of rebuilding it per snapshot
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+## Problem
+
+`purrdf-text`'s `TextIndex` can only be built whole (`TextIndex::from_dataset`). A consumer that keeps a dataset current under writes (Katamari's query graph, `katamari-query-purrdf`) has to rebuild the whole index for every snapshot, so the first full-text query after any write pays for the entire corpus again.
+
+## Measured
+
+On a synthetic corpus shaped like a real import (claims with literal objects of 40-400 characters), release build:
+
+| Claims | First text query | First text query after one write | Peak RSS |
+|---|---|---|---|
+| 95,368 | 17.4 s | 14.0 s | 2.9 GB |
+| 190,734 | 91.4 s | 75.4 s | 10 GB |
+
+The cost grows faster than the data (about 5.3x for 2x the claims). At the corpus's full size (about 950k claims in one dataset) the extrapolation is over an hour per write.
+
+Profiled with `perf` on a symbolized build at 95k claims, the time is the index build: `surface::add_projection` (largest single frame), sorting `GramPosting`s, `SurfaceIndex::assemble`, `TextIndex::assemble`, BLAKE3 over the projections, and allocator `memcpy`/`realloc` as postings grow.
+
+## Ask
+
+Update a `TextIndex` by a delta of added and removed literals instead of rebuilding it. BM25F's statistics (document count, field lengths, document frequencies) are sums, so a delta update is exact; the ranking law and `Fixed` arithmetic stay as they are, and the result should be identical to a fresh build over the same dataset (a good conformance oracle).
+
+
+## Comments (0)
+

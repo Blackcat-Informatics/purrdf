@@ -1,0 +1,13 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/text)
+    Finished `test` profile [optimized] target(s) in 14.97s
+     Running unittests src/lib.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/42a17d23c203f4d0/out/purrdf_text-42a17d23c203f4d0)
+
+running 4 tests
+test index::delta::tests::text_delta_graph_free_carrier_matches_fresh ... ok
+test index::delta::tests::text_delta_rejects_missing_and_incomplete_changes_with_original_operands ... ok
+test index::delta::tests::text_delta_preserves_cross_layer_multiplicity_and_empty_transitions ... ok
+test index::delta::tests::text_delta_replaces_inserts_retracts_and_rebases_all_tables ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.00s
+

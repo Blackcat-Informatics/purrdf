@@ -1,0 +1,38 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/rdf-events)
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/rdf-core)
+    Checking hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/alloc-probe)
+    Checking regex-automata v0.4.14
+    Checking hybrid-array v0.4.15
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/deflate)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/stack)
+    Checking digest v0.11.3
+    Checking rayon v1.12.0
+    Checking regex v1.12.4
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/xsd)
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/testkit)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-algebra)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 36.42s

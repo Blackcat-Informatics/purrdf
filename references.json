@@ -1,0 +1,50 @@
+{
+  "paths": [],
+  "identifiers": [
+    {
+      "name": "TextIndex",
+      "files": 55
+    },
+    {
+      "name": "TextIndex::from_dataset",
+      "files": 40
+    },
+    {
+      "name": "perf",
+      "files": 718
+    },
+    {
+      "name": "surface::add_projection",
+      "files": 0
+    },
+    {
+      "name": "GramPosting",
+      "files": 3
+    },
+    {
+      "name": "SurfaceIndex::assemble",
+      "files": 1
+    },
+    {
+      "name": "TextIndex::assemble",
+      "files": 0
+    },
+    {
+      "name": "memcpy",
+      "files": 9
+    },
+    {
+      "name": "realloc",
+      "files": 47
+    },
+    {
+      "name": "Fixed",
+      "files": 319
+    }
+  ],
+  "packages": [
+    "purrdf-text"
+  ],
+  "urls": [],
+  "truncated": []
+}

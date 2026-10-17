@@ -1,0 +1,16 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 20,
+      "rules": [
+        "modal"
+      ],
+      "text": "Update a `TextIndex` by a delta of added and removed literals instead of rebuilding it. BM25F's statistics (document count, field lengths, document frequencies) are sums, so a delta update is exact; the ranking law and `Fixed` arithmetic stay as they are, and the result should be identical to a fresh build over the same dataset (a good conformance oracle).",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

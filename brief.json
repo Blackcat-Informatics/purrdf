@@ -1,0 +1,70 @@
+{
+  "issue": 538,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "purrdf-text: update a TextIndex by delta instead of rebuilding it per snapshot",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 512,
+      "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+      "state": "CLOSED"
+    },
+    {
+      "number": 482,
+      "title": "text: rank inputs past QUERY_TERMS_MAX, DOCUMENTS_MAX and FIELD_LENGTH_MAX exactly instead of refusing them",
+      "state": "CLOSED"
+    },
+    {
+      "number": 337,
+      "title": "purrdf-retrieval: a fused answer can contain the same entity twice \u2014 what a consumer needs from duplicate handling",
+      "state": "CLOSED"
+    },
+    {
+      "number": 338,
+      "title": "purrdf-retrieval: a fused top-k drains every stream \u2014 the documented reading bound does not hold",
+      "state": "CLOSED"
+    },
+    {
+      "number": 319,
+      "title": "Design: a composition layer over the ranked property-function producers",
+      "state": "CLOSED"
+    },
+    {
+      "number": 339,
+      "title": "Contract for an index-backed ranked producer, and three gaps found meeting it",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 21,
+    "performance": 3,
+    "correctness": 1,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/538-purrdf-text-update-a-textindex-by-delta"
+  },
+  "coverage": [
+    "issue #538 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['purrdf-text:', 'update', 'TextIndex']: 7 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #538 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #538: 0",
+    "requirement candidates: 1 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 10 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}

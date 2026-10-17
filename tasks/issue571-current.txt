@@ -1,0 +1,16 @@
+# Issue #571: Model the XSD anyURI value space in the native datatype engine
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+The native XSD value engine resolves numeric, string, temporal and binary types but leaves xsd:anyURI uninterpreted. GMEOW consequently maintains its own whitespace, equality and length branches (Blackcat-Informatics/gmeow-ontology#1803).
+
+Implement the XSD 1.1 Part 2 anyURI primitive through the existing XsdDatatype/XsdValue, parsing, value identity, retained storage and data-range engine. Apply fixed XML whitespace collapse; accept relative, empty and fragment references without URL normalization; reject characters outside XML Char. Keep its primitive value space disjoint from xsd:string. Range membership, Boolean combinations, enumerations, length facets and cardinality bounds must remain sound for collapsed values. Audit shared governed parsers and entailment consumers, preserve native/WASM portability, and add focused regression coverage.
+
+Integrate the qualified replacement downstream and delete its superseded anyURI special cases. No compatibility fallback or second implementation.
+
+Normative source: https://www.w3.org/TR/xmlschema11-2/#anyURI
+
+## Comments (0)
+

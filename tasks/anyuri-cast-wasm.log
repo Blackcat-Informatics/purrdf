@@ -1,0 +1,20 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 26s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/68/ff9d214fba5682/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/0d7d209c52ff253c/out/numeric_wasm_determinism-0d7d209c52ff253c.wasm)
+
+running 3 tests
+test any_uri_casts_keep_their_primitive_domain_on_this_target ... ok
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=3704a65139127bbd corpus_len=2822
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

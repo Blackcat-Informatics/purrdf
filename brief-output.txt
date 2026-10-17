@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/.stage/purrdf-text-update-a-textindex-by-delta/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/.stage/purrdf-text-update-a-textindex-by-delta/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/.stage/purrdf-text-update-a-textindex-by-delta/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/.stage/purrdf-text-update-a-textindex-by-delta/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/.stage/purrdf-text-update-a-textindex-by-delta/brief.json  (+ requirements.json, references.json)
+
+  - issue #538 + 0 comment(s) via github
+  - link crawl: no `#N` references in the issue or its comments
+  - forge search on ['purrdf-text:', 'update', 'TextIndex']: 7 other item(s)
+  - GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #538 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #538: 0
+  - requirement candidates: 1 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 0 path(s) (0 on disk), 10 identifier(s), 1 workspace package(s), 0 URL(s)

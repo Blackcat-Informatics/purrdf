@@ -1,0 +1,57 @@
+$ stagectl pr-checks 579
+SUCCESS    test
+SUCCESS    simd-asm
+SUCCESS    conformance
+SKIPPED    Deploy to GitHub Pages
+SUCCESS    aarch64
+SUCCESS    msrv
+SUCCESS    wasm
+SUCCESS    simd-asm-config (wasm32-simd128)
+SUCCESS    windows-mtime
+SUCCESS    test (integration-4)
+SUCCESS    test (integration-5)
+SUCCESS    projection-oracles
+SUCCESS    capi
+SUCCESS    doc
+SUCCESS    test (integration-2)
+SUCCESS    workspace
+SUCCESS    wasm-package
+SUCCESS    wasm-exec
+SUCCESS    geo-determinism
+SUCCESS    wasm-schema-oracles
+SUCCESS    simd-asm-config (x86_64)
+SUCCESS    simd-asm-config (x86_64-v3)
+SUCCESS    simd-asm-config (x86_64-v4)
+SUCCESS    simd-asm-config (aarch64)
+SUCCESS    simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    simd-asm-config (wasm32)
+SUCCESS    test (lib)
+SUCCESS    test (doc)
+SUCCESS    test (integration-1)
+SUCCESS    cross-arch
+SUCCESS    test (integration-3)
+SUCCESS    cross-arch-riscv64 (suites)
+SUCCESS    cross-arch-riscv64 (determinism-serial)
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)
+SUCCESS    avx512-sde
+SUCCESS    pytest
+SUCCESS    python-publisher
+SUCCESS    miri
+SUCCESS    conformance (core)
+SUCCESS    conformance (sparql)
+SUCCESS    conformance (shapes)
+SUCCESS    conformance (python)
+SKIPPED    native-profile-comparison
+SKIPPED    native-profile-admission
+SKIPPED    simd-asm-projection
+SKIPPED    native-profile
+SUCCESS    CodeQL
+SUCCESS    Build The PurRDF Book
+SUCCESS    Analyze (actions)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (javascript-typescript)
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (rust)
+SUCCESS    CodeRabbit
+state: pass

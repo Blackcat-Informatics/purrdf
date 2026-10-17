@@ -1,0 +1,32 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-jsonschema-preserve-order-consumer v0.0.0 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/jsonschema/tests/preserve_order_consumer)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/lex)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/xsd)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/jsonschema)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.54s
+     Running unittests src/lib.rs (/opt/.cargo/d8/26f1cabc4b9b85/debug/build/purrdf-jsonschema-preserve-order-consumer/bbc242158947ece1/out/purrdf_jsonschema_preserve_order_consumer-bbc242158947ece1)
+
+running 1 test
+test tests::unique_items_detects_reverse_key_order_above_hash_threshold ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests purrdf_jsonschema_preserve_order_consumer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

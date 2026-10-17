@@ -1,0 +1,25 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/text)
+error: used `assert!` to check that a value is empty
+   --> crates/text/tests/wasm_determinism.rs:162:5
+    |
+162 | /     assert!(
+163 | |         covered
+164 | |             .source_coverage()
+165 | |             .unrepresented_predicates()
+166 | |             .is_empty()
+167 | |     );
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+162 ~     assert_eq!(
+163 ~         covered
+164 +             .source_coverage()
+165 +             .unrepresented_predicates(), []
+    |
+
+error: could not compile `purrdf-text` (test "wasm_determinism") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

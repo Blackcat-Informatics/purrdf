@@ -1,0 +1,554 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/text)
+    Finished `test` profile [optimized] target(s) in 1m 54s
+     Running unittests src/lib.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/42a17d23c203f4d0/out/purrdf_text-42a17d23c203f4d0)
+
+running 86 tests
+test error::tests::conversion_maps_arithmetic_failures_to_function ... ok
+test error::tests::conversion_maps_config_and_data_to_their_namesakes ... ok
+test error::tests::conversion_preserves_the_detail ... ok
+test error::tests::display_carries_the_detail ... ok
+test error::tests::each_constructor_builds_its_own_variant ... ok
+test error::tests::source_read_failure_remains_fatal_and_preserves_its_detail ... ok
+test fixed::tests::addition_and_subtraction_report_overflow ... ok
+test fixed::tests::division_by_zero_is_a_domain_error ... ok
+test fixed::tests::ln_of_a_non_positive_value_is_a_domain_error ... ok
+test fixed::tests::ln_of_one_is_exactly_zero ... ok
+test fixed::tests::ln_of_two_reproduces_the_constant ... ok
+test fixed::tests::multiplication_and_division_are_exact_on_representable_values ... ok
+test fixed::tests::ordering_is_numeric ... ok
+test fixed::tests::signs_compose_as_they_should ... ok
+test fixed::tests::the_binade_brackets_its_input ... ok
+test fixed::tests::the_constants_denote_what_they_say ... ok
+test fixed::tests::the_lexical_form_is_exact_and_fixed_width ... ok
+test fixed::tests::ln_is_a_pure_function ... ok
+test index::delta::tests::text_delta_rejects_missing_and_incomplete_changes_with_original_operands ... ok
+test index::delta::tests::text_delta_graph_free_carrier_matches_fresh ... ok
+test index::tests::a_non_iri_graph_selector_is_refused ... ok
+test index::tests::an_absent_language_differs_from_an_empty_one ... ok
+test index::tests::digest_fields_are_self_delimiting ... ok
+test index::tests::the_average_is_exact ... ok
+test index::tests::the_partition_key_reports_its_absences ... ok
+test index::tests::the_predicate_list_is_sorted ... ok
+test index::delta::tests::text_delta_preserves_cross_layer_multiplicity_and_empty_transitions ... ok
+test relation::tests::a_bound_document_pushdown_loses_no_row ... ok
+test relation::tests::a_bound_position_selects_one_occurrence ... ok
+test relation::tests::a_ceiling_with_a_bound_doc_still_emits_the_matching_row ... ok
+test relation::tests::a_free_needle_is_an_error ... ok
+test relation::tests::a_ceiling_yields_the_prefix_of_the_unbounded_answer ... ok
+test relation::tests::a_huge_but_well_formed_rank_is_empty_not_an_error ... ok
+test relation::tests::a_multi_partition_index_declares_nothing_but_its_neighbours_still_do ... ok
+test relation::tests::a_non_string_language_is_an_error ... ok
+test relation::tests::a_non_string_needle_is_an_error ... ok
+test relation::tests::a_rank_of_zero_is_an_error ... ok
+test index::delta::tests::text_delta_replaces_inserts_retracts_and_rebases_all_tables ... ok
+test relation::tests::a_single_partition_index_declares_its_ranked_capability ... ok
+test relation::tests::a_rank_past_the_end_is_empty_not_an_error ... ok
+test relation::tests::a_zero_term_needle_is_an_honest_empty_result ... ok
+test relation::tests::an_empty_index_declares_zero_rows_and_emits_none ... ok
+test relation::tests::both_relations_are_stable ... ok
+test relation::tests::occurrence_emits_one_row_per_position_in_ascending_order ... ok
+test relation::tests::occurrence_rejects_a_multi_term_needle ... ok
+test relation::tests::emission_order_is_a_pure_function_of_the_invocation ... ok
+test relation::tests::search_emits_rank_order_with_exact_rows ... ok
+test relation::tests::the_bound_document_row_bound_is_attained_not_merely_respected ... ok
+test relation::tests::the_ceiling_counts_emitted_rows_not_skipped_ones ... ok
+test relation::tests::the_declared_shape_is_the_documented_one ... ok
+test relation::tests::auxiliary_partitions_do_not_loosen_occurrence_bounds ... ok
+test relation::tests::the_occurrence_row_bound_table_is_the_documented_one ... ok
+test relation::tests::untagged_documents_emit_the_empty_language ... ok
+test relation::tests::the_search_row_bound_table_is_the_documented_one ... ok
+test relation::tests::verify_binding_accepts_the_source_dataset_and_rejects_another ... ok
+test score::tests::a_bound_absent_dimension_is_not_a_bound_empty_one ... ok
+test score::tests::the_constants_are_the_canonical_ones ... ok
+test score::tests::the_filter_constrains_one_dimension_at_a_time ... ok
+test score::tests::the_needle_is_reduced_to_sorted_distinct_terms ... ok
+test surface::delta::tests::delta_capacity_refuses_before_allocating_an_unaddressable_table ... ok
+test surface::delta::tests::conflicting_source_tables_retain_the_original_identity ... ok
+test surface::postings::tests::ordered_delta_merge_matches_fresh_sorted_union ... ok
+test surface::postings::tests::retraction_matches_fresh_postings_and_keeps_the_posting_buffer ... ok
+test surface::delta::tests::document_merge_retains_shared_word_code_allocations ... ok
+test surface::tests::conflicting_source_identity_and_invalid_projection_are_rejected ... ok
+test surface::tests::document_delta_refuses_a_different_analyzer ... ok
+test surface::tests::document_retraction_matches_fresh_auxiliary_results_and_source_evidence ... ok
+test surface::tests::document_delta_matches_fresh_insertion_and_replacement ... ok
+test surface::tests::retraction_handles_noop_bound_generation_and_the_last_document ... ok
+test surface::tests::successive_document_deltas_preserve_fresh_generations_and_queries ... ok
+test term_bytes::tests::a_shifted_split_does_not_collide ... ok
+test term_bytes::tests::an_absent_language_differs_from_an_empty_one ... ok
+test term_bytes::tests::blank_scope_is_encoded ... ok
+test term_bytes::tests::both_directions_are_distinguished ... ok
+test term_bytes::tests::each_variant_has_its_own_tag ... ok
+test term_bytes::tests::encoding_agrees_with_the_recursive_reference ... ok
+test term_bytes::tests::encoding_appends_to_the_buffer ... ok
+test term_bytes::tests::encoding_is_deterministic ... ok
+test relation::tests::rows_per_invocation_is_a_real_function_of_the_mode ... ok
+test term_bytes::tests::the_fingerprint_is_deterministic_and_order_sensitive ... ok
+test term_bytes::tests::the_fingerprint_of_a_deeply_nested_term_is_the_digest_of_its_encoding ... ok
+test term_bytes::tests::encoding_is_injective ... ok
+test unicode::sentence::tests::lowercase_lookahead_does_not_rescan_long_closing_and_space_runs ... ok
+test index::delta::tests::text_delta_chained_population_and_fielded_ranking_parity ... ok
+test term_bytes::tests::a_hundred_thousand_level_term_encodes_on_a_128_kib_thread ... ok
+test unicode::tests::the_ascii_bypass_agrees_with_the_pipeline ... ok
+
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/analysis.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/e92c1e5e8a820858/out/analysis-e92c1e5e8a820858)
+
+running 13 tests
+test an_empty_or_punctuation_only_input_yields_no_tokens ... ok
+test analyze_reuses_the_caller_buffer ... ok
+test full_case_fold_matches_sharp_s ... ok
+test compatibility_fold_matches_fullwidth_and_ligatures ... ok
+test greek_final_sigma_folds_with_medial_sigma ... ok
+test nfkc_composed_and_decomposed_forms_fold_identically ... ok
+test the_reported_unicode_versions_are_the_pinned_tables ... ok
+test golden_token_vectors_pin_the_unicode_tables ... ok
+test uax29_word_boundaries_over_apostrophes_and_numerals ... ok
+test positions_are_consecutive_and_zero_based ... ok
+test unchanged_text_is_borrowed_rather_than_copied ... ok
+test the_scratch_form_agrees_and_borrows_every_token ... ok
+test unspaced_script_fallback_emits_complete_graphemes ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/analysis_allocations.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/81fa0801c335a832/out/analysis_allocations-81fa0801c335a832)
+
+running 3 tests
+test repeated_emoji_metadata_grows_linearly ... ok
+test incomplete_tag_runs_and_lexical_cleanup_use_linear_storage ... ok
+test bm25f_only_omits_surface_storage_without_changing_ranked_answers ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/analysis_conformance.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/aace1201ca2ea9d9/out/analysis_conformance-aace1201ca2ea9d9)
+
+running 2 tests
+test ordered_laws_and_source_alignment ... ok
+test unicode17_grapheme_and_all_emoji ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/analysis_integration.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/695642f9ba39264a/out/analysis_integration-695642f9ba39264a)
+
+running 6 tests
+test fast_and_expanding_normalization_keep_original_utf8_contributors ... ok
+test refusals_never_call_a_sink_and_scratch_remains_reusable ... ok
+test removed_controls_do_not_destroy_meaningful_orthographic_joiners ... ok
+test html_streaming_agrees_after_decode_cleanup_and_joining ... ok
+test long_control_runs_preserve_joining_context_without_rescanning ... ok
+test every_lexical_entry_point_agrees_across_reused_scratch ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/bm25f.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/81d12d9545fbed9e/out/bm25f-81d12d9545fbed9e)
+
+running 8 tests
+test canonical_ranking_identity_binds_the_index_corpus_construction_law ... ok
+test invalid_inputs_fail_before_zero_contribution_shortcuts ... ok
+test profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping ... ok
+test score_bound_is_exact_and_width_is_derived ... ok
+test the_ranking_profile_fingerprint_is_frozen ... ok
+test reweight_and_remap_reuse_predicate_facts_but_change_ranking_identity ... ok
+test zero_weight_matching_rows_keep_the_canonical_tie_order ... ok
+test independent_integer_reference_corpus_matches_every_raw_unit ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bounded_text_focus.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/a44e356ae12e44cb/out/bounded_text_focus-a44e356ae12e44cb)
+
+running 1 test
+test native_text_search_occurrence_and_focus_keep_exact_answers_and_original_owners ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/ceiling_pushdown.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/e41c0503a2967850/out/ceiling_pushdown-e41c0503a2967850)
+
+running 5 tests
+test a_repeated_variable_withholds_the_ceiling ... ok
+test a_bare_limit_offers_a_ceiling ... ok
+test a_ceiling_shrinks_across_invocations ... ok
+test order_by_limit_offers_no_ceiling ... ok
+test limit_k_equals_the_prefix_of_the_unlimited_answer ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/character.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/59901eb22dc59e45/out/character-59901eb22dc59e45)
+
+running 9 tests
+test evidence_generation_distinguishes_original_forms_with_identical_character_keys ... ok
+test auxiliary_only_documents_remain_addressable_without_changing_lexical_scores ... ok
+test auxiliary_only_graph_and_language_partitions_allow_ranked_declaration ... ok
+test character_recall_is_independent_of_dictionary_boundaries_and_lexical_statistics ... ok
+test html_references_keep_original_contributors_in_character_evidence ... ok
+test repeated_grams_and_boundaries_preserve_counts_without_crossing_literals ... ok
+test prepend_scalars_do_not_hide_han_bases ... ok
+test supplementary_han_and_controls_have_exact_contributors_and_whole_cluster_highlight ... ok
+test long_han_runs_have_bounded_keys_without_losing_later_characters ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/chinese_retrieval.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/c34afdfb4e7fa01c/out/chinese_retrieval-c34afdfb4e7fa01c)
+
+running 7 tests
+test mixed_identifiers_and_declared_english_stemming_keep_script_boundaries ... ok
+test lexical_costs_resolve_real_chinese_word_ambiguity ... ok
+test rdf12_annotation_identity_survives_search_normalization ... ok
+test supplementary_han_and_unknown_units_remain_searchable ... ok
+test dictionary_and_rdf_insertion_order_preserve_ranked_answers_and_identities ... ok
+test chinese_phrase_adjacency_is_a_real_sparql_occurrence_join ... ok
+test ranked_chinese_technical_queries_meet_explicit_precision_and_recall ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/cleanup.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/1ed0f3d703022dd1/out/cleanup-1ed0f3d703022dd1)
+
+running 7 tests
+test joins_require_complete_elements_in_the_admitted_grapheme ... ok
+test pictographic_boundary_reservations_do_not_protect_controls ... ok
+test emoji_controls_require_complete_elements_in_every_projection ... ok
+test removed_and_lexical_controls_have_distinct_source_evidence ... ok
+test index_queries_and_substring_evidence_share_corrected_cleanup ... ok
+test reusable_streaming_storage_obeys_the_same_control_law ... ok
+test every_standardized_emoji_presentation_keeps_its_control ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/determinism.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/85435ceba754945b/out/determinism-85435ceba754945b)
+
+running 7 tests
+test golden_scores_are_exact_decimals ... ok
+test byte_identical_json_across_two_independently_built_datasets ... ok
+test the_float_scan_refuses_floats_and_admits_their_neighbours ... ok
+test blank_node_labels_are_the_documented_limit ... ok
+test the_source_walk_descends_into_subdirectories ... ok
+test byte_identical_json_across_repeated_runs ... ok
+test no_source_file_mentions_a_float_width ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/emoji_predicate.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/af3e8a83bedc1150/out/emoji_predicate-af3e8a83bedc1150)
+
+running 1 test
+test every_emoji_spelling_and_protected_scalar_matches_the_input_data ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/exclusion_membership.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/73d6abe5680549df/out/exclusion_membership-73d6abe5680549df)
+
+running 10 tests
+test a_candidate_bound_invocation_is_a_point_lookup ... ok
+test an_unbound_document_is_not_a_lookup ... ok
+test an_observed_rank_is_still_ranked ... ok
+test membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one ... ok
+test the_declared_basis_is_membership_and_it_registers ... ok
+test every_document_agrees_with_the_stream_in_both_directions ... ok
+test the_point_score_is_the_streamed_score_exactly ... ok
+test a_rank_blank_shared_with_a_triple_is_observed_and_ranked ... ok
+test the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else ... ok
+test a_possible_lookup_scores_one_document_whatever_the_corpus_holds ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/field_populations.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/a6c3e12baa94fa35/out/field_populations-a6c3e12baa94fa35)
+
+running 5 tests
+test populations_and_totals_are_checked_before_scoring ... ok
+test dense_populations_preserve_every_raw_score_and_legacy_identity ... ok
+test sparse_shortest_normalization_and_bounds_match_the_reference ... ok
+test index_carriers_follow_partition_and_remapping_facts ... ok
+test sparse_field_means_match_the_unbounded_reference ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fixed_point.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/3e2a6bd460f3ec21/out/fixed_point-3e2a6bd460f3ec21)
+
+running 9 tests
+test checked_mul_and_div_round_trip ... ok
+test ln_of_e_is_one ... ok
+test ln_of_one_is_zero ... ok
+test ln_of_zero_and_negative_are_domain_errors ... ok
+test overflow_is_a_hard_error_not_a_wrap ... ok
+test the_range_extremes_are_admitted_not_only_refused ... ok
+test ln_agrees_with_the_f64_oracle ... ok
+test to_decimal_lexical_is_exact_and_fixed_width ... ok
+test ln_is_a_pure_function ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/index.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/be92be466d4b5a16/out/index-be92be466d4b5a16)
+
+running 21 tests
+test a_duplicate_predicate_is_a_config_error ... ok
+test a_non_iri_predicate_is_a_config_error ... ok
+test a_document_without_lexical_terms_retains_auxiliary_evidence ... ok
+test a_named_graph_selector_restricts_the_walk ... ok
+test an_annotation_only_predicate_is_found_by_the_coverage ... ok
+test an_empty_predicate_set_is_a_config_error ... ok
+test a_predicate_absent_from_the_dataset_contributes_no_rows ... ok
+test a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean ... ok
+test an_empty_dataset_is_no_shortfall_and_still_attests_a_generation ... ok
+test annotation_layer_literals_are_indexed ... ok
+test an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation ... ok
+test an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not ... ok
+test asserted_and_annotation_text_merge_into_one_document ... ok
+test blank_node_subjects_are_indexed ... ok
+test non_literal_objects_are_skipped_not_errors ... ok
+test blank_node_labels_change_the_fingerprint ... ok
+test language_splits_documents_but_base_direction_does_not ... ok
+test triple_term_subjects_are_indexed ... ok
+test untagged_literals_do_not_collide_with_a_real_language_tag ... ok
+test statistics_are_per_partition_not_pooled ... ok
+test two_independently_built_datasets_share_a_fingerprint ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/needle_value_sources.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/5aa4a7b0323b3a5f/out/needle_value_sources-5aa4a7b0323b3a5f)
+
+running 3 tests
+test an_undef_needle_is_refused_and_its_neighbour_answers ... ok
+test two_values_needles_answer_with_both_constant_answers ... ok
+test a_values_or_bind_needle_answers_exactly_as_the_constant_does ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/phonetic.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/4391e372dbd093e1/out/phonetic-4391e372dbd093e1)
+
+running 9 tests
+test canonical_spelling_is_shared_by_code_and_distance ... ok
+test banded_distance_matches_full_matrix_for_all_short_mixed_scalar_strings ... ok
+test long_graphemes_remain_scalar_sequences_for_refinement ... ok
+test phonetic_domain_and_every_resource_boundary_are_explicit ... ok
+test scalar_distance_examples_cover_thresholds_and_unicode ... ok
+test scalar_distance_refuses_invalid_bounds_and_handles_maximum_inputs ... ok
+test arbitrary_unicode_edits_match_the_independent_global_matrix ... ok
+test both_engines_cross_every_block_boundary_and_reuse_query_scratch ... ok
+test every_independent_reference_vector_matches_at_every_declared_code_bound ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/phrase_composition.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/b822d2e7b5604c3e/out/phrase_composition-b822d2e7b5604c3e)
+
+running 5 tests
+test a_multi_term_needle_is_refused_rather_than_narrowed ... ok
+test phrase_and_ranked_search_compose_on_the_same_document ... ok
+test adjacent_positions_express_a_phrase ... ok
+test occurrence_rows_carry_the_token_ordinal ... ok
+test proximity_within_a_window ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/physical_shapes.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/4c8926fa3987b9d1/out/physical_shapes-4c8926fa3987b9d1)
+
+running 21 tests
+test dictionary_projection_and_aliases ... ok
+test expanded_dictionary_and_union ... ok
+test longest_first_reference ... ok
+test typed_series_property ... ok
+test registered_host_and_decline ... ok
+test prepared_and_query_forms ... ok
+test dictionary_property ... ok
+test dictionary_analyzer_identity ... ok
+test bucket_custom_and_parallel_order ... ok
+test host_refusal_and_governor_boundary ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test bounded_shapes_keep_original_owners ... ok
+test original_evidence_and_empty_barriers ... ok
+test scoped_streams_and_update_where ... ok
+test window_barrier_property ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+test graph_free_corpus_keys_ranking_and_query ... ok
+test graph_free_rdf12_partitions_and_named_refusal ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test window_property ... ok
+test dictionary_cache_and_size ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/profiles.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/39b70fbe1234045f/out/profiles-39b70fbe1234045f)
+
+running 9 tests
+test accent_fold_respects_script_scope_and_mark_category ... ok
+test controls_follow_each_projection_and_preserve_emoji ... ok
+test every_profile_dimension_changes_the_analysis_identity ... ok
+test phonetics_read_surface_words_and_expose_refinement_evidence ... ok
+test empty_indexes_still_bind_the_entire_analysis_law ... ok
+test substring_candidates_are_verified_and_short_fragments_have_postings ... ok
+test every_accent_subset_is_independent_and_identified ... ok
+test folded_surface_stemming_and_scalar_bounds_are_separate_projections ... ok
+test search_and_occurrence_relations_use_the_stored_analyzer ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/scoring.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/9080425a30b0ab12/out/scoring-9080425a30b0ab12)
+
+running 21 tests
+test a_needle_analyzing_to_zero_terms ... ok
+test a_bound_rank_applies_to_every_admitted_partition ... ok
+test a_partition_filter_selects_without_changing_any_rank ... ok
+test a_bound_rank_selects_that_rank ... ok
+test an_out_of_range_rank_yields_nothing ... ok
+test an_unknown_partition_scores_nothing ... ok
+test bm25_matches_a_hand_computed_golden ... ok
+test each_term_contribution_matches_the_hand_computation ... ok
+test explain_reports_a_term_the_document_does_not_hold ... ok
+test equal_scores_are_broken_by_document_id_deterministically ... ok
+test explaining_an_unknown_document_is_a_data_error ... ok
+test matched_counts_distinct_needle_terms_present ... ok
+test order_by_score_and_order_by_rank_can_disagree_under_rounding ... ok
+test rank_is_per_partition_not_global ... ok
+test predicate_scope_precedes_depth_without_changing_score_weights ... ok
+test statistics_are_not_pooled_across_partitions ... ok
+test explain_contributions_sum_exactly_to_the_score ... ok
+test the_published_text_identities_are_frozen ... ok
+test two_independently_built_indexes_rank_identically ... ok
+test bounded_heap_equals_the_full_sort_prefix ... ok
+test score_is_a_pure_function_of_index_and_needle ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/search_property_function.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/daca5da2f7dc3bda/out/search_property_function-daca5da2f7dc3bda)
+
+running 16 tests
+test a_free_needle_has_no_feasible_evaluation_order ... ok
+test a_bound_doc_returns_its_single_row ... ok
+test a_document_subject_joins_back_by_bgp ... ok
+test a_bound_language_filters_without_changing_rank ... ok
+test a_namespace_declared_with_an_unregistered_iri_is_a_hard_error ... ok
+test an_arity_mismatch_at_the_call_site_is_an_error ... ok
+test an_iri_declared_but_unregistered_is_a_hard_error ... ok
+test an_iri_in_neither_is_an_ordinary_triple_pattern ... ok
+test annotation_text_is_searchable_through_sparql ... ok
+test matched_expresses_conjunctive_retrieval ... ok
+test an_empty_index_answers_with_no_rows_and_attests_its_own_generation ... ok
+test ranked_rows_for_a_needle ... ok
+test order_by_rank_is_the_reproducing_idiom ... ok
+test values_rank_selects_those_ranks ... ok
+test the_same_rows_under_a_different_ranking_law_attest_a_different_generation ... ok
+test two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/segmentation.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/ad6f04504d6d6e47/out/segmentation-ad6f04504d6d6e47)
+
+running 23 tests
+test artifacts_validate_physical_semantic_canonical_and_resource_contracts ... ok
+test canonical_words_and_equal_cost_duplicates_have_one_identity ... ok
+test complete_coverage_wins_over_a_greedy_longest_match ... ok
+test dictionary_edges_cannot_split_a_base_from_its_marks ... ok
+test dictionaries_segment_each_requested_script_and_mixed_japanese ... ok
+test empty_dictionary_respects_unicode_units_in_every_script ... ok
+test integer_lexical_costs_resolve_chinese_ambiguity_and_are_fingerprinted ... ok
+test invalid_dictionary_entries_are_hard_errors ... ok
+test lattice_agrees_with_exhaustive_partition_ranking_on_small_chinese_corpora ... ok
+test lexical_weights_are_canonical_and_reusable_for_profile_normalization ... ok
+test other_scripts_keep_native_word_boundaries_and_scratch_can_be_reused ... ok
+test property_vectors_distinguish_nonspacing_from_combining_class_and_marks ... ok
+test punctuation_and_separators_do_not_fabricate_dictionary_matches ... ok
+test ranked_minimal_automaton_preserves_costs_and_all_prefix_matches ... ok
+test rare_han_extensions_are_script_data_not_a_frozen_block_approximation ... ok
+test surface_dictionary_edges_retain_internal_periods_and_colons ... ok
+test technical_chinese_words_can_mix_scripts_digits_and_internal_punctuation ... ok
+test transparent_controls_retain_full_token_coverage_and_punctuation_barriers ... ok
+test unknown_units_obey_extended_graphemes_not_combining_mark_heuristics ... ok
+test zero_costs_and_exact_ties_have_a_total_insertion_independent_order ... ok
+test generated_analysis_properties_match_the_ucd_for_every_scalar ... ok
+test all_five_full_baseline_artifacts_preserve_every_canonical_key_and_cost ... ok
+test baseline_artifact_resolution ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+
+     Running tests/sentence_borrowed.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/30c50346a315580b/out/sentence_borrowed-30c50346a315580b)
+
+running 1 test
+test sentence_iteration_and_partial_cursor_clones_allocate_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stemming.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/ada29caa9aef3f7a/out/stemming-ada29caa9aef3f7a)
+
+running 6 tests
+test latin_domain_uses_scalar_regions_and_preserves_non_ascii_consonants ... ok
+test non_latin_words_and_short_inputs_are_preserved ... ok
+test version_and_new_snowball_exceptions_are_pinned ... ok
+test y_is_marked_as_a_consonant_only_in_the_defined_positions ... ok
+test arbitrarily_long_admitted_tokens_do_not_recurse_or_grow ... ok
+test every_official_snowball_english_vector ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/surface.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/06ea8d7499aa817d/out/surface-06ea8d7499aa817d)
+
+running 14 tests
+test positional_alignment_narrows_universal_gram_membership ... ok
+test repeated_grams_require_distinct_relative_positions_and_keep_overlap ... ok
+test missing_gram_and_empty_index_are_complete_empty_without_posting_work ... ok
+test singletons_and_universal_candidates_require_explicit_exhaustion ... ok
+test each_budget_refuses_atomically_at_its_first_excess_charge ... ok
+test timestamp_punctuation_short_fragments_and_interior_word_match ... ok
+test retained_controls_remain_searchable_and_do_not_form_false_adjacencies ... ok
+test emoji_endpoints_are_filtered_before_selectivity ... ok
+test html_composition_and_multiscalar_entities_retain_original_contributors ... ok
+test source_offsets_never_masquerade_as_normalized_offsets ... ok
+test repeated_literals_and_input_order_have_canonical_identity_and_evidence ... ok
+test phonetics_refine_the_same_canonical_widened_spelling_they_encode ... ok
+test oversized_first_grapheme_has_full_positions_and_source_evidence ... ok
+test every_small_scalar_query_matches_an_independent_exhaustive_oracle ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/unicode_conformance.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/5cdab7fc9f5d8669/out/unicode_conformance-5cdab7fc9f5d8669)
+
+running 6 tests
+test compare_agrees_with_the_built_form ... ok
+test the_analysis_form_composes_the_public_operations ... ok
+test sentence_break_test_every_line ... ok
+test word_break_test_every_line ... ok
+test the_fold_is_case_folding_txt_c_and_f_for_every_scalar ... ok
+test is_alphanumeric_is_alphabetic_or_a_number_for_every_scalar ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/unicode_differential.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/e77977e5c7784c65/out/unicode_differential-e77977e5c7784c65)
+
+running 2 tests
+test the_case_fold_replays_except_where_17_0_0_folds_differently ... ok
+test the_word_segmentation_and_analysis_form_replay ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/unrestricted_ranking.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/79d0b05596528055/out/unrestricted_ranking-79d0b05596528055)
+
+running 4 tests
+test promoted_products_and_unrestricted_fields_keep_exact_rounding ... ok
+test full_u64_populations_and_large_query_scores_match_independent_arithmetic ... ok
+test a_complete_five_thousand_term_needle_reaches_the_public_relation ... ok
+test actual_two_to_the_twenty_fifth_token_field_builds_and_scores ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.29s
+
+     Running tests/wasm_determinism.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/4fedff16cb8f6c65/out/wasm_determinism-4fedff16cb8f6c65)
+
+running 12 tests
+test scoped_text_preserves_original_constraint_failure ... ok
+test scoped_text_depth_preserves_original_unknown_rows_and_scores ... ok
+test the_integer_logarithm_agrees_with_its_hand_values_on_this_target ... ok
+test the_pinned_ranking_is_reproduced_on_this_target ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target ... ok
+test scoped_text_bound_candidates_retain_unknown_membership ... ok
+test the_independent_fielded_reference_is_reproduced_on_this_target ... ok
+test thirty_two_index_fields_are_exact ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests purrdf_text
+
+running 1 test
+test crates/text/src/lib.rs - (line 32) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.82s; merged doctests compilation took 0.82s

@@ -1,0 +1,27 @@
+{
+  "issue": 538,
+  "branch": "paudley/538-purrdf-text-update-a-textindex-by-delta",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "5258479c119f772ab6621c95a86c8007f468aa0b",
+      "subject": "feat(text): update indexes with source-bound literal deltas",
+      "date": "2026-10-17"
+    }
+  ],
+  "files": [
+    "crates/rdf-wasm/src/interleaving.rs",
+    "crates/text/README.md",
+    "crates/text/src/analysis.rs",
+    "crates/text/src/error.rs",
+    "crates/text/src/index.rs",
+    "crates/text/src/index/delta.rs",
+    "crates/text/src/lib.rs",
+    "crates/text/src/surface.rs",
+    "crates/text/src/surface/delta.rs",
+    "crates/text/src/surface/postings.rs",
+    "crates/text/tests/determinism.rs",
+    "crates/text/tests/wasm_determinism.rs"
+  ],
+  "adrs_touched": []
+}

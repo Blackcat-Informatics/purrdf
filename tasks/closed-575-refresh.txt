@@ -1,0 +1,67 @@
+# Issue #575: Validate the native xsd:string XML character domain at admission
+
+State: CLOSED   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+The new finite length-space comparison correctly counts the XML Char alphabet, but both xsd:string parse entry points currently accept every Rust string, including NUL and U+FFFE. Such accepted values contradict the modeled datatype domain. Enforce the XSD 1.1 string lexical domain through the shared XML terminal before allocation in ordinary and admitted parsing; preserve valid string whitespace verbatim. Reuse the same lexical validator for anyURI, retain typed lexical refusal and allocation accounting, and exercise both text primitives natively and on WASM. This is needed by the ongoing downstream anyURI/native-value cutover, not a deferred risk. Normative definitions: https://www.w3.org/TR/xmlschema11-2/#string and https://www.w3.org/TR/rdf12-concepts/#xsd-datatypes
+
+## Comments (3)
+
+### paudley — 2026-10-17T11:29:54Z
+
+# Enforce the native string domain
+
+Issue 575: both native string parse doors currently copy arbitrary Rust strings, although the modeled XSD string domain and range alphabet are XML Char sequences. Reject non-XML scalars before allocation, preserving every valid lexical byte and all valid whitespace. AnyURI must consume the same borrowed XML validator before its existing collapse formatter; no second validator or legacy unchecked parse branch remains.
+
+## Task 1: Repair both production parse doors
+
+Add the borrowed XML string reader in the existing simple-value home, using purrdf_lex::terminals::is_xml_char. Route ordinary String parsing and try_parse_with_memory through it, retaining XsdError datatype/lexical context and Forg0001 for admitted refusal. Keep low-level supplied-buffer UTF-8 copying separate: it is not a datatype admission API. Inspect production XsdValue::String constructors for bypasses.
+
+## Task 2: Verify the selected contract
+
+Extend the existing portable text-primitive contract with invalid String/AnyURI character cases and a verbatim whitespace String case. Extend the allocation-accounting invalid-input matrix so rejected String lexicals allocate nothing. Run the XSD crate suite, warnings-as-errors all-target clippy, actual native/WASM portable contract and affected entailment tests. Tests construct only explicit synthetic inputs; no GMEOW corpus production, runtime hardware identity or machine probes are authorized.
+
+## Task 3: Publish and merge
+
+Use normal hooks, push, actual CodeRabbit review where available and ghprsq only. Preserve failed/unrun evidence and keep full hosted CI distinct; existing user authority permits merging with subsequent CI findings tracked. This corrects the native admission invariant without adding dependencies, semantic features, alternate readers or compatibility aliases. No unrelated worktree or dirty work may be removed.
+
+
+### paudley — 2026-10-17T11:47:54Z
+
+# String admission validation
+
+Both public datatype parse doors now use one borrowed XML-character validator. AnyURI delegates to that reader before applying its existing collapse formatter. The former independent URI validation branch and unchecked String admission branches are removed. Valid String lexical bytes remain unchanged.
+
+Completed checks on the four-file patch:
+- XSD crate suite: 413 unit tests, all integration suites and doctests passed (xsd-tests.log).
+- XSD all-target clippy with warnings denied passed (clippy.log).
+- Actual wasm32 portable text-primitive suite: all three tests passed (wasm-text-primitives.log), including both text primitives refusing invalid XML characters and String preserving valid whitespace.
+- Invalid admitted String inputs return Forg0001 before any admitted allocation; the existing accounting matrix passed.
+
+The complete entailment library suite passed: 718 passed, zero failed, one ignored (entail-tests.log). Full workspace/hosted CI is not claimed passed. Existing user instruction authorizes pushing and merging with subsequent hosted CI findings handled separately. No local GMEOW corpus factory or machine inspection was run.
+
+Production-constructor searches found the two repaired parse branches; other consumer occurrences inspected were matches or test fixtures. The supplied-buffer UTF-8 copier remains because it is a distinct low-level operation, not datatype admission.
+
+
+### paudley — 2026-10-17T11:51:57Z
+
+fix(xsd): validate string characters before allocation
+
+Closes #575
+
+Both native string parse entry points previously admitted non-XML characters despite the datatype calculus modeling XML Char sequences. One borrowed validator now checks the character domain before either ordinary ownership or admitted allocation. Valid string text stays verbatim; ordinary errors preserve datatype/lexical context and admitted errors retain Forg0001. AnyURI delegates to the same validator before its existing whitespace collapse. The duplicate URI validator and unchecked String admission branches are removed.
+
+The four changed files are the simple-value reader, both value parse doors, the portable text contract and admitted allocation accounting. There are no dependency, feature, pipeline or compatibility-layer changes. The low-level supplied-buffer UTF-8 copier is a separate non-admission operation and remains in use.
+
+Validation: the complete XSD suite passed (413 unit tests plus integrations and doctests); all-target XSD clippy passed with warnings denied; all three portable text tests passed in actual wasm32 execution; the full entailment library suite passed 718 tests with zero failures and one ignored. Normal commit hooks and push passed. Full hosted workspace CI is pending and is not represented as passed. The user explicitly instructed pushing and merging now, with subsequent CI findings tracked.
+
+The plan and current validation are in the selected .stage/validate-the-native-xsd-string-xml directory. Its completion assessment identifies implementer versus independent review evidence. The branch was compared against the fetched unchanged base; the clean candidate has no additional base interaction. No conflicts were encountered. No source or acceptance requirement was deferred. Existing sibling worktrees and unrelated files are preserved.
+
+Review: CodeRabbit is processing the actual four changed files. The retrieved review/inline/thread surfaces contain no findings yet; the bot progress comment is not a completed review. Merge proceeds under the explicit user instruction to ghprsq now and handle subsequent CI findings. Independent review and full hosted acceptance are not claimed passed.
+
+Commit: 39975fca2 fix(xsd): validate the string character domain before allocation
+
+Defect-Class: none
+
+

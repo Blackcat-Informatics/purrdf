@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/538-purrdf-text-update-a-textindex-by-delta/crates/text)
+    Finished `test` profile [optimized] target(s) in 11.15s
+     Running tests/surface.rs (/opt/.cargo/68/ff9d214fba5682/debug/build/purrdf-text/06ea8d7499aa817d/out/surface-06ea8d7499aa817d)
+
+running 14 tests
+test positional_alignment_narrows_universal_gram_membership ... ok
+test repeated_grams_require_distinct_relative_positions_and_keep_overlap ... ok
+test singletons_and_universal_candidates_require_explicit_exhaustion ... ok
+test missing_gram_and_empty_index_are_complete_empty_without_posting_work ... ok
+test each_budget_refuses_atomically_at_its_first_excess_charge ... ok
+test timestamp_punctuation_short_fragments_and_interior_word_match ... ok
+test emoji_endpoints_are_filtered_before_selectivity ... ok
+test source_offsets_never_masquerade_as_normalized_offsets ... ok
+test retained_controls_remain_searchable_and_do_not_form_false_adjacencies ... ok
+test repeated_literals_and_input_order_have_canonical_identity_and_evidence ... ok
+test html_composition_and_multiscalar_entities_retain_original_contributors ... ok
+test phonetics_refine_the_same_canonical_widened_spelling_they_encode ... ok
+test oversized_first_grapheme_has_full_positions_and_source_evidence ... ok
+test every_small_scalar_query_matches_an_independent_exhaustive_oracle ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -1,0 +1,469 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[workspace]
+# The GTS engine moved to the gmeow-gts repo; its `gts` binary is obtained via
+# `cargo install gmeow-gts`. The ontology Rust workspace keeps logic + shacl +
+# validate plus shared diagnostics/RDF glue.
+members = [
+    # Worktree-local DAG runner for the full developer gate.
+    "crates/xtask",
+    "crates/helper-census",
+    # Shared CLI foundation (console modes, reporters, tracing, exit codes) both
+    # the consumer `gmeow` and the maintenance `gmeow-dev` binaries build on.
+    "crates/cli-core",
+    # Native logic-conformance harness: datatest-stable over the corpus.
+    "crates/conformance",
+    # Engine-vs-engine benchmark harness (dedicated LEAF bin). It is the ONLY
+    # installer of the gmeow-cost-measure counting #[global_allocator]; as a leaf
+    # nothing depends on it, so the allocator never reaches gmeow-cli even though the
+    # CLI transitively depends on gmeow-conformance (cli→pipeline→conformance).
+    "crates/bench-engines",
+    # Harness-scoped deterministic allocation-measurement allocator + measure()
+    # helper. Depended on ONLY by bench targets / dedicated regression-test targets /
+    # the future maint harness bin — NEVER by gmeow-cli, since its
+    # #[global_allocator] is process-global.
+    "crates/cost-measure",
+    "crates/errors",
+    # Dependency-leaf action cache: canonical keys, immutable receipts/blobs,
+    # cross-process election, and bounded reachability GC shared by pipeline/docs.
+    "crates/action-cache",
+    "crates/build-inputs",
+    # Rust-owned typed documentation model built from the slice catalog.
+    "crates/docs",
+    # Deterministic Typst-source renderer + in-memory byte-reproducible PDF
+    # compiler for the print documentation projection.
+    "crates/docs-print",
+    # Foundation-corpus importer: narrative JSONL corpus → RDF graph +
+    # budget report + six lossy projections.
+    "crates/foundation-corpus",
+    # Off-gate GMN token-cost matrix: runs the five mandated tokenizer families
+    # (o200k/cl100k embedded, Qwen vendored, Llama/Gemma fetched-at-maint-time) over the
+    # emitted GMN/Turtle/JSON-LD serializations of the grounding corpus and flags
+    # byte-fragmenting glyphs per vocab. A LEAF crate — nothing depends on it, so the heavy
+    # `tokenizers` dependency never reaches gmeow-cli. Driven by `make maint-gmn-cost-matrix`.
+    "crates/gmn-cost-matrix",
+    # The mandatory GMEOW GTS authorship profile: the ONE production entry to
+    # `purrdf::gts_compose::emit_gts` plus the wire-level audit that every
+    # payload-bearing frame carries zstd-rsyncable at level 12. A LEAF (purrdf +
+    # gmeow-errors + ciborium) precisely so every bundle author can sit above it —
+    # the profile used to live in `gmeow-pipeline`, which `gmeow-math` cannot depend
+    # on (the pipeline depends on math), so math and music called the writer directly
+    # and the single-entry claim was false.
+    "crates/gts-profile",
+    # Native cross-process GTS -> indexed-dataset acceleration. A small leaf so
+    # core-only and reasoning consumers share one self-verifying content-keyed pack
+    # without either importing the other's runtime.
+    "crates/bundle-import",
+    # Report-only CI/performance evidence binaries. This LEAF intentionally depends
+    # only on small third-party codecs/accounting crates so producing the binaries
+    # beside an already-built nextest archive never relinks pipeline or validation.
+    "crates/perf-evidence",
+    # Test-only proc macro that turns parameterized corpus cases into one libtest
+    # process per suite, so nextest cannot re-import the same authenticated corpus
+    # once per case.
+    "crates/test-batch-macros",
+    # The consumer/wheel-only `gmeow` command surface (runs without the repo).
+    "crates/gmeow-cli",
+    # The repo-maintenance `gmeow-dev` command surface (needs the working tree).
+    "crates/gmeow-dev-cli",
+    # The lang: form AST, content keys, and interning (FORMS): a pure rlib peer of
+    # logic-compile with no reasoning-runtime deps, keying forms by structural content.
+    "crates/lang-form",
+    # The lang: ingester/emitter skeleton (RUNTIME): the shared Bridge abstraction that
+    # CARRIES a logic:Correspondence rather than minting a parallel lang: law-spine.
+    "crates/lang-bridge",
+    # Dependency-free license-token policy classifier (RUST-FIRST single source of
+    # truth) shared by the conformance vendoring gate and the Python LinkPolicy shim.
+    "crates/license",
+    "crates/logic",
+    # The pure, wasm-able logic compiler: the parse(RDF 1.2)→IR→project
+    # half of the logic stack, split out of crates/logic with zero reasoning-runtime
+    # deps. gmeow-logic depends on it.
+    "crates/logic-compile",
+    # THE one structured-term representation: the persistent hash-consed, binder-aware,
+    # content-addressed term arena (ContentKey / TermArena / InterningStats), relocated
+    # out of the reasoning runtime so a front-end can intern terms without linking the
+    # native DL engine. Reasoner-free and wasm-clean; gmeow-logic and
+    # gmeow-logic-compile depend on it.
+    "crates/term-arena",
+    # The executable math: ingestion front-ends: R scripts, ONNX graphs, and TSTP proof
+    # derivations parsed into math: structures. It sits BESIDE crates/math rather than
+    # inside it because the in-bundle producers are pinned pure and no-disk-read, so a
+    # file-reading lifter cannot live among them — the same split as affect-ingest/affect.
+    "crates/math-lift",
+    # Synchronous LSP server for .ttl and .logic files + sarif CLI.
+    "crates/lsp",
+    # Reusable exact-rational geometry: an inner-product-space over a metric Gram
+    # matrix + the pure math: graph loaders, shared by affect + the native math:
+    # conformance gates so the "reusable layer" is genuinely reused, not buried.
+    "crates/math",
+    # Affect-intensity geometry: exact-rational inner-product-space over a metric
+    # Gram matrix, read from an RDF graph, the √(xᵀGx) norm computed OUTSIDE the
+    # reasoned core (Principle 12) for the CLI and the EmotionML emitter.
+    "crates/affect",
+    # Classifier-ingestion producers: captured HuggingFace classifier outputs
+    # (GoEmotions / SST-2 / CardiffNLP / j-hartmann / zero-shot) → attributed
+    # gmeow:ModelInferenceRun / AffectClassifierOutput / AffectiveClaim evidence,
+    # with a blind get-leg round-trip proof of losslessness.
+    "crates/affect-ingest",
+    # Music-package toolchain: piece model, GTS package I/O, notation renderers,
+    # MusicXML import, and loss manifests.
+    "crates/music",
+    # The registered ontology term namespaces (gmeow/logic/lang/math) and the ONE
+    # purrdf SliceVocab / OntologyProfile built from them. Depends on `purrdf`
+    # alone so every consumer — validate, docs, slice-brief, pipeline, dev-cli —
+    # can sit above it; a namespace GMEOW mints into but never declares here is
+    # invisible to purrdf's ownership analyzer.
+    "crates/ns",
+    # DAG-driven single-pass build executor: typed stages over an
+    # in-memory RDF dataflow, dogfooding the build graph from gmeow: individuals.
+    # The universal RDF-1.2 transcode hub. A LEAF (purrdf + logic-compile +
+    # errors): both gmeow-pipeline and the MCP `convert` tool spoke through it,
+    # so it must depend on neither.
+    # The documentation MODEL, split from gmeow-docs so consumers can use it WITHOUT
+    # the renderer: gmeow-docs `include_bytes!`s ~19 MB of wasm engines, and
+    # gmeow-slice-quality (which the browser MCP engine links) must not inherit those
+    # bytes. That is a hard constraint, not a tidiness preference.
+    "crates/docs-model",
+    # The universal RDF-1.2 transcode hub. A LEAF (purrdf + logic-compile +
+    # errors): both gmeow-pipeline and the MCP `convert` tool spoke through it,
+    # so it must depend on neither.
+    "crates/transcode",
+    # The READ side of a materialized gmeow.gts, split from gmeow-pipeline so a
+    # bundle reader (the consumer CLI, gmeow-dev, the MCP tool surface) never
+    # inherits the build executor. A LEAF, and wasm-clean.
+    "crates/bundle-view",
+    # The documentation-catalog READERS over the meta-level distribution-catalog named
+    # graph: the per-format distribution matrix and the formal-concept lattice derived
+    # over the surface x capability incidence. A LEAF over gmeow-bundle-view, and
+    # wasm-clean, so `gmeow docs matrix` and the MCP `distribution_matrix` tool read the
+    # SAME catalog without either side inheriting the build executor.
+    "crates/docs-catalog",
+    # The consumer-mode MCP engine: the bundle-only tool/resource surface and the
+    # stdio JSON-RPC loop, split from gmeow-pipeline so the shippable `gmeow mcp`
+    # never inherits the build executor. A LEAF over gmeow-bundle-view.
+    "crates/mcp",
+    # The four repo-reading MCP dev tools (validate / sync / reason / constitution),
+    # registered into gmeow-mcp through its extension seam. This is the ONLY MCP
+    # crate that depends on gmeow-pipeline, which is exactly what keeps gmeow-mcp a
+    # leaf: the cycle would otherwise run mcp → pipeline → mcp.
+    "crates/mcp-dev",
+    "crates/pipeline",
+
+
+    # Authoring-packet brief assembler: gathers, for one batch of a slice's
+    # terms, its definition + axioms + bounded neighbourhood + definitional closure,
+    # same-slice exemplars, and cross-ontology / cross-lingual grounding, emitted as
+    # canonical turtle, JSON, and human text. A leaf library both the pipeline stage
+    # and the `gmeow slice brief` CLI call.
+    "crates/slice-brief",
+    "crates/slicetest",
+    # Per-slice quality report + opinionated uplift advisor: the shared kernel
+    # that reads the ontology-resident slice-quality rubric and scores a slice
+    # across the quality axes, bound by both the dev CLI and the pipeline MCP.
+    "crates/slice-quality",
+    "crates/validate",
+    # wasm32 bindings for the repo-free Tier-1 validator: client-side conformance in
+    # editors / browsers / LLM clients, over the wasm-clean gmeow-validate core.
+    "crates/validate-wasm",
+    # wasm32 bindings for the native logic reasoner (browser entailment panel).
+    "crates/reason-wasm",
+    "crates/gmn-wasm",
+    # wasm32 bindings for the consumer MCP engine: the whole 35-tool / 5-resource
+    # JSON-RPC surface driven a frame at a time over a caller-supplied gmeow.gts
+    # snapshot (never an embedded one — a bundle is caller data, not a build constant).
+    "crates/mcp-wasm",
+    # wasm32 bindings for the LEAN CORE of that same engine: the identical 35-tool /
+    # 5-resource surface with the reasoning segment demand-loaded on first use instead of
+    # carried in the first-load image. A deployment tier, not a reduced theory — the
+    # deferred tools stay advertised and answer with the typed mcp.segment-not-loaded
+    # routing signal the host re-dispatches against crates/mcp-wasm.
+    "crates/mcp-core-wasm",
+    # wasm32 bindings for the RDF 1.2 / SPARQL engine behind the offline documentation
+    # query playground and bundle explorer. Built HERE from the workspace purrdf pin,
+    # replacing a prebuilt blob vendored from the sibling repository that carried no
+    # version or revision — only a digest of its bytes — and whose refresh target did
+    # not exist, so it could drift from the pin with nothing detecting it.
+    "crates/query-wasm",
+]
+resolver = "2"
+
+[workspace.dependencies]
+cargo-config2 = "0.1.45"
+# Compatible PurRDF releases or exact official Git revisions. Cargo.lock is the
+# exact version/source authority (a checksum for registry releases, a commit for Git).
+# fuzz/Cargo.lock must select the same substrate, and every shipped
+# wasm engine must attest that resolved version. `make maint-bump-purrdf VERSION=...`
+# selects a release WITHIN these requirements and rebuilds all browser engines; a
+# major bump edits every requirement here and in fuzz/Cargo.toml first. Every
+# declared `purrdf*` requirement must agree and admit nothing below major 3
+# (`gmeow_validate::substrate::PURRDF_MAJOR_FLOOR`).
+purrdf = { version = "3", git = "https://github.com/Blackcat-Informatics/purrdf", rev = "d839dd72aaa6c62af7e04ac57a824dac2f65f459" }
+# Diagnostics and gate orchestration use the RDF kernel without parser/query/shape engines.
+purrdf-core = { version = "3", git = "https://github.com/Blackcat-Informatics/purrdf", rev = "d839dd72aaa6c62af7e04ac57a824dac2f65f459" }
+# The substrate's one JSON/YAML/CBOR/XML home; the facade does not re-export it.
+purrdf-lex = { version = "3", git = "https://github.com/Blackcat-Informatics/purrdf", rev = "d839dd72aaa6c62af7e04ac57a824dac2f65f459" }
+# The substrate's one Ed25519 implementation (GTS signing and verification keys).
+purrdf-ed25519 = { version = "3", git = "https://github.com/Blackcat-Informatics/purrdf", rev = "d839dd72aaa6c62af7e04ac57a824dac2f65f459" }
+# The substrate's one BLAKE3/hex home.
+purrdf-hash = { version = "3", git = "https://github.com/Blackcat-Informatics/purrdf", rev = "d839dd72aaa6c62af7e04ac57a824dac2f65f459" }
+
+# Harness-scoped allocation accounting. Keeping the path here makes the workspace
+# the single dependency authority while individual crates retain dev-only scope.
+gmeow-cost-measure = { path = "crates/cost-measure" }
+
+# `wasm-bindgen` and `blake3` are declared ONCE each in the third-party block below,
+# where this branch's normalization sweep put them — not here. A second declaration in
+# the same table is a TOML duplicate key, and both sides independently reached for one.
+
+# --- Third-party dependencies: ONE declaration site each -----------------------
+# Every member crate inherits these with `<dep>.workspace = true` and never
+# re-states a version. A member may still narrow or widen its own use of a
+# dependency (`features = [...]`, `optional = true`) at its own call site — what it
+# may not do is own a second copy of the VERSION, which is how two crates that must
+# agree silently stop agreeing. The per-dependency rationale (why a crate needs it,
+# what it is allowed to reach) stays in the member manifest beside the use.
+#
+# The BLAKE3 content digest: the project's canonical fingerprint for vendored-asset
+# anti-rot manifests, blob content addressing, and `blake3:<hex>` grounding values.
+blake3 = "1"
+# CBOR value codec: the gts snapshot's per-blob metadata maps and segment payloads
+# are read and written with it, so every reader and writer must share one codec.
+ciborium = "0.2"
+# Snapshot goldens. The version is fixed here; a crate that asserts JSON snapshots
+# adds `features = ["json"]` at its own site, since not every consumer needs it.
+insta = { version = "1.48" }
+# JSON Schema validation of shipped JSON projections. `default-features = false` is
+# part of the shared fact, not a per-crate choice: the default feature set pulls a
+# network-fetching resolver that no gate is permitted to depend on.
+jsonschema = { version = "0.46", default-features = false }
+# Unix process resource accounting for the report-only performance sampler. The
+# sampler reads `getrusage(RUSAGE_CHILDREN)` around exactly one measured command;
+# production libraries never call libc through this dependency.
+libc = "0.2"
+# Pure-Rust template engine for the static site: no build scripts, deterministic
+# rendering.
+minijinja = "2"
+# Colored line-diffs on assert_eq! failure. Drop-in and identical on pass.
+pretty_assertions = "1"
+# Markdown → HTML for the rendered page bodies. `default-features = false` drops the
+# bundled CLI/ancillary surface; `html` is the only renderer any consumer calls, and
+# both consumers must produce byte-identical HTML, so the feature set is shared.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# Regular expressions for the text-shaped lints and renderers.
+regex = "1"
+# Rust source parsing for the build-input closure, the test-batch macros and the
+# dev-only helper census.
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+# Derive-based (de)serialization. `derive` is in the shared fact because every
+# consumer here uses `#[derive(Serialize/Deserialize)]` rather than hand impls.
+serde = { version = "1", features = ["derive"] }
+# JSON is a first-class egress format across the workspace: tool envelopes, JSON-RPC
+# frames, the JSON card/schema projections and the JSONL export tiers.
+serde_json = "1"
+# Semantic release identities: the term changelog's tracked previous-release
+# authority must be ordered against the ontology release, never compared as text.
+semver = "1"
+# SHA-256 content addressing for append-only segment commits and claim fingerprints.
+sha2 = "0.10"
+# Atomic, self-cleaning temp files: write a sibling temp file, fsync, rename over
+# the target, so a crash mid-write can never leave a torn artifact.
+tempfile = "3"
+# Subscriber-controlled diagnostic events. Never product data and never a gate — the
+# events surface only when the host CLI has installed a subscriber.
+tracing = "0.1"
+# EXACT pin, and the single reason this table is load-bearing for the shipped
+# browser artifacts: the `wasm-bindgen` CLI that generates the JS bindings refuses
+# to run unless it matches the library version byte-for-byte. Five crates compile to
+# wasm32 against one CLI install, so the pin has to be ONE fact — a per-crate copy
+# that drifted would produce an engine whose vendored bytes no longer match the
+# glue that loads them. `make *-wasm-pkg` and the CI Node lane install the
+# `wasm-bindgen-cli` matching THIS version.
+wasm-bindgen = "=0.2.125"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Blackcat-Informatics/gmeow-ontology"
+
+[profile.dev]
+# NO debuginfo. We never run a debugger here, and the DWARF in `target/debug` was the
+# dominant disk hog: a built debug tree is 20–40 GB per worktree (vs ~1.4 GB release),
+# so across ~10 worktrees it is hundreds of GB of symbols nothing consumes. `debug =
+# false` keeps the dev profile otherwise intact — fast unoptimized compile, with
+# `debug-assertions` / `overflow-checks` still on (runtime checks, not debuginfo) — so
+# the test suite is unchanged; only the unused symbol tables are dropped.
+debug = false
+debug-assertions = true
+overflow-checks = true
+# Strip the residual symbol tables from the linked test binaries / bins too (panic
+# backtraces lose function names — acceptable, we never debug here).
+strip = "symbols"
+# opt-level 3, with debug-assertions/overflow-checks kept ON (orthogonal to opt-level —
+# release-grade codegen AND the overflow/assert safety net the gate depends on). This is
+# a compute engine (native EL/DL/RL reasoner, forward chase, higher-order math kernels),
+# so codegen quality is a first-class runtime property of our own crates, not just deps.
+# MEASURED 2026-07-05, our-crate opt-3 vs opt-2 with dependencies constant:
+# NO build penalty — a full workspace test rebuild is 46s@opt-3 vs 42s@opt-2
+# with peak build RSS 7.6 vs 8.2 GB (opt-3 is not the slower or hungrier build). And a
+# consistent runtime WIN on our reasoner (gmeow-logic `reason` bench): opt-3 faster in
+# every group — el_closure/30-class 126.6ms vs 134.3ms (~5.7%), reason_all ~1.6%,
+# materialization ~2.2%. Debug assertions stay on, so coverage is unchanged. (The dep-bound
+# whole-bundle canonicalization tests — ~147s in purrdf, already opt-3 — are NOT moved by
+# our-crate opt-level: measured 147s@opt-2 ≈ 148s@opt-3; they are handled on their own.)
+opt-level = 3
+
+[profile.test]
+# `cargo nextest` / `cargo test` build with Cargo's test profile, not `dev`.
+# Keep the always-on Rust gate under the same no-debuginfo contract as `dev`;
+# otherwise CI silently rebuilds the workspace test binaries with full DWARF in
+# `target/debug`, restoring the 20+ GB symbol tree the profile.dev cap removed.
+debug = false
+debug-assertions = true
+overflow-checks = true
+strip = "symbols"
+# Same opt-3 + checks-on contract as profile.dev above (see that rationale).
+opt-level = 3
+
+# Third-party DEPENDENCIES also build at opt-3, but WITHOUT debug-assertions/overflow-
+# checks — `package."*"` matches dependencies only, never our own workspace crates (which
+# keep the checks-ON contract above). Our crates and deps thus share opt-3 codegen; the
+# only difference is that our code additionally carries the runtime safety net. The
+# conformance-gated purrdf engine (parse + id-native SHACL + SPARQL eval) is compute-bound
+# in the whole-bundle tests, so opt-3 here is load-bearing.
+[profile.dev.package."*"]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.test.package."*"]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+# Workspace-wide thin-LTO was gated on a measurement of peak link RSS against
+# the 16 GB `ubuntu-latest` wheel runner. MEASURED 2026-06-24: a cold
+# `cargo build --release` with `lto = "thin"` peaked at 7.37 GB RSS
+# across the whole build tree at full 32-core local parallelism. A 4-core CI
+# runner has fewer concurrent rustc compiles (lower compile-phase peak) and the
+# same single-process LTO link, so its peak is ≤ that figure — well under 16 GB
+# with >8 GB of headroom. Thin (not fat) LTO keeps the link-step memory bounded
+# while still buying cross-crate inlining the per-crate `codegen-units = 1`
+# overrides below cannot reach.
+[profile.release]
+lto = "thin"
+# Same no-debug-symbol contract as `[profile.dev]`/`[profile.test]` above: this
+# profile-level setting was previously missing here, so every `--release` build
+# (wheel builds, `cargo run --release`, ad-hoc release binaries) left full
+# symbol tables un-stripped — the identical disk-bloat pattern the dev/test
+# comment above describes, just never closed for this profile. `debug` is
+# already Cargo's release default (no DWARF); `strip` is not.
+strip = "symbols"
+
+# Corpus production has its own executable lineage. Runtime checks remain enabled
+# for workspace crates; tests keep their separate O3, non-LTO build.
+[profile.pipeline]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+incremental = false
+debug = false
+strip = "symbols"
+debug-assertions = true
+overflow-checks = true
+
+[profile.pipeline.package."*"]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+# === First-party release tuning ===
+# Our own crates carry the runtime hot paths (logic chase, SHACL evaluation,
+# validation lints). The default release profile splits each crate into 16
+# codegen units, which forfeits cross-function inlining WITHIN the crate.
+# codegen-units = 1 lets LLVM optimize each of our crates as a single unit.
+#
+# This is scoped to FIRST-PARTY crates via per-package overrides on purpose;
+# third-party dependencies keep the default 16 units, so neither their build RAM
+# nor build time regresses.
+# A per-package table inherits every unspecified setting from `[profile.release]`:
+# `gmeow-logic` therefore remains at release `opt-level = 3`; this override changes
+# ONLY `codegen-units`. Net effect: only the crates we actually wrote get the tighter
+# within-crate optimization unit.
+# Workspace-wide thin-LTO IS now enabled (see `[profile.release]` above) — its
+# peak link RSS was measured at 7.37 GB, well within the 16 GB wheel-runner
+# budget. codegen-units = 1 below still matters: it sets the
+# per-crate optimization unit; thin-LTO then inlines ACROSS crate boundaries on
+# top of that.
+[profile.release.package.gmeow-logic]
+codegen-units = 1
+
+[profile.release.package.gmeow-logic-compile]
+codegen-units = 1
+
+[profile.release.package.gmeow-lang-form]
+codegen-units = 1
+
+[profile.release.package.gmeow-lang-bridge]
+codegen-units = 1
+
+[profile.release.package.gmeow-validate]
+codegen-units = 1
+
+[profile.release.package.gmeow-errors]
+codegen-units = 1
+
+[profile.release.package.gmeow-docs]
+codegen-units = 1
+
+[profile.release.package.gmeow-pipeline]
+codegen-units = 1
+
+[profile.release.package.gmeow-slicetest]
+codegen-units = 1
+
+[profile.release.package.gmeow-conformance]
+codegen-units = 1
+
+# The wasm cdylib. codegen-units = 1 for a single optimization
+# unit; binary-size reduction (opt-level "z" + wasm-opt) is applied by the
+# wasm-pack build in the crate's own package metadata, not the workspace release
+# profile (which native wheels share).
+[profile.release.package.gmeow-validate-wasm]
+codegen-units = 1
+
+# `cargo bench` (used by `make bench`) runs under the `bench` profile, which
+# inherits the BASE release settings but NOT the per-package overrides above.
+# Our own crates bench at the release base (opt-level 3); criterion deltas across
+# phases are relative, so codegen-units fidelity to the wheel is not required here.
+#
+# Thin-LTO is the one base-release setting we DROP for bench: bench
+# deltas are relative, so wheel fidelity is explicitly not required here, and a
+# cross-crate LTO link on every `make bench` would add build time for no
+# measurement benefit. Release/wheel artifacts still get thin-LTO via the base.
+
+[profile.release.package.gmeow-lsp]
+codegen-units = 1
+
+[profile.release.package.gmeow-cli-core]
+codegen-units = 1
+
+[profile.release.package.gmeow-cli]
+codegen-units = 1
+
+[profile.release.package.gmeow-dev-cli]
+codegen-units = 1
+
+[profile.release.package.gmeow-slice-quality]
+codegen-units = 1
+
+[profile.bench]
+lto = false
+# Same no-debug-symbol contract as `[profile.dev]`/`[profile.test]`/`[profile.release]`
+# above — `bench` does not inherit `[profile.release]`'s settings (Cargo profile
+# overrides are per-profile), so it needs its own `strip` closing the same gap.
+strip = "symbols"
