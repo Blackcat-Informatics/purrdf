@@ -1,0 +1,16 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/crates/entail)
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/proof/schema_tests.rs:256:9
+    |
+256 |     let super::ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+256 -     let super::ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+256 +     let ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+    |
+
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 594,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof",
+  "branch": "paudley/594-owl-dl-borrow-the-prepared-proof",
+  "slug": "owl-dl-borrow-the-prepared-proof",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "8166dbcc93dd759a2f29cc730eaf27734d12ee6d",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof",
+    "branch:paudley/594-owl-dl-borrow-the-prepared-proof",
+    "stage:/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof",
+    "issue:/home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T15:22:12-0600"
+}

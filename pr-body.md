@@ -1,0 +1,7 @@
+Native proof checking previously consumed the prepared reasoner and immediately canonicalized the complete source a second time. Callers can now borrow the exact consumer-owned knowledge base and verify against its sealed source identity, retaining the reasoner for later services.
+
+Owning and borrowed storage share one context constructor. Supplied-source and prepared verification share the same input, question, trust-base, certificate and native replay checks. The actual validation caller uses prepared verification after independently preparing its original source and question. Existing proof encodings and decision semantics remain unchanged.
+
+Final native validation passed: four ownership controls, 174 proof regressions, six public cases, all sixteen shared service/schema vectors and the imported-source regression. Strict affected all-target Clippy passed. All six public cases passed on scalar WASM. Both WASM validation cases, the compile-fail lifetime check and all normal signed commit hooks also passed. The hosted optimized npm/WASM package job is still building; the scalar WASM results above are a separate qualification. No elapsed-time speedup is claimed.
+
+Refs #594, which remains open pending actual packaged WASM qualification. Advances Blackcat-Informatics/gmeow-ontology#1803; precise local-premise support, monotone source updates and downstream class-engine replacement remain open.

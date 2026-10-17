@@ -1,0 +1,51 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "The prepared native reasoner currently has to be consumed to obtain its proof checking context. A caller retaining one prepared source for repeated decisions cannot borrow that same immutable context for checking; it must give up the reasoner or prepare another one. This obstructs the shared native store boundary required by downstream logic execution.\n\nAdd a borrowed checking context over the caller-owned prepared native knowledge base. Reuse the existing source identity, prepared schema and single proof checker. Preserve the independently owned checking context for callers that need ownership to outlive the reasoner. Both are explicit storage/lifetime choices of the same context, not alternate proof semantics.\n\nAcceptance:\n\n- A recorded reasoner can lend its prepared knowledge base to the existing checker without cloning, reverse mapping or source canonicalization. The Rust lifetime prevents mutation or destruction while the borrow is live.\n- Owning and borrowed contexts produce identical source/calculus identities and replay reports for independently prepared consumers. Keep exact service-question preparation and reject changed input, question and proof.\n- Contexts retain the caller stop signal and preparation refusals. Unrecorded reasoners still refuse checking-context construction. Dropping a borrowed context leaves the reasoner usable for later decisions.\n- Route the actual native validation proof-checking path through the borrowed form after preparing the consumer question. Do not use producer search state as checking authority or add a duplicate checker.\n- Run affected native checks, strict Clippy, normal hooks and the packaged WASM proof registration lane where available. No new runtime dependency, source filtering, machine probe, resource cap or semantic feature.\n\nThis advances the shared prepared-store boundary needed by Blackcat-Informatics/gmeow-ontology#1803. It does not claim source-premise dependency extraction, incremental ABox updates or downstream class-engine replacement.\n\nPrepared verification must reuse the immutable consumer context identity instead of immediately canonicalizing the whole source a second time. Retain the explicit supplied-source verification boundary, with both forms sharing source/question/trust-base binding and the same replay implementation. The actual validation caller must use prepared verification. Tests must compare complete replay reports across both storage and input choices and reject a different prepared source, wrong question, unprepared query context and stopped caller.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABdALArA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Borrow the prepared proof checking context\n\nThe existing native context owns its prepared knowledge base and consumes Reasoner. Add a borrowing constructor to the same context and checker, preserving the owning constructor for callers that need independent lifetime ownership. The actual validation proof checker will borrow its independently prepared consumer reasoner after preparing the requested question.\n\n## Task 1: Share context storage without copying source\n\nRepresent ownership explicitly inside DlProofContext with a lifetime tied to the borrowed knowledge base. All checking methods continue using the same immutable Kb, native clauses, source identity and calculus contract. Owning contexts remain static and preserve existing consumer preparation. Borrowed contexts may not outlive or coexist with mutation of their reasoner. The explicit storage choice adds no second proof algorithm, source filtering, semantic feature or dependency.\n\n## Task 2: Exercise the real checker and its lifetime\n\nTest borrowed versus owned replay over independently prepared consumers, both complete consistency outcomes and selected questions that intern additional concepts. Verify actual storage borrowing, unchanged preparation measurements, exact input/contract identity, changed-source and question rejection, absent recording refusal, original stop behavior, and later reuse of the reasoner after dropping the context. Add compile-fail documentation for mutation/lifetime exclusion. Run the actual validation proof regressions and native/packaged WASM registrations through existing targets.\n\n## Task 3: Qualify and integrate\n\nRun affected native tests, strict affected all-target Clippy and normal hooks. Inspect full review surfaces and current hosted checks, address actionable feedback and merge only through ghprsq. Keep downstream local-premise support, monotone ABox update and class-engine replacement explicitly open under the existing full plan. No local GMEOW corpus producer, full GMEOW gate, machine probe, resource cap or model/service action is authorized. Reviews are self-reviews unless external feedback actually arrives.\n",
+      "createdAt": "2026-10-17T21:23:01Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/594#issuecomment-6241304748",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABdAWzfQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Borrow the prepared proof checking context\n\nThe existing native context owns its prepared knowledge base and consumes Reasoner. Add a borrowing constructor to the same context and checker, preserving the owning constructor for callers that need independent lifetime ownership. The actual validation proof checker will borrow its independently prepared consumer reasoner after preparing the requested question.\n\n## Task 1: Share context storage without copying source\n\nRepresent ownership explicitly inside DlProofContext with a lifetime tied to the borrowed knowledge base. All checking methods continue using the same immutable Kb, native clauses, source identity and calculus contract. Owning contexts remain static and preserve existing consumer preparation. Borrowed contexts may not outlive or coexist with mutation of their reasoner. The explicit storage choice adds no second proof algorithm, source filtering, semantic feature or dependency.\n\n## Task 2: Exercise the real checker and its lifetime\n\nTest borrowed versus owned replay over independently prepared consumers, both complete consistency outcomes and selected questions that intern additional concepts. Verify actual storage borrowing, unchanged preparation measurements, exact input/contract identity, changed-source and question rejection, absent recording refusal, original stop behavior, and later reuse of the reasoner after dropping the context. Add compile-fail documentation for mutation/lifetime exclusion. Run the actual validation proof regressions and native/packaged WASM registrations through existing targets.\n\n## Task 3: Qualify and integrate\n\nRun affected native tests, strict affected all-target Clippy and normal hooks. Inspect full review surfaces and current hosted checks, address actionable feedback and merge only through ghprsq. Keep downstream local-premise support, monotone ABox update and class-engine replacement explicitly open under the existing full plan. No local GMEOW corpus producer, full GMEOW gate, machine probe, resource cap or model/service action is authorized. Reviews are self-reviews unless external feedback actually arrives.\n\n## Prepared verification dataflow\n\nSource inspection after the first runtime checks found that validation canonicalizes the complete source in Reasoner::with_proofs and then immediately repeats it in ServiceProof::verify. Add verify_prepared against the sealed immutable consumer context. Factor source/question/trust-base binding into one helper and retain the existing supplied-source check as an explicit validation boundary using the same replay implementation. The production validation caller will use the prepared path. Owning/borrowed and source/prepared paths must return identical reports, with wrong source context, wrong question, tampered proof and stopping receipt still rejected. This eliminates one duplicate complete-source identity computation per actual validation check; no elapsed-time speedup is claimed without measurement. This strengthens the same prepared-store scope and leaves the larger ownership plan open.\n",
+      "createdAt": "2026-10-17T21:35:58Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/594#issuecomment-6241497981",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-17T21:21:51Z",
+  "labels": [],
+  "milestone": null,
+  "number": 594,
+  "state": "OPEN",
+  "title": "OWL DL: borrow the prepared proof checking context",
+  "updatedAt": "2026-10-17T21:37:33Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/594"
+}

@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/594-owl-dl-borrow-the-prepared-proof/.stage/owl-dl-borrow-the-prepared-proof/brief.json  (+ requirements.json, references.json)
+
+  - issue #594 + 2 comment(s) via github
+  - link crawl: no `#N` references in the issue or its comments
+  - forge search on ['borrow', 'prepared', 'proof']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 9 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #594 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #594: 0
+  - requirement candidates: 3 line(s); 1 comment(s) matched no rule
+  - referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 0 URL(s)

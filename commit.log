@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 8166dbcc93dd (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/594-owl-dl-borrow-the-prepared-proof 925b4a7e7] Reuse prepared native proof checking contexts
+ 10 files changed, 392 insertions(+), 48 deletions(-)
+ create mode 100644 crates/entail/src/reasoner/borrowed_tests.rs

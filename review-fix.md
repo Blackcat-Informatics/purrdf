@@ -1,0 +1,3 @@
+@coderabbitai Fixed the WASM summary using a fresh inventory of every exact selection in the current Makefile: 165 named cases in 28 integration targets, with 175 executions across 33 scalar/SIMD invocations. The inventory covers all current targets, including the graph-free carrier lanes. Added descriptions for the touched fixture, service-assumption check and immutable storage access.
+
+This final push changes documentation only. The executable Rust and test bodies are unchanged, so the passing native and scalar WASM evidence remains applicable. Normal signed hooks passed again. Please refresh the documentation checklist against this update. The actual optimized npm/WASM package CI job remains a separate qualification; the issue stays open until that job passes.

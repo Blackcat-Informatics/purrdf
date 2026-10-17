@@ -1,0 +1,5 @@
+# Final documentation delta
+
+The child commit changes three Rust documentation comments and the introductory WASM selection totals only. A direct diff assertion confirms every Rust addition is a documentation comment and no executable Rust line was removed or altered. Normal signed hooks passed on the child. The runtime, native and scalar WASM evidence therefore remains applicable to unchanged execution. The RDF input, proof bytes, certificates and fixtures are unchanged.
+
+The complete current Makefile inventory, rather than a one-case increment to older prose, gives 165 named cases in 28 targets, 175 executions and 33 invocations. wasm-inventory.json records every parsed package/target/selection; the command parser asserts it accounted for every selected cargo invocation. The out-of-diff review finding is addressed with that measured source inventory. The touched missing function contracts are documented. No updated external coverage percentage is claimed until the checklist actually refreshes.

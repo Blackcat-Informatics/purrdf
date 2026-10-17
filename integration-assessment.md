@@ -1,0 +1,9 @@
+# Integration assessment
+
+The PR targets main. A fresh fetch found no additional base changes, and Git computed a clean final candidate recorded in integration-candidate.tree. No base behavior or dependency delta invalidates the selected functional evidence. The implementation commit is followed only by two documentation children; the Rust delta is three documentation comments, with no executable or test-body changes. The current Makefile inventory and complete documentation target set agree.
+
+All selected native, scalar WASM, lifetime and strict Clippy checks passed, and all three normal signed commits and pushes completed. CodeRabbit reviewed the implementation and raised documentation findings, which are repaired and recorded in review-debt.md. No new full implementation review is fabricated for unchanged execution.
+
+Hosted CI, including the optimized npm/WASM package, is pending under the explicit maintainer merge instruction. Its issue remains open. Final integration uses only ghprsq with this exact Stage directory. Verify the actual result against this assessed candidate once, read essential archived logs and remove only this owned worktree and branch after successful archival. Preserve unrelated source and sibling worktrees.
+
+Final external documentation disposition: the latest CodeRabbit reply confirms all 28 targets, 165 named cases, 175 executions and 33 invocations; exact URI, scalar/SIMD statement and shared BLAKE3 selections; corrected six/five/three counts; contiguous Markdown; and all three function descriptions. It states the documentation mismatch is addressed and the documentation-only changes do not invalidate the reported native/scalar results. It did not rerun tests or independently verify hooks. Packaged qualification remains pending. No updated numeric documentation-coverage percentage is claimed.
