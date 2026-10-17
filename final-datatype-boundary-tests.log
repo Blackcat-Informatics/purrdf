@@ -1,0 +1,30 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 45s
+     Running unittests src/lib.rs (/opt/.cargo/13/fd31473041f40c/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 17 tests
+test owl_dl::data::tests::a_complement_of_the_data_domain_is_empty ... ok
+test owl_dl::data::tests::a_datatype_intersected_with_its_own_complement_is_empty ... ok
+test owl_dl::data::tests::an_ill_typed_literal_makes_the_ontology_inconsistent ... ok
+test owl_dl::data::tests::an_empty_facet_range_makes_the_ontology_inconsistent ... ok
+test owl_dl::data::tests::an_ontology_without_a_literal_holds_no_data_range ... ok
+test owl_dl::data::tests::a_datatype_intersected_with_a_wider_one_of_its_own_space_is_inhabited ... ok
+test owl_dl::data::tests::a_functional_data_property_separates_two_language_tagged_values ... ok
+test owl_dl::data::tests::native_any_uri_is_exact_while_an_unmodelled_datatype_is_reported ... ok
+test owl_dl::data::tests::a_literal_outside_its_property_range_is_inconsistent ... ok
+test owl_dl::data::tests::a_decidable_data_range_leaves_the_run_exact ... ok
+test owl_dl::data::tests::a_pattern_facet_is_reported_rather_than_guessed ... ok
+test owl_dl::data::tests::a_functional_data_property_counts_values_rather_than_lexical_forms ... ok
+test owl_dl::data::tests::a_functional_property_tells_sixty_digit_values_apart ... ok
+test owl_dl::data::tests::a_min_cardinality_over_a_smaller_enumeration_is_inconsistent ... ok
+test owl_dl::data::tests::the_numeric_tower_identifies_only_what_the_datatype_map_nests ... ok
+test owl_dl::data::tests::facet_ranges_past_machine_integers_are_judged_exactly ... ok
+test owl_dl::data::tests::a_satisfiable_facet_range_stays_satisfiable ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 702 filtered out; finished in 0.00s
+

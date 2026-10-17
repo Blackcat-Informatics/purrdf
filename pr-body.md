@@ -1,0 +1,7 @@
+Fix finite length-space exhaustion and the stale datatype boundary regression exposed by native anyURI support.
+
+The range engine treated every positive character length as inexhaustible by a finite exception list. Character alphabets are finite, so that could invent an inhabited range after all values were excluded. Count only up to the queried exception count plus one, including the collapsed-anyURI adjacency/end rules and octet spaces. This preserves the exact comparison and terminates after a bounded number of arithmetic steps even for a maximal length. The new threshold test checks the actual XML terminal census, exact finite boundaries and maximal length/count inputs without materializing a huge enumeration.
+
+The OWL-DL regression also used `xsd:anyURI` as its unsupported datatype. Replace that fixture with a two-row contract: anyURI has no data-range boundary, while unmodelled `owl:real` retains the explicit boundary. Both remain consistent, preserving the negative capability check.
+
+Validation: the complete XSD crate suite and all-target clippy with warnings denied passed, including the new finite-exhaustion threshold regression. All 17 affected native datatype tests passed before the range correction; their affected rerun and WASM replay are recorded before merge. Normal configured hooks run on both commits. Advances #572. Original failing job: https://github.com/Blackcat-Informatics/purrdf/actions/runs/39018704037/job/117356063207 (717 passed, one failed, one report-only ignored). Full hosted qualification remains separate.
