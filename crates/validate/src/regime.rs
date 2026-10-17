@@ -4823,6 +4823,11 @@ pub fn check_dl_proof(
 /// WASM and PyO3 crates consume the SAME bytes as the Rust test rather than each growing a
 /// fixture that drifts from the other three. The artifact lives at
 /// `crates/validate/tests/fixtures/dl-proof.vectors`.
+///
+/// After an intentional proof-layout change, refresh only its proof/check bodies
+/// with `cargo run -p purrdf-validate --example refresh_dl_proof_vectors`.
+/// The explicit producer refuses an answer change and preserves source/questions;
+/// normal native, portable and packaged host tests remain read-only comparisons.
 pub const DL_PROOF_GOLDEN_VECTORS: &str = include_str!("../tests/fixtures/dl-proof.vectors");
 
 /// One case of [`DL_PROOF_GOLDEN_VECTORS`]: a document and a question, and the three strings
