@@ -70,7 +70,10 @@ impl BoundSubjectLookup {
         dataset: &D,
         head: &TermValue,
         graph: GraphMatch<D::Id>,
-    ) -> Result<Self, EvalError> {
+    ) -> Result<Self, EvalError>
+    where
+        D::ReadError: purrdf_core::StructuredError,
+    {
         let table = MemoryRelation::from_graph(dataset, head, graph, 1, 1)?;
         Ok(Self::new(table.rows().to_vec()))
     }

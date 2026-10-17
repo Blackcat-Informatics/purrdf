@@ -1665,6 +1665,245 @@ fn raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers() {
     );
 }
 
+fn memory_failure_fields<'a>(
+    error: &'a EvalError,
+    kind: NativeDiagnosticKind,
+    code: &str,
+) -> Capture<'a> {
+    let EvalError::RetainedNativeFailure(failure) = error else {
+        panic!("the original native failure must survive")
+    };
+    assert_eq!(failure.kind(), kind);
+    let buffer = Vec::with_capacity(16);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(failure.cause(), buffer);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, code);
+    fields
+}
+
+fn memory_relation_configuration_refusals_keep_arity_and_width() {
+    use purrdf_sparql_eval::{MemoryRelation, PfArgs, PropertyFunction};
+    let original = MemoryRelation::new(1, 1, vec![Vec::new()]).unwrap_err();
+    let retained = original.clone();
+    drop(original);
+    let fields = memory_failure_fields(
+        &retained,
+        NativeDiagnosticKind::Config,
+        "property-memory-config-row",
+    );
+    assert!(matches!(fields.field("index"), ErrorValue::Unsigned(0)));
+    assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(0)));
+    assert!(matches!(fields.field("required"), ErrorValue::Unsigned(2)));
+    assert!(matches!(
+        fields.child("arity").field("subject"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(retained.diagnostic_code().is_none());
+    assert_eq!(
+        retained.to_string(),
+        "invalid evaluation configuration: in-memory property-function row 0 has 0 value(s); the declared arity (1 subject / 1 object) requires 2"
+    );
+
+    let overflow = MemoryRelation::new(usize::MAX, 1, Vec::new()).unwrap_err();
+    let fields = memory_failure_fields(
+        &overflow,
+        NativeDiagnosticKind::Config,
+        "property-memory-arity-overflow",
+    );
+    assert!(
+        matches!(fields.field("requested"), ErrorValue::Unsigned(value) if value == usize::MAX as u128 + 1)
+    );
+    assert!(
+        matches!(fields.field("limit"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(
+        matches!(fields.child("arity").field("subject"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+
+    let limit = purrdf_core::binding_pattern::BindingPattern::MAX_ARITY;
+    assert!(MemoryRelation::new(limit, 0, Vec::new()).is_ok());
+    let overwide = MemoryRelation::new(limit + 1, 0, Vec::new()).unwrap_err();
+    let fields = memory_failure_fields(
+        &overwide,
+        NativeDiagnosticKind::Config,
+        "property-memory-arity-capacity",
+    );
+    assert!(
+        matches!(fields.field("requested"), ErrorValue::Unsigned(value) if value == limit as u128 + 1)
+    );
+    assert!(matches!(fields.field("limit"), ErrorValue::Unsigned(value) if value == limit as u128));
+
+    let relation = MemoryRelation::new(1, 1, Vec::new()).unwrap();
+    let error = relation
+        .open(&PfArgs::new(&[], &[None]), None)
+        .err()
+        .unwrap();
+    let fields = memory_failure_fields(
+        &error,
+        NativeDiagnosticKind::Function,
+        "property-memory-invocation",
+    );
+    assert!(matches!(
+        fields.child("expected").field("subject"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(matches!(
+        fields.child("actual").field("subject"),
+        ErrorValue::Unsigned(0)
+    ));
+    assert!(error.diagnostic_code().is_none());
+    assert_eq!(
+        error.to_string(),
+        "host function error: in-memory property function expects 1 subject / 1 object argument(s), got 0 subject / 1 object"
+    );
+}
+
+fn memory_table_fixture(
+    case: &str,
+) -> (
+    std::sync::Arc<purrdf_core::RdfDataset>,
+    purrdf_core::TermValue,
+) {
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_iri::vocab::rdf;
+    let mut builder = RdfDatasetBuilder::new();
+    let head = builder.intern_iri("https://example.org/table").unwrap();
+    let row = builder.intern_iri("https://example.org/row").unwrap();
+    let tail = builder.intern_iri("https://example.org/tail").unwrap();
+    let a = builder.intern_iri("https://example.org/a").unwrap();
+    let b = builder.intern_iri("https://example.org/b").unwrap();
+    let first = builder.intern_iri(rdf::FIRST).unwrap();
+    let rest = builder.intern_iri(rdf::REST).unwrap();
+    let nil = builder.intern_iri(rdf::NIL).unwrap();
+    builder.push_quad(head, first, row, None).unwrap();
+    builder.push_quad(head, rest, nil, None).unwrap();
+    if case == "table-first" {
+        builder.push_quad(head, first, a, None).unwrap();
+    }
+    if case != "row-missing" {
+        builder.push_quad(row, first, a, None).unwrap();
+    }
+    if case == "row-first" {
+        builder.push_quad(row, first, b, None).unwrap();
+    }
+    let next = match case {
+        "row-dangling" => b,
+        "valid" => tail,
+        _ => nil,
+    };
+    builder.push_quad(row, rest, next, None).unwrap();
+    if case == "row-rest" {
+        builder.push_quad(row, rest, b, None).unwrap();
+    }
+    if case == "valid" {
+        builder.push_quad(tail, first, b, None).unwrap();
+        builder.push_quad(tail, rest, nil, None).unwrap();
+    }
+    (
+        builder.freeze().unwrap(),
+        TermValue::iri("https://example.org/table"),
+    )
+}
+
+fn memory_relation_graph_refusals_keep_native_list_causes() {
+    use purrdf_core::{GraphMatch, TermValue};
+    use purrdf_sparql_eval::MemoryRelation;
+    for (case, code, reason) in [
+        (
+            "table-first",
+            "property-memory-table-list",
+            Some("rdf-list-multiple-first"),
+        ),
+        (
+            "row-first",
+            "property-memory-row-list",
+            Some("rdf-list-multiple-first"),
+        ),
+        (
+            "row-missing",
+            "property-memory-row-list",
+            Some("rdf-list-missing-first"),
+        ),
+        (
+            "row-dangling",
+            "property-memory-row-list",
+            Some("rdf-list-dangling-rest"),
+        ),
+        (
+            "row-rest",
+            "property-memory-row-list",
+            Some("rdf-list-multiple-rest"),
+        ),
+        ("row-width", "property-memory-graph-row", None),
+    ] {
+        let (dataset, head) = memory_table_fixture(case);
+        let original =
+            MemoryRelation::from_graph(&*dataset, &head, GraphMatch::Default, 1, 1).unwrap_err();
+        drop(dataset);
+        drop(head);
+        let retained = original.clone();
+        drop(original);
+        let fields = memory_failure_fields(&retained, NativeDiagnosticKind::Data, code);
+        assert!(retained.diagnostic_code().is_none());
+        if case != "table-first" {
+            assert!(matches!(fields.field("index"), ErrorValue::Unsigned(0)));
+        }
+        if let Some(reason) = reason {
+            assert_eq!(fields.child("cause").code, reason);
+        } else {
+            assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
+            assert!(matches!(fields.field("required"), ErrorValue::Unsigned(2)));
+        }
+    }
+    let (dataset, _) = memory_table_fixture("valid");
+    let missing = TermValue::iri("https://example.org/缺失");
+    let error =
+        MemoryRelation::from_graph(&*dataset, &missing, GraphMatch::Default, 1, 1).unwrap_err();
+    drop(dataset);
+    drop(missing);
+    let fields = memory_failure_fields(
+        &error,
+        NativeDiagnosticKind::Data,
+        "property-memory-missing-head",
+    );
+    assert!(matches!(
+        fields.child("head").field("iri"),
+        ErrorValue::Iri("https://example.org/缺失")
+    ));
+    assert_eq!(
+        error.to_string(),
+        "malformed RDF input: property-function table head Iri(\"https://example.org/缺失\") is not present in the dataset"
+    );
+}
+
+fn memory_relation_source_failure_cannot_publish_partial_table() {
+    use purrdf_core::{DatasetView, GraphMatch, TripleDataset, TripleReadError};
+    use purrdf_sparql_eval::MemoryRelation;
+    let (dataset, head) = memory_table_fixture("valid");
+    let triples = TripleDataset::try_from(std::sync::Arc::try_unwrap(dataset).unwrap()).unwrap();
+    let read = triples.read().unwrap();
+    let id = read.term_id_by_value(&head).unwrap().unwrap();
+    let error = MemoryRelation::from_graph(&read, &head, GraphMatch::Named(id), 1, 1).unwrap_err();
+    let fields = memory_failure_fields(
+        &error,
+        NativeDiagnosticKind::SourceRead,
+        "triple-read-named-graphs-unsupported",
+    );
+    assert!(fields.events.is_empty());
+    assert_eq!(error.diagnostic_code(), Some("native-sparql-source-read"));
+    assert!(error.is_native_storage_failure());
+    let source = std::error::Error::source(&error).unwrap().source().unwrap();
+    assert!(matches!(
+        source.downcast_ref::<TripleReadError>(),
+        Some(TripleReadError::NamedGraphsUnsupported)
+    ));
+    let (dataset, head) = memory_table_fixture("valid");
+    let relation = MemoryRelation::from_graph(&*dataset, &head, GraphMatch::Default, 1, 1).unwrap();
+    assert_eq!(relation.rows().len(), 1);
+    assert_eq!(relation.rows()[0].len(), 2);
+}
+
 fn shacl_body_mismatch_keeps_original_boolean_solutions_and_graph() {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
@@ -1724,7 +1963,7 @@ fn shacl_body_mismatch_keeps_original_boolean_solutions_and_graph() {
             purrdf_sparql_eval::protocol::FailureCode::from(&retained),
             purrdf_sparql_eval::protocol::FailureCode::Evaluation
         );
-        let EvalError::RetainedInvariant(native) = &retained else {
+        let EvalError::RetainedNativeFailure(native) = &retained else {
             panic!("the original mismatch must survive")
         };
         let buffer = Vec::with_capacity(32);
@@ -2576,6 +2815,9 @@ fn knn_artifact_refusals_retain_native_format_causes() {
 }
 
 purrdf_testkit::harness_main!(
+    memory_relation_configuration_refusals_keep_arity_and_width,
+    memory_relation_graph_refusals_keep_native_list_causes,
+    memory_relation_source_failure_cannot_publish_partial_table,
     shacl_body_mismatch_keeps_original_boolean_solutions_and_graph,
     knn_zero_norm_retains_row_after_original_owner_release,
     knn_artifact_refusals_retain_native_format_causes,

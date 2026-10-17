@@ -24,7 +24,7 @@ pub(super) fn retain<D: DatasetView + Sync>(
     expected: UserFnBody,
     outcome: Outcome<D::Id>,
     child: &EvalCtx<'_, D>,
-) -> Result<crate::RetainedInvariant, EvalError> {
+) -> Result<crate::RetainedNativeFailure, EvalError> {
     let iri = child.growth.authored_text(iri)?;
     let mut rows = AdmittedVec::new(&child.growth);
     if let Outcome::Solutions(solutions) = &outcome {
@@ -46,7 +46,8 @@ pub(super) fn retain<D: DatasetView + Sync>(
             rows.push(values)?;
         }
     }
-    crate::RetainedInvariant::new(
+    crate::RetainedNativeFailure::new(
+        crate::NativeDiagnosticKind::Internal,
         BodyMismatch {
             iri,
             expected,

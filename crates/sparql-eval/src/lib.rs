@@ -210,7 +210,7 @@ pub use engine::{
     PreparedQuery, PreparedRdflibQuery, QueryOptions,
 };
 pub use error::{
-    EvalError, EvaluatorInvariant, RetainedInvariant, StackExpectation, UnsupportedKind,
+    EvalError, EvaluatorInvariant, RetainedNativeFailure, StackExpectation, UnsupportedKind,
 };
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,

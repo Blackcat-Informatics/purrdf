@@ -81,6 +81,15 @@ impl std::fmt::Display for RdfListError {
 
 impl std::error::Error for RdfListError {}
 
+impl purrdf_hash::error::StructuredError for RdfListError {
+    purrdf_hash::error_visit! {
+        MissingFirst => "rdf-list-missing-first" {},
+        MultipleFirst => "rdf-list-multiple-first" {},
+        DanglingRest => "rdf-list-dangling-rest" {},
+        MultipleRest => "rdf-list-multiple-rest" {},
+    }
+}
+
 /// Which invariant of an RDF Collection the strict walker
 /// ([`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict))
 /// found broken, at [`ListError::node`].

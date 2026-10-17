@@ -63,6 +63,8 @@ use crate::DetHashMap;
 use crate::error::EvalError;
 use crate::user_fn::Volatility;
 
+mod memory_refusal;
+
 // ---------------------------------------------------------------------------
 // Positional shape
 // ---------------------------------------------------------------------------
@@ -3723,24 +3725,30 @@ impl MemoryRelation {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Config`] if any row's width differs from
+    /// A retained [`crate::NativeDiagnosticKind::Config`] cause if any row's width differs from
     /// `subject_arity + object_arity`. A ragged table is a host configuration error,
     /// caught where it is supplied rather than surfacing later as a row the engine
-    /// cannot bind.
+    /// cannot bind. Unrepresentable arities and arities beyond the existing
+    /// [`BindingPattern::MAX_ARITY`] carrier are refused in this same class.
     pub fn new(
         subject_arity: usize,
         object_arity: usize,
         rows: Vec<PfRow>,
     ) -> Result<Self, EvalError> {
         let arity = PfArity::new(subject_arity, object_arity);
-        let width = arity.total();
+        let workspace = crate::WorkspaceCapability::resident();
+        let width = memory_refusal::width(arity, &workspace)?;
         for (index, row) in rows.iter().enumerate() {
             if row.len() != width {
-                return Err(EvalError::config(format!(
-                    "in-memory property-function row {index} has {} value(s); the declared \
-                     arity ({arity}) requires {width}",
-                    row.len()
-                )));
+                return Err(crate::RetainedNativeFailure::error(
+                    crate::NativeDiagnosticKind::Config,
+                    memory_refusal::Refusal::ConfigRow {
+                        index,
+                        actual: row.len(),
+                        arity,
+                    },
+                    &workspace,
+                ));
             }
         }
         Ok(Self {
@@ -3771,63 +3779,94 @@ impl MemoryRelation {
     ///
     /// # Errors
     ///
-    /// * [`EvalError::Data`] if `head` or any row head is a torn or malformed
+    /// * A retained [`crate::NativeDiagnosticKind::Data`] cause if `head` or any row head is a torn or malformed
     ///   `rdf:List` (a cell missing its `rdf:first`, a multi-valued `rdf:first`, or an
     ///   `rdf:rest` pointing at a non-cell), or if a row's length differs from
     ///   `subject_arity + object_arity`. Both are bad *input* rather than a caller API
     ///   misuse, so they are distinguished from [`Self::new`]'s
     ///   [`EvalError::Config`].
-    /// * [`EvalError::Data`] if `head` is not interned in `dataset` at all: a head
+    /// * The same Data class if `head` is not interned in `dataset` at all: a head
     ///   naming a list that does not exist is a configuration pointing at nothing, not
     ///   an empty relation.
+    /// * The original typed source failure if the view cannot be read completely;
+    ///   neither partial rows nor provisional list errors authorize a relation.
+    /// * A Config cause if the declared arity cannot fit its binding-pattern carrier.
     pub fn from_graph<D: DatasetView>(
         dataset: &D,
         head: &TermValue,
         graph: GraphMatch<D::Id>,
         subject_arity: usize,
         object_arity: usize,
-    ) -> Result<Self, EvalError> {
+    ) -> Result<Self, EvalError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
+        use crate::{NativeDiagnosticKind as Kind, RetainedNativeFailure as Failure};
         let arity = PfArity::new(subject_arity, object_arity);
-        let width = arity.total();
-        let Some(head_id) = dataset
-            .term_id_by_value(head)
-            .map_err(EvalError::source_read)?
-        else {
-            return Err(EvalError::data(format!(
-                "property-function table head {head:?} is not present in the dataset"
-            )));
-        };
-        let row_heads = dataset.rdf_list(head_id, graph).map_err(|e| {
-            EvalError::data(format!("property-function table is not an rdf:List: {e}"))
-        })?;
+        let workspace = crate::WorkspaceCapability::resident();
+        let width = memory_refusal::width(arity, &workspace)?;
+        let source_error = |cause| Failure::error(Kind::SourceRead, cause, &workspace);
+        // List traversal uses provisional readiness adapters. Only this source
+        // checkpoint can authorize the complete table; a latched read fault wins
+        // over both partial rows and an apparent malformed-list refusal.
+        dataset
+            .checked_read(|dataset| {
+                let Some(head_id) = dataset.term_id_by_value(head).map_err(source_error)? else {
+                    return Err(crate::RetainedNativeFailure::error(
+                        crate::NativeDiagnosticKind::Data,
+                        memory_refusal::Refusal::MissingHead {
+                            head: workspace.clone_term(head)?,
+                        },
+                        &workspace,
+                    ));
+                };
+                let row_heads = dataset.rdf_list(head_id, graph).map_err(|cause| {
+                    crate::RetainedNativeFailure::error(
+                        crate::NativeDiagnosticKind::Data,
+                        memory_refusal::Refusal::TableList { cause },
+                        &workspace,
+                    )
+                })?;
 
-        let mut rows: Vec<PfRow> = Vec::with_capacity(row_heads.len());
-        for (index, row_head) in row_heads.into_iter().enumerate() {
-            let cells = dataset.rdf_list(row_head, graph).map_err(|e| {
-                EvalError::data(format!(
-                    "property-function table row {index} is not an rdf:List: {e}"
-                ))
-            })?;
-            if cells.len() != width {
-                return Err(EvalError::data(format!(
-                    "property-function table row {index} has {} value(s); the declared arity \
-                     ({arity}) requires {width}",
-                    cells.len()
-                )));
-            }
-            rows.push(
-                cells
-                    .into_iter()
-                    .map(|id| crate::scratch::try_term_id_to_value(dataset, id))
-                    .collect::<Result<_, _>>()?,
-            );
-        }
+                let mut rows: Vec<PfRow> = Vec::with_capacity(row_heads.len());
+                for (index, row_head) in row_heads.into_iter().enumerate() {
+                    let cells = dataset.rdf_list(row_head, graph).map_err(|cause| {
+                        crate::RetainedNativeFailure::error(
+                            crate::NativeDiagnosticKind::Data,
+                            memory_refusal::Refusal::RowList { index, cause },
+                            &workspace,
+                        )
+                    })?;
+                    if cells.len() != width {
+                        return Err(crate::RetainedNativeFailure::error(
+                            crate::NativeDiagnosticKind::Data,
+                            memory_refusal::Refusal::GraphRow {
+                                index,
+                                actual: cells.len(),
+                                arity,
+                            },
+                            &workspace,
+                        ));
+                    }
+                    rows.push(
+                        cells
+                            .into_iter()
+                            .map(|id| {
+                                dataset.term_value(id).map_err(|cause| {
+                                    Failure::error(Kind::SourceRead, cause, &workspace)
+                                })
+                            })
+                            .collect::<Result<_, _>>()?,
+                    );
+                }
 
-        Ok(Self {
-            arity,
-            rows: Arc::new(rows),
-            modes: [arity.all_free_mode()],
-        })
+                Ok(Self {
+                    arity,
+                    rows: Arc::new(rows),
+                    modes: [arity.all_free_mode()],
+                })
+            })
+            .map_err(source_error)?
     }
 
     /// The relation's rows, in emission order.
@@ -3866,10 +3905,14 @@ impl PropertyFunction for MemoryRelation {
         // answer rather than a panic on a short row.
         let supplied = args.arity();
         if supplied != self.arity {
-            return Err(EvalError::function(format!(
-                "in-memory property function expects {} argument(s), got {supplied}",
-                self.arity
-            )));
+            return Err(crate::RetainedNativeFailure::error(
+                crate::NativeDiagnosticKind::Function,
+                memory_refusal::Refusal::Invocation {
+                    expected: self.arity,
+                    actual: supplied,
+                },
+                &crate::WorkspaceCapability::resident(),
+            ));
         }
         // The bound positions are cloned into the cursor: a cursor outlives the
         // borrow `args` lends, and a bound argument vector is at most `arity` values
@@ -4214,7 +4257,10 @@ mod tests {
     fn ragged_rows_are_a_configuration_error() {
         let error = MemoryRelation::new(1, 1, vec![vec![iri(EX_A)]])
             .expect_err("a one-value row cannot fill two positions");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
         assert!(error.to_string().contains("requires 2"), "got {error}");
     }
 
@@ -4227,7 +4273,10 @@ mod tests {
         let Err(error) = relation.open(&args, None) else {
             panic!("a zero-argument subject side does not match the declaration");
         };
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
+            "got {error:?}"
+        );
     }
 
     // ---- from_graph ------------------------------------------------------
@@ -4308,7 +4357,10 @@ mod tests {
         let (dataset, head) = table_dataset(&[vec![EX_A, EX_ONE], vec![EX_B]]);
         let error = MemoryRelation::from_graph(&*dataset, &head, GraphMatch::Default, 1, 1)
             .expect_err("a one-value row cannot fill two positions");
-        assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Data),
+            "got {error:?}"
+        );
         assert!(error.to_string().contains("row 1"), "got {error}");
     }
 
@@ -4323,7 +4375,10 @@ mod tests {
             1,
         )
         .expect_err("a head that is not interned names no list");
-        assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Data),
+            "got {error:?}"
+        );
     }
 
     // ---- panic containment ------------------------------------------------

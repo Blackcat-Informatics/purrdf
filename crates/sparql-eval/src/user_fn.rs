@@ -2135,7 +2135,7 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
         // The declaration parser pairs `kind` with the matching body form, so a
         // mismatch is an internal invariant violation, not user input.
         (kind, outcome) => {
-            return Err(EvalError::RetainedInvariant(body_mismatch::retain(
+            return Err(EvalError::RetainedNativeFailure(body_mismatch::retain(
                 iri, kind, outcome, &child,
             )?));
         }

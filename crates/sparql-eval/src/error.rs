@@ -30,8 +30,54 @@ use purrdf_sparql_algebra::ParseError;
 
 mod invariant;
 pub use invariant::{EvaluatorInvariant, StackExpectation};
-mod retained_invariant;
-pub use retained_invariant::RetainedInvariant;
+mod retained_native_failure;
+pub use retained_native_failure::RetainedNativeFailure;
+
+const SOURCE_RENDER_LIMIT: usize = 2048;
+
+/// The existing source-message presentation limit, independent of cause storage.
+/// Output refusal is propagated; only the cause's bounded rendering receives
+/// the historical truncation marker. No inspection calls this formatter.
+fn write_source_message(
+    error: &(impl core::fmt::Display + ?Sized),
+    output: &mut dyn core::fmt::Write,
+) -> core::fmt::Result {
+    const MARKER: &str = "… [truncated]";
+    struct Bounded<'a> {
+        output: &'a mut dyn core::fmt::Write,
+        written: usize,
+        output_failed: bool,
+    }
+    impl core::fmt::Write for Bounded<'_> {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            let remaining = (SOURCE_RENDER_LIMIT - MARKER.len()).saturating_sub(self.written);
+            let length = text.floor_char_boundary(remaining.min(text.len()));
+            if self.output.write_str(&text[..length]).is_err() {
+                self.output_failed = true;
+                return Err(core::fmt::Error);
+            }
+            self.written += length;
+            if text.len() > remaining {
+                Err(core::fmt::Error)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let mut bounded = Bounded {
+        output,
+        written: 0,
+        output_failed: false,
+    };
+    let result = core::fmt::write(&mut bounded, format_args!("{error}"));
+    if bounded.output_failed {
+        return Err(core::fmt::Error);
+    }
+    if result.is_err() {
+        bounded.output.write_str(MARKER)?;
+    }
+    Ok(())
+}
 
 /// Which of the narrow, ENUMERATED classified-unsupported residue an
 /// [`EvalError::Unsupported`] belongs to — see that variant's docs for the full
@@ -132,6 +178,43 @@ impl purrdf_hash::error::StructuredError for NativeDiagnosticKind {
         UnclassifiedUnsupported => "sparql-native-unclassified-unsupported" {},
         CompositeBound => "sparql-native-composite-bound" {},
         StandardFunctionConflict => "sparql-native-standard-function-conflict" {},
+    }
+}
+
+impl NativeDiagnosticKind {
+    pub(super) const fn prefix(self) -> &'static str {
+        match self {
+            Self::Function | Self::FunctionOperational => "host function error",
+            Self::Data => "malformed RDF input",
+            Self::SourceRead => "dataset read failed",
+            Self::Config => "invalid evaluation configuration",
+            Self::Internal => "internal evaluator error",
+            Self::Unsupported(_) | Self::UnclassifiedUnsupported => "unsupported",
+            Self::StandardFunctionConflict => "standard scalar function conflict",
+            Self::CompositeBound => {
+                "the composite value this query asked for exceeds a SEP-0009 resource bound"
+            }
+        }
+    }
+
+    const fn diagnostic_code(self) -> Option<&'static str> {
+        match self {
+            Self::SourceRead => Some("native-sparql-source-read"),
+            Self::Internal => Some(EvalError::INTERNAL_CODE),
+            Self::FunctionOperational => Some(EvalError::FUNCTION_OPERATIONAL_CODE),
+            Self::Unsupported(kind) => Some(kind.code()),
+            Self::CompositeBound => Some(EvalError::COMPOSITE_BOUND_CODE),
+            Self::StandardFunctionConflict => Some("native-sparql-standard-function-conflict"),
+            Self::Function | Self::Data | Self::Config | Self::UnclassifiedUnsupported => None,
+        }
+    }
+
+    const fn preserve_function_failure(self) -> Self {
+        if matches!(self, Self::Function) {
+            Self::FunctionOperational
+        } else {
+            self
+        }
     }
 }
 
@@ -333,9 +416,7 @@ impl NativeDiagnostic {
         }
     }
     fn preserve_function_failure(mut self) -> Self {
-        if self.kind == NativeDiagnosticKind::Function {
-            self.kind = NativeDiagnosticKind::FunctionOperational;
-        }
+        self.kind = self.kind.preserve_function_failure();
         self
     }
 }
@@ -354,21 +435,7 @@ impl core::hash::Hash for NativeDiagnostic {
 }
 impl core::fmt::Display for NativeDiagnostic {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let prefix = match self.kind {
-            NativeDiagnosticKind::Function | NativeDiagnosticKind::FunctionOperational => {
-                "host function error"
-            }
-            NativeDiagnosticKind::Data => "malformed RDF input",
-            NativeDiagnosticKind::SourceRead => "dataset read failed",
-            NativeDiagnosticKind::Config => "invalid evaluation configuration",
-            NativeDiagnosticKind::Internal => "internal evaluator error",
-            NativeDiagnosticKind::Unsupported(_)
-            | NativeDiagnosticKind::UnclassifiedUnsupported => "unsupported",
-            NativeDiagnosticKind::StandardFunctionConflict => "standard scalar function conflict",
-            NativeDiagnosticKind::CompositeBound => {
-                "the composite value this query asked for exceeds a SEP-0009 resource bound"
-            }
-        };
+        let prefix = self.kind.prefix();
         write!(f, "{prefix}: {}", self.message())
     }
 }
@@ -396,8 +463,8 @@ impl purrdf_hash::error::StructuredError for NativeDiagnostic {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError {
-    /// A dynamic native invariant, retaining its original cause without formatting.
-    RetainedInvariant(RetainedInvariant),
+    /// A classified native failure, retaining its original cause without formatting.
+    RetainedNativeFailure(RetainedNativeFailure),
     /// An immutable native diagnostic retaining its exact allocation grant.
     NativeDiagnostic(NativeDiagnostic),
     /// Original RDF diagnostic and immutable allocation owner.
@@ -497,7 +564,7 @@ pub enum EvalError {
     /// (a frozen, validated dataset and a parsed algebra cannot legitimately cause
     /// it); it is surfaced rather than panicking so callers fail cleanly.
     /// Classified native reasons use [`Self::Invariant`]; dynamic native causes
-    /// use [`Self::RetainedInvariant`] instead of flattening their fields here.
+    /// use [`Self::RetainedNativeFailure`] instead of flattening their fields here.
     Internal(String),
 
     /// A native evaluator invariant, classified before diagnostic presentation.
@@ -736,7 +803,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
     purrdf_hash::error_visit! {
         NativeDiagnostic(error) => "sparql-eval-native-diagnostic" { "cause" => Cause(error) },
         RetainedDiagnostic(error) => "sparql-eval-retained-diagnostic" { "cause" => Cause(error) },
-        RetainedInvariant(error) => "sparql-eval-retained-invariant" { "cause" => Cause(error) },
+        RetainedNativeFailure(error) => "sparql-eval-retained-native-failure" { "cause" => Cause(error) },
         RetainedServiceFailure(error) => "sparql-eval-retained-service" { "cause" => Cause(error) },
         UnstableNativeDiagnostic => "sparql-eval-unstable-diagnostic" {},
         Parse(error) => "sparql-eval-parse" { "cause" => Cause(error) },
@@ -826,6 +893,7 @@ impl EvalError {
                 | Self::UnstableNativeDiagnostic
                 | Self::ExchangeIdExhausted
         ) || matches!(error, Self::NativeDiagnostic(diagnostic) if matches!(diagnostic.kind(), NativeDiagnosticKind::SourceRead))
+            || matches!(error, Self::RetainedNativeFailure(failure) if failure.kind() == NativeDiagnosticKind::SourceRead)
             || matches!(error, Self::RetainedServiceFailure(failure) if matches!(failure.remote_error().error(), crate::remote::RemoteError::SourceRead(_) | crate::remote::RemoteError::WorkspaceStopped | crate::remote::RemoteError::AllocationFailed { .. } | crate::remote::RemoteError::ExchangeIdExhausted))
     }
 
@@ -849,6 +917,10 @@ impl EvalError {
             Self::NativeDiagnostic(message) => {
                 Self::NativeDiagnostic(message.preserve_function_failure())
             }
+            Self::RetainedNativeFailure(mut failure) => {
+                failure.kind = failure.kind.preserve_function_failure();
+                Self::RetainedNativeFailure(failure)
+            }
             other => other,
         }
     }
@@ -858,26 +930,9 @@ impl EvalError {
         // The typed root error remains in the fallible engine receipt. This
         // secondary English rendering must fit the fixed report admission even
         // when a host supplies an arbitrarily long operation label.
-        const LIMIT: usize = 2048;
-        const MARKER: &str = "… [truncated]";
-        struct Bounded(String);
-        impl core::fmt::Write for Bounded {
-            fn write_str(&mut self, text: &str) -> core::fmt::Result {
-                let remaining = (LIMIT - MARKER.len()).saturating_sub(self.0.len());
-                if text.len() > remaining {
-                    self.0
-                        .push_str(&text[..text.floor_char_boundary(remaining)]);
-                    return Err(core::fmt::Error);
-                }
-                self.0.push_str(text);
-                Ok(())
-            }
-        }
-        let mut rendered = Bounded(String::with_capacity(LIMIT));
-        if core::fmt::write(&mut rendered, format_args!("{error}")).is_err() {
-            rendered.0.push_str(MARKER);
-        }
-        Self::SourceRead(rendered.0)
+        let mut rendered = String::with_capacity(SOURCE_RENDER_LIMIT);
+        write_source_message(&error, &mut rendered).expect("the String sink cannot refuse");
+        Self::SourceRead(rendered)
     }
     /// Construct an unclassified [`EvalError::Unsupported`] from any displayable
     /// construct name — a genuine gap, not one of the narrow classified residue.
@@ -918,20 +973,8 @@ impl EvalError {
                 }
                 _ => None,
             },
-            Self::NativeDiagnostic(message) => match message.kind() {
-                NativeDiagnosticKind::SourceRead => Some("native-sparql-source-read"),
-                NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
-                NativeDiagnosticKind::FunctionOperational => Some(Self::FUNCTION_OPERATIONAL_CODE),
-                NativeDiagnosticKind::Unsupported(kind) => Some(kind.code()),
-                NativeDiagnosticKind::CompositeBound => Some(Self::COMPOSITE_BOUND_CODE),
-                NativeDiagnosticKind::StandardFunctionConflict => {
-                    Some("native-sparql-standard-function-conflict")
-                }
-                NativeDiagnosticKind::Function
-                | NativeDiagnosticKind::Data
-                | NativeDiagnosticKind::Config
-                | NativeDiagnosticKind::UnclassifiedUnsupported => None,
-            },
+            Self::NativeDiagnostic(message) => message.kind().diagnostic_code(),
+            Self::RetainedNativeFailure(failure) => failure.kind().diagnostic_code(),
             Self::UnstableNativeDiagnostic => Some("native-sparql-unstable-native-diagnostic"),
             Self::SourceRead(_) | Self::WorkspaceStopped => Some("native-sparql-source-read"),
             Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) => {
@@ -946,9 +989,7 @@ impl EvalError {
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::Capacity(_) => Some("native-sparql-capacity-exhausted"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
-            Self::Internal(_) | Self::Invariant(_) | Self::RetainedInvariant(_) => {
-                Some(Self::INTERNAL_CODE)
-            }
+            Self::Internal(_) | Self::Invariant(_) => Some(Self::INTERNAL_CODE),
             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
             Self::FloatEnvironment(_) => Some(Self::FLOAT_ENVIRONMENT_CODE),
             Self::FunctionOperational(_) => Some(Self::FUNCTION_OPERATIONAL_CODE),
@@ -989,6 +1030,11 @@ impl EvalError {
             Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
             Self::NativeDiagnostic(message)
                 if message.kind() == NativeDiagnosticKind::UnclassifiedUnsupported =>
+            {
+                Some(Self::UNSUPPORTED_CODE)
+            }
+            Self::RetainedNativeFailure(failure)
+                if failure.kind() == NativeDiagnosticKind::UnclassifiedUnsupported =>
             {
                 Some(Self::UNSUPPORTED_CODE)
             }
@@ -1155,7 +1201,7 @@ impl core::fmt::Display for EvalError {
                 diagnostic.message
             ),
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
-            Self::RetainedInvariant(cause) => write!(f, "internal evaluator error: {cause}"),
+            Self::RetainedNativeFailure(cause) => core::fmt::Display::fmt(cause, f),
             Self::Invariant(reason) => write!(f, "internal evaluator error: {reason}"),
             Self::Remote(msg) | Self::ServiceUnconfigured(msg) => {
                 write!(f, "SERVICE federation error: {msg}")
@@ -1237,7 +1283,7 @@ impl std::error::Error for EvalError {
             Self::NativeDiagnostic(error) => Some(error),
             Self::Invariant(reason) => Some(reason),
             Self::RetainedDiagnostic(error) => Some(error),
-            Self::RetainedInvariant(error) => Some(error),
+            Self::RetainedNativeFailure(error) => Some(error),
             Self::RetainedServiceFailure(error) => Some(error),
             Self::Parse(error) => Some(error),
             Self::Dataset(error) => Some(error),
@@ -1255,6 +1301,20 @@ purrdf_lex::variant_from!(EvalError { Parse(ParseError) });
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_message_sink_refusal_is_not_replaced_by_a_marker() {
+        struct RefusingSink(usize);
+        impl core::fmt::Write for RefusingSink {
+            fn write_str(&mut self, _: &str) -> core::fmt::Result {
+                self.0 += 1;
+                Err(core::fmt::Error)
+            }
+        }
+        let mut sink = RefusingSink(0);
+        assert!(write_source_message(&"read refused", &mut sink).is_err());
+        assert_eq!(sink.0, 1);
+    }
+
     #[test]
     fn source_read_rendering_is_bounded_and_preserves_utf8_and_short_messages() {
         let host_message = "漢字操作".repeat(20_000);
