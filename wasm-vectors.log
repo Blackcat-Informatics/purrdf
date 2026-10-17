@@ -1,0 +1,80 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling crossbeam-utils v0.8.21
+   Compiling regex-syntax v0.8.11
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/rdf-events)
+   Compiling quote v1.0.46
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/rdf-core)
+   Compiling rustversion v1.0.22
+   Compiling rayon-core v1.13.0
+   Compiling cmov v0.5.4
+   Compiling hashbrown v0.17.1
+   Compiling cpubits v0.1.1
+   Compiling bumpalo v3.20.3
+   Compiling either v1.16.0
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/deflate)
+   Compiling wasm-bindgen v0.2.125
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling ctutils v0.4.2
+   Compiling structured-zstd v0.0.49
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.118
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/iri)
+   Compiling rayon v1.12.0
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling universal-hash v0.6.1
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling polyval v0.7.3
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/cdt)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/ed25519)
+   Compiling ghash v0.6.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/sparql-algebra)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/testkit)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/entail)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/gts)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/crates/validate)
+    Finished `test` profile [optimized] target(s) in 4m 06s
+     Running tests/dl_proof_vectors.rs (/opt/.cargo/38/3ae8c28ee21339/wasm32-unknown-unknown/debug/build/purrdf-validate/ab5b828b0fd41701/out/dl_proof_vectors-ab5b828b0fd41701.wasm)
+
+running 1 test
+test all_shared_dl_proof_vectors_match_the_current_native_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

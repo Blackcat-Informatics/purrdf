@@ -1,0 +1,271 @@
+@case consistency
+@service consistency
+@argument
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+consistency true
+@end
+
+@case class-satisfiability
+@service class-satisfiability
+@argument
+<http://example.org/Cat>
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+class-satisfiability true
+term <http://example.org/Cat>
+@end
+
+@case classify
+@service classify
+@argument
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+subclass <http://example.org/Animal> <http://www.w3.org/2002/07/owl#Thing>
+subclass <http://example.org/Cat> <http://example.org/Animal>
+subclass <http://example.org/Cat> <http://www.w3.org/2002/07/owl#Thing>
+subclass <http://example.org/Fish> <http://example.org/Animal>
+subclass <http://example.org/Fish> <http://www.w3.org/2002/07/owl#Thing>
+subclass <http://www.w3.org/2002/07/owl#Nothing> <http://example.org/Animal>
+subclass <http://www.w3.org/2002/07/owl#Nothing> <http://example.org/Cat>
+subclass <http://www.w3.org/2002/07/owl#Nothing> <http://example.org/Fish>
+subclass <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2002/07/owl#Thing>
+direct <http://example.org/Animal> <http://www.w3.org/2002/07/owl#Thing>
+direct <http://example.org/Cat> <http://example.org/Animal>
+direct <http://example.org/Fish> <http://example.org/Animal>
+direct <http://www.w3.org/2002/07/owl#Nothing> <http://example.org/Cat>
+direct <http://www.w3.org/2002/07/owl#Nothing> <http://example.org/Fish>
+unsatisfiable <http://www.w3.org/2002/07/owl#Nothing>
+@end
+
+@case realize
+@service realize
+@argument
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+type <http://example.org/tom> <http://example.org/Animal>
+type <http://example.org/tom> <http://example.org/Cat>
+type <http://example.org/tom> <http://www.w3.org/2002/07/owl#Thing>
+direct-type <http://example.org/tom> <http://example.org/Cat>
+@end
+
+@case instances
+@service instances
+@argument
+<http://example.org/Animal>
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+instance <http://example.org/tom>
+@end
+
+@case entails
+@service entails
+@argument
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+entails true
+axiom SubClassOf
+term <http://example.org/Cat>
+term <http://example.org/Animal>
+@end
+
+@case extract-module
+@service extract-module
+@argument
+method bot
+<http://example.org/Cat>
+@input
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/Fish> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@answer
+<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+@end
+
+@case schema-preparation-empty-consistency
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+@answer
+consistency true
+@end
+
+@case schema-preparation-empty-class
+@service class-satisfiability
+@argument
+<https://example.org/A>
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+@answer
+class-satisfiability false
+term <https://example.org/A>
+@end
+
+@case schema-preparation-asserted
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-largest-count
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "4294967294"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "0"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-derived
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/edge> <http://www.w3.org/2000/01/rdf-schema#range> <https://example.org/A> .
+<https://example.org/s> <https://example.org/edge> <https://example.org/i> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-existential
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:exists .
+_:exists <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/edge> .
+_:exists <http://www.w3.org/2002/07/owl#someValuesFrom> <https://example.org/A> .
+<https://example.org/s> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/B> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-data-extent
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#boolean> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "3"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-data-containment
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#integer> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#decimal> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@end
+
+@case schema-preparation-union-neighbor
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+_:choice <http://www.w3.org/2002/07/owl#unionOf> _:first .
+_:first <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/A> .
+_:first <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:second .
+_:second <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/Good> .
+_:second <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:choice .
+@answer
+consistency true
+@end

@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 62bb4d25451f (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/588-refresh-shared-cross-host-proof-goldens 378398ca7] Refresh shared DL proof boundary vectors for current support
+ 8 files changed, 311 insertions(+), 233 deletions(-)
+ create mode 100644 crates/validate/examples/refresh_dl_proof_vectors.rs
+ create mode 100644 crates/validate/tests/dl_proof_vectors.rs

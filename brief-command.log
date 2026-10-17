@@ -1,0 +1,14 @@
+issue      /home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/.stage/refresh-shared-cross-host-proof-goldens/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/.stage/refresh-shared-cross-host-proof-goldens/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/.stage/refresh-shared-cross-host-proof-goldens/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/.stage/refresh-shared-cross-host-proof-goldens/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/588-refresh-shared-cross-host-proof-goldens/.stage/refresh-shared-cross-host-proof-goldens/brief.json  (+ requirements.json, references.json)
+
+  - issue #588 + 0 comment(s) via github
+  - link crawl: no `#N` references in the issue or its comments
+  - forge search on ['Refresh', 'shared', 'cross-host']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 6 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #588 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #588: 0
+  - requirement candidates: 0 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 1 path(s) (1 on disk), 0 identifier(s), 1 workspace package(s), 1 URL(s)

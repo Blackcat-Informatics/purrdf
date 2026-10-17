@@ -1,0 +1,26 @@
+{
+  "paths": [
+    {
+      "ref": "crates/validate/tests/fixtures/dl-proof.vectors",
+      "path": "/home/paudley/Active/purrdf/crates/validate/tests/fixtures/dl-proof.vectors",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1105,
+      "licence": "SPDX: CC-BY-4.0",
+      "commits": [
+        "2ce33c668 feat(entail): reason over regular OWL role chains",
+        "d5ee0c862 Prepare schema-invariant cardinality contradictions once per class",
+        "d5f3ab224 feat(entail): decode, render and check the OWL-DL service proof at every host (#214 stage 3B)"
+      ]
+    }
+  ],
+  "identifiers": [],
+  "packages": [
+    "purrdf-validate"
+  ],
+  "urls": [
+    "https://github.com/Blackcat-Informatics/purrdf/actions/runs/39054291844/job/117458981838"
+  ],
+  "truncated": []
+}

@@ -1,0 +1,1272 @@
+﻿2026-10-17T17:33:42.2793868Z Current runner version: '2.337.0'
+2026-10-17T17:33:42.2814060Z ##[group]Runner Image Provisioner
+2026-10-17T17:33:42.2814602Z Hosted Compute Agent
+2026-10-17T17:33:42.2815016Z Version: 20261012.601
+2026-10-17T17:33:42.2815557Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T17:33:42.2816043Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T17:33:42.2816518Z Worker ID: {52ee9834-0d45-4b47-9522-602e3eccda78}
+2026-10-17T17:33:42.2816928Z Region: centralus
+2026-10-17T17:33:42.2817283Z Cloud: Azure
+2026-10-17T17:33:42.2817618Z ##[endgroup]
+2026-10-17T17:33:42.2818654Z ##[group]Operating System
+2026-10-17T17:33:42.2819058Z Ubuntu
+2026-10-17T17:33:42.2819371Z 24.04.5
+2026-10-17T17:33:42.2819670Z LTS
+2026-10-17T17:33:42.2820024Z ##[endgroup]
+2026-10-17T17:33:42.2820407Z ##[group]Runner Image
+2026-10-17T17:33:42.2820790Z Image: ubuntu-24.04
+2026-10-17T17:33:42.2821126Z Version: 20261012.334.1
+2026-10-17T17:33:42.2821948Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-17T17:33:42.2822905Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-17T17:33:42.2823534Z ##[endgroup]
+2026-10-17T17:33:42.2824178Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T17:33:42.2825866Z Contents: read
+2026-10-17T17:33:42.2826256Z Metadata: read
+2026-10-17T17:33:42.2826576Z ##[endgroup]
+2026-10-17T17:33:42.2828031Z Secret source: Actions
+2026-10-17T17:33:42.2828577Z Cache mode: write
+2026-10-17T17:33:42.2829099Z Prepare workflow directory
+2026-10-17T17:33:42.3118426Z Prepare all required actions
+2026-10-17T17:33:42.3150331Z Getting action download info
+2026-10-17T17:33:42.5319663Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-17T17:33:42.6580251Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-17T17:33:42.8191884Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-17T17:33:43.5234764Z Complete job name: pytest
+2026-10-17T17:33:43.5702471Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-17T17:33:43.5703024Z with:
+2026-10-17T17:33:43.5703276Z   persist-credentials: false
+2026-10-17T17:33:43.5703581Z   repository: Blackcat-Informatics/purrdf
+2026-10-17T17:33:43.5706005Z   token: ***
+2026-10-17T17:33:43.5706249Z   ssh-strict: true
+2026-10-17T17:33:43.5706495Z   ssh-user: git
+2026-10-17T17:33:43.5706744Z   clean: true
+2026-10-17T17:33:43.5706997Z   sparse-checkout-cone-mode: true
+2026-10-17T17:33:43.5707291Z   fetch-depth: 1
+2026-10-17T17:33:43.5707534Z   fetch-tags: false
+2026-10-17T17:33:43.5707782Z   show-progress: true
+2026-10-17T17:33:43.5708032Z   lfs: false
+2026-10-17T17:33:43.5708283Z   submodules: false
+2026-10-17T17:33:43.5708552Z   set-safe-directory: true
+2026-10-17T17:33:43.5708839Z   allow-unsafe-pr-checkout: false
+2026-10-17T17:33:43.5709225Z env:
+2026-10-17T17:33:43.5709459Z   UV_PYTHON: 3.13
+2026-10-17T17:33:43.5709703Z ##[endgroup]
+2026-10-17T17:33:43.6345682Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-17T17:33:43.6346909Z ##[group]Getting Git version info
+2026-10-17T17:33:43.6347298Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-17T17:33:43.6347912Z [command]/usr/bin/git version
+2026-10-17T17:33:43.6408003Z git version 2.55.0
+2026-10-17T17:33:43.6420722Z ##[endgroup]
+2026-10-17T17:33:43.6429049Z Temporarily overriding HOME='/home/runner/work/_temp/c9727105-eaf9-495b-829e-1eca81760f9f' before making global git config changes
+2026-10-17T17:33:43.6430707Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T17:33:43.6433429Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-17T17:33:43.6472368Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-17T17:33:43.6474444Z ##[group]Determining repository object format
+2026-10-17T17:33:43.6475607Z ##[endgroup]
+2026-10-17T17:33:43.6476081Z ##[group]Initializing the repository
+2026-10-17T17:33:43.6479148Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-17T17:33:43.6577736Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T17:33:43.6579044Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T17:33:43.6580149Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T17:33:43.6580943Z hint: call:
+2026-10-17T17:33:43.6581390Z hint:
+2026-10-17T17:33:43.6581911Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T17:33:43.6582456Z hint:
+2026-10-17T17:33:43.6582903Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T17:33:43.6583854Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T17:33:43.6584433Z hint:
+2026-10-17T17:33:43.6584889Z hint: 	git branch -m <name>
+2026-10-17T17:33:43.6585353Z hint:
+2026-10-17T17:33:43.6586229Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T17:33:43.6587435Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-17T17:33:43.6589424Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-17T17:33:43.6642358Z ##[endgroup]
+2026-10-17T17:33:43.6643127Z ##[group]Disabling automatic garbage collection
+2026-10-17T17:33:43.6644819Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T17:33:43.6669106Z ##[endgroup]
+2026-10-17T17:33:43.6669816Z ##[group]Setting up auth
+2026-10-17T17:33:43.6670460Z Removing SSH command configuration
+2026-10-17T17:33:43.6673921Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:33:43.6697750Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:33:43.6979084Z Removing HTTP extra header
+2026-10-17T17:33:43.6983383Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:33:43.7008340Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:33:43.7169340Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:33:43.7173303Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:33:43.7195842Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:33:43.7360245Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T17:33:43.7387742Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:43.7448705Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:43.7475726Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:43.7498518Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:43.7518758Z ##[endgroup]
+2026-10-17T17:33:43.7519230Z ##[group]Fetching the repository
+2026-10-17T17:33:43.7523342Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +3f2aa03c70809f83e0f2ad1abb5c3462201cfca8:refs/remotes/pull/587/merge
+2026-10-17T17:33:47.5979922Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-17T17:33:47.5980373Z  * [new ref]           3f2aa03c70809f83e0f2ad1abb5c3462201cfca8 -> pull/587/merge
+2026-10-17T17:33:47.5982572Z ##[endgroup]
+2026-10-17T17:33:47.5982849Z ##[group]Determining the checkout info
+2026-10-17T17:33:47.5983237Z ##[endgroup]
+2026-10-17T17:33:47.5987488Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T17:33:47.6031503Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T17:33:47.6054854Z ##[group]Checking out the ref
+2026-10-17T17:33:47.6057317Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/587/merge
+2026-10-17T17:33:48.5824823Z Note: switching to 'refs/remotes/pull/587/merge'.
+2026-10-17T17:33:48.5825839Z 
+2026-10-17T17:33:48.5826029Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T17:33:48.5826548Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T17:33:48.5827056Z state without impacting any branches by switching back to a branch.
+2026-10-17T17:33:48.5827360Z 
+2026-10-17T17:33:48.5827560Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T17:33:48.5827963Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T17:33:48.5828248Z 
+2026-10-17T17:33:48.5828462Z   git switch -c <new-branch-name>
+2026-10-17T17:33:48.5828657Z 
+2026-10-17T17:33:48.5830950Z Or undo this operation with:
+2026-10-17T17:33:48.5831308Z 
+2026-10-17T17:33:48.5831544Z   git switch -
+2026-10-17T17:33:48.5831924Z 
+2026-10-17T17:33:48.5832192Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T17:33:48.5832451Z 
+2026-10-17T17:33:48.5832864Z HEAD is now at 3f2aa03c Merge 04f6edbffcb5b3efac805911fbebc54ecc18fc01 into 50172ad5534f409220f340ac0c6b3da581d577e0
+2026-10-17T17:33:48.5854764Z ##[endgroup]
+2026-10-17T17:33:48.5893056Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T17:33:48.5914273Z 3f2aa03c70809f83e0f2ad1abb5c3462201cfca8
+2026-10-17T17:33:48.5923719Z ##[group]Removing auth
+2026-10-17T17:33:48.5923911Z Removing SSH command configuration
+2026-10-17T17:33:48.5924983Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:33:48.5949972Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:33:48.6129624Z Removing HTTP extra header
+2026-10-17T17:33:48.6132573Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:33:48.6156290Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:33:48.6331970Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:33:48.6334582Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:33:48.6356452Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-17T17:33:48.6356937Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-17T17:33:48.6357540Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T17:33:48.6357939Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T17:33:48.6364166Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-17T17:33:48.6380999Z /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6387539Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6411895Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-17T17:33:48.6427730Z /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6432478Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6456719Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T17:33:48.6477836Z /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6482857Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6507326Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T17:33:48.6523270Z /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6532251Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config
+2026-10-17T17:33:48.6554810Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:33:48.6734863Z Removing credentials config '/home/runner/work/_temp/git-credentials-ba4f1f48-0909-45e1-ac29-426892635e1d.config'
+2026-10-17T17:33:48.6735974Z ##[endgroup]
+2026-10-17T17:33:48.6953547Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-17T17:33:48.6953786Z with:
+2026-10-17T17:33:48.6953896Z   toolchain: nightly
+2026-10-17T17:33:48.6954011Z env:
+2026-10-17T17:33:48.6954111Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.6954235Z ##[endgroup]
+2026-10-17T17:33:48.7011496Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-17T17:33:48.7044036Z ##[group]Run : parse toolchain version
+2026-10-17T17:33:48.7044300Z [36;1m: parse toolchain version[0m
+2026-10-17T17:33:48.7044470Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-17T17:33:48.7044787Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-17T17:33:48.7045088Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-17T17:33:48.7045250Z [36;1m  exit 1[0m
+2026-10-17T17:33:48.7045662Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-17T17:33:48.7045903Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-17T17:33:48.7046190Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7046460Z [36;1m  else[0m
+2026-10-17T17:33:48.7046686Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7046926Z [36;1m  fi[0m
+2026-10-17T17:33:48.7047088Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-17T17:33:48.7047373Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7047620Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-17T17:33:48.7047896Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7048193Z [36;1melse[0m
+2026-10-17T17:33:48.7048354Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7048516Z [36;1mfi[0m
+2026-10-17T17:33:48.7313618Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:48.7313866Z env:
+2026-10-17T17:33:48.7314175Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.7314291Z   toolchain: nightly
+2026-10-17T17:33:48.7314412Z ##[endgroup]
+2026-10-17T17:33:48.7429772Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=41]
+2026-10-17T17:33:48.7445989Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-17T17:33:48.7467265Z ##[group]Run : construct rustup command line
+2026-10-17T17:33:48.7467486Z [36;1m: construct rustup command line[0m
+2026-10-17T17:33:48.7467733Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7468083Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7468346Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:48.7520941Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:48.7521129Z env:
+2026-10-17T17:33:48.7521252Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.7521367Z   targets: 
+2026-10-17T17:33:48.7521473Z   components: 
+2026-10-17T17:33:48.7521583Z ##[endgroup]
+2026-10-17T17:33:48.7603579Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=15]
+2026-10-17T17:33:48.7607040Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-17T17:33:48.7626002Z ##[group]Run : set $CARGO_HOME
+2026-10-17T17:33:48.7626180Z [36;1m: set $CARGO_HOME[0m
+2026-10-17T17:33:48.7626356Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-17T17:33:48.7676788Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:48.7676968Z env:
+2026-10-17T17:33:48.7677229Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.7677345Z ##[endgroup]
+2026-10-17T17:33:48.7749853Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=14]
+2026-10-17T17:33:48.7751553Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-17T17:33:48.7774122Z ##[group]Run : install rustup if needed
+2026-10-17T17:33:48.7774309Z [36;1m: install rustup if needed[0m
+2026-10-17T17:33:48.7774475Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-17T17:33:48.7774894Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-17T17:33:48.7775279Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-17T17:33:48.7775629Z [36;1mfi[0m
+2026-10-17T17:33:48.7825668Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:48.7825859Z env:
+2026-10-17T17:33:48.7825987Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.7826114Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:48.7826255Z ##[endgroup]
+2026-10-17T17:33:48.7899784Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=14]
+2026-10-17T17:33:48.7903294Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-17T17:33:48.7908949Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-17T17:33:48.7911203Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-17T17:33:48.7930452Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+2026-10-17T17:33:48.7930764Z [36;1mrustup toolchain install nightly --profile minimal --no-self-update[0m
+2026-10-17T17:33:48.7981086Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:48.7981268Z env:
+2026-10-17T17:33:48.7981390Z   UV_PYTHON: 3.13
+2026-10-17T17:33:48.7981512Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:48.7981656Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-17T17:33:48.7981790Z ##[endgroup]
+2026-10-17T17:33:48.8463488Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-17T17:33:49.1685168Z info: latest update on 2026-10-17 for version 1.101.0-nightly (5d8fec066 2026-10-16)
+2026-10-17T17:33:49.1685681Z info: downloading 3 components
+2026-10-17T17:33:55.4279075Z 
+2026-10-17T17:33:55.4334421Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (5d8fec066 2026-10-16)
+2026-10-17T17:33:55.4334692Z 
+2026-10-17T17:33:55.4375914Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=6646]
+2026-10-17T17:33:55.4381098Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-17T17:33:55.4418352Z ##[group]Run rustup default nightly
+2026-10-17T17:33:55.4418545Z [36;1mrustup default nightly[0m
+2026-10-17T17:33:55.4467288Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.4467492Z env:
+2026-10-17T17:33:55.4467596Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.4467714Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.4467852Z ##[endgroup]
+2026-10-17T17:33:55.4564821Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-17T17:33:55.4570602Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-17T17:33:55.4570792Z 
+2026-10-17T17:33:55.4622128Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (5d8fec066 2026-10-16)
+2026-10-17T17:33:55.4622392Z 
+2026-10-17T17:33:55.4625559Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-17T17:33:55.4637913Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=25]
+2026-10-17T17:33:55.4642015Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-17T17:33:55.4657399Z ##[group]Run : create cachekey
+2026-10-17T17:33:55.4657600Z [36;1m: create cachekey[0m
+2026-10-17T17:33:55.4657913Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-17T17:33:55.4658268Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-17T17:33:55.4658529Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-17T17:33:55.4707525Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.4707709Z env:
+2026-10-17T17:33:55.4707818Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.4707938Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.4708073Z ##[endgroup]
+2026-10-17T17:33:55.4978533Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=33]
+2026-10-17T17:33:55.4980477Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-17T17:33:55.4995676Z ##[group]Run : disable incremental compilation
+2026-10-17T17:33:55.4995880Z [36;1m: disable incremental compilation[0m
+2026-10-17T17:33:55.4996059Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-17T17:33:55.4996248Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-17T17:33:55.4996397Z [36;1mfi[0m
+2026-10-17T17:33:55.5045822Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.5046006Z env:
+2026-10-17T17:33:55.5046119Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.5046242Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.5046377Z ##[endgroup]
+2026-10-17T17:33:55.5112288Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=13]
+2026-10-17T17:33:55.5113762Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-17T17:33:55.5128011Z ##[group]Run : enable colors in Cargo output
+2026-10-17T17:33:55.5128212Z [36;1m: enable colors in Cargo output[0m
+2026-10-17T17:33:55.5128384Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-17T17:33:55.5128566Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-17T17:33:55.5128723Z [36;1mfi[0m
+2026-10-17T17:33:55.5172694Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.5172879Z env:
+2026-10-17T17:33:55.5172992Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.5173119Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.5173264Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:33:55.5173397Z ##[endgroup]
+2026-10-17T17:33:55.5234947Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=12]
+2026-10-17T17:33:55.5238479Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-17T17:33:55.5254088Z ##[group]Run : enable Cargo sparse registry
+2026-10-17T17:33:55.5254278Z [36;1m: enable Cargo sparse registry[0m
+2026-10-17T17:33:55.5254482Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-17T17:33:55.5254862Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-17T17:33:55.5255274Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-17T17:33:55.5255814Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-17T17:33:55.5256121Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-17T17:33:55.5256394Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-17T17:33:55.5256701Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-17T17:33:55.5256974Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-17T17:33:55.5257165Z [36;1m  fi[0m
+2026-10-17T17:33:55.5257410Z [36;1mfi[0m
+2026-10-17T17:33:55.5300977Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.5301153Z env:
+2026-10-17T17:33:55.5301257Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.5301374Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.5301511Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:33:55.5301646Z   CARGO_TERM_COLOR: always
+2026-10-17T17:33:55.5301781Z ##[endgroup]
+2026-10-17T17:33:55.5539802Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=30]
+2026-10-17T17:33:55.5543279Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-17T17:33:55.5558278Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-17T17:33:55.5558537Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-17T17:33:55.5558846Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-17T17:33:55.5559204Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-17T17:33:55.5559458Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-17T17:33:55.5559648Z [36;1mfi[0m
+2026-10-17T17:33:55.5609250Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.5609446Z env:
+2026-10-17T17:33:55.5609555Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.5609675Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.5609811Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:33:55.5609935Z   CARGO_TERM_COLOR: always
+2026-10-17T17:33:55.5610057Z ##[endgroup]
+2026-10-17T17:33:55.5770095Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T17:33:55.5773474Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-17T17:33:55.5788614Z ##[group]Run rustc +nightly --version --verbose
+2026-10-17T17:33:55.5788822Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-17T17:33:55.5837065Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T17:33:55.5837247Z env:
+2026-10-17T17:33:55.5837358Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.5837475Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.5837614Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:33:55.5837870Z   CARGO_TERM_COLOR: always
+2026-10-17T17:33:55.5837992Z ##[endgroup]
+2026-10-17T17:33:55.5980972Z rustc 1.101.0-nightly (5d8fec066 2026-10-16)
+2026-10-17T17:33:55.5981414Z binary: rustc
+2026-10-17T17:33:55.5981594Z commit-hash: 5d8fec0669a64607db9ccbf663e7c23125bf4748
+2026-10-17T17:33:55.5981796Z commit-date: 2026-10-16
+2026-10-17T17:33:55.5982001Z host: x86_64-unknown-linux-gnu
+2026-10-17T17:33:55.5982279Z release: 1.101.0-nightly
+2026-10-17T17:33:55.5982555Z LLVM version: 23.1.4
+2026-10-17T17:33:55.5994454Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T17:33:55.6087076Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-17T17:33:55.6087285Z with:
+2026-10-17T17:33:55.6087402Z   shared-key: workspace-test
+2026-10-17T17:33:55.6087529Z   save-if: false
+2026-10-17T17:33:55.6087641Z   prefix-key: v0-rust
+2026-10-17T17:33:55.6087759Z   add-job-id-key: true
+2026-10-17T17:33:55.6087888Z   add-rust-environment-hash-key: true
+2026-10-17T17:33:55.6088052Z   cache-targets: true
+2026-10-17T17:33:55.6088174Z   cache-all-crates: false
+2026-10-17T17:33:55.6088304Z   cache-workspace-crates: false
+2026-10-17T17:33:55.6088439Z   cache-provider: github
+2026-10-17T17:33:55.6088556Z   cache-bin: true
+2026-10-17T17:33:55.6088663Z   lookup-only: false
+2026-10-17T17:33:55.6088772Z   cmd-format: {0}
+2026-10-17T17:33:55.6088878Z env:
+2026-10-17T17:33:55.6088981Z   UV_PYTHON: 3.13
+2026-10-17T17:33:55.6089094Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:33:55.6089225Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:33:55.6089362Z   CARGO_TERM_COLOR: always
+2026-10-17T17:33:55.6089481Z ##[endgroup]
+2026-10-17T17:33:55.7927464Z (node:2271) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T17:33:55.7928456Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T17:34:00.4276621Z ##[group]Cache Configuration
+2026-10-17T17:34:00.4276860Z Cache Provider:
+2026-10-17T17:34:00.4277023Z     github
+2026-10-17T17:34:00.4277140Z Workspaces:
+2026-10-17T17:34:00.4277273Z     /home/runner/work/purrdf/purrdf
+2026-10-17T17:34:00.4277436Z Cache Paths:
+2026-10-17T17:34:00.4277565Z     /home/runner/.cargo/bin
+2026-10-17T17:34:00.4277712Z     /home/runner/.cargo/.crates.toml
+2026-10-17T17:34:00.4278025Z     /home/runner/.cargo/.crates2.json
+2026-10-17T17:34:00.4278247Z     /home/runner/.cargo/registry
+2026-10-17T17:34:00.4278453Z     /home/runner/.cargo/git
+2026-10-17T17:34:00.4278657Z     /home/runner/work/purrdf/purrdf/target
+2026-10-17T17:34:00.4278882Z Restore Key:
+2026-10-17T17:34:00.4279110Z     v0-rust-workspace-test-Linux-x64-4d88e5f6
+2026-10-17T17:34:00.4279353Z Cache Key:
+2026-10-17T17:34:00.4279570Z     v0-rust-workspace-test-Linux-x64-4d88e5f6-59006be1
+2026-10-17T17:34:00.4280029Z .. Prefix:
+2026-10-17T17:34:00.4280459Z   - v0-rust-workspace-test-Linux-x64
+2026-10-17T17:34:00.4281007Z .. Environment considered:
+2026-10-17T17:34:00.4281272Z   - Rust Versions:
+2026-10-17T17:34:00.4281614Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 5d8fec0669a64607db9ccbf663e7c23125bf4748
+2026-10-17T17:34:00.4282101Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-17T17:34:00.4282566Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 5d8fec0669a64607db9ccbf663e7c23125bf4748
+2026-10-17T17:34:00.4282932Z   - CARGO_HOME
+2026-10-17T17:34:00.4283116Z   - CARGO_INCREMENTAL
+2026-10-17T17:34:00.4283310Z   - CARGO_TERM_COLOR
+2026-10-17T17:34:00.4283511Z .. Lockfiles considered:
+2026-10-17T17:34:00.4283797Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-17T17:34:00.4284217Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-17T17:34:00.4284574Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-17T17:34:00.4284897Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-17T17:34:00.4285320Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-17T17:34:00.4286265Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-17T17:34:00.4286583Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-17T17:34:00.4286922Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-17T17:34:00.4287313Z   - /home/runner/work/purrdf/purrdf/crates/conformance-kit/Cargo.toml
+2026-10-17T17:34:00.4287705Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-17T17:34:00.4288058Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-17T17:34:00.4288393Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-17T17:34:00.4289040Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-17T17:34:00.4289433Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-17T17:34:00.4289863Z   - /home/runner/work/purrdf/purrdf/crates/geo-kernel/Cargo.toml
+2026-10-17T17:34:00.4290131Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-17T17:34:00.4290345Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-17T17:34:00.4290584Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-17T17:34:00.4290817Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-17T17:34:00.4291044Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-17T17:34:00.4291298Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-17T17:34:00.4291557Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-17T17:34:00.4291851Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-17T17:34:00.4292129Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-17T17:34:00.4292348Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-17T17:34:00.4292551Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-17T17:34:00.4292767Z   - /home/runner/work/purrdf/purrdf/crates/mime/Cargo.toml
+2026-10-17T17:34:00.4292971Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-17T17:34:00.4293184Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-17T17:34:00.4293398Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-17T17:34:00.4293617Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-17T17:34:00.4293835Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-17T17:34:00.4294039Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-17T17:34:00.4294276Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-17T17:34:00.4294526Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-17T17:34:00.4294730Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-17T17:34:00.4294931Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-17T17:34:00.4295150Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-17T17:34:00.4295397Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-17T17:34:00.4295855Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-17T17:34:00.4296191Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-17T17:34:00.4296534Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-17T17:34:00.4296873Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-17T17:34:00.4297194Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-17T17:34:00.4297556Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-17T17:34:00.4297975Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-17T17:34:00.4298321Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-17T17:34:00.4298664Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-17T17:34:00.4299269Z ##[endgroup]
+2026-10-17T17:34:00.4299378Z 
+2026-10-17T17:34:00.4299458Z ... Restoring cache ...
+2026-10-17T17:34:00.5655159Z Cache hit for restore-key: v0-rust-workspace-test-Linux-x64-4d88e5f6-61eab8f2
+2026-10-17T17:34:01.3519879Z Received 36564951 of 36564951 (100.0%), 53.5 MBs/sec
+2026-10-17T17:34:01.3520228Z Cache Size: ~35 MB (36564951 B)
+2026-10-17T17:34:01.3536606Z [command]/usr/bin/tar -xf /home/runner/work/_temp/5c688f9f-0f93-45fb-9759-025fdf2139cc/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+2026-10-17T17:34:01.5142003Z Cache restored successfully
+2026-10-17T17:34:01.5160634Z Restored from cache key "v0-rust-workspace-test-Linux-x64-4d88e5f6-61eab8f2" full match: false.
+2026-10-17T17:34:01.5312254Z ##[group]Run curl -LsSf https://astral.sh/uv/install.sh | sh
+2026-10-17T17:34:01.5312575Z [36;1mcurl -LsSf https://astral.sh/uv/install.sh | sh[0m
+2026-10-17T17:34:01.5312806Z [36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"[0m
+2026-10-17T17:34:01.5365657Z shell: /usr/bin/bash -e {0}
+2026-10-17T17:34:01.5365804Z env:
+2026-10-17T17:34:01.5365918Z   UV_PYTHON: 3.13
+2026-10-17T17:34:01.5366043Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:34:01.5366206Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:34:01.5366336Z   CARGO_TERM_COLOR: always
+2026-10-17T17:34:01.5366468Z   CACHE_ON_FAILURE: false
+2026-10-17T17:34:01.5366610Z ##[endgroup]
+2026-10-17T17:34:01.7376272Z downloading uv 0.13.1 x86_64-unknown-linux-gnu
+2026-10-17T17:34:02.2269548Z installing to /home/runner/.local/bin
+2026-10-17T17:34:02.2316219Z   uv
+2026-10-17T17:34:02.2331176Z   uvx
+2026-10-17T17:34:02.2359667Z everything's installed!
+2026-10-17T17:34:02.2434713Z ##[group]Run make pytest
+2026-10-17T17:34:02.2434902Z [36;1mmake pytest[0m
+2026-10-17T17:34:02.2489451Z shell: /usr/bin/bash -e {0}
+2026-10-17T17:34:02.2489632Z env:
+2026-10-17T17:34:02.2489780Z   UV_PYTHON: 3.13
+2026-10-17T17:34:02.2489937Z   CARGO_HOME: /home/runner/.cargo
+2026-10-17T17:34:02.2490095Z   CARGO_INCREMENTAL: 0
+2026-10-17T17:34:02.2490234Z   CARGO_TERM_COLOR: always
+2026-10-17T17:34:02.2490371Z   CACHE_ON_FAILURE: false
+2026-10-17T17:34:02.2490503Z ##[endgroup]
+2026-10-17T17:34:02.2987080Z cargo run -q --locked -p helper-census -- --python-binding-tests
+2026-10-17T17:34:51.3830684Z OK: no Rust test module under bindings/python/src (30 sources scanned)
+2026-10-17T17:34:51.3833670Z cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+2026-10-17T17:34:51.5589857Z Downloading cpython-3.13.16-linux-x86_64-gnu (download) (33.5MiB)
+2026-10-17T17:34:52.1872303Z  Downloaded cpython-3.13.16-linux-x86_64-gnu (download)
+2026-10-17T17:34:52.2917950Z Using CPython 3.13.16
+2026-10-17T17:34:52.2918391Z Creating virtual environment at: .venv
+2026-10-17T17:34:52.2944535Z Resolved 107 packages in 0.91ms
+2026-10-17T17:34:52.3060175Z    Building purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+2026-10-17T17:34:52.3665601Z Downloading sqlalchemy (3.1MiB)
+2026-10-17T17:34:52.3666472Z Downloading numpy (15.9MiB)
+2026-10-17T17:34:52.3667440Z Downloading mypy (14.3MiB)
+2026-10-17T17:34:52.3670180Z Downloading pyarrow (47.8MiB)
+2026-10-17T17:34:52.3676573Z Downloading pygments (1.2MiB)
+2026-10-17T17:34:52.3678296Z Downloading ast-serialize (1.2MiB)
+2026-10-17T17:34:52.3680860Z Downloading duckdb (20.5MiB)
+2026-10-17T17:34:52.3682034Z Downloading maturin (10.1MiB)
+2026-10-17T17:34:52.3683901Z Downloading pandas (10.4MiB)
+2026-10-17T17:34:52.3685310Z Downloading sphinx (3.7MiB)
+2026-10-17T17:34:52.3688675Z Downloading pydantic-core (2.0MiB)
+2026-10-17T17:34:52.3690678Z Downloading babel (9.7MiB)
+2026-10-17T17:34:52.3692907Z Downloading pyshacl (1.2MiB)
+2026-10-17T17:34:52.4639993Z    Building antlr4-python3-runtime==4.9.3
+2026-10-17T17:34:52.5883682Z    Building cfgraph==0.2.1
+2026-10-17T17:34:52.5885115Z    Building pytest-logging==2015.11.4
+2026-10-17T17:34:52.6156799Z  Downloaded ast-serialize
+2026-10-17T17:34:52.6157337Z  Downloaded pygments
+2026-10-17T17:34:52.6181570Z  Downloaded pyshacl
+2026-10-17T17:34:52.6520277Z  Downloaded pydantic-core
+2026-10-17T17:34:52.6992824Z  Downloaded sqlalchemy
+2026-10-17T17:34:52.7123236Z  Downloaded sphinx
+2026-10-17T17:34:52.8363190Z  Downloaded babel
+2026-10-17T17:34:52.8436310Z  Downloaded maturin
+2026-10-17T17:34:52.8977509Z  Downloaded pandas
+2026-10-17T17:34:52.9227258Z  Downloaded numpy
+2026-10-17T17:34:52.9344733Z  Downloaded mypy
+2026-10-17T17:34:52.9647474Z  Downloaded duckdb
+2026-10-17T17:34:53.1438698Z  Downloaded pyarrow
+2026-10-17T17:34:54.2802895Z       Built antlr4-python3-runtime==4.9.3
+2026-10-17T17:34:54.4146552Z       Built pytest-logging==2015.11.4
+2026-10-17T17:34:54.4566723Z       Built cfgraph==0.2.1
+2026-10-17T17:44:48.5349494Z       Built purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+2026-10-17T17:44:48.5450456Z Prepared 105 packages in 9m 56s
+2026-10-17T17:44:48.6246231Z Installed 105 packages in 79ms
+2026-10-17T17:44:48.6246470Z  + alabaster==1.0.0
+2026-10-17T17:44:48.6246621Z  + annotated-types==0.7.0
+2026-10-17T17:44:48.6246944Z  + antlr4-python3-runtime==4.9.3
+2026-10-17T17:44:48.6247247Z  + arrow==1.4.0
+2026-10-17T17:44:48.6247513Z  + ast-serialize==0.6.0
+2026-10-17T17:44:48.6247746Z  + attrs==26.1.0
+2026-10-17T17:44:48.6248004Z  + babel==2.18.0
+2026-10-17T17:44:48.6248247Z  + backports-zstd==1.6.0
+2026-10-17T17:44:48.6248522Z  + certifi==2026.6.17
+2026-10-17T17:44:48.6248756Z  + cfgraph==0.2.1
+2026-10-17T17:44:48.6248979Z  + chardet==7.4.3
+2026-10-17T17:44:48.6249208Z  + charset-normalizer==3.4.7
+2026-10-17T17:44:48.6249497Z  + click==8.4.2
+2026-10-17T17:44:48.6249714Z  + curies==0.13.13
+2026-10-17T17:44:48.6249910Z  + deprecated==1.3.1
+2026-10-17T17:44:48.6250408Z  + deprecation==2.1.0
+2026-10-17T17:44:48.6250619Z  + docutils==0.22.4
+2026-10-17T17:44:48.6250823Z  + duckdb==1.5.5
+2026-10-17T17:44:48.6251035Z  + et-xmlfile==2.0.0
+2026-10-17T17:44:48.6251255Z  + fqdn==1.5.1
+2026-10-17T17:44:48.6251476Z  + graphviz==0.21
+2026-10-17T17:44:48.6251696Z  + greenlet==3.5.3
+2026-10-17T17:44:48.6251915Z  + hbreader==0.9.1
+2026-10-17T17:44:48.6252170Z  + html5rdf==1.2.1
+2026-10-17T17:44:48.6252384Z  + idna==3.18
+2026-10-17T17:44:48.6252593Z  + imagesize==2.0.0
+2026-10-17T17:44:48.6252826Z  + iniconfig==2.3.0
+2026-10-17T17:44:48.6253069Z  + isodate==0.7.2
+2026-10-17T17:44:48.6253296Z  + isoduration==20.11.0
+2026-10-17T17:44:48.6253592Z  + jinja2==3.1.6
+2026-10-17T17:44:48.6253815Z  + json-flattener==0.1.9
+2026-10-17T17:44:48.6254082Z  + jsonasobj==1.3.1
+2026-10-17T17:44:48.6254282Z  + jsonasobj2==1.0.4
+2026-10-17T17:44:48.6254547Z  + jsonpointer==3.1.1
+2026-10-17T17:44:48.6254788Z  + jsonschema==4.26.0
+2026-10-17T17:44:48.6255061Z  + jsonschema-specifications==2025.9.1
+2026-10-17T17:44:48.6255407Z  + librt==0.12.0
+2026-10-17T17:44:48.6255718Z  + linkml==1.11.1
+2026-10-17T17:44:48.6256000Z  + linkml-runtime==1.11.1
+2026-10-17T17:44:48.6256288Z  + markupsafe==3.0.3
+2026-10-17T17:44:48.6256520Z  + maturin==1.14.1
+2026-10-17T17:44:48.6256744Z  + mypy==2.1.0
+2026-10-17T17:44:48.6256980Z  + mypy-extensions==1.1.0
+2026-10-17T17:44:48.6257265Z  + numpy==2.5.0
+2026-10-17T17:44:48.6257463Z  + openpyxl==3.1.5
+2026-10-17T17:44:48.6257725Z  + owlrl==7.1.4
+2026-10-17T17:44:48.6257961Z  + packaging==26.2
+2026-10-17T17:44:48.6258253Z  + pandas==3.0.3
+2026-10-17T17:44:48.6258552Z  + parse==1.22.1
+2026-10-17T17:44:48.6258778Z  + pathspec==1.1.1
+2026-10-17T17:44:48.6259000Z  + pluggy==1.6.0
+2026-10-17T17:44:48.6259225Z  + prefixcommons==0.1.12
+2026-10-17T17:44:48.6259461Z  + prefixmaps==0.2.6
+2026-10-17T17:44:48.6259695Z  + prettytable==3.18.0
+2026-10-17T17:44:48.6260047Z  + purrdf==3.0.1 (from file:///home/runner/work/purrdf/purrdf/bindings/python)
+2026-10-17T17:44:48.6260380Z  + pyarrow==25.0.1
+2026-10-17T17:44:48.6260581Z  + pydantic==2.13.4
+2026-10-17T17:44:48.6263005Z  + pydantic-core==2.46.4
+2026-10-17T17:44:48.6263223Z  + pygments==2.20.0
+2026-10-17T17:44:48.6263409Z  + pyjsg==0.12.4
+2026-10-17T17:44:48.6263593Z  + pyparsing==3.3.2
+2026-10-17T17:44:48.6263780Z  + pyshacl==0.31.0
+2026-10-17T17:44:48.6263969Z  + pyshex==0.9.0
+2026-10-17T17:44:48.6264155Z  + pyshexc==0.10.3.post1
+2026-10-17T17:44:48.6264352Z  + pystow==0.8.19
+2026-10-17T17:44:48.6264539Z  + pytest==9.0.3
+2026-10-17T17:44:48.6264752Z  + pytest-logging==2015.11.4
+2026-10-17T17:44:48.6265267Z  + python-dateutil==2.9.0.post0
+2026-10-17T17:44:48.6265653Z  + pyyaml==6.0.3
+2026-10-17T17:44:48.6265836Z  + rdflib==7.6.0
+2026-10-17T17:44:48.6266039Z  + rdflib-jsonld==0.6.1
+2026-10-17T17:44:48.6266243Z  + rdflib-shim==1.0.3
+2026-10-17T17:44:48.6266438Z  + referencing==0.37.0
+2026-10-17T17:44:48.6266643Z  + requests==2.34.2
+2026-10-17T17:44:48.6266835Z  + rfc3339-validator==0.1.4
+2026-10-17T17:44:48.6267034Z  + rfc3987==1.3.8
+2026-10-17T17:44:48.6267231Z  + roman-numerals==4.1.0
+2026-10-17T17:44:48.6267447Z  + rpds-py==2026.6.3
+2026-10-17T17:44:48.6267646Z  + shexjsg==0.9.0
+2026-10-17T17:44:48.6267821Z  + six==1.17.0
+2026-10-17T17:44:48.6268007Z  + snowballstemmer==3.1.1
+2026-10-17T17:44:48.6268222Z  + sparqlslurper==0.5.1
+2026-10-17T17:44:48.6268429Z  + sparqlwrapper==2.0.0
+2026-10-17T17:44:48.6268627Z  + sphinx==9.1.0
+2026-10-17T17:44:48.6268817Z  + sphinx-click==6.2.0
+2026-10-17T17:44:48.6269028Z  + sphinxcontrib-applehelp==2.0.0
+2026-10-17T17:44:48.6269282Z  + sphinxcontrib-devhelp==2.0.0
+2026-10-17T17:44:48.6269531Z  + sphinxcontrib-htmlhelp==2.1.0
+2026-10-17T17:44:48.6269768Z  + sphinxcontrib-jsmath==1.0.1
+2026-10-17T17:44:48.6270005Z  + sphinxcontrib-qthelp==2.0.0
+2026-10-17T17:44:48.6270248Z  + sphinxcontrib-serializinghtml==2.0.0
+2026-10-17T17:44:48.6270499Z  + sqlalchemy==2.0.51
+2026-10-17T17:44:48.6270701Z  + sssom==0.4.17
+2026-10-17T17:44:48.6270876Z  + sssom-schema==1.0.0
+2026-10-17T17:44:48.6271056Z  + tqdm==4.68.3
+2026-10-17T17:44:48.6271456Z  + typing-extensions==4.15.0
+2026-10-17T17:44:48.6271612Z  + typing-inspection==0.4.2
+2026-10-17T17:44:48.6271748Z  + tzdata==2026.2
+2026-10-17T17:44:48.6271896Z  + uri-template==1.3.0
+2026-10-17T17:44:48.6272017Z  + urllib3==2.8.0
+2026-10-17T17:44:48.6272133Z  + validators==0.35.0
+2026-10-17T17:44:48.6272255Z  + watchdog==6.0.0
+2026-10-17T17:44:48.6272367Z  + wcwidth==0.8.2
+2026-10-17T17:44:48.6272480Z  + webcolors==25.10.0
+2026-10-17T17:44:48.6272600Z  + wrapt==2.2.2
+2026-10-17T17:44:50.3370660Z ============================= test session starts ==============================
+2026-10-17T17:44:50.3371171Z platform linux -- Python 3.13.16, pytest-9.0.3, pluggy-1.6.0
+2026-10-17T17:44:50.3371561Z rootdir: /home/runner/work/purrdf/purrdf/bindings/python
+2026-10-17T17:44:50.3371875Z configfile: pyproject.toml
+2026-10-17T17:44:50.3372105Z collected 4228 items
+2026-10-17T17:44:50.3372229Z 
+2026-10-17T17:44:55.0716607Z tests/test_acceptance_matrix.py ....s.                                   [  0%]
+2026-10-17T17:44:55.0932605Z tests/test_aggregate_namespace.py ...........                            [  0%]
+2026-10-17T17:44:55.1705243Z tests/test_argument_refusals.py ...........................              [  1%]
+2026-10-17T17:44:55.1822088Z tests/test_codec_fidelity.py .........................                   [  1%]
+2026-10-17T17:44:55.3457339Z tests/test_collection.py .........                                       [  1%]
+2026-10-17T17:44:55.4934051Z tests/test_compat_parity.py ...........                                  [  2%]
+2026-10-17T17:44:55.5132029Z tests/test_construct_named_graphs.py ................................... [  2%]
+2026-10-17T17:44:55.5188379Z .........                                                                [  3%]
+2026-10-17T17:44:55.5993441Z tests/test_contextual_mappings.py ...............                        [  3%]
+2026-10-17T17:44:55.6096001Z tests/test_dataset.py ...........                                        [  3%]
+2026-10-17T17:44:55.6118566Z tests/test_dataset_canonicalization.py ......                            [  3%]
+2026-10-17T17:44:55.6333238Z tests/test_division_policy.py ..................                         [  4%]
+2026-10-17T17:44:55.6451681Z tests/test_document_base.py ...................................          [  5%]
+2026-10-17T17:44:55.6474569Z tests/test_engine_configuration.py ...                                   [  5%]
+2026-10-17T17:44:55.6495881Z tests/test_entail.py ....                                                [  5%]
+2026-10-17T17:44:55.7933175Z tests/test_entail_reasoning.py ......................................... [  6%]
+2026-10-17T17:44:55.9601387Z ............................F                                            [  6%]
+2026-10-17T17:44:56.1550613Z tests/test_entail_regimes.py ........................................... [  7%]
+2026-10-17T17:44:56.3320765Z ............................................                             [  9%]
+2026-10-17T17:44:56.3459591Z tests/test_frozen_escape_vectors.py .................................... [  9%]
+2026-10-17T17:44:56.3715384Z ........................................................................ [ 11%]
+2026-10-17T17:44:56.4000261Z ........................................................................ [ 13%]
+2026-10-17T17:44:56.4284327Z ........................................................................ [ 14%]
+2026-10-17T17:44:56.4557294Z ........................................................................ [ 16%]
+2026-10-17T17:44:56.4826815Z ........................................................................ [ 18%]
+2026-10-17T17:44:56.5094502Z ........................................................................ [ 20%]
+2026-10-17T17:44:56.5344951Z ........................................................................ [ 21%]
+2026-10-17T17:44:56.5599665Z ........................................................................ [ 23%]
+2026-10-17T17:44:56.5849660Z ........................................................................ [ 25%]
+2026-10-17T17:44:56.6160204Z ........................................................................ [ 26%]
+2026-10-17T17:44:56.6433611Z ........................................................................ [ 28%]
+2026-10-17T17:44:56.6709137Z ........................................................................ [ 30%]
+2026-10-17T17:44:56.6987358Z ........................................................................ [ 32%]
+2026-10-17T17:44:56.7265299Z ........................................................................ [ 33%]
+2026-10-17T17:44:56.7541842Z ........................................................................ [ 35%]
+2026-10-17T17:44:56.7818615Z ........................................................................ [ 37%]
+2026-10-17T17:45:01.5844010Z ........................................................................ [ 38%]
+2026-10-17T17:45:29.1043271Z ................................                                         [ 39%]
+2026-10-17T17:45:29.1165705Z tests/test_frozen_lex_vectors.py ....................................... [ 40%]
+2026-10-17T17:45:29.1375244Z ........................................................................ [ 42%]
+2026-10-17T17:45:29.1589207Z ........................................................................ [ 43%]
+2026-10-17T17:45:29.1797693Z ........................................................................ [ 45%]
+2026-10-17T17:45:29.2001207Z ........................................................................ [ 47%]
+2026-10-17T17:45:29.2209739Z ........................................................................ [ 49%]
+2026-10-17T17:45:29.2415802Z ........................................................................ [ 50%]
+2026-10-17T17:45:29.2624325Z ........................................................................ [ 52%]
+2026-10-17T17:45:29.2833394Z ........................................................................ [ 54%]
+2026-10-17T17:45:29.3040359Z ........................................................................ [ 55%]
+2026-10-17T17:45:29.3250533Z ........................................................................ [ 57%]
+2026-10-17T17:45:29.3459204Z ........................................................................ [ 59%]
+2026-10-17T17:45:29.3667592Z ........................................................................ [ 60%]
+2026-10-17T17:45:29.3870489Z ........................................................................ [ 62%]
+2026-10-17T17:45:29.4082199Z ........................................................................ [ 64%]
+2026-10-17T17:45:29.4288519Z ........................................................................ [ 66%]
+2026-10-17T17:45:29.4534196Z ........................................................................ [ 67%]
+2026-10-17T17:45:29.4744916Z ........................................................................ [ 69%]
+2026-10-17T17:45:29.4954562Z ........................................................................ [ 71%]
+2026-10-17T17:45:40.6419586Z .............................................                            [ 72%]
+2026-10-17T17:45:40.6659706Z tests/test_geo.py .....                                                  [ 72%]
+2026-10-17T17:45:40.6672692Z tests/test_graph.py ..                                                   [ 72%]
+2026-10-17T17:45:40.6835386Z tests/test_graph_facade.py ..............x....                           [ 72%]
+2026-10-17T17:45:40.6865663Z tests/test_gts_fold_view.py ..........                                   [ 73%]
+2026-10-17T17:45:40.6892051Z tests/test_gts_fold_view_self_reaching.py ........                       [ 73%]
+2026-10-17T17:45:40.6920645Z tests/test_gts_ingest_report.py ........                                 [ 73%]
+2026-10-17T17:45:41.1122913Z tests/test_gts_relational_export.py .................                    [ 73%]
+2026-10-17T17:45:41.1139660Z tests/test_jsonld_baseline.py ...                                        [ 73%]
+2026-10-17T17:45:41.1169150Z tests/test_jsonld_configured.py ......                                   [ 74%]
+2026-10-17T17:45:41.1329126Z tests/test_namespaces.py ............................................... [ 75%]
+2026-10-17T17:45:41.1572880Z ................                                                         [ 75%]
+2026-10-17T17:45:41.2640965Z tests/test_native_store_contract.py .........                            [ 75%]
+2026-10-17T17:45:41.2759799Z tests/test_paths.py ....................                                 [ 76%]
+2026-10-17T17:45:41.2878445Z tests/test_plugin_discovery.py ......................................... [ 77%]
+2026-10-17T17:45:41.3048985Z .........................................                                [ 78%]
+2026-10-17T17:45:41.3106472Z tests/test_prepared_prebound_grouping.py .......                         [ 78%]
+2026-10-17T17:45:41.3276681Z tests/test_prepared_query.py .......................                     [ 78%]
+2026-10-17T17:45:41.3409970Z tests/test_projection.py ..........                                      [ 79%]
+2026-10-17T17:45:41.3639003Z tests/test_property_functions.py ....................................... [ 80%]
+2026-10-17T17:45:41.4021559Z ..........................................                               [ 81%]
+2026-10-17T17:45:41.4469638Z tests/test_query.py .......xx                                            [ 81%]
+2026-10-17T17:45:41.5116774Z tests/test_query_governors.py .......................................... [ 82%]
+2026-10-17T17:45:41.5153829Z .....                                                                    [ 82%]
+2026-10-17T17:45:41.5292569Z tests/test_query_presentation.py ....................                    [ 82%]
+2026-10-17T17:45:41.5306109Z tests/test_rdf_dataset_layers.py ...                                     [ 82%]
+2026-10-17T17:45:41.8958525Z tests/test_rdflib_shadow.py ............                                 [ 83%]
+2026-10-17T17:45:42.5929901Z tests/test_rdflib_suite.py ..                                            [ 83%]
+2026-10-17T17:45:42.6124291Z tests/test_rdflib_version.py .                                           [ 83%]
+2026-10-17T17:45:42.6137199Z tests/test_redeclared_withdrawn_graph.py .                               [ 83%]
+2026-10-17T17:45:42.6168029Z tests/test_resource.py ........                                          [ 83%]
+2026-10-17T17:45:51.6245745Z tests/test_retrieval.py ................................................ [ 84%]
+2026-10-17T17:45:52.3979259Z ........................................................................ [ 86%]
+2026-10-17T17:45:52.4022652Z .........                                                                [ 86%]
+2026-10-17T17:45:52.4284739Z tests/test_retrieval_cost_counters.py ....                               [ 86%]
+2026-10-17T17:45:52.5894775Z tests/test_retrieval_vector_producers.py ...........................     [ 87%]
+2026-10-17T17:45:52.6558136Z tests/test_sarif.py ....                                                 [ 87%]
+2026-10-17T17:45:52.9512465Z tests/test_scan_order_determinism.py .                                   [ 87%]
+2026-10-17T17:45:52.9535180Z tests/test_serialize_declared_empty_graphs.py ...                        [ 87%]
+2026-10-17T17:45:52.9564983Z tests/test_serialize_loss.py ........                                    [ 87%]
+2026-10-17T17:45:53.0072348Z tests/test_serialize_output_short_write.py ....                          [ 87%]
+2026-10-17T17:45:53.0112424Z tests/test_sha3.py ......                                                [ 87%]
+2026-10-17T17:45:53.0198623Z tests/test_shacl_change_path.py ..........                               [ 88%]
+2026-10-17T17:45:53.6434234Z tests/test_shacl_change_path_typing.py .....                             [ 88%]
+2026-10-17T17:45:53.6468123Z tests/test_shacl_conformance_disallows.py .....                          [ 88%]
+2026-10-17T17:45:53.6487712Z tests/test_shacl_extension_usage.py ....                                 [ 88%]
+2026-10-17T17:45:53.6669894Z tests/test_shacl_owl_imports.py ...............                          [ 88%]
+2026-10-17T17:45:53.6715126Z tests/test_shacl_product.py ........                                     [ 89%]
+2026-10-17T17:45:53.6726786Z tests/test_shacl_result_annotations.py .                                 [ 89%]
+2026-10-17T17:45:53.6767259Z tests/test_shacl_rules_shapes_graph.py ...                               [ 89%]
+2026-10-17T17:45:53.6957468Z tests/test_shacl_shapes_graph_iri.py ...                                 [ 89%]
+2026-10-17T17:45:53.7493327Z tests/test_shacl_shapes_graph_well_formed.py ...                         [ 89%]
+2026-10-17T17:45:53.7505915Z tests/test_shacl_subclass_of_in_shapes_graph.py ..                       [ 89%]
+2026-10-17T17:45:53.8189452Z tests/test_shacl_tools.py .........                                      [ 89%]
+2026-10-17T17:45:53.8256094Z tests/test_shapes_product_identity.py ..........                         [ 89%]
+2026-10-17T17:45:53.8284397Z tests/test_shex.py .......                                               [ 89%]
+2026-10-17T17:45:53.8294783Z tests/test_shex_exact_facets.py .                                        [ 89%]
+2026-10-17T17:45:53.8362629Z tests/test_solution_row_protocol.py .............                        [ 90%]
+2026-10-17T17:45:53.8469969Z tests/test_sparql_prefixes.py ....                                       [ 90%]
+2026-10-17T17:45:53.9182703Z tests/test_sparql_results.py ........................................... [ 91%]
+2026-10-17T17:45:53.9198361Z .                                                                        [ 91%]
+2026-10-17T17:45:53.9233747Z tests/test_sparqlprocessor.py .....                                      [ 91%]
+2026-10-17T17:45:53.9441773Z tests/test_term_model.py ............................................... [ 92%]
+2026-10-17T17:45:54.0360803Z ......................................x........                          [ 93%]
+2026-10-17T17:45:54.0427273Z tests/test_top_level_exports.py ............                             [ 93%]
+2026-10-17T17:46:01.2938646Z tests/test_xpath_regex_large_counts.py ..........................        [ 94%]
+2026-10-17T17:46:01.3527454Z tests/test_xpath_regex_profiles.py ..................................... [ 95%]
+2026-10-17T17:46:01.7066121Z ........................................................................ [ 97%]
+2026-10-17T17:46:01.8102106Z ........................................................................ [ 98%]
+2026-10-17T17:46:08.6386358Z ......................................                                   [ 99%]
+2026-10-17T17:46:08.6472061Z tests/test_xsd_exact_numerics.py .........                               [100%]
+2026-10-17T17:46:08.6472463Z 
+2026-10-17T17:46:08.6472926Z =================================== FAILURES ===================================
+2026-10-17T17:46:08.6473350Z __________ test_the_committed_proof_bytes_reproduce_through_this_host __________
+2026-10-17T17:46:08.6473631Z 
+2026-10-17T17:46:08.6473833Z     def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
+2026-10-17T17:46:08.6474315Z         """**THE CROSS-HOST BYTE ASSERTION, made from Python.**
+2026-10-17T17:46:08.6474627Z     
+2026-10-17T17:46:08.6474886Z         Every case of the artifact the native, C-ABI and wasm hosts are checked
+2026-10-17T17:46:08.6475371Z         against reproduces byte for byte through the PyO3 extension. A rendered proof
+2026-10-17T17:46:08.6476263Z         carries the proof term's own canonical encoding, so a byte that differed here
+2026-10-17T17:46:08.6477073Z         would be a different proof TERM — and a consumer who pinned its digest on one
+2026-10-17T17:46:08.6477510Z         host and verified on another would have had it move under them.
+2026-10-17T17:46:08.6477829Z         """
+2026-10-17T17:46:08.6478009Z         cases = _dl_proof_vectors()
+2026-10-17T17:46:08.6478335Z         assert len(cases) == 16, "seven service cases and nine prepared-schema cases"
+2026-10-17T17:46:08.6478756Z         assert [case["case"] for case in cases[:7]] == entail.proof_services()
+2026-10-17T17:46:08.6479193Z         # Keep the original service prefix and check every appended case through PyO3.
+2026-10-17T17:46:08.6479857Z         # The service-set guard still rejects a lost or unrecognized proof service.
+2026-10-17T17:46:08.6480301Z         assert {case["service"] for case in cases} == set(entail.proof_services()), (
+2026-10-17T17:46:08.6480744Z             "every service that carries a proof term has a case, and the artifact "
+2026-10-17T17:46:08.6481094Z             "names no service that does not"
+2026-10-17T17:46:08.6481328Z         )
+2026-10-17T17:46:08.6481499Z         for case in cases:
+2026-10-17T17:46:08.6481747Z             argument = case.get("argument", "").rstrip("\n")
+2026-10-17T17:46:08.6482165Z             answer, certificate, proof = entail.prove(case["input"], case["service"], argument)
+2026-10-17T17:46:08.6482621Z             assert answer == case["answer"], case["case"]
+2026-10-17T17:46:08.6482935Z >           assert proof == case["proof"], case["case"]
+2026-10-17T17:46:08.6483207Z E           AssertionError: realize
+2026-10-17T17:46:08.6483545Z E           assert 'purrdf-dl-pr...00000000000\n' == 'purrdf-dl-pr...00000000000\n'
+2026-10-17T17:46:08.6483885Z E             
+2026-10-17T17:46:08.6484163Z E             Skipping 124 identical leading characters in diff, use -v to show
+2026-10-17T17:46:08.6484511Z E               f5
+2026-10-17T17:46:08.6484804Z E             - digest 163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76
+2026-10-17T17:46:08.6485305Z E             + digest edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e
+2026-10-17T17:46:08.6486074Z E               trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+2026-10-17T17:46:08.6486593Z E               runs 6
+2026-10-17T17:46:08.6486775Z E               traced 6
+2026-10-17T17:46:08.6486962Z E               claims 5
+2026-10-17T17:46:08.6487151Z E               truncated false
+2026-10-17T17:46:08.6487362Z E               receipt none
+2026-10-17T17:46:08.6487566Z E             - bytes 2624
+2026-10-17T17:46:08.6487753Z E             ?         ^^
+2026-10-17T17:46:08.6487942Z E             + bytes 2760
+2026-10-17T17:46:08.6488126Z E             ?        + ^
+2026-10-17T17:46:08.6488408Z E               body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+2026-10-17T17:46:08.6488836Z E               body 76322796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3
+2026-10-17T17:46:08.6489259Z E               body c0f5030006000000000000000000000000000000010000000000000002000000
+2026-10-17T17:46:08.6489661Z E               body 0000000003000000000000000400000000000000050000000000000003010000
+2026-10-17T17:46:08.6490264Z E               body 0000000000001600000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6490672Z E               body 2f746f6d0500000000000000002300000000000000687474703a2f2f7777772e
+2026-10-17T17:46:08.6491083Z E               body 77332e6f72672f323030322f30372f6f776c235468696e670025000000000000
+2026-10-17T17:46:08.6491512Z E               body 00687474703a2f2f7777772e77332e6f72672f323030322f30372f6f776c234e
+2026-10-17T17:46:08.6491959Z E               body 6f7468696e67001600000000000000687474703a2f2f6578616d706c652e6f72
+2026-10-17T17:46:08.6492381Z E               body 672f436174001900000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6492828Z E               body 2f416e696d616c001700000000000000687474703a2f2f6578616d706c652e6f
+2026-10-17T17:46:08.6493322Z E               body 72672f4669736806000000000000000100000000000000000000000000000000
+2026-10-17T17:46:08.6493778Z E               body 0000000000000000000110010000000000001600000000000000707572726466
+2026-10-17T17:46:08.6494254Z E               body 2d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbe
+2026-10-17T17:46:08.6494751Z E               body acd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c
+2026-10-17T17:46:08.6495236Z E               body 7c21d41559b46666d8d8a24ef8a73d9900000600000000000000000000000000
+2026-10-17T17:46:08.6496153Z E               body 0000010000000000000002000000000000000300000000000000040000000000
+2026-10-17T17:46:08.6496549Z E               body 0000050000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6496940Z E               body 0000000000000000000005000000000000000000000000000000000101000000
+2026-10-17T17:46:08.6497327Z E               body 0000000000550000000001000000020000000000000002000000030000000100
+2026-10-17T17:46:08.6497724Z E               body 0000000000005500000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6498139Z E               body 0000010101000000000000005500000001000000000000000000000000000000
+2026-10-17T17:46:08.6498562Z E             - body 0000000001f60000000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6498893Z E             ?                ^^ ^
+2026-10-17T17:46:08.6499194Z E             + body 0000000001120100000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6499509Z E             ?                ^^ ^
+2026-10-17T17:46:08.6499841Z E             - body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6500192Z E             ?                           ^
+2026-10-17T17:46:08.6500523Z E             + body 646c2d70726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6500872Z E             ?                           ^
+2026-10-17T17:46:08.6501205Z E               body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
+2026-10-17T17:46:08.6501643Z E             - body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+2026-10-17T17:46:08.6502016Z E             ?                                                                    --
+2026-10-17T17:46:08.6502396Z E             + body b46666d8d8a24ef8a73d99010000060000000000000000000000000000000100
+2026-10-17T17:46:08.6502730Z E             ?                              ++
+2026-10-17T17:46:08.6503046Z E             - body 0000000000020000000000000003000000000000000400000000000000050000
+2026-10-17T17:46:08.6503404Z E             ?                                                                    --
+2026-10-17T17:46:08.6503762Z E             + body 0000000000000200000000000000030000000000000004000000000000000500
+2026-10-17T17:46:08.6504076Z E             ?      ++
+2026-10-17T17:46:08.6504344Z E             - body 0000000000000000000000000001000000000000000100000000000000005500
+2026-10-17T17:46:08.6504731Z E             + body 0000000000000000000000000000000000000000000001000000000000000100
+2026-10-17T17:46:08.6505122Z E             + body 0000000000000055000000010000000000000000550000000100000000000000
+2026-10-17T17:46:08.6505799Z E             + body 0000550000000100000000010001000000000000000000000000000000000000
+2026-10-17T17:46:08.6506188Z E             + body 0000000000000000000000000000000000000000000000000000000000000001
+2026-10-17T17:46:08.6506587Z E             - body 0000010000000000000000550000000100000000000000000055000000010000
+2026-10-17T17:46:08.6506952Z E             ?      --    --                       -                  --       ^
+2026-10-17T17:46:08.6507323Z E             + body 0001000000000000005500000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6507666Z E             ?                                                          ^^^^^^^^
+2026-10-17T17:46:08.6508021Z E             + body 0001140100000000000016000000000000007075727264662d6f776c2d646c2d
+2026-10-17T17:46:08.6508434Z E             + body 70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d
+2026-10-17T17:46:08.6508879Z E             + body 7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666
+2026-10-17T17:46:08.6509316Z E             + body d8d8a24ef8a73d99000006000000000000000000000000000000010000000000
+2026-10-17T17:46:08.6509720Z E             + body 0000020000000000000003000000000000000400000000000000050000000000
+2026-10-17T17:46:08.6510114Z E               body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6510511Z E             + body 0000050000000000000000000000000000000001010000000000000000550000
+2026-10-17T17:46:08.6511046Z E             + body 0000010000000300000000000000000000000200000003000000010000000000
+2026-10-17T17:46:08.6511442Z E             + body 0000550000000000000000000000000000000000000000000000000000000101
+2026-10-17T17:46:08.6511834Z E             - body 0000000100010000000000000055000000000000000000000000000000000000
+2026-10-17T17:46:08.6512150Z E             ?      ----------
+2026-10-17T17:46:08.6512435Z E             + body 0100000000000000550000000500000000000000000000000000000000000000
+2026-10-17T17:46:08.6512794Z E             ?                       ++++++++                                     ++
+2026-10-17T17:46:08.6513153Z E             - body 000000000001140100000000000016000000000000007075727264662d6f776c
+2026-10-17T17:46:08.6513477Z E             ?      ----------   ^
+2026-10-17T17:46:08.6513773Z E             + body 011c0100000000000016000000000000007075727264662d6f776c2d646c2d70
+2026-10-17T17:46:08.6514133Z E             ?         ^                                                  ++++++++++
+2026-10-17T17:46:08.6514508Z E             - body 2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c35
+2026-10-17T17:46:08.6514853Z E             ?      ----------             ^
+2026-10-17T17:46:08.6515195Z E             + body 726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7d
+2026-10-17T17:46:08.6515706Z E             ?                   ^                                        ++++++++++
+2026-10-17T17:46:08.6516083Z E             - body 29137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d415
+2026-10-17T17:46:08.6516422Z E             ?      ----------
+2026-10-17T17:46:08.6516738Z E             + body ca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8
+2026-10-17T17:46:08.6517108Z E             ?                                                            ++++++++++
+2026-10-17T17:46:08.6517461Z E             - body 59b46666d8d8a24ef8a73d990000060000000000000000000000000000000100
+2026-10-17T17:46:08.6517789Z E             ?      ----------
+2026-10-17T17:46:08.6518086Z E             + body d8a24ef8a73d9901000006000000000000000000000000000000010000000000
+2026-10-17T17:46:08.6518439Z E             ?                    ++                                        ++++++++
+2026-10-17T17:46:08.6518789Z E             - body 0000000000000200000000000000030000000000000004000000000000000500
+2026-10-17T17:46:08.6519115Z E             ?      --------
+2026-10-17T17:46:08.6519391Z E             + body 0000020000000000000003000000000000000400000000000000050000000000
+2026-10-17T17:46:08.6519737Z E             ?                                                              ++++++++
+2026-10-17T17:46:08.6520230Z E             + body 0000000000000000000000000000000000000100000000000000020000000000
+2026-10-17T17:46:08.6520619Z E             + body 0000005500000001000000000000000055000000020000000000000000005500
+2026-10-17T17:46:08.6521017Z E             + body 0000020000000000550000000500000000010001000000000000000000000000
+2026-10-17T17:46:08.6521416Z E               body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6521992Z E             - body 0000000000000500000000000000000000000000000000010100000000000000
+2026-10-17T17:46:08.6522389Z E             - body 0055000000000100000003000000000000000000000002000000030000000100
+2026-10-17T17:46:08.6522785Z E             - body 0000000000005500000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6523205Z E             - body 0000010101000000000000005500000005000000000000000000000000000000
+2026-10-17T17:46:08.6523546Z E             ?                                       ^^^^^^^
+2026-10-17T17:46:08.6523872Z E             + body 0000000000010101000000000000005500000006000000000000000000000000
+2026-10-17T17:46:08.6524200Z E             ?      ++++++                                 ^
+2026-10-17T17:46:08.6524530Z E             - body 0000000001000100000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6525016Z E             ?                ^                                               ------
+2026-10-17T17:46:08.6525362Z E             + body 0000000000000001500100000000000016000000000000007075727264662d6f
+2026-10-17T17:46:08.6526077Z E             ?      ++++++          ^
+2026-10-17T17:46:08.6526351Z E             - body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6526611Z E             ?                           ^                                    ------
+2026-10-17T17:46:08.6526874Z E             + body 776c2d646c2d70726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd1
+2026-10-17T17:46:08.6527120Z E             ?      ++++++                     ^
+2026-10-17T17:46:08.6527353Z E             - body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
+2026-10-17T17:46:08.6527602Z E             ?                                                                ------
+2026-10-17T17:46:08.6527847Z E             + body 6c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21
+2026-10-17T17:46:08.6528073Z E             ?      ++++++
+2026-10-17T17:46:08.6528267Z E             - body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+2026-10-17T17:46:08.6528497Z E             ?                                                              --------
+2026-10-17T17:46:08.6528735Z E             + body d41559b46666d8d8a24ef8a73d99010000060000000000000000000000000000
+2026-10-17T17:46:08.6528954Z E             ?      ++++++                        ++
+2026-10-17T17:46:08.6529155Z E             - body 0000000000020000000000000003000000000000000400000000000000050000
+2026-10-17T17:46:08.6529380Z E             ?                                                              --------
+2026-10-17T17:46:08.6529614Z E             + body 0001000000000000000200000000000000030000000000000004000000000000
+2026-10-17T17:46:08.6529818Z E             ?      ++++++++
+2026-10-17T17:46:08.6530004Z E             + body 0005000000000000000000000000000000010000000000000000050000000000
+2026-10-17T17:46:08.6530257Z E             + body 0000010000000000000000000000000000000001000000000000000002000000
+2026-10-17T17:46:08.6530503Z E             + body 0003000000010000000000000003000000000000000055000000010000000000
+2026-10-17T17:46:08.6530746Z E             + body 0000005500000002000000000000000000550000000300000000005500000006
+2026-10-17T17:46:08.6530992Z E             - body 0000000000000000000000000001000000000000000200000000000000005500
+2026-10-17T17:46:08.6531220Z E             ?                                                 -                ^^
+2026-10-17T17:46:08.6531447Z E             + body 0000000001010000000000000000010000000000000000000000000000000000
+2026-10-17T17:46:08.6531859Z E             ?               + +                                                 ^
+2026-10-17T17:46:08.6532080Z E             - body 0000010000000000000000550000000200000000000000000055000000020000
+2026-10-17T17:46:08.6532328Z E             - body 0000005500000005000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6532577Z E             - body 0000000000000000000000000001010100000000000000550000000600000000
+2026-10-17T17:46:08.6532824Z E             - body 0000000000000000000000000000000100010000000000001600000000000000
+2026-10-17T17:46:08.6533080Z E             - body 7075727264662d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd458
+2026-10-17T17:46:08.6533362Z E             - body 2dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4f
+2026-10-17T17:46:08.6533648Z E             - body ea8db234ec6c7c21d41559b46666d8d8a24ef8a73d9901000600000000000000
+2026-10-17T17:46:08.6533907Z E             - body 0000000000000000010000000000000002000000000000000300000000000000
+2026-10-17T17:46:08.6534156Z E             - body 0400000000000000050000000000000000000000000000000100000000000000
+2026-10-17T17:46:08.6534406Z E             - body 0300000000000000005500000001000000000000000055000000020000000000
+2026-10-17T17:46:08.6534670Z E             - body 0000000055000000030000000000550000000600000000000000000000000000
+2026-10-17T17:46:08.6535128Z E             - body 0000000000000000000000000000000000000000000000000100010000000000
+2026-10-17T17:46:08.6535375Z E             - body 0000550000000700000000000000000000000000000000000000011401000000
+2026-10-17T17:46:08.6535838Z E             - body 00000016000000000000007075727264662d6f776c2d646c2d70726f6f662d76
+2026-10-17T17:46:08.6536105Z E             - body 332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0
+2026-10-17T17:46:08.6536385Z E             - body f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8a73d
+2026-10-17T17:46:08.6536649Z E             - body 9900000600000000000000000000000000000001000000000000000200000000
+2026-10-17T17:46:08.6536895Z E             - body 0000000300000000000000040000000000000005000000000000000000000000
+2026-10-17T17:46:08.6537139Z E             - body 0000000000000000000000000000000000000000000000000000000500000000
+2026-10-17T17:46:08.6537359Z E             ?                                                             ^
+2026-10-17T17:46:08.6537585Z E             + body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6537804Z E             ?                                                             ^
+2026-10-17T17:46:08.6538021Z E             - body 0000000000000000000000000101000000000000000055000000000100000003
+2026-10-17T17:46:08.6538271Z E             + body 0100010000000000000055000000070000000000000000000000000000000000
+2026-10-17T17:46:08.6538519Z E             + body 000001140100000000000016000000000000007075727264662d6f776c2d646c
+2026-10-17T17:46:08.6538781Z E             + body 2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a
+2026-10-17T17:46:08.6539062Z E             + body 1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b466
+2026-10-17T17:46:08.6539336Z E             + body 66d8d8a24ef8a73d990000060000000000000000000000000000000100000000
+2026-10-17T17:46:08.6539586Z E             - body 0000000000000002000000030000000700000001000000000000005500000000
+2026-10-17T17:46:08.6539814Z E             ?                     --------        -       ^               -
+2026-10-17T17:46:08.6540035Z E             + body 0000000200000000000000030000000000000004000000000000000500000000
+2026-10-17T17:46:08.6540254Z E             ?      ++++++++                              ^^^
+2026-10-17T17:46:08.6540466Z E             - body 0000000000000000000000000000000000000000000000050000000000000003
+2026-10-17T17:46:08.6540689Z E             ?                                                     -               ^
+2026-10-17T17:46:08.6540915Z E             + body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6541231Z E             ?                                                                    ^^
+2026-10-17T17:46:08.6541449Z E             + body 0000000500000000000000000000000000000000010100000000000000005500
+2026-10-17T17:46:08.6541694Z E             + body 0000000100000003000000000000000200000003000000070000000100000000
+2026-10-17T17:46:08.6541941Z E             + body 0000005500000000000000000000000000000000000000000000000000000005
+2026-10-17T17:46:08.6542190Z E             - body 001600000000000000687474703a2f2f6578616d706c652e6f72672f746f6d00
+2026-10-17T17:46:08.6542420Z E             ?                                                      ----------------
+2026-10-17T17:46:08.6542672Z E             + body 0000000000000003001600000000000000687474703a2f2f6578616d706c652e
+2026-10-17T17:46:08.6542912Z E             ?      ++++++++++++++++
+2026-10-17T17:46:08.6543146Z E             - body 2300000000000000687474703a2f2f7777772e77332e6f72672f323030322f30
+2026-10-17T17:46:08.6543388Z E             ?                                                      ----------------
+2026-10-17T17:46:08.6543615Z E             + body 6f72672f746f6d002300000000000000687474703a2f2f7777772e77332e6f72
+2026-10-17T17:46:08.6543821Z E             ?      ++++++++++++++++
+2026-10-17T17:46:08.6544016Z E             - body 372f6f776c235468696e67000100000000000000010000000000000003001600
+2026-10-17T17:46:08.6544326Z E             ?                                                      ----------------
+2026-10-17T17:46:08.6544556Z E             + body 672f323030322f30372f6f776c235468696e6700010000000000000001000000
+2026-10-17T17:46:08.6544757Z E             ?      ++++++++++++++++
+2026-10-17T17:46:08.6544950Z E             - body 000000000000687474703a2f2f6578616d706c652e6f72672f746f6d00250000
+2026-10-17T17:46:08.6545205Z E             - body 0000000000687474703a2f2f7777772e77332e6f72672f323030322f30372f6f
+2026-10-17T17:46:08.6545594Z E             - body 776c234e6f7468696e6702020000000000000003001600000000000000687474
+2026-10-17T17:46:08.6545859Z E             - body 703a2f2f6578616d706c652e6f72672f746f6d00160000000000000068747470
+2026-10-17T17:46:08.6546200Z E             - body 3a2f2f6578616d706c652e6f72672f4361740001000000000000000300000000
+2026-10-17T17:46:08.6546454Z E             - body 00000003001600000000000000687474703a2f2f6578616d706c652e6f72672f
+2026-10-17T17:46:08.6546686Z E             ?                                                                    --
+2026-10-17T17:46:08.6546912Z E             + body 0000000003001600000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6547112Z E             ?      ++
+2026-10-17T17:46:08.6547291Z E             + body 2f746f6d002500000000000000687474703a2f2f7777772e77332e6f72672f32
+2026-10-17T17:46:08.6547546Z E             + body 3030322f30372f6f776c234e6f7468696e670202000000000000000300160000
+2026-10-17T17:46:08.6547800Z E             + body 0000000000687474703a2f2f6578616d706c652e6f72672f746f6d0016000000
+2026-10-17T17:46:08.6548053Z E             + body 00000000687474703a2f2f6578616d706c652e6f72672f436174000100000000
+2026-10-17T17:46:08.6548303Z E             + body 000000030000000000000003001600000000000000687474703a2f2f6578616d
+2026-10-17T17:46:08.6548553Z E             + body 706c652e6f72672f746f6d001900000000000000687474703a2f2f6578616d70
+2026-10-17T17:46:08.6548807Z E             + body 6c652e6f72672f416e696d616c00010000000000000004000000000000000300
+2026-10-17T17:46:08.6549064Z E             - body 746f6d001900000000000000687474703a2f2f6578616d706c652e6f72672f41
+2026-10-17T17:46:08.6549273Z E             ?      ^^ -------
+2026-10-17T17:46:08.6549463Z E             + body 1600000000000000687474703a2f2f6578616d706c652e6f72672f746f6d0017
+2026-10-17T17:46:08.6549684Z E             ?      ^                                                     + ++++++ +
+2026-10-17T17:46:08.6549905Z E             - body 6e696d616c000100000000000000040000000000000003001600000000000000
+2026-10-17T17:46:08.6550164Z E             - body 687474703a2f2f6578616d706c652e6f72672f746f6d00170000000000000068
+2026-10-17T17:46:08.6550544Z E             - body 7474703a2f2f6578616d706c652e6f72672f4669736802050000000000000000
+2026-10-17T17:46:08.6550772Z E             ?                                                      ----------------
+2026-10-17T17:46:08.6551007Z E             + body 00000000000000687474703a2f2f6578616d706c652e6f72672f466973680205
+2026-10-17T17:46:08.6551209Z E             ?      ++++++++++++++++
+2026-10-17T17:46:08.6551349Z E             + body 0000000000000000
+2026-10-17T17:46:08.6551447Z 
+2026-10-17T17:46:08.6551531Z tests/test_entail_reasoning.py:915: AssertionError
+2026-10-17T17:46:08.6551740Z =============================== warnings summary ===============================
+2026-10-17T17:46:08.6557031Z tests/test_contextual_mappings.py::test_python_contextual_dispatch[ConjunctiveGraph]
+2026-10-17T17:46:08.6557517Z   /home/runner/work/purrdf/purrdf/bindings/python/tests/test_contextual_mappings.py:41: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+2026-10-17T17:46:08.6557957Z     graph = getattr(compat, "Graph" if route == "processor" else route)()
+2026-10-17T17:46:08.6558124Z 
+2026-10-17T17:46:08.6558286Z tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[False-ConjunctiveGraph]
+2026-10-17T17:46:08.6558637Z tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[True-ConjunctiveGraph]
+2026-10-17T17:46:08.6559244Z   /home/runner/work/purrdf/purrdf/bindings/python/tests/test_contextual_mappings.py:64: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+2026-10-17T17:46:08.6559629Z     dataset = getattr(compat, kind)()
+2026-10-17T17:46:08.6559733Z 
+2026-10-17T17:46:08.6559824Z tests/test_dataset.py::test_named_graph_view_is_readable
+2026-10-17T17:46:08.6560027Z tests/test_dataset.py::test_default_graph_view
+2026-10-17T17:46:08.6560240Z tests/test_dataset.py::test_get_context_reads_without_registering
+2026-10-17T17:46:08.6560449Z tests/test_dataset.py::test_quads_parity
+2026-10-17T17:46:08.6560646Z tests/test_dataset.py::test_quads_restricted_to_named_graph
+2026-10-17T17:46:08.6560861Z tests/test_dataset.py::test_dataset_iter_yields_quads
+2026-10-17T17:46:08.6561366Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+2026-10-17T17:46:08.6561841Z     c = self.default_context if default else None
+2026-10-17T17:46:08.6561957Z 
+2026-10-17T17:46:08.6562069Z tests/test_term_model.py::test_ill_typed_matches_oracle[boolean-maybe]
+2026-10-17T17:46:08.6562526Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/term.py:1862: UserWarning: Parsing weird boolean, 'maybe' does not map to True or False
+2026-10-17T17:46:08.6562924Z     warnings.warn(
+2026-10-17T17:46:08.6562996Z 
+2026-10-17T17:46:08.6563134Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2026-10-17T17:46:08.6563395Z =========================== short test summary info ============================
+2026-10-17T17:46:08.6563736Z FAILED tests/test_entail_reasoning.py::test_the_committed_proof_bytes_reproduce_through_this_host - AssertionError: realize
+2026-10-17T17:46:08.6564100Z assert 'purrdf-dl-pr...00000000000\n' == 'purrdf-dl-pr...00000000000\n'
+2026-10-17T17:46:08.6564307Z   
+2026-10-17T17:46:08.6564470Z   Skipping 124 identical leading characters in diff, use -v to show
+2026-10-17T17:46:08.6564661Z     f5
+2026-10-17T17:46:08.6564842Z   - digest 163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76
+2026-10-17T17:46:08.6565126Z   + digest edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e
+2026-10-17T17:46:08.6565706Z     trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+2026-10-17T17:46:08.6566028Z     runs 6
+2026-10-17T17:46:08.6566138Z     traced 6
+2026-10-17T17:46:08.6566245Z     claims 5
+2026-10-17T17:46:08.6566357Z     truncated false
+2026-10-17T17:46:08.6566596Z     receipt none
+2026-10-17T17:46:08.6566716Z   - bytes 2624
+2026-10-17T17:46:08.6566825Z   ?         ^^
+2026-10-17T17:46:08.6566931Z   + bytes 2760
+2026-10-17T17:46:08.6567038Z   ?        + ^
+2026-10-17T17:46:08.6567200Z     body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+2026-10-17T17:46:08.6567461Z     body 76322796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3
+2026-10-17T17:46:08.6567713Z     body c0f5030006000000000000000000000000000000010000000000000002000000
+2026-10-17T17:46:08.6567945Z     body 0000000003000000000000000400000000000000050000000000000003010000
+2026-10-17T17:46:08.6568177Z     body 0000000000001600000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6568412Z     body 2f746f6d0500000000000000002300000000000000687474703a2f2f7777772e
+2026-10-17T17:46:08.6568650Z     body 77332e6f72672f323030322f30372f6f776c235468696e670025000000000000
+2026-10-17T17:46:08.6568892Z     body 00687474703a2f2f7777772e77332e6f72672f323030322f30372f6f776c234e
+2026-10-17T17:46:08.6569139Z     body 6f7468696e67001600000000000000687474703a2f2f6578616d706c652e6f72
+2026-10-17T17:46:08.6569378Z     body 672f436174001900000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6569616Z     body 2f416e696d616c001700000000000000687474703a2f2f6578616d706c652e6f
+2026-10-17T17:46:08.6569850Z     body 72672f4669736806000000000000000100000000000000000000000000000000
+2026-10-17T17:46:08.6570170Z     body 0000000000000000000110010000000000001600000000000000707572726466
+2026-10-17T17:46:08.6570414Z     body 2d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbe
+2026-10-17T17:46:08.6570677Z     body acd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c
+2026-10-17T17:46:08.6570930Z     body 7c21d41559b46666d8d8a24ef8a73d9900000600000000000000000000000000
+2026-10-17T17:46:08.6571167Z     body 0000010000000000000002000000000000000300000000000000040000000000
+2026-10-17T17:46:08.6571413Z     body 0000050000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6571646Z     body 0000000000000000000005000000000000000000000000000000000101000000
+2026-10-17T17:46:08.6571875Z     body 0000000000550000000001000000020000000000000002000000030000000100
+2026-10-17T17:46:08.6572108Z     body 0000000000005500000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6572337Z     body 0000010101000000000000005500000001000000000000000000000000000000
+2026-10-17T17:46:08.6572572Z   - body 0000000001f60000000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6572766Z   ?                ^^ ^
+2026-10-17T17:46:08.6572933Z   + body 0000000001120100000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6573122Z   ?                ^^ ^
+2026-10-17T17:46:08.6573305Z   - body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6573511Z   ?                           ^
+2026-10-17T17:46:08.6573707Z   + body 646c2d70726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6573910Z   ?                           ^
+2026-10-17T17:46:08.6574108Z     body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
+2026-10-17T17:46:08.6574368Z   - body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+2026-10-17T17:46:08.6574591Z   ?                                                                    --
+2026-10-17T17:46:08.6585364Z   + body b46666d8d8a24ef8a73d99010000060000000000000000000000000000000100
+2026-10-17T17:46:08.6585672Z   ?                              ++
+2026-10-17T17:46:08.6585867Z   - body 0000000000020000000000000003000000000000000400000000000000050000
+2026-10-17T17:46:08.6586085Z   ?                                                                    --
+2026-10-17T17:46:08.6586300Z   + body 0000000000000200000000000000030000000000000004000000000000000500
+2026-10-17T17:46:08.6586492Z   ?      ++
+2026-10-17T17:46:08.6586654Z   - body 0000000000000000000000000001000000000000000100000000000000005500
+2026-10-17T17:46:08.6587014Z   + body 0000000000000000000000000000000000000000000001000000000000000100
+2026-10-17T17:46:08.6587249Z   + body 0000000000000055000000010000000000000000550000000100000000000000
+2026-10-17T17:46:08.6587484Z   + body 0000550000000100000000010001000000000000000000000000000000000000
+2026-10-17T17:46:08.6587719Z   + body 0000000000000000000000000000000000000000000000000000000000000001
+2026-10-17T17:46:08.6587953Z   - body 0000010000000000000000550000000100000000000000000055000000010000
+2026-10-17T17:46:08.6588178Z   ?      --    --                       -                  --       ^
+2026-10-17T17:46:08.6588398Z   + body 0001000000000000005500000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6588611Z   ?                                                          ^^^^^^^^
+2026-10-17T17:46:08.6588819Z   + body 0001140100000000000016000000000000007075727264662d6f776c2d646c2d
+2026-10-17T17:46:08.6589067Z   + body 70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d
+2026-10-17T17:46:08.6589347Z   + body 7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666
+2026-10-17T17:46:08.6589608Z   + body d8d8a24ef8a73d99000006000000000000000000000000000000010000000000
+2026-10-17T17:46:08.6589847Z   + body 0000020000000000000003000000000000000400000000000000050000000000
+2026-10-17T17:46:08.6590079Z     body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6590404Z   + body 0000050000000000000000000000000000000001010000000000000000550000
+2026-10-17T17:46:08.6590634Z   + body 0000010000000300000000000000000000000200000003000000010000000000
+2026-10-17T17:46:08.6590863Z   + body 0000550000000000000000000000000000000000000000000000000000000101
+2026-10-17T17:46:08.6591101Z   - body 0000000100010000000000000055000000000000000000000000000000000000
+2026-10-17T17:46:08.6591298Z   ?      ----------
+2026-10-17T17:46:08.6591464Z   + body 0100000000000000550000000500000000000000000000000000000000000000
+2026-10-17T17:46:08.6591672Z   ?                       ++++++++                                     ++
+2026-10-17T17:46:08.6591888Z   - body 000000000001140100000000000016000000000000007075727264662d6f776c
+2026-10-17T17:46:08.6592085Z   ?      ----------   ^
+2026-10-17T17:46:08.6592261Z   + body 011c0100000000000016000000000000007075727264662d6f776c2d646c2d70
+2026-10-17T17:46:08.6592474Z   ?         ^                                                  ++++++++++
+2026-10-17T17:46:08.6592707Z   - body 2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c35
+2026-10-17T17:46:08.6592933Z   ?      ----------             ^
+2026-10-17T17:46:08.6593137Z   + body 726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7d
+2026-10-17T17:46:08.6593363Z   ?                   ^                                        ++++++++++
+2026-10-17T17:46:08.6593595Z   - body 29137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d415
+2026-10-17T17:46:08.6593830Z   ?      ----------
+2026-10-17T17:46:08.6594030Z   + body ca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8
+2026-10-17T17:46:08.6594289Z   ?                                                            ++++++++++
+2026-10-17T17:46:08.6594510Z   - body 59b46666d8d8a24ef8a73d990000060000000000000000000000000000000100
+2026-10-17T17:46:08.6594710Z   ?      ----------
+2026-10-17T17:46:08.6594880Z   + body d8a24ef8a73d9901000006000000000000000000000000000000010000000000
+2026-10-17T17:46:08.6595094Z   ?                    ++                                        ++++++++
+2026-10-17T17:46:08.6595310Z   - body 0000000000000200000000000000030000000000000004000000000000000500
+2026-10-17T17:46:08.6595658Z   ?      --------
+2026-10-17T17:46:08.6595825Z   + body 0000020000000000000003000000000000000400000000000000050000000000
+2026-10-17T17:46:08.6596034Z   ?                                                              ++++++++
+2026-10-17T17:46:08.6596245Z   + body 0000000000000000000000000000000000000100000000000000020000000000
+2026-10-17T17:46:08.6596485Z   + body 0000005500000001000000000000000055000000020000000000000000005500
+2026-10-17T17:46:08.6596820Z   + body 0000020000000000550000000500000000010001000000000000000000000000
+2026-10-17T17:46:08.6597052Z     body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6597292Z   - body 0000000000000500000000000000000000000000000000010100000000000000
+2026-10-17T17:46:08.6597529Z   - body 0055000000000100000003000000000000000000000002000000030000000100
+2026-10-17T17:46:08.6597767Z   - body 0000000000005500000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6598004Z   - body 0000010101000000000000005500000005000000000000000000000000000000
+2026-10-17T17:46:08.6598211Z   ?                                       ^^^^^^^
+2026-10-17T17:46:08.6598408Z   + body 0000000000010101000000000000005500000006000000000000000000000000
+2026-10-17T17:46:08.6598610Z   ?      ++++++                                 ^
+2026-10-17T17:46:08.6598806Z   - body 0000000001000100000000000016000000000000007075727264662d6f776c2d
+2026-10-17T17:46:08.6599019Z   ?                ^                                               ------
+2026-10-17T17:46:08.6599236Z   + body 0000000000000001500100000000000016000000000000007075727264662d6f
+2026-10-17T17:46:08.6599428Z   ?      ++++++          ^
+2026-10-17T17:46:08.6599619Z   - body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+2026-10-17T17:46:08.6599846Z   ?                           ^                                    ------
+2026-10-17T17:46:08.6600158Z   + body 776c2d646c2d70726f6f662d76352796fe31f2b96aabd4582dfd4703cfbeacd1
+2026-10-17T17:46:08.6600368Z   ?      ++++++                     ^
+2026-10-17T17:46:08.6600575Z   - body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
+2026-10-17T17:46:08.6600810Z   ?                                                                ------
+2026-10-17T17:46:08.6601046Z   + body 6c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21
+2026-10-17T17:46:08.6601273Z   ?      ++++++
+2026-10-17T17:46:08.6601515Z   - body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+2026-10-17T17:46:08.6601754Z   ?                                                              --------
+2026-10-17T17:46:08.6601971Z   + body d41559b46666d8d8a24ef8a73d99010000060000000000000000000000000000
+2026-10-17T17:46:08.6602176Z   ?      ++++++                        ++
+2026-10-17T17:46:08.6602362Z   - body 0000000000020000000000000003000000000000000400000000000000050000
+2026-10-17T17:46:08.6602585Z   ?                                                              --------
+2026-10-17T17:46:08.6602795Z   + body 0001000000000000000200000000000000030000000000000004000000000000
+2026-10-17T17:46:08.6602985Z   ?      ++++++++
+2026-10-17T17:46:08.6603163Z   + body 0005000000000000000000000000000000010000000000000000050000000000
+2026-10-17T17:46:08.6603446Z   + body 0000010000000000000000000000000000000001000000000000000002000000
+2026-10-17T17:46:08.6603729Z   + body 0003000000010000000000000003000000000000000055000000010000000000
+2026-10-17T17:46:08.6603981Z   + body 0000005500000002000000000000000000550000000300000000005500000006
+2026-10-17T17:46:08.6604226Z   - body 0000000000000000000000000001000000000000000200000000000000005500
+2026-10-17T17:46:08.6604440Z   ?                                                 -                ^^
+2026-10-17T17:46:08.6604654Z   + body 0000000001010000000000000000010000000000000000000000000000000000
+2026-10-17T17:46:08.6604866Z   ?               + +                                                 ^
+2026-10-17T17:46:08.6605087Z   - body 0000010000000000000000550000000200000000000000000055000000020000
+2026-10-17T17:46:08.6605327Z   - body 0000005500000005000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6605718Z   - body 0000000000000000000000000001010100000000000000550000000600000000
+2026-10-17T17:46:08.6605957Z   - body 0000000000000000000000000000000100010000000000001600000000000000
+2026-10-17T17:46:08.6606215Z   - body 7075727264662d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd458
+2026-10-17T17:46:08.6606489Z   - body 2dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4f
+2026-10-17T17:46:08.6606880Z   - body ea8db234ec6c7c21d41559b46666d8d8a24ef8a73d9901000600000000000000
+2026-10-17T17:46:08.6607145Z   - body 0000000000000000010000000000000002000000000000000300000000000000
+2026-10-17T17:46:08.6607403Z   - body 0400000000000000050000000000000000000000000000000100000000000000
+2026-10-17T17:46:08.6607657Z   - body 0300000000000000005500000001000000000000000055000000020000000000
+2026-10-17T17:46:08.6607905Z   - body 0000000055000000030000000000550000000600000000000000000000000000
+2026-10-17T17:46:08.6608151Z   - body 0000000000000000000000000000000000000000000000000100010000000000
+2026-10-17T17:46:08.6608395Z   - body 0000550000000700000000000000000000000000000000000000011401000000
+2026-10-17T17:46:08.6608648Z   - body 00000016000000000000007075727264662d6f776c2d646c2d70726f6f662d76
+2026-10-17T17:46:08.6608920Z   - body 332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0
+2026-10-17T17:46:08.6609201Z   - body f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8a73d
+2026-10-17T17:46:08.6609467Z   - body 9900000600000000000000000000000000000001000000000000000200000000
+2026-10-17T17:46:08.6609711Z   - body 0000000300000000000000040000000000000005000000000000000000000000
+2026-10-17T17:46:08.6609951Z   - body 0000000000000000000000000000000000000000000000000000000500000000
+2026-10-17T17:46:08.6610174Z   ?                                                             ^
+2026-10-17T17:46:08.6610539Z   + body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6610751Z   ?                                                             ^
+2026-10-17T17:46:08.6610962Z   - body 0000000000000000000000000101000000000000000055000000000100000003
+2026-10-17T17:46:08.6611204Z   + body 0100010000000000000055000000070000000000000000000000000000000000
+2026-10-17T17:46:08.6611442Z   + body 000001140100000000000016000000000000007075727264662d6f776c2d646c
+2026-10-17T17:46:08.6611694Z   + body 2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a
+2026-10-17T17:46:08.6611971Z   + body 1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b466
+2026-10-17T17:46:08.6612239Z   + body 66d8d8a24ef8a73d990000060000000000000000000000000000000100000000
+2026-10-17T17:46:08.6612482Z   - body 0000000000000002000000030000000700000001000000000000005500000000
+2026-10-17T17:46:08.6612696Z   ?                     --------        -       ^               -
+2026-10-17T17:46:08.6612916Z   + body 0000000200000000000000030000000000000004000000000000000500000000
+2026-10-17T17:46:08.6613116Z   ?      ++++++++                              ^^^
+2026-10-17T17:46:08.6613314Z   - body 0000000000000000000000000000000000000000000000050000000000000003
+2026-10-17T17:46:08.6613537Z   ?                                                     -               ^
+2026-10-17T17:46:08.6613770Z   + body 0000000000000000000000000000000000000000000000000000000000000000
+2026-10-17T17:46:08.6614012Z   ?                                                                    ^^
+2026-10-17T17:46:08.6614231Z   + body 0000000500000000000000000000000000000000010100000000000000005500
+2026-10-17T17:46:08.6614464Z   + body 0000000100000003000000000000000200000003000000070000000100000000
+2026-10-17T17:46:08.6614696Z   + body 0000005500000000000000000000000000000000000000000000000000000005
+2026-10-17T17:46:08.6614935Z   - body 001600000000000000687474703a2f2f6578616d706c652e6f72672f746f6d00
+2026-10-17T17:46:08.6615155Z   ?                                                      ----------------
+2026-10-17T17:46:08.6615367Z   + body 0000000000000003001600000000000000687474703a2f2f6578616d706c652e
+2026-10-17T17:46:08.6615712Z   ?      ++++++++++++++++
+2026-10-17T17:46:08.6615891Z   - body 2300000000000000687474703a2f2f7777772e77332e6f72672f323030322f30
+2026-10-17T17:46:08.6616103Z   ?                                                      ----------------
+2026-10-17T17:46:08.6616318Z   + body 6f72672f746f6d002300000000000000687474703a2f2f7777772e77332e6f72
+2026-10-17T17:46:08.6616611Z   ?      ++++++++++++++++
+2026-10-17T17:46:08.6616783Z   - body 372f6f776c235468696e67000100000000000000010000000000000003001600
+2026-10-17T17:46:08.6616996Z   ?                                                      ----------------
+2026-10-17T17:46:08.6617212Z   + body 672f323030322f30372f6f776c235468696e6700010000000000000001000000
+2026-10-17T17:46:08.6617403Z   ?      ++++++++++++++++
+2026-10-17T17:46:08.6617581Z   - body 000000000000687474703a2f2f6578616d706c652e6f72672f746f6d00250000
+2026-10-17T17:46:08.6617828Z   - body 0000000000687474703a2f2f7777772e77332e6f72672f323030322f30372f6f
+2026-10-17T17:46:08.6618070Z   - body 776c234e6f7468696e6702020000000000000003001600000000000000687474
+2026-10-17T17:46:08.6618312Z   - body 703a2f2f6578616d706c652e6f72672f746f6d00160000000000000068747470
+2026-10-17T17:46:08.6618560Z   - body 3a2f2f6578616d706c652e6f72672f4361740001000000000000000300000000
+2026-10-17T17:46:08.6618803Z   - body 00000003001600000000000000687474703a2f2f6578616d706c652e6f72672f
+2026-10-17T17:46:08.6619023Z   ?                                                                    --
+2026-10-17T17:46:08.6619236Z   + body 0000000003001600000000000000687474703a2f2f6578616d706c652e6f7267
+2026-10-17T17:46:08.6619424Z   ?      ++
+2026-10-17T17:46:08.6619584Z   + body 2f746f6d002500000000000000687474703a2f2f7777772e77332e6f72672f32
+2026-10-17T17:46:08.6619829Z   + body 3030322f30372f6f776c234e6f7468696e670202000000000000000300160000
+2026-10-17T17:46:08.6620153Z   + body 0000000000687474703a2f2f6578616d706c652e6f72672f746f6d0016000000
+2026-10-17T17:46:08.6620395Z   + body 00000000687474703a2f2f6578616d706c652e6f72672f436174000100000000
+2026-10-17T17:46:08.6620632Z   + body 000000030000000000000003001600000000000000687474703a2f2f6578616d
+2026-10-17T17:46:08.6620869Z   + body 706c652e6f72672f746f6d001900000000000000687474703a2f2f6578616d70
+2026-10-17T17:46:08.6621111Z   + body 6c652e6f72672f416e696d616c00010000000000000004000000000000000300
+2026-10-17T17:46:08.6621357Z   - body 746f6d001900000000000000687474703a2f2f6578616d706c652e6f72672f41
+2026-10-17T17:46:08.6621563Z   ?      ^^ -------
+2026-10-17T17:46:08.6621743Z   + body 1600000000000000687474703a2f2f6578616d706c652e6f72672f746f6d0017
+2026-10-17T17:46:08.6621991Z   ?      ^                                                     + ++++++ +
+2026-10-17T17:46:08.6622208Z   - body 6e696d616c000100000000000000040000000000000003001600000000000000
+2026-10-17T17:46:08.6622473Z   - body 687474703a2f2f6578616d706c652e6f72672f746f6d00170000000000000068
+2026-10-17T17:46:08.6622718Z   - body 7474703a2f2f6578616d706c652e6f72672f4669736802050000000000000000
+2026-10-17T17:46:08.6622931Z   ?                                                      ----------------
+2026-10-17T17:46:08.6623143Z   + body 00000000000000687474703a2f2f6578616d706c652e6f72672f466973680205
+2026-10-17T17:46:08.6623346Z   ?      ++++++++++++++++
+2026-10-17T17:46:09.2228512Z   + body 0000000000000000
+2026-10-17T17:46:09.2228945Z = 1 failed, 4222 passed, 1 skipped, 4 xfailed, 10 warnings in 79.58s (0:01:19) =
+2026-10-17T17:46:09.8088145Z make: *** [Makefile:455: pytest] Error 1
+2026-10-17T17:46:09.8101187Z ##[error]Process completed with exit code 2.
+2026-10-17T17:46:09.8185059Z Post job cleanup.
+2026-10-17T17:46:09.8870038Z [command]/usr/bin/git version
+2026-10-17T17:46:09.8903592Z git version 2.55.0
+2026-10-17T17:46:09.8927191Z Temporarily overriding HOME='/home/runner/work/_temp/88bc3783-d34c-4693-acfc-fe6c97e530f3' before making global git config changes
+2026-10-17T17:46:09.8927760Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T17:46:09.8931144Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-17T17:46:09.8965026Z Removing SSH command configuration
+2026-10-17T17:46:09.8970460Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T17:46:09.8999891Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T17:46:09.9202851Z Removing HTTP extra header
+2026-10-17T17:46:09.9209099Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T17:46:09.9249575Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T17:46:09.9473253Z Removing includeIf entries pointing to credentials config files
+2026-10-17T17:46:09.9480627Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T17:46:09.9516158Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T17:46:09.9887477Z Cleaning up orphan processes
+

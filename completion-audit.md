@@ -1,0 +1,5 @@
+# Scope audit
+
+Self-audit, not an independent verdict. Compared the implementation to issue588 and plan.md. The artifact repair covers all16 cases and retains all expected answers/inputs, schema controls, shared exact checks and every existing host consumer. An explicit Rust producer replaces the incomplete historical writer; source drift/answer changes refuse. Actual native and portable WASM checks pass the complete artifact, with strict Clippy and full helper hygiene green. The new portable harness is registered in make wasm-test and its inventory is documented as144 cases/149 executions in25 targets/29 invocations.
+
+No implementation requirement is moved to an unowned follow-up. Normal hooks, PR/reviews, ghprsq/archive/cleanup still require execution. Optimized packaged WASM and Python acceptance is not proven by the portable run and remains outstanding until hosted jobs complete; keep588 open if it remains pending. Existing user authorization permits merging while hosted CI runs and requires owning subsequent findings. The full logic backlog, GMEOW1843 and larger source-leaf/shared-store/delta work remain active.

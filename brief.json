@@ -1,0 +1,106 @@
+{
+  "issue": 588,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Refresh shared cross-host proof goldens for current-support encoding",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 558,
+      "title": "Structured access to error variants and fields, so consumers never render errors to text",
+      "state": "OPEN"
+    },
+    {
+      "number": 479,
+      "title": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 553,
+      "title": "Segmented stack view: bound-reifier patterns drop annotations and scan the reifier table; block cache lookup is linear",
+      "state": "CLOSED"
+    },
+    {
+      "number": 542,
+      "title": "rdf-core: MutableDataset::freeze uses fixed default ViewLimits; allow caller limits",
+      "state": "CLOSED"
+    },
+    {
+      "number": 401,
+      "title": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+      "state": "CLOSED"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 458,
+      "title": "purrdf-gts: composite ML-DSA-65 + Ed25519 signatures under COSE_Sign1",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 382,
+      "title": "SHACL pre-binding leaves `$this` unbound in a triple pattern inside `OPTIONAL`",
+      "state": "CLOSED"
+    },
+    {
+      "number": 457,
+      "title": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+      "state": "CLOSED"
+    },
+    {
+      "number": 385,
+      "title": "An alternative path of plain predicates is not translated, and a UNION in its place joins by position",
+      "state": "CLOSED"
+    },
+    {
+      "number": 406,
+      "title": "Native XPath regex profile with operational resource refusal",
+      "state": "CLOSED"
+    },
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 402,
+      "title": "SHACL dated profile selection and complete validation reports (additive)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "proof-premise-reachability": 1,
+    "correctness": 3,
+    "none": 21,
+    "performance": 2,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/588-refresh-shared-cross-host-proof-goldens"
+  },
+  "coverage": [
+    "issue #588 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Refresh', 'shared', 'cross-host']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 6 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #588 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #588: 0",
+    "requirement candidates: 0 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 1 path(s) (1 on disk), 0 identifier(s), 1 workspace package(s), 1 URL(s)"
+  ]
+}

@@ -1,0 +1,15 @@
+# Repair the shared proof boundary artifact
+
+The full logic goal remains active. This is an owned CI regression from native587: wasm-package job117458981838 executes the real shared check_dl_proof_golden_vectors door and rejects realize's old proof bytes. The prior entailment-only qualification missed the shared16-case artifact in purrdf-validate. Fix that artifact and its owning explicit refresh operation; preserve all mismatch checks and shared host consumers. GMEOW1843's clean worktree/plan remain intact while this directly introduced regression is repaired.
+
+Native law, ordinary hooks, original profiles/ceilings, no runtime dependency/semantic feature and ghprsq-only integration apply. No machine/resource/environment probes or caps, banned commands, GMEOW producer/full gate/corpus factory, private memory or unrelated edits. Root REWORK_LIST.md is unrelated. No independent dispatcher is available; reviews are self-reviews, never fabricated independent verdicts. Source and all issue comments must be gathered by brief before publication. The named source is a first-party generated fixture, not frozen external vectors.
+
+## Task 1: One explicit artifact producer and refreshed bytes
+
+Add an explicit Rust producer for the existing shared proof vector artifact, using the actual public native prove/check entry points over each recorded case's original document/question. Preserve all case names, service/argument/input and expected answers byte for byte; recompute only proof and replay-report bodies after verifying the answer remains the expected one. Replace the obsolete one-time schema-only test sealer with this single refresh operation rather than retain two producers. Ordinary tests only compare, never refresh. Review changed bytes, schema/current-support trust classifications and source identities; no stronger semantic claim may be inferred merely from regeneration.
+
+## Task 2: Qualify and integrate the actual boundary
+
+Run the existing native shared checker over all16 cases and affected boundary regressions. Add a minimal portable harness over that same production checker if needed to execute every vector on real WASM without invoking the broad optimized package build; keep the optimized packaged door unchanged and require its hosted CI result separately. Register the exact portable door under the existing native/WASM inventory and document actual counts. Strict affected all-target Clippy, complete helper checks and normal hooks must pass. Read actual Make recipes before invoking them. No unsupported optimization-profile or full-package claim from a filtered portable run.
+
+Review scope against the issue, commit/push normally, create a focused PR, inspect complete review/CI/thread surfaces, and integrate only with ghprsq under existing pending-CI authority. The optimized-package acceptance remains visibly unqualified until its actual hosted job passes; keep588 open if that acceptance is still pending. Archive evidence before owned cleanup. Resume GMEOW1843 immediately after this coherent repair, retaining the larger native/GMEOW integration goal.
