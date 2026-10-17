@@ -359,6 +359,9 @@ use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
 use crate::statement_layer::{self, StatementProbe};
 use crate::user_fn::Volatility;
 
+mod refusal;
+use refusal::PathRefusal;
+
 /// `rdf:reifies` — the RDF 1.2 indirection edge from a reifier resource to the triple term
 /// it reifies. A well-known RDF vocabulary IRI (PurRDF mints none of its own); it is named
 /// here only to decide whether a step alternative can draw edges from the reifier
@@ -432,18 +435,14 @@ impl PathStep {
     /// * any alternative's term is not a [`TermValue::Iri`] — RDF predicates are IRIs,
     ///   and a literal or blank node in predicate position names no statements at all;
     /// * a `(predicate, direction)` pair is repeated — see the type docs.
-    pub fn new(alternatives: Vec<(TermValue, PathDirection)>) -> Result<Self, EvalError> {
+    pub fn new(mut alternatives: Vec<(TermValue, PathDirection)>) -> Result<Self, EvalError> {
         if alternatives.is_empty() {
-            return Err(EvalError::config(
-                "a path step needs at least one (predicate, direction) alternative; an empty \
-                 alternation traverses nothing and so defines no hop",
-            ));
+            return Err(PathRefusal::EmptyStep.error());
         }
         for (index, (predicate, _)) in alternatives.iter().enumerate() {
             if !matches!(predicate, TermValue::Iri(_)) {
-                return Err(EvalError::config(format!(
-                    "path step alternative {index} is {predicate:?}; a predicate must be an IRI"
-                )));
+                let (actual, _) = alternatives.swap_remove(index);
+                return Err(PathRefusal::Predicate { index, actual }.error());
             }
         }
         // Quadratic in the alternation's length, which is a hand-written list of a
@@ -452,12 +451,13 @@ impl PathStep {
         // neighbour order this type feeds.
         for (index, alternative) in alternatives.iter().enumerate() {
             if alternatives[..index].contains(alternative) {
-                return Err(EvalError::config(format!(
-                    "path step alternative {index} repeats {:?} in the {:?} direction; a \
-                     duplicated alternative doubles every walk that traverses it, with no \
-                     observable difference at the call site",
-                    alternative.0, alternative.1
-                )));
+                let (predicate, direction) = alternatives.swap_remove(index);
+                return Err(PathRefusal::Duplicate {
+                    index,
+                    predicate,
+                    direction,
+                }
+                .error());
             }
         }
         Ok(Self { alternatives })
@@ -522,28 +522,20 @@ impl PathLimits {
         max_expansions_per_invocation: u64,
     ) -> Result<Self, EvalError> {
         if min_hops == 0 {
-            return Err(EvalError::config(
-                "min_hops must be at least 1; a zero-hop path is the identity and has no \
-                 witness — no statement was traversed, so there is no hop to bind",
-            ));
+            return Err(PathRefusal::ZeroMinimum.error());
         }
         if min_hops > max_hops {
-            return Err(EvalError::config(format!(
-                "min_hops ({min_hops}) exceeds max_hops ({max_hops}); the accepted walk-length \
-                 interval would be empty"
-            )));
+            return Err(PathRefusal::ReversedBounds {
+                minimum: min_hops,
+                maximum: max_hops,
+            }
+            .error());
         }
         if max_paths_per_seed == 0 {
-            return Err(EvalError::config(
-                "max_paths_per_seed must be at least 1; a guard of zero fails on the first \
-                 candidate walk and so can only ever produce an error",
-            ));
+            return Err(PathRefusal::ZeroPaths.error());
         }
         if max_expansions_per_invocation == 0 {
-            return Err(EvalError::config(
-                "max_expansions_per_invocation must be at least 1; a guard of zero fails on the \
-                 first traversed edge and so can only ever produce an error",
-            ));
+            return Err(PathRefusal::ZeroExpansions.error());
         }
         Ok(Self {
             min_hops,
@@ -818,16 +810,13 @@ impl PathGraph {
         statements.sort_unstable();
         statements.dedup();
         if u32::try_from(nodes.len()).is_err() {
-            return Err(EvalError::data(format!(
-                "path step spans {} distinct nodes, which exceeds the dense u32 index space",
-                nodes.len()
-            )));
+            return Err(PathRefusal::DenseNodes { count: nodes.len() }.error());
         }
         if u32::try_from(statements.len()).is_err() {
-            return Err(EvalError::data(format!(
-                "path step spans {} distinct statements, which exceeds the dense u32 index space",
-                statements.len()
-            )));
+            return Err(PathRefusal::DenseStatements {
+                count: statements.len(),
+            }
+            .error());
         }
 
         let mut adjacency: Vec<Vec<Edge>> = (0..nodes.len()).map(|_| Vec::new()).collect();
@@ -965,18 +954,13 @@ impl PathGraph {
         if observed_digest == self.fingerprint.content_digest {
             return Ok(());
         }
-        Err(EvalError::data(format!(
-            "this path snapshot records a different edge set than the dataset presented \
-             carries under the same step: the snapshot digests to {} over {} edge(s), and \
-             the dataset digests to {} over {} edge(s). The property-function seam hands a \
-             relation no dataset at evaluation time, so an unnoticed mismatch is answered \
-             silently about the snapshot's edges; rebuild the snapshot from the dataset \
-             being queried",
-            purrdf_hash::hex::encode(&self.fingerprint.content_digest),
-            self.fingerprint.edge_count,
-            purrdf_hash::hex::encode(&observed_digest),
-            observed_edges.len(),
-        )))
+        Err(PathRefusal::SnapshotMismatch {
+            expected_digest: self.fingerprint.content_digest,
+            expected_count: self.fingerprint.edge_count,
+            observed_digest,
+            observed_count: observed_edges.len(),
+        }
+        .error())
     }
 
     /// The dense index of `value`, or `None` when it participates in no edge.
@@ -1457,15 +1441,13 @@ impl Prepared {
     fn charge_expansion(&mut self, graph: &PathGraph, seed: u32) -> Result<(), EvalError> {
         self.expansions += 1;
         if self.expansions > self.limits.max_expansions_per_invocation() {
-            return Err(EvalError::function_operational(format!(
-                "{} traversal exceeded max_expansions_per_invocation ({}) while exploring from \
-                 seed {:?}; this is a resource guard over edges actually traversed, so whether \
-                 it fires depends on the row ceiling the engine granted — the same query under \
-                 a LIMIT may stop before it",
-                self.kind,
-                self.limits.max_expansions_per_invocation(),
-                graph.nodes[seed as usize]
-            )));
+            return Err(PathRefusal::ExpansionLimit {
+                relation: self.kind,
+                limit: self.limits.max_expansions_per_invocation(),
+                observed: self.expansions,
+                seed: graph.nodes[seed as usize].clone(),
+            }
+            .error());
         }
         Ok(())
     }
@@ -1478,15 +1460,13 @@ impl Prepared {
     fn charge_candidate(&mut self, graph: &PathGraph, seed: u32) -> Result<(), EvalError> {
         self.candidates += 1;
         if self.candidates > self.limits.max_paths_per_seed() {
-            return Err(EvalError::function_operational(format!(
-                "{} traversal exceeded max_paths_per_seed ({}) at seed {:?}; this is a resource \
-                 guard over candidate walks actually enumerated, so whether it fires depends on \
-                 the row ceiling the engine granted — the same query under a LIMIT may stop \
-                 before it",
-                self.kind,
-                self.limits.max_paths_per_seed(),
-                graph.nodes[seed as usize]
-            )));
+            return Err(PathRefusal::CandidateLimit {
+                relation: self.kind,
+                limit: self.limits.max_paths_per_seed(),
+                observed: self.candidates,
+                seed: graph.nodes[seed as usize].clone(),
+            }
+            .error());
         }
         Ok(())
     }
@@ -1802,10 +1782,12 @@ impl PropertyFunction for PathWitnessRelation {
         // caller gets the same answer rather than a panic on a short argument vector.
         let supplied = args.arity();
         if supplied != path_arity() {
-            return Err(EvalError::function(format!(
-                "path witness relation expects {} argument(s), got {supplied}",
-                path_arity()
-            )));
+            return Err(PathRefusal::Arity {
+                shortest: false,
+                expected: path_arity(),
+                supplied,
+            }
+            .error());
         }
         let Some(prepared) = Prepared::new(&self.graph, "path witness", self.limits, args, ceiling)
         else {
@@ -2129,10 +2111,12 @@ impl PropertyFunction for ShortestPathWitnessRelation {
     ) -> Result<Box<dyn PfCursor>, EvalError> {
         let supplied = args.arity();
         if supplied != path_arity() {
-            return Err(EvalError::function(format!(
-                "shortest path witness relation expects {} argument(s), got {supplied}",
-                path_arity()
-            )));
+            return Err(PathRefusal::Arity {
+                shortest: true,
+                expected: path_arity(),
+                supplied,
+            }
+            .error());
         }
         let Some(prepared) = Prepared::new(
             &self.graph,
@@ -2712,7 +2696,7 @@ mod tests {
             "got {error}"
         );
         assert!(
-            matches!(error, EvalError::FunctionOperational(_)),
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::FunctionOperational),
             "got {error:?}"
         );
         assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
@@ -2769,7 +2753,10 @@ mod tests {
     #[test]
     fn a_step_needs_at_least_one_alternative() {
         let error = PathStep::new(Vec::new()).expect_err("an empty alternation is no step");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
     }
 
     #[test]
@@ -2779,7 +2766,10 @@ mod tests {
             PathDirection::Forward,
         )])
         .expect_err("a literal names no statements");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
         assert!(error.to_string().contains("must be an IRI"), "got {error}");
     }
 
@@ -2791,7 +2781,10 @@ mod tests {
             (iri("p"), PathDirection::Forward),
         ])
         .expect_err("a duplicate doubles every walk through it");
-        assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+            "got {error:?}"
+        );
         assert!(error.to_string().contains("repeats"), "got {error}");
         // The same predicate in the OTHER direction is a different alternative.
         PathStep::new(vec![
@@ -2809,7 +2802,10 @@ mod tests {
             let Err(error) = PathLimits::new(min, max, paths, expansions) else {
                 panic!("({min}, {max}, {paths}, {expansions}) is ill-formed and must be refused");
             };
-            assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Config),
+                "got {error:?}"
+            );
         }
         let ok = PathLimits::new(1, u32::MAX, 2, 3).expect("any max_hops a u32 holds is allowed");
         assert_eq!(ok.min_hops(), 1);
@@ -2928,7 +2924,10 @@ mod tests {
         let error = graph
             .assert_matches(&*other, GraphMatch::Default)
             .expect_err("a snapshot of a different dataset must not pass silently");
-        assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Data),
+            "got {error:?}"
+        );
         let text = error.to_string();
         // Both sides, because "these do not match" is not actionable.
         assert!(
@@ -2989,7 +2988,10 @@ mod tests {
             let error = graph
                 .assert_matches(&other, GraphMatch::Default)
                 .expect_err("a different edge set must be refused");
-            assert!(matches!(error, EvalError::Data(_)), "{label}: {error:?}");
+            assert!(
+                matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Data),
+                "{label}: {error:?}"
+            );
         }
 
         // ...and the mirror hazard, which is a defect in its own right: a check that
@@ -3671,7 +3673,10 @@ mod tests {
             .open(&args, None)
             .err()
             .expect("a one-value object side does not match the declaration");
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(failure) if failure.kind() == crate::NativeDiagnosticKind::Function),
+            "got {error:?}"
+        );
         let shortest = ShortestPathWitnessRelation::new(graph, limits(1, 3));
         assert!(shortest.open(&args, None).is_err());
     }

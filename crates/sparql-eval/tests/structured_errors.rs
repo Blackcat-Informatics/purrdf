@@ -1806,6 +1806,282 @@ fn endpoint_refusals_preserve_native_scope_and_rdf_values() {
     );
 }
 
+fn path_refusals_keep_native_terms_bounds_and_directions() {
+    use purrdf_core::TermValue;
+    use purrdf_sparql_eval::path_relation::{PathDirection, PathLimits, PathStep};
+
+    let empty = PathStep::new(Vec::new()).unwrap_err();
+    assert_eq!(
+        memory_failure_fields(&empty, NativeDiagnosticKind::Config, "path-empty-step").code,
+        "path-empty-step"
+    );
+    let invalid = PathStep::new(vec![(
+        TermValue::simple_literal("原文"),
+        PathDirection::Forward,
+    )])
+    .unwrap_err();
+    let retained = invalid.clone();
+    drop(invalid);
+    let fields = memory_failure_fields(
+        &retained,
+        NativeDiagnosticKind::Config,
+        "path-non-iri-predicate",
+    );
+    assert!(matches!(fields.field("index"), ErrorValue::Unsigned(0)));
+    let ErrorValue::Term(value) = fields.field("actual") else {
+        panic!("original RDF value")
+    };
+    let term = Capture::read(value);
+    assert_eq!(term.code, "rdf-term-literal");
+    assert!(matches!(
+        term.field("lexical_form"),
+        ErrorValue::Text("原文")
+    ));
+    let predicate = TermValue::iri("https://example.org/p");
+    let duplicate = PathStep::new(vec![
+        (predicate.clone(), PathDirection::Inverse),
+        (predicate, PathDirection::Inverse),
+    ])
+    .unwrap_err();
+    let fields = memory_failure_fields(
+        &duplicate,
+        NativeDiagnosticKind::Config,
+        "path-duplicate-alternative",
+    );
+    assert!(matches!(fields.field("index"), ErrorValue::Unsigned(1)));
+    let ErrorValue::Term(value) = fields.field("predicate") else {
+        panic!("original predicate")
+    };
+    let term = Capture::read(value);
+    assert_eq!(term.code, "rdf-term-iri");
+    assert!(matches!(
+        term.field("iri"),
+        ErrorValue::Iri("https://example.org/p")
+    ));
+    assert_eq!(fields.child("direction").code, "path-inverse");
+
+    for (minimum, maximum, paths, expansions, code) in [
+        (0, 1, 1, 1, "path-zero-minimum"),
+        (u32::MAX, 2, 1, 1, "path-reversed-bounds"),
+        (1, 2, 0, 1, "path-zero-path-limit"),
+        (1, 2, 1, 0, "path-zero-expansion-limit"),
+    ] {
+        let error = PathLimits::new(minimum, maximum, paths, expansions).unwrap_err();
+        let fields = memory_failure_fields(&error, NativeDiagnosticKind::Config, code);
+        if minimum > maximum {
+            assert!(
+                matches!(fields.field("minimum"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+            );
+            assert!(matches!(fields.field("maximum"), ErrorValue::Unsigned(2)));
+        }
+    }
+}
+
+fn path_snapshot_and_invocation_refusals_keep_original_digests_and_arities() {
+    use purrdf_core::{GraphMatch, RdfDatasetBuilder, TermValue};
+    use purrdf_sparql_eval::path_relation::{
+        PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation,
+        ShortestPathWitnessRelation,
+    };
+    use purrdf_sparql_eval::{PfArgs, PropertyFunction};
+    use std::sync::Arc;
+
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("https://example.org/s").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    let object = builder.intern_iri("https://example.org/o").unwrap();
+    builder.push_quad(subject, predicate, object, None).unwrap();
+    let end = builder.intern_iri("https://example.org/end").unwrap();
+    builder.push_quad(object, predicate, end, None).unwrap();
+    let data = builder.freeze().unwrap();
+    let step = PathStep::new(vec![(
+        TermValue::iri("https://example.org/p"),
+        PathDirection::Forward,
+    )])
+    .unwrap();
+    let graph = Arc::new(PathGraph::from_dataset(&*data, &step, GraphMatch::Default).unwrap());
+    let empty = support::empty_dataset();
+    let observed = PathGraph::from_dataset(&*empty, &step, GraphMatch::Default)
+        .unwrap()
+        .snapshot_fingerprint();
+    let expected = graph.snapshot_fingerprint();
+    let error = graph
+        .assert_matches(&*empty, GraphMatch::Default)
+        .unwrap_err();
+    drop(data);
+    drop(empty);
+    let fields =
+        memory_failure_fields(&error, NativeDiagnosticKind::Data, "path-snapshot-mismatch");
+    assert!(
+        matches!(fields.field("expected_digest"), ErrorValue::Bytes(value) if value == expected.content_digest)
+    );
+    assert!(
+        matches!(fields.field("observed_digest"), ErrorValue::Bytes(value) if value == observed.content_digest)
+    );
+    assert!(matches!(
+        fields.field("expected_count"),
+        ErrorValue::Unsigned(2)
+    ));
+    assert!(matches!(
+        fields.field("observed_count"),
+        ErrorValue::Unsigned(0)
+    ));
+
+    let limits = PathLimits::new(1, 2, 3, 4).unwrap();
+    let witness = PathWitnessRelation::new(Arc::clone(&graph), limits);
+    let shortest = ShortestPathWitnessRelation::new(Arc::clone(&graph), limits);
+    let args = PfArgs::new(&[None], &[]);
+    for (relation, shortest) in [
+        (&witness as &dyn PropertyFunction, false),
+        (&shortest, true),
+    ] {
+        let error = relation.open(&args, None).err().expect("wrong arity");
+        let fields = memory_failure_fields(
+            &error,
+            NativeDiagnosticKind::Function,
+            "path-invocation-arity",
+        );
+        assert!(
+            matches!(fields.field("shortest"), ErrorValue::Boolean(value) if value == shortest)
+        );
+        assert!(matches!(
+            fields.child("expected").field("subject"),
+            ErrorValue::Unsigned(1)
+        ));
+        assert!(matches!(
+            fields.child("expected").field("object"),
+            ErrorValue::Unsigned(6)
+        ));
+        assert!(matches!(
+            fields.child("supplied").field("object"),
+            ErrorValue::Unsigned(0)
+        ));
+    }
+
+    let start = TermValue::iri("https://example.org/s");
+    let subject = [Some(&start)];
+    let object = [None; 6];
+    let args = PfArgs::new(&subject, &object);
+    for (paths, expansions, code) in [
+        (10, 1, "path-expansion-limit"),
+        (1, 10, "path-candidate-limit"),
+    ] {
+        let relation = PathWitnessRelation::new(
+            Arc::clone(&graph),
+            PathLimits::new(1, 2, paths, expansions).unwrap(),
+        );
+        let mut cursor = relation.open(&args, None).unwrap();
+        assert!(cursor.next().unwrap().is_some());
+        let error = cursor.next().unwrap_err();
+        drop(cursor);
+        drop(relation);
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
+        let fields = memory_failure_fields(&error, NativeDiagnosticKind::FunctionOperational, code);
+        assert!(matches!(fields.field("limit"), ErrorValue::Unsigned(1)));
+        assert!(matches!(fields.field("observed"), ErrorValue::Unsigned(2)));
+        let ErrorValue::Term(seed) = fields.field("seed") else {
+            panic!("original seed")
+        };
+        assert!(matches!(
+            Capture::read(seed).field("iri"),
+            ErrorValue::Iri("https://example.org/s")
+        ));
+    }
+}
+
+fn application_policy_failures_keep_native_reason_identity() {
+    use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+    use purrdf_sparql_algebra::{Child, GraphPattern};
+    use purrdf_sparql_eval::eval::{EvalCtx, eval};
+    let data = support::empty_dataset();
+    for (dataset_required, reduced_adjacent, group_domain, code) in [
+        (true, false, None, "eval-policy-dataset-required"),
+        (false, true, None, "eval-policy-reduced-required"),
+        (
+            false,
+            false,
+            Some(Vec::new().into_boxed_slice()),
+            "eval-policy-group-required",
+        ),
+    ] {
+        let pattern = GraphPattern::Apply {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(GraphPattern::empty_bgp()),
+            policy: Box::new(ApplicationPolicy {
+                dataset_required,
+                reduced_adjacent,
+                group_domain,
+                row_pipeline: false,
+                inputs: Vec::new(),
+                optional: None,
+            }),
+        };
+        let error = {
+            let mut context = EvalCtx::new(&*data);
+            eval(&pattern, &mut context).unwrap_err()
+        };
+        drop(pattern);
+        assert_eq!(
+            memory_failure_fields(&error, NativeDiagnosticKind::Config, code).code,
+            code
+        );
+        assert_eq!(error.code(), None);
+    }
+}
+
+fn query_admission_refusals_keep_the_original_version_and_basic_construct() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    let data = support::empty_dataset();
+    for (text, code) in [
+        ("VERSION \"0.9\" ASK {}", "sparql-version-unknown"),
+        (
+            "VERSION \"1.2-basic\" SELECT * WHERE { ?r <https://example.org/p> <<( ?s ?p ?o )>> }",
+            "sparql-basic-triple-pattern",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT * WHERE { VALUES ?t { <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> } }",
+            "sparql-basic-ground-triple",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT (TRIPLE(?s, ?p, ?o) AS ?t) WHERE {}",
+            "sparql-basic-triple-function",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT (isTRIPLE(?t) AS ?x) WHERE {}",
+            "sparql-basic-is-triple-function",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT (SUBJECT(?t) AS ?x) WHERE {}",
+            "sparql-basic-subject-function",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT (PREDICATE(?t) AS ?x) WHERE {}",
+            "sparql-basic-predicate-function",
+        ),
+        (
+            "VERSION \"1.2-basic\" SELECT (OBJECT(?t) AS ?x) WHERE {}",
+            "sparql-basic-object-function",
+        ),
+    ] {
+        let query = SparqlParser::new().parse_query(text).unwrap();
+        let error = {
+            let mut context = EvalCtx::new(&*data);
+            evaluate_query(&query, &mut context).unwrap_err()
+        };
+        drop(query);
+        assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
+        let fields =
+            memory_failure_fields(&error, NativeDiagnosticKind::UnclassifiedUnsupported, code);
+        if code == "sparql-version-unknown" {
+            assert!(matches!(fields.field("label"), ErrorValue::Text("0.9")));
+            assert_eq!(
+                error.to_string(),
+                "unsupported: VERSION \"0.9\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
+            );
+        }
+    }
+}
+
 fn memory_failure_fields<'a>(
     error: &'a EvalError,
     kind: NativeDiagnosticKind,
@@ -2999,6 +3275,10 @@ purrdf_testkit::harness_main!(
     admitted_service_native_causes_survive_without_rendering_or_inspection_allocation,
     actual_protocol_errors_keep_parser_form_iri_and_operation_fields,
     endpoint_refusals_preserve_native_scope_and_rdf_values,
+    path_refusals_keep_native_terms_bounds_and_directions,
+    path_snapshot_and_invocation_refusals_keep_original_digests_and_arities,
+    query_admission_refusals_keep_the_original_version_and_basic_construct,
+    application_policy_failures_keep_native_reason_identity,
     control_and_load_errors_keep_native_causes_and_genuine_messages,
     native_protocol_resource_refusals_remain_allocation_free,
 );

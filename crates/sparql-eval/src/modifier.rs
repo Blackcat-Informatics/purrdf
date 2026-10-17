@@ -2192,9 +2192,11 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     for (out_var, _) in aggregates {
         let next = schema.vars().len();
         if schema.push(out_var.clone())? != next {
-            return Err(EvalError::config(
-                "aggregate output collides with another group output",
-            ));
+            return Err(crate::error::RequestRefusal::GroupOutputCollision {
+                variable: ctx.growth.authored_text(&out_var.as_str())?,
+                index: next,
+            }
+            .error(&ctx.growth));
         }
     }
     let out_schema = schema.finish()?.shared_admitted(&ctx.growth)?;

@@ -30,6 +30,8 @@ use purrdf_sparql_algebra::ParseError;
 
 mod invariant;
 pub use invariant::{EvaluatorInvariant, StackExpectation};
+mod request;
+pub(crate) use request::RequestRefusal;
 mod retained_native_failure;
 pub use retained_native_failure::RetainedNativeFailure;
 

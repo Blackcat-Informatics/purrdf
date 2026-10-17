@@ -818,15 +818,11 @@ pub(crate) fn eval_apply<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if policy.dataset_required {
-        return Err(EvalError::config(
-            "GRAPH requires a dataset, but this query is scoped to a single graph",
-        ));
+        return Err(crate::error::RequestRefusal::DatasetRequired.error(&ctx.growth));
     }
     if policy.reduced_adjacent {
         let GraphPattern::Reduced { inner } = right else {
-            return Err(EvalError::config(
-                "adjacent reduction requires a Reduced operand",
-            ));
+            return Err(crate::error::RequestRefusal::ReducedRequired.error(&ctx.growth));
         };
         let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
@@ -847,9 +843,7 @@ pub(crate) fn eval_apply<D: DatasetView + Sync>(
             aggregates,
         } = right
         else {
-            return Err(EvalError::config(
-                "group mapping domain requires a Group operand",
-            ));
+            return Err(crate::error::RequestRefusal::GroupRequired.error(&ctx.growth));
         };
         let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
@@ -885,9 +879,7 @@ pub(crate) fn eval_apply_with<D: DatasetView + Sync, M: crate::eval::RowDelivery
     }
     if policy.reduced_adjacent {
         let GraphPattern::Reduced { inner } = right else {
-            return Err(EvalError::config(
-                "adjacent reduction requires a Reduced operand",
-            ));
+            return Err(crate::error::RequestRefusal::ReducedRequired.error(&ctx.growth));
         };
         let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {

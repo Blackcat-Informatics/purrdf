@@ -144,16 +144,33 @@ fn aggregate_output_collisions_keep_their_error_when_the_child_would_truncate() 
             let state = Arc::new(GovernorState::new(&QueryGovernors::METERED.with_fuel(fuel)));
             let mut ctx = EvalCtx::new(&*data).with_governors(state);
             let error = eval(&pattern, &mut ctx).unwrap_err();
-            assert_eq!(
-                error,
-                EvalError::Config("aggregate output collides with another group output".into())
-            );
             let state = Arc::new(GovernorState::new(&QueryGovernors::METERED.with_fuel(fuel)));
             let mut ctx = EvalCtx::new(&*data).with_governors(state);
-            assert_eq!(
-                evaluate_query(&ask(pattern.clone()), &mut ctx).unwrap_err(),
-                error
-            );
+            let query_error = evaluate_query(&ask(pattern.clone()), &mut ctx).unwrap_err();
+            for error in [error, query_error] {
+                assert_eq!(error.code(), None);
+                let EvalError::RetainedNativeFailure(failure) = &error else {
+                    panic!("the group configuration retains its native fields")
+                };
+                assert_eq!(
+                    failure.kind(),
+                    purrdf_sparql_eval::NativeDiagnosticKind::Config
+                );
+                let fields = purrdf_testkit::error_capture::Capture::read(failure.cause());
+                assert_eq!(fields.code, "eval-group-output-collision");
+                assert!(matches!(
+                    fields.field("variable"),
+                    purrdf_hash::error::ErrorValue::Text("x")
+                ));
+                assert!(matches!(
+                    fields.field("index"),
+                    purrdf_hash::error::ErrorValue::Unsigned(1)
+                ));
+                assert_eq!(
+                    error.to_string(),
+                    "invalid evaluation configuration: aggregate output collides with another group output"
+                );
+            }
         }
     }
 }

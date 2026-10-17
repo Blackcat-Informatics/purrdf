@@ -186,19 +186,14 @@ fn check_term_pattern(t: &TermPattern) -> Result<(), EvalError> {
         | TermPattern::BlankNode(_)
         | TermPattern::Literal(_)
         | TermPattern::Variable(_) => Ok(()),
-        TermPattern::Triple(_) => Err(refuse(
-            "an RDF 1.2 triple term or reifying triple (`<<( s p o )>>` / `<<s p o>>`) \
-             in a triple pattern",
-        )),
+        TermPattern::Triple(_) => Err(refuse(BasicConstruct::TriplePattern)),
     }
 }
 
 fn check_ground_term(t: &GroundTerm) -> Result<(), EvalError> {
     match t {
         GroundTerm::NamedNode(_) | GroundTerm::Literal(_) | GroundTerm::BlankNode(_) => Ok(()),
-        GroundTerm::Triple(_) => Err(refuse(
-            "an RDF 1.2 ground triple term (`<<( ... )>>`) in a VALUES data block",
-        )),
+        GroundTerm::Triple(_) => Err(refuse(BasicConstruct::GroundTriple)),
     }
 }
 
@@ -398,27 +393,81 @@ fn check_property_function(call: &PropertyFunctionCall) -> Result<(), EvalError>
 /// profile (see the module docs).
 fn check_function(func: &Function) -> Result<(), EvalError> {
     let name = match func {
-        Function::Triple => Some("TRIPLE()"),
-        Function::IsTriple => Some("isTRIPLE()"),
-        Function::Subject => Some("SUBJECT()"),
-        Function::Predicate => Some("PREDICATE()"),
-        Function::Object => Some("OBJECT()"),
+        Function::Triple => Some(BasicConstruct::Triple),
+        Function::IsTriple => Some(BasicConstruct::IsTriple),
+        Function::Subject => Some(BasicConstruct::Subject),
+        Function::Predicate => Some(BasicConstruct::Predicate),
+        Function::Object => Some(BasicConstruct::Object),
         _ => None,
     };
     match name {
-        Some(name) => Err(refuse(format!(
-            "the RDF 1.2 triple-term function {name} (SPARQL 1.2 Query specification §17.4.6)"
-        ))),
+        Some(construct) => Err(refuse(construct)),
         None => Ok(()),
     }
 }
 
-fn refuse(construct: impl Into<String>) -> EvalError {
-    EvalError::unsupported(format!(
-        "VERSION \"1.2-basic\" admits no RDF 1.2 triple-term construct \
-         (SPARQL 1.2 Query specification §4.3.1 Version Labels); found {}",
-        construct.into()
-    ))
+#[derive(Debug)]
+enum BasicConstruct {
+    TriplePattern,
+    GroundTriple,
+    Triple,
+    IsTriple,
+    Subject,
+    Predicate,
+    Object,
+}
+
+impl purrdf_hash::error::StructuredError for BasicConstruct {
+    purrdf_hash::error_visit! {
+        TriplePattern => "sparql-basic-triple-pattern" {},
+        GroundTriple => "sparql-basic-ground-triple" {},
+        Triple => "sparql-basic-triple-function" {},
+        IsTriple => "sparql-basic-is-triple-function" {},
+        Subject => "sparql-basic-subject-function" {},
+        Predicate => "sparql-basic-predicate-function" {},
+        Object => "sparql-basic-object-function" {},
+    }
+}
+
+impl std::error::Error for BasicConstruct {}
+
+impl core::fmt::Display for BasicConstruct {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(
+            "VERSION \"1.2-basic\" admits no RDF 1.2 triple-term construct \
+         (SPARQL 1.2 Query specification §4.3.1 Version Labels); found ",
+        )?;
+        let name = match self {
+            Self::TriplePattern => {
+                return f.write_str(
+                    "an RDF 1.2 triple term or reifying triple (`<<( s p o )>>` / `<<s p o>>`) \
+                 in a triple pattern",
+                );
+            }
+            Self::GroundTriple => {
+                return f.write_str(
+                    "an RDF 1.2 ground triple term (`<<( ... )>>`) in a VALUES data block",
+                );
+            }
+            Self::Triple => "TRIPLE()",
+            Self::IsTriple => "isTRIPLE()",
+            Self::Subject => "SUBJECT()",
+            Self::Predicate => "PREDICATE()",
+            Self::Object => "OBJECT()",
+        };
+        write!(
+            f,
+            "the RDF 1.2 triple-term function {name} (SPARQL 1.2 Query specification §17.4.6)"
+        )
+    }
+}
+
+fn refuse(construct: BasicConstruct) -> EvalError {
+    crate::RetainedNativeFailure::error(
+        crate::NativeDiagnosticKind::UnclassifiedUnsupported,
+        construct,
+        &crate::WorkspaceCapability::resident(),
+    )
 }
 
 #[cfg(test)]

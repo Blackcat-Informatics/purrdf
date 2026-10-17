@@ -5830,9 +5830,11 @@ impl AdmittedRequest<'_> {
 pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalError> {
     match request.version() {
         Some(SparqlVersion::Other(raw)) => {
-            return Err(EvalError::unsupported(format!(
-                "VERSION \"{raw}\" is not a recognized SPARQL version (recognized: \"1.2\", \"1.2-basic\")"
-            )));
+            let workspace = crate::WorkspaceCapability::resident();
+            return Err(crate::error::RequestRefusal::UnknownVersion {
+                label: workspace.authored_text(raw)?,
+            }
+            .error(&workspace));
         }
         Some(SparqlVersion::V12Basic) => crate::basic_profile::admit(request)?,
         // The full profile and the undeclared case are admitted unconditionally,
@@ -7244,7 +7246,10 @@ mod tests {
             .expect("VERSION is syntax-only; any string parses");
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx).expect_err("unrecognized VERSION is refused");
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
+        assert!(
+            err.code() == Some(EvalError::UNSUPPORTED_CODE),
+            "got {err:?}"
+        );
         assert!(
             err.to_string().contains("0.9"),
             "error should name the declared version: {err}"
@@ -7287,7 +7292,10 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         let err = evaluate_query(&query, &mut ctx)
             .expect_err("a triple term outside the Basic profile is refused");
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
+        assert!(
+            err.code() == Some(EvalError::UNSUPPORTED_CODE),
+            "got {err:?}"
+        );
         assert!(
             err.to_string().contains("triple term"),
             "error should name the offending construct: {err}"

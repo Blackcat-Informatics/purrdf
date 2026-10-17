@@ -1586,21 +1586,6 @@ fn service_reaches(
     }
 }
 
-fn service_unsupported(message: &'static str, workspace: &crate::WorkspaceCapability) -> EvalError {
-    if workspace.is_bounded() {
-        match crate::RetainedDiagnostic::render(
-            EvalError::UNSUPPORTED_CODE,
-            &format_args!("unsupported: {message}"),
-            workspace,
-        ) {
-            Ok(error) => EvalError::RetainedDiagnostic(error),
-            Err(error) => error,
-        }
-    } else {
-        EvalError::unsupported(message)
-    }
-}
-
 #[inline(never)]
 pub(crate) fn eval_service<D: DatasetView + Sync>(
     node: &GraphPattern,
@@ -1617,24 +1602,14 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // invocation that fails but one that succeeds with the wrong question, so `SILENT`
     // has nothing to say about it.
     if service_reaches(inner, false, &ctx.growth)? {
-        return Err(service_unsupported(
-            "a property-function call inside a SERVICE body: the call would be forwarded as an \
-             ordinary triple pattern and matched against the remote endpoint's data, so the \
-             relation would never be invoked and the answer would be silently wrong",
-            &ctx.growth,
-        ));
+        return Err(crate::error::RequestRefusal::ForwardedPropertyFunction.error(&ctx.growth));
     }
     // A custom aggregate call inside a forwarded body is refused the same way, for the
     // same reason: `AGG(<iri>, …)` serializes as text the remote endpoint has no
     // registered meaning for, and this engine's registry — the one place the IRI is
     // actually resolved — never sees the call at all once it has been shipped away.
     if service_reaches(inner, true, &ctx.growth)? {
-        return Err(service_unsupported(
-            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded as \
-             text the remote endpoint has no registered meaning for, so this engine's aggregate \
-             registry would never resolve the call and the answer would be silently wrong",
-            &ctx.growth,
-        ));
+        return Err(crate::error::RequestRefusal::ForwardedAggregate.error(&ctx.growth));
     }
     // A variable endpoint still unresolved here was not substituted by a `LATERAL` (a
     // pattern earlier in the same group), so it is answered over the endpoints an
@@ -3250,7 +3225,7 @@ mod tests {
             "SELECT ?n WHERE { VALUES ?e { \"lit\" } SERVICE ?e { ?a ?b ?n } }",
         );
         assert!(
-            matches!(result, Err(EvalError::Unsupported { .. })),
+            matches!(&result, Err(error) if error.code() == Some(EvalError::UNSUPPORTED_CODE)),
             "{result:?}"
         );
     }
@@ -3402,7 +3377,10 @@ mod tests {
              GROUP BY ?s } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Unsupported { .. }), "got {err:?}");
+        assert!(
+            err.code() == Some(EvalError::UNSUPPORTED_CODE),
+            "got {err:?}"
+        );
         assert!(
             err.to_string()
                 .contains("custom-aggregate call inside a SERVICE body"),
