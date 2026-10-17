@@ -1627,6 +1627,47 @@ mod tests {
     }
 
     #[test]
+    fn streaming_output_refusals_retain_io_and_native_causes() {
+        use purrdf_hash::error::{ErrorValue, io_error};
+        use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+        let prepared = prepare_matrix(f32_input()).unwrap();
+        let error = EmbeddingStreamWriter::new(
+            Cursor::new(&mut [][..]),
+            metadata(),
+            vec![prepared.commitment],
+        )
+        .unwrap_err();
+        let capture = Capture::read(&error);
+        assert_eq!(capture.code, "purremb-write-io");
+        assert!(matches!(
+            capture.child("cause").child("kind").field("name"),
+            ErrorValue::Code("write-zero")
+        ));
+        let EmbeddingWriteError::Io(ref cause) = error else {
+            panic!("output refusal must keep its native I/O error")
+        };
+        assert_eq!(cause.original().kind(), std::io::ErrorKind::WriteZero);
+        assert_eq!(
+            error.to_string(),
+            format!("PURREMB output I/O failed: {}", cause.original())
+        );
+
+        // Exercise the same From boundary without ever rendering this cause.
+        let native = EmbeddingWriteError::from(io_error(
+            std::io::ErrorKind::Other,
+            CallerRefusal { limit: u128::MAX },
+        ));
+        let capture = Capture::read(&native);
+        let original = capture.child("cause").child("cause").child("cause");
+        assert_eq!(original.code, "caller-refused");
+        assert!(matches!(
+            original.field("limit"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+    }
+
+    #[test]
     fn matrix_content_identity_matches_the_normative_helper() {
         let prepared = prepare_matrix(f32_input()).unwrap();
         let expected = derive_matrix_content_digest(1, 2, 3, &prepared.bytes);
@@ -1656,6 +1697,9 @@ mod tests {
             error,
             EmbeddingWriteError::Format(EmbeddingError::NonCanonicalOrder(_))
         ));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "purremb-write-format");
+        assert_eq!(capture.child("cause").code, "purremb-non-canonical-order");
     }
 
     #[test]

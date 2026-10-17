@@ -414,7 +414,14 @@ pub enum EmbeddingWriteError {
     /// Canonical input or numerical validation failed.
     Format(EmbeddingError),
     /// The output writer failed.
-    Io(std::io::Error),
+    Io(purrdf_hash::error::IoFailure),
+}
+
+impl purrdf_hash::error::StructuredError for EmbeddingWriteError {
+    purrdf_hash::error_visit! {
+        Format(error) => "purremb-write-format" { "cause" => Cause(error) },
+        Io(error) => "purremb-write-io" { "cause" => Cause(error) },
+    }
 }
 
 impl fmt::Display for EmbeddingWriteError {
@@ -437,8 +444,16 @@ impl std::error::Error for EmbeddingWriteError {
 
 purrdf_lex::variant_from!(EmbeddingWriteError {
     Format(EmbeddingError),
-    Io(std::io::Error),
+    Io(purrdf_hash::error::IoFailure),
 });
+
+// Capture the native I/O metadata before wrapping it; direct variant conversion
+// would discard the shared root representation of known structured I/O causes.
+impl From<std::io::Error> for EmbeddingWriteError {
+    fn from(error: std::io::Error) -> Self {
+        Self::from(purrdf_hash::error::IoFailure::from(error))
+    }
+}
 
 #[cfg(test)]
 mod tests {
