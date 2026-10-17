@@ -981,6 +981,7 @@ fn load(
             source,
             purrdf_core::SilencedKind::Unconfigured,
             RdfDiagnostic::error("native-sparql-load-no-resolver", message),
+            None,
             governors,
         );
     };
@@ -1016,7 +1017,13 @@ fn load(
             if silent && let Some(tripped) = post_return_trip {
                 return Err(tripped);
             }
-            return silence_or_fail(silent, source, kind, diagnostic, governors);
+            let cause = crate::retained::PreparedDiagnosticCause::new(
+                error,
+                crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()),
+            )
+            .and_then(crate::retained::PreparedDiagnosticCause::publish)
+            .map_err(|error| crate::engine::EvaluationFailure::from(error).into_diagnostic())?;
+            return silence_or_fail(silent, source, kind, diagnostic, Some(cause), governors);
         }
     };
 
@@ -1045,23 +1052,37 @@ fn silence_or_fail(
     source: &str,
     kind: purrdf_core::SilencedKind,
     diagnostic: RdfDiagnostic,
+    cause: Option<purrdf_core::diagnostic::DiagnosticCause>,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
     if !silent {
+        let diagnostic = if let Some(cause) = cause {
+            diagnostic
+                .with_native_cause(
+                    cause,
+                    &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+                )
+                .map_err(RdfDiagnostic::from)?
+        } else {
+            diagnostic
+        };
         return Err(UpdateAbort::Failed(diagnostic));
     }
     if let Some(state) = governors {
+        let invocation = purrdf_core::SilencedInvocation::new(
+            purrdf_core::SilencedTarget::Load {
+                iri: source.to_owned(),
+            },
+            kind,
+            diagnostic.message,
+        );
+        let invocation = if let Some(cause) = cause {
+            invocation.with_cause(cause)
+        } else {
+            invocation
+        };
         state
-            .record_silenced_admitted(
-                purrdf_core::SilencedInvocation::new(
-                    purrdf_core::SilencedTarget::Load {
-                        iri: source.to_owned(),
-                    },
-                    kind,
-                    diagnostic.message,
-                ),
-                &crate::WorkspaceCapability::resident(),
-            )
+            .record_silenced_admitted(invocation, &crate::WorkspaceCapability::resident())
             .map_err(|error| {
                 UpdateAbort::Failed(RdfDiagnostic::error(
                     crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
@@ -2422,8 +2443,22 @@ mod tests {
             options: QueryOptions::EMPTY,
         };
         let outcome = eval_update(&parse(update), &mut m, resolver, &cfg);
-        let silenced = state
-            .evidence()
+        let original = state.evidence();
+        let copied = original.clone();
+        drop(state);
+        for (before, after) in original.silenced().iter().zip(copied.silenced()) {
+            if before.kind == purrdf_core::SilencedKind::Unconfigured {
+                continue;
+            }
+            let cause = after.cause().unwrap();
+            assert!(core::ptr::eq(before.cause().unwrap(), cause));
+            let load = (cause as &dyn std::error::Error)
+                .downcast_ref::<LoadError>()
+                .unwrap();
+            assert_eq!(load.silenced_kind(), Some(after.kind));
+        }
+        drop(original);
+        let silenced = copied
             .silenced()
             .iter()
             .map(|record| (record.target.name().to_owned(), record.kind.label()))
@@ -2445,6 +2480,12 @@ mod tests {
                 Err(UpdateAbort::Failed(diagnostic)) => {
                     assert_eq!(diagnostic.code, failure().code(), "{kind}");
                     assert!(diagnostic.message.starts_with(&format!("LOAD <{EX}doc>: ")));
+                    assert_eq!(
+                        (diagnostic.native_cause().unwrap() as &dyn std::error::Error)
+                            .downcast_ref::<LoadError>(),
+                        Some(&failure()),
+                        "{kind}: original resolver fields survive"
+                    );
                 }
                 other => panic!("{kind}: expected the failure, got {other:?}"),
             }
