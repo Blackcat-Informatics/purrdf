@@ -1705,13 +1705,19 @@ pub(crate) fn failed_invocation<I: ViewTermId>(
         .charge(u64::try_from(endpoint.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
     let (message, message_admission) =
         crate::workspace::render(workspace, &error, "SILENT service error")?;
+    let cause = crate::retained::PreparedDiagnosticCause::new(
+        error,
+        crate::workspace::LexicalFrame::new(workspace),
+    )?
+    .publish()?;
     let invocation = purrdf_core::SilencedInvocation::new(
         purrdf_core::SilencedTarget::Service {
             endpoint: crate::workspace::string(endpoint, "SILENT service endpoint")?,
         },
         kind,
         message,
-    );
+    )
+    .with_cause(cause);
     Ok(Invocation::Silenced(AdmittedSilencedInvocation {
         invocation,
         _endpoint: endpoint_admission,
@@ -3099,6 +3105,53 @@ mod tests {
     }
 
     #[test]
+    fn silent_cause_keeps_its_original_grant_through_last_receipt_clone() {
+        use crate::workspace::owned_row_regressions::account;
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use std::sync::atomic::Ordering;
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let window = CurrentThreadWindow::open();
+        let invocation = failed_invocation::<purrdf_core::TermId>(
+            "https://example.org/endpoint",
+            purrdf_core::SilencedKind::Decode,
+            EvalError::Invariant(EvaluatorInvariant::EvidenceOwnerPoisoned),
+            true,
+            &capability,
+        )
+        .unwrap();
+        let measured = window.close();
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert_eq!(measured.retained_bytes, i64::try_from(live - base).unwrap());
+        let Invocation::Silenced(original) = invocation else {
+            panic!("an ordinary invocation failure must be recorded")
+        };
+        let retained = original.invocation.clone();
+        assert!(core::ptr::eq(
+            original.invocation.cause().unwrap(),
+            retained.cause().unwrap()
+        ));
+        drop(original);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        let events = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let capture = purrdf_testkit::error_capture::Capture::read_with_buffer(
+            retained.cause().unwrap(),
+            events,
+        );
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(
+            capture.child("cause").code,
+            "eval-invariant-evidence-owner-poisoned"
+        );
+        drop(capture);
+        drop(retained);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn every_failed_invocation_kind_is_silenced_and_recorded() {
         const KINDS: [&str; 6] = [
             "transport",
@@ -3138,6 +3191,13 @@ mod tests {
             silenced.iter().all(|record| !record.message.is_empty()),
             "{silenced:?}"
         );
+        for record in silenced.iter() {
+            let cause = record.cause().expect("the original failure must survive");
+            let original = (cause as &dyn std::error::Error)
+                .downcast_ref::<EvalError>()
+                .expect("the original evaluator failure");
+            assert_eq!(record.message, original.to_string());
+        }
 
         // Without SILENT each is its own error, and nothing is recorded.
         for name in KINDS {

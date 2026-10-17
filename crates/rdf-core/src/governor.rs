@@ -615,7 +615,7 @@ impl SilencedKind {
 /// The answer such an operation returns is the one the specification defines, and it is
 /// indistinguishable from an endpoint that answered with nothing to add. This record is
 /// where the difference is kept.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct SilencedInvocation {
     /// The endpoint or source.
@@ -624,14 +624,18 @@ pub struct SilencedInvocation {
     pub kind: SilencedKind,
     /// The failure's own message, as the error would have rendered without `SILENT`.
     pub message: String,
+    cause: Option<crate::diagnostic::DiagnosticCause>,
 }
 
 impl purrdf_hash::error::StructuredError for SilencedInvocation {
     purrdf_hash::error_visit! {
-        @record self { target, kind, message } => "silenced-invocation" {
+        @record self { target, kind, message, cause } => "silenced-invocation" {
             "target" => Record(&self.target),
             "kind" => Record(&self.kind),
             "message" => Message(&self.message),
+            "cause" => Value(self.cause.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |cause| purrdf_hash::error::ErrorValue::Cause(&***cause))),
         }
     }
 }
@@ -644,7 +648,63 @@ impl SilencedInvocation {
             target,
             kind,
             message,
+            cause: None,
         }
+    }
+
+    /// Retain the original native failure under its existing admitted owner.
+    /// Receipt comparison and ordering retain their established target/kind/message
+    /// law, independently of this supplemental cause.
+    #[must_use]
+    pub fn with_cause(mut self, cause: crate::diagnostic::DiagnosticCause) -> Self {
+        self.cause = Some(cause);
+        self
+    }
+
+    /// The original typed failure, when the producing operation retained it.
+    #[must_use]
+    pub fn cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.cause.as_ref().map(|cause| &***cause)
+    }
+
+    fn key(&self) -> (&SilencedTarget, SilencedKind, &str) {
+        (&self.target, self.kind, &self.message)
+    }
+}
+
+// As for RdfDiagnostic, supplemental native causes have no generic value
+// equality. Preserve the existing deterministic receipt order and hash law.
+impl PartialEq for SilencedInvocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+impl Eq for SilencedInvocation {}
+impl PartialOrd for SilencedInvocation {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for SilencedInvocation {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+impl core::hash::Hash for SilencedInvocation {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.key(), state);
+    }
+}
+// Supplemental causes may have arbitrary Debug bodies. Preserve the established
+// receipt presentation; the exhaustive structured visitor exposes the cause.
+#[allow(clippy::missing_fields_in_debug)]
+impl core::fmt::Debug for SilencedInvocation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SilencedInvocation")
+            .field("target", &self.target)
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .finish()
     }
 }
 
@@ -891,11 +951,9 @@ impl SilencedEvidenceBuilder {
                 },
                 SilencedTarget::Load { iri } => SilencedTarget::Load { iri: copy(iri)? },
             };
-            records.push(SilencedInvocation::new(
-                target,
-                record.kind,
-                copy(&record.message)?,
-            ));
+            let mut copied = SilencedInvocation::new(target, record.kind, copy(&record.message)?);
+            copied.cause.clone_from(&record.cause);
+            records.push(copied);
         }
         let ordinal = records.partition_point(|record| record <= &invocation);
         records.insert(ordinal, invocation);

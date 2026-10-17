@@ -1665,6 +1665,68 @@ fn raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers() {
     );
 }
 
+fn silent_service_receipts_keep_original_causes_after_owner_release() {
+    use purrdf_core::{SilencedInvocation, SilencedKind};
+    use purrdf_sparql_eval::eval::{EvalCtx, Outcome, evaluate_query};
+    use purrdf_sparql_eval::{GovernorState, QueryGovernors};
+    let dataset = support::empty_dataset();
+    let query = SparqlParser::new()
+        .parse_query("SELECT ?x WHERE { SERVICE SILENT <https://example.org/z> { ?x ?p ?o } SERVICE SILENT <https://example.org/a> { ?x ?p ?o } }")
+        .unwrap();
+    let state = std::sync::Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let mut ctx = EvalCtx::new(&dataset).with_governors(std::sync::Arc::clone(&state));
+    let Outcome::Solutions(rows) = evaluate_query(&query, &mut ctx).unwrap() else {
+        panic!("SELECT must preserve the SILENT join identity")
+    };
+    assert_eq!(rows.len(), 1);
+    drop(rows);
+    let receipt = state.evidence().silenced;
+    let clone = receipt.clone();
+    drop(receipt);
+    drop(ctx);
+    drop(state);
+    drop(dataset);
+    drop(query);
+    assert_eq!(clone.len(), 2);
+    for (record, endpoint) in clone
+        .iter()
+        .zip(["https://example.org/a", "https://example.org/z"])
+    {
+        assert_eq!(record.target.name(), endpoint);
+        assert_eq!(record.kind, SilencedKind::Unconfigured);
+        let fields = Capture::read_with_buffer(record, Vec::with_capacity(8));
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "sparql-eval-retained-service");
+        let failure = cause.child("cause");
+        assert!(matches!(failure.field("endpoint"), ErrorValue::Iri(value) if value == endpoint));
+        assert_eq!(
+            failure.child("cause").child("cause").code,
+            "service-no-source"
+        );
+        let events = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let _captured = Capture::read_with_buffer(record, events);
+        assert_eq!(window.close().allocations, 0);
+        let native = record.cause().unwrap() as &dyn std::error::Error;
+        let error = native.downcast_ref::<EvalError>().unwrap();
+        assert_eq!(error.code(), Some(EvalError::SERVICE_UNCONFIGURED_CODE));
+        assert_eq!(record.message, error.to_string());
+        let legacy =
+            SilencedInvocation::new(record.target.clone(), record.kind, record.message.clone());
+        assert!(legacy.cause().is_none());
+        assert!(matches!(
+            Capture::read(&legacy).field("cause"),
+            ErrorValue::Absent
+        ));
+        assert_eq!(record, &legacy);
+        assert_eq!(record.cmp(&legacy), core::cmp::Ordering::Equal);
+        assert_eq!(format!("{record:?}"), format!("{legacy:?}"));
+        let mut map = purrdf_core::FastMap::default();
+        map.insert(record.clone(), endpoint);
+        assert_eq!(map.get(&legacy), Some(&endpoint));
+    }
+}
+
 fn memory_failure_fields<'a>(
     error: &'a EvalError,
     kind: NativeDiagnosticKind,
@@ -2815,6 +2877,7 @@ fn knn_artifact_refusals_retain_native_format_causes() {
 }
 
 purrdf_testkit::harness_main!(
+    silent_service_receipts_keep_original_causes_after_owner_release,
     memory_relation_configuration_refusals_keep_arity_and_width,
     memory_relation_graph_refusals_keep_native_list_causes,
     memory_relation_source_failure_cannot_publish_partial_table,
