@@ -71,7 +71,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        236,
+        255,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -79,7 +79,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "root-class-value",
         "rootClass> on shape",
-        1,
+        2,
         "SHACL 1.2 Core §7.9.4: \"The values of sh:rootClass in a shape are either IRIs or \
          blank nodes that are well-formed SHACL lists where all members are IRIs.\" — \
          shacl-shacl.ttl states no rule for sh:rootClass",
@@ -106,7 +106,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "sparql-pre-binding",
         "Pre-binding of Variables in SPARQL Queries",
-        12,
+        13,
         "the pre-binding restrictions of SHACL 1.2 SPARQL Extensions, Appendix A (no MINUS, \
          VALUES or SERVICE, no assignment to a pre-bound variable, subqueries project it) are \
          rules about SPARQL text, which shacl-shacl.ttl does not parse",
@@ -119,6 +119,31 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
          does (SHACL 1.2 Core §3.6.2.4); shacl-shacl.ttl checks sh:severity on shapes only, and \
          the object of sh:sparql is not one",
     ),
+    (
+        "sparql-constraint-deactivated",
+        "sh:deactivated on <",
+        1,
+        "a SPARQL-based constraint's sh:deactivated has the rule a shape's has — SHACL 1.2 \
+         Core: \"In SHACL Core, the only valid values for sh:deactivated are the constant \
+         literal node expressions true and false\" — shacl-shacl.ttl checks sh:deactivated on \
+         shapes only, and the object of sh:sparql is not one",
+    ),
+    (
+        "sparql-query-text",
+        "has an unparsable sh:select query",
+        2,
+        "the text of a SPARQL-based constraint is SPARQL, which shacl-shacl.ttl does not \
+         parse: a query that does not parse (sparql-syntax-error-001), or that uses a prefix \
+         no declaration in scope binds (prefixes-003), is refused at load",
+    ),
+    (
+        "unsupported-entailment-regime",
+        "this processor supports the entailment regime sh:RulesEntailment only",
+        4,
+        "SHACL 1.2 requires a processor to signal a failure for an sh:entailment regime it \
+         does not support; shacl-shacl.ttl does not know which regimes a processor supports, \
+         so it accepts a rule set named by sh:entailment",
+    ),
 ];
 
 /// A graph `shacl-shacl.ttl` flags that SHACL 1.2 Core makes well-formed. The rules
@@ -128,8 +153,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
 /// keep from reporting a valid shapes graph as a finding; there is no second list. This
 /// ledger pins how many inputs each rule covers, `(name, inputs)`.
 ///
-/// * `closed-by-types`: the W3C suite's own closed-003 and closed-004.
-/// * `list-valued-node-kind`: one input.
+/// * `list-valued-node-kind`: two inputs.
 /// * `path-valued-property-pair`: the W3C suite's own equals-002, disjoint-002,
 ///   lessThan-003 and lessThanOrEquals-002.
 /// * `node-expression-target-node`: a blank-node sh:targetNode that is the subject of
@@ -139,8 +163,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
 ///   node also carries sh:inversePath; the exact count keeps this pattern from absorbing
 ///   any other input.
 const SHACL_SHACL_BEHIND_THE_SPEC: &[(&str, usize)] = &[
-    ("closed-by-types", 2),
-    ("list-valued-node-kind", 1),
+    ("list-valued-node-kind", 2),
     ("path-valued-property-pair", 4),
     ("node-expression-target-node", 2),
     ("sequence-path-with-other-values", 1),
@@ -473,13 +496,13 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 }
 
 /// The exact number of shapes graphs the three corpora contribute: 73 first-party
-/// cases, 129 W3C SHACL 1.0 cases and 174 W3C SHACL 1.2 `sht:Validate` entries, each
+/// cases, 129 W3C SHACL 1.0 cases and 213 W3C SHACL 1.2 `sht:Validate` entries, each
 /// with its own shapes file.
-const BASE_INPUTS: usize = 376;
+const BASE_INPUTS: usize = 415;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 193 literal-for-IRI, 102
-/// non-integer counts, 158 lists-for-single-values, 35 non-boolean flags and 236
+/// mutation kind that finds a statement to rewrite): 203 literal-for-IRI, 112
+/// non-integer counts, 172 lists-for-single-values, 41 non-boolean flags and 255
 /// misspelled predicates.
 ///
 /// # What some bases contribute
@@ -533,7 +556,7 @@ const BASE_INPUTS: usize = 376;
 /// `equals-002`, `disjoint-002`, `lessThan-003` and `lessThanOrEquals-002` (see
 /// `path-valued-property-pair`) and `targetNode-select-001` (see
 /// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags.
-const MUTANT_INPUTS: usize = 724;
+const MUTANT_INPUTS: usize = 783;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -650,11 +673,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 193),
-        ("non-integer-count", 102),
-        ("list-where-a-single-value-is-required", 158),
-        ("non-boolean-flag", 35),
-        (UNKNOWN_TERM, 236),
+        ("literal-where-an-IRI-is-required", 203),
+        ("non-integer-count", 112),
+        ("list-where-a-single-value-is-required", 172),
+        ("non-boolean-flag", 41),
+        (UNKNOWN_TERM, 255),
     ]
     .into_iter()
     .collect();

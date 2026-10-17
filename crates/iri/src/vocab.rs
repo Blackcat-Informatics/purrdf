@@ -1628,6 +1628,20 @@ pub mod sht {
     pub const SCHEMA: &str = "http://www.w3.org/ns/shacl-test#schema";
     /// `sht:result`.
     pub const RESULT: &str = "http://www.w3.org/ns/shacl-test#result";
+    /// `sht:Core`, the SHACL 1.2 Core conformance class (`mf:requires` value).
+    pub const CONFORMANCE_CORE: &str = "http://www.w3.org/ns/shacl-test#Core";
+    /// `sht:SPARQLValidation`, the SHACL-SPARQL validation conformance class.
+    pub const CONFORMANCE_SPARQL_VALIDATION: &str =
+        "http://www.w3.org/ns/shacl-test#SPARQLValidation";
+    /// `sht:NodeExpr`, the node expressions conformance class.
+    pub const CONFORMANCE_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#NodeExpr";
+    /// `sht:InferenceRules`, the inference rules conformance class.
+    pub const CONFORMANCE_INFERENCE_RULES: &str = "http://www.w3.org/ns/shacl-test#InferenceRules";
+    /// `sht:SPARQLNodeExpr`, the SPARQL node expressions conformance class.
+    pub const CONFORMANCE_SPARQL_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#SPARQLNodeExpr";
+    /// `sht:SPARQLCustomFunctions`, the SPARQL custom functions conformance class.
+    pub const CONFORMANCE_SPARQL_CUSTOM_FUNCTIONS: &str =
+        "http://www.w3.org/ns/shacl-test#SPARQLCustomFunctions";
 }
 
 /// EARL 1.0 vocabulary (<https://www.w3.org/TR/EARL10-Schema/>).

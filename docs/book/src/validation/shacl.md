@@ -125,9 +125,9 @@ Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
 The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero ledgered
-gaps at the time of writing), and so does the approved W3C SHACL 1.2 suite apart
-from six entries whose approved result spells a decimal non-canonically, which are
-counted on their own line (538/544); the live
+gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes apart
+from fourteen entries that fail and six entries whose approved result spells a
+decimal non-canonically, which are counted on their own line (571/591); the live
 numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
@@ -578,13 +578,14 @@ candidate by looking it up in its SELECT's results.
 ## SHACL 1.2 conformance
 
 The complete W3C `shacl12-test-suite` is vendored byte-exact under
-`vectors/shacl12/` and run through the library API: 547 tests, covering 174
-`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 203
+`vectors/shacl12/` and run through the library API: 592 tests, covering 213
+`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 209
 SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
-upstream manifest lists 544 of them. Of those, 538 pass as approved and 6 are
+upstream manifest lists 591 of them. Of those, 571 pass as approved and 6 are
 counted apart because their approved result spells a decimal non-canonically, as
-described below, and the expected-failure ledger is empty. The other 3 are entries of
-vendored files that no manifest includes, and they are reported apart. A
+described below, and the expected-failure ledger is empty. The other 1 are entries of
+vendored files that no manifest includes, and they are reported apart. The
+remaining 14 listed entries fail; `docs/CONFORMANCE.md` names them. A
 negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
 an earlier one.
 Reproduce it with:
@@ -594,22 +595,15 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
 The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 538, non-canonical-expected-decimal 6, xfailed 0, ledger 0`,
+`W3C12 TOTAL: passed 571, non-canonical-expected-decimal 6, xfailed 0, ledger 0`,
 and the unlisted files' own line is
-`W3C12 UNLISTED: passed 3, exact 2, with-delta 1, total 3`.
+`W3C12 UNLISTED: passed 1, exact 1, with-delta 0, total 1`.
 
-Three vendored files carry test entries that no upstream manifest includes:
-`core/node/xone-002.ttl`, `core/node/xone-003.ttl` and
-`inference-rules/rdfs/rdfs1.ttl`. They are not part of the approved suite, so
-they are never counted among its passes. A separate test,
-`w3c_shacl12_unlisted_vendored_files`, grades them and reports them under their
-own label. Two are graded exactly as written. `core/node/xone-003` expects a
-result from a property shape with no `sh:resultPath`, but section 6.7.2.2 says:
-"For results produced by a property shape, this SHACL property path is
-equivalent to the value of sh:path of the shape, unless stated otherwise." The
-engine keeps the shape's `sh:path`. The harness grades the file's report with
-exactly that one result amended, quotes the clause beside the amendment, and
-proves that a report without the amendment, or with a different one, fails.
+One vendored file carries test entries that no upstream manifest includes:
+`inference-rules/rdfs/rdfs1.ttl`. It is not part of the approved suite, so it is
+never counted among its passes. A separate test,
+`w3c_shacl12_unlisted_vendored_files`, grades it exactly as written and reports
+it under its own label.
 
 A `sh:reifierShape` or `sh:reificationRequired` result carries the value node
 as `sh:value`. The textual definition in SHACL 1.2 Core section 7.8.5 uses the
@@ -1387,7 +1381,7 @@ once, on request, and reports seven sections:
 1. `load`: the loader's verdict, accepted or the refusal it raised.
 2. `shacl-shacl`: every result of validating the shapes graph against the
    vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core
-   relaxations (`sh:closed sh:ByTypes`, a list-valued `sh:nodeKind`, a
+   relaxations (a list-valued `sh:nodeKind`, a
    path-valued `sh:equals`, a node-expression `sh:targetNode`). A result SHACL
    1.2 Core makes well-formed is marked `superseded` and is not a finding, but
    only when the loader accepted the graph.

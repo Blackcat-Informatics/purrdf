@@ -880,16 +880,17 @@ fn cli_shapes_lint() {
     assert!(report.ends_with("clean false\n"), "{report}");
     assert!(stderr(&bad).contains("shapes lint clean false\n"));
 
-    let by_types = write_file(
+    let list_kind = write_file(
         dir.path(),
-        "by-types.ttl",
+        "list-kind.ttl",
         &format!(
-            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n"
+            "{PREFIXES}{SPARQL_EXPR_DECLARATION}ex:S a sh:NodeShape ; \
+             sh:nodeKind ( sh:IRI sh:Literal ) .\n"
         ),
     );
-    let superseded = run(&["shapes", "lint", &by_types]);
+    let superseded = run(&["shapes", "lint", &list_kind]);
     assert_eq!(code(&superseded), 0, "{}", stderr(&superseded));
-    assert!(stdout(&superseded).contains(" superseded closed-by-types\n"));
+    assert!(stdout(&superseded).contains(" superseded list-valued-node-kind\n"));
 
     // An empty sh:xone list is a mandatory diagnostic named by rule id: the load is
     // accepted, the line is a finding, and the verb exits 1. The clean fixture above is

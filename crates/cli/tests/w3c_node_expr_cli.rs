@@ -125,7 +125,7 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         cases
             .iter()
             .filter(|case| matches!(case.body, Body::NodeExpr(_)))
-            .all(|case| case.listed),
+            .all(|case| case.root.is_listed()),
         "every sht:EvalNodeExpr entry is one an upstream manifest lists"
     );
 

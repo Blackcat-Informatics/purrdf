@@ -30,12 +30,12 @@ use shacl_corpora::shacl12::{Body, SrlCase, SrlKind, shacl12_cases};
 /// The discovered entries of each kind, restated from the corpus so the sweep cannot
 /// pass by running fewer.
 const EXPECTED: [(SrlKind, usize); 7] = [
-    (SrlKind::PositiveSyntax, 109),
+    (SrlKind::PositiveSyntax, 111),
     (SrlKind::NegativeSyntax, 30),
     (SrlKind::PositiveWellFormedness, 4),
     (SrlKind::NegativeWellFormedness, 4),
-    (SrlKind::PositiveStratification, 5),
-    (SrlKind::NegativeStratification, 5),
+    (SrlKind::PositiveStratification, 7),
+    (SrlKind::NegativeStratification, 7),
     (SrlKind::Eval, 46),
 ];
 

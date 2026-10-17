@@ -83,8 +83,9 @@ use shacl_corpora::node_expr_grading::{
 };
 use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
-    Body, Case12, InferCase, InferExpected, NodeExprCase, SrlCase, SrlKind, W3C12_TOTAL_CASES,
-    shacl12_cases,
+    Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SrlCase, SrlKind, Status12,
+    W3C12_CLAIMED_CLASSES, W3C12_SHACL_ROOT_APPROVED, W3C12_SUITE_COMMIT, W3C12_TOTAL_CASES,
+    default_conformance_class, shacl12_cases,
 };
 use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_file};
 
@@ -140,8 +141,9 @@ struct Amendment {
     graded: ResultTuple,
 }
 
-const XONE_PROPERTY_SHAPE: &str =
-    "<http://www.w3.org/ns/shacl-shacl#xoneSubjectsShapeXonePropertyShape>";
+/// One row of the delta table: `(test id, the normative sentence quoted with its
+/// section, the exact deltas)`.
+type DeltaRow = (&'static str, &'static str, &'static [Amendment]);
 
 /// Deltas for the entries of vendored files that NO upstream manifest includes
 /// (`shacl12::W3C12_UNINCLUDED_MANIFESTS`), where the file's own expectation
@@ -163,40 +165,14 @@ const XONE_PROPERTY_SHAPE: &str =
 /// proves both directions on the engine's real report, and pins the table by
 /// count.
 ///
-/// * `core/node/xone-003` (`core/node/xone-003.ttl`, which
-///   `core/node/manifest.ttl` does not include) — the result is produced by
-///   `shsh:xoneSubjectsShapeXonePropertyShape`, a property shape whose `sh:path`
-///   is `sh:xone`, through `sh:minListLength`, whose definition states no
-///   exception to §6.7.2.2. The file's report omits `sh:resultPath`; the quoted
-///   sentence makes it the shape's `sh:path`, and the engine keeps it.
-const UNLISTED_FILE_DELTAS: &[(&str, &str, &[Amendment])] = &[(
-    "core/node/xone-003",
-    "SHACL 1.2 Core §6.7.2.2: \"For results produced by a property shape, this SHACL \
-         property path is equivalent to the value of sh:path of the shape, unless stated \
-         otherwise.\"",
-    &[Amendment {
-        approved: ResultTuple {
-            focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
-            path: None,
-            value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
-            component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
-            severity: "<http://www.w3.org/ns/shacl#Warning>",
-            source_shape: XONE_PROPERTY_SHAPE,
-        },
-        graded: ResultTuple {
-            focus: "<http://example.com/ns#TestXoneUnsatisfiableShape>",
-            path: Some("<http://www.w3.org/ns/shacl#xone>"),
-            value: Some("<http://www.w3.org/1999/02/22-rdf-syntax-ns#nil>"),
-            component: "<http://www.w3.org/ns/shacl#MinListLengthConstraintComponent>",
-            severity: "<http://www.w3.org/ns/shacl#Warning>",
-            source_shape: XONE_PROPERTY_SHAPE,
-        },
-    }],
-)];
+/// The table is empty: the one vendored file whose expectation was amended here
+/// is now listed by an upstream manifest and is graded as approved. The only
+/// remaining unlisted entry is graded exactly as written.
+const UNLISTED_FILE_DELTAS: &[DeltaRow] = &[];
 
 /// [`UNLISTED_FILE_DELTAS`] pinned by count, so an entry cannot be added or
 /// dropped without this number moving with it.
-const UNLISTED_FILE_DELTAS_COUNT: usize = 1;
+const UNLISTED_FILE_DELTAS_COUNT: usize = 0;
 
 /// The approved expected results of `id` with `deltas` applied. A delta whose
 /// approved result the approved report does not contain is a stale entry and an
@@ -226,7 +202,18 @@ fn amend(id: &str, results: &Multiset, deltas: &[Amendment]) -> Result<Multiset,
 /// an unlisted entry only — the file's own amended by its [`UNLISTED_FILE_DELTAS`]
 /// entry. A listed (approved-suite) entry named in that table is an error.
 fn graded_expectation(id: &str, listed: bool, tc: &W3cCase) -> Result<Expected, String> {
-    let entry = UNLISTED_FILE_DELTAS.iter().find(|(entry, ..)| *entry == id);
+    graded_expectation_in(UNLISTED_FILE_DELTAS, id, listed, tc)
+}
+
+/// [`graded_expectation`] over an explicit delta `table`, so the refusal of a
+/// listed entry is proven against a table that names one.
+fn graded_expectation_in(
+    table: &[DeltaRow],
+    id: &str,
+    listed: bool,
+    tc: &W3cCase,
+) -> Result<Expected, String> {
+    let entry = table.iter().find(|(entry, ..)| *entry == id);
     if listed && entry.is_some() {
         return Err(format!(
             "UNLISTED_FILE_DELTAS names {id}, which an upstream manifest lists — an approved \
@@ -570,7 +557,7 @@ fn srl_stage(error: &SrlError) -> &'static str {
 /// Grade one entry.
 fn run(case: &Case12) -> Result<(), String> {
     match &case.body {
-        Body::Validate(tc) => run_validate(&case.id, case.listed, tc),
+        Body::Validate(tc) => run_validate(&case.id, case.root.is_listed(), tc),
         Body::NodeExpr(tc) => run_node_expr(&case.id, tc),
         Body::Infer(tc) => run_infer(tc),
         Body::Srl(tc) => run_srl(tc),
@@ -654,7 +641,7 @@ fn w3c_shacl12_conformance() {
 
     let mut unlisted = 0usize;
     for case in &cases {
-        if !case.listed {
+        if !case.root.is_listed() {
             // Graded and reported by `w3c_shacl12_unlisted_vendored_files`.
             unlisted += 1;
             continue;
@@ -739,19 +726,18 @@ fn w3c_shacl12_conformance() {
 // ── Unlisted vendored files ───────────────────────────────────────────────────
 
 /// The number of entries in vendored files that no upstream manifest includes
-/// (`shacl12::W3C12_UNINCLUDED_MANIFESTS`): `core/node/xone-002`,
-/// `core/node/xone-003` and `inference-rules/rdfs/rectangle-condition`.
-const W3C12_UNLISTED_ENTRIES: usize = 3;
+/// (`shacl12::W3C12_UNINCLUDED_MANIFESTS`): `inference-rules/rdfs/rectangle-condition`.
+const W3C12_UNLISTED_ENTRIES: usize = 1;
 
 /// The entries of vendored files that no upstream manifest includes, graded
-/// exactly against their own file — `core/node/xone-003` with the one proven
-/// delta in [`UNLISTED_FILE_DELTAS`], every other one as written — and reported
+/// exactly against their own file — with the proven deltas in
+/// [`UNLISTED_FILE_DELTAS`], none today, else as written — and reported
 /// under their own label. They are not the approved suite and are never counted
 /// among its passes. Every one must pass; there is no ledger here.
 #[test]
 fn w3c_shacl12_unlisted_vendored_files() {
     let cases = shacl12_cases();
-    let unlisted: Vec<&Case12> = cases.iter().filter(|c| !c.listed).collect();
+    let unlisted: Vec<&Case12> = cases.iter().filter(|c| !c.root.is_listed()).collect();
     assert_eq!(unlisted.len(), W3C12_UNLISTED_ENTRIES, "unlisted entries");
     for (id, ..) in UNLISTED_FILE_DELTAS {
         assert!(
@@ -796,28 +782,189 @@ fn w3c_shacl12_unlisted_vendored_files() {
     );
 }
 
-/// No approved entry is graded against an amended expectation: naming a LISTED
-/// entry in the delta table is refused, and the neighbouring unlisted entry the
-/// table really names is graded through its delta.
+/// No approved entry is graded against an amended expectation: a table row naming
+/// a LISTED entry is refused, and the same entry with no row is graded against its
+/// approved expectation.
 #[test]
 fn a_listed_entry_is_never_amended() {
     let cases = shacl12_cases();
-    let (id, ..) = UNLISTED_FILE_DELTAS[0];
+    // Formerly the one amended entry; an upstream manifest now lists it.
+    let id = "core/node/xone-003";
     let case = cases
         .iter()
         .find(|c| c.id == id)
-        .expect("the delta's entry is discovered");
+        .expect("the entry is discovered");
     let Body::Validate(tc) = &case.body else {
         panic!("{id} is an sht:Validate test");
     };
-    assert!(!case.listed, "{id} is an entry of an unlisted file");
     assert!(
-        graded_expectation(id, false, tc).is_ok(),
-        "the unlisted entry is graded through its delta"
+        case.root.is_listed(),
+        "{id} is an entry an upstream manifest lists"
     );
-    let error =
-        graded_expectation(id, true, tc).expect_err("the same entry, were it listed, is refused");
+    const TUPLE: ResultTuple = ResultTuple {
+        focus: ELSEWHERE,
+        path: None,
+        value: None,
+        component: ELSEWHERE,
+        severity: ELSEWHERE,
+        source_shape: ELSEWHERE,
+    };
+    const CONTROL: &[Amendment] = &[Amendment {
+        approved: TUPLE,
+        graded: ResultTuple {
+            path: Some(ELSEWHERE),
+            ..TUPLE
+        },
+    }];
+    let row: DeltaRow = (
+        "core/node/xone-003",
+        "SHACL 1.2 Core §6.7.2.2: \"control\"",
+        CONTROL,
+    );
+    let error = graded_expectation_in(&[row], id, case.root.is_listed(), tc)
+        .expect_err("a listed entry named in the table is refused");
     assert!(error.contains("an upstream manifest lists"), "{error}");
+    assert!(
+        graded_expectation_in(&[], id, case.root.is_listed(), tc).is_ok(),
+        "the same entry with no row is graded against its approved expectation"
+    );
+}
+
+// ── Roots, status and conformance classes ─────────────────────────────────────
+
+/// The approved entries reachable from the SHACL root are exactly
+/// [`W3C12_SHACL_ROOT_APPROVED`], every SHACL-root entry is approved, the SPARQL
+/// 1.2 RL root holds exactly the `srlt:*` entries (which state no `mf:status`),
+/// and the unlisted entries are the ones of `W3C12_UNINCLUDED_MANIFESTS`.
+#[test]
+fn the_shacl_root_scope_is_pinned() {
+    let cases = shacl12_cases();
+    let approved: Vec<&Case12> = cases
+        .iter()
+        .filter(|c| c.is_approved_shacl_root())
+        .collect();
+    assert_eq!(
+        approved.len(),
+        W3C12_SHACL_ROOT_APPROVED,
+        "approved entries reachable from the SHACL root"
+    );
+    assert!(
+        cases
+            .iter()
+            .filter(|c| c.root == Root12::Shacl)
+            .all(|c| c.status == Some(Status12::Approved) && !matches!(c.body, Body::Srl(_))),
+        "every SHACL-root entry is an approved, non-SPARQL-RL one"
+    );
+    for case in &cases {
+        match case.root {
+            Root12::SparqlRl => assert!(
+                matches!(case.body, Body::Srl(_))
+                    && case.status.is_none()
+                    && case.requires.is_empty()
+                    && case.id.starts_with("sparql-rl/"),
+                "{}: a SPARQL 1.2 RL root entry is an srlt:* test with no status or class",
+                case.id
+            ),
+            Root12::Shacl | Root12::Unlisted => assert!(
+                !matches!(case.body, Body::Srl(_)) && case.status.is_some(),
+                "{}: a SHACL-root or unlisted entry is an sht:* test with a status",
+                case.id
+            ),
+        }
+    }
+    assert_eq!(
+        cases
+            .iter()
+            .filter(|c| c.status == Some(Status12::Proposed))
+            .count(),
+        0,
+        "no vendored entry is proposed"
+    );
+    assert_eq!(
+        cases.len() - approved.len(),
+        W3C12_UNLISTED_ENTRIES + SRL_TOTAL,
+        "everything outside the approved SHACL root is an unlisted entry or SPARQL 1.2 RL"
+    );
+}
+
+/// The union of the conformance classes of every approved SHACL-root entry is
+/// exactly the claimed set, no entry is left unclassified (the folder default
+/// covers `core/`, `inference-rules/` and `node-expr/`; `sparql/` entries state
+/// their class), and the default rule applies only when `mf:requires` is absent.
+#[test]
+fn the_claimed_classes_are_the_union_over_the_shacl_root() {
+    let cases = shacl12_cases();
+    let mut union: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for case in cases.iter().filter(|c| c.is_approved_shacl_root()) {
+        let classes = case.conformance_classes();
+        assert!(!classes.is_empty(), "{}: no conformance class", case.id);
+        if case.requires.is_empty() {
+            let folder = case.id.split('/').next().expect("an id has a folder");
+            assert_eq!(
+                classes,
+                vec![
+                    default_conformance_class(folder)
+                        .expect("a default")
+                        .to_owned()
+                ],
+                "{}: the folder default applies only without mf:requires",
+                case.id
+            );
+        } else {
+            assert_eq!(classes, case.requires, "{}: stated classes win", case.id);
+        }
+        union.extend(classes);
+    }
+    let claimed: std::collections::BTreeSet<String> = W3C12_CLAIMED_CLASSES
+        .iter()
+        .map(|c| (*c).to_owned())
+        .collect();
+    assert_eq!(
+        claimed.len(),
+        W3C12_CLAIMED_CLASSES.len(),
+        "a class is claimed twice"
+    );
+    assert_eq!(
+        union, claimed,
+        "classes used by the SHACL root vs the claimed set"
+    );
+
+    // The folder defaults: the three the reports page knows, and no guess for
+    // any other (a `sparql/` entry without `mf:requires` is unspecified).
+    assert_eq!(
+        default_conformance_class("core"),
+        Some(purrdf_iri::vocab::sht::CONFORMANCE_CORE)
+    );
+    assert_eq!(
+        default_conformance_class("inference-rules"),
+        Some(purrdf_iri::vocab::sht::CONFORMANCE_INFERENCE_RULES)
+    );
+    assert_eq!(
+        default_conformance_class("node-expr"),
+        Some(purrdf_iri::vocab::sht::CONFORMANCE_NODE_EXPR)
+    );
+    assert_eq!(default_conformance_class("sparql"), None);
+    assert_eq!(default_conformance_class("sparql-rl"), None);
+}
+
+/// The recorded suite commit is the one the vendored provenance names, in full.
+#[test]
+fn the_suite_commit_is_the_vendored_one() {
+    assert_eq!(W3C12_SUITE_COMMIT.len(), 40);
+    assert!(
+        W3C12_SUITE_COMMIT
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    let provenance = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vectors/shacl12/PROVENANCE.md"
+    ))
+    .expect("vectors/shacl12/PROVENANCE.md is vendored");
+    assert!(
+        provenance.contains(&format!("Pinned commit: `{W3C12_SUITE_COMMIT}`")),
+        "PROVENANCE.md does not pin {W3C12_SUITE_COMMIT}"
+    );
 }
 
 // ── The completion gate ───────────────────────────────────────────────────────
@@ -955,7 +1102,7 @@ const INFER_INVENTORY: &[&str] = &[
 /// The number of discovered SPARQL 1.2 RL (`srlt:*`) entries, every one of which
 /// must pass. Pinned so a walk that stops reaching some of them cannot pass by
 /// grading fewer.
-const SRL_TOTAL: usize = 203;
+const SRL_TOTAL: usize = 209;
 
 /// Every id in the measured failure inventory is discovered and passes, every
 /// `sht:Infer` entry passes by name, and every SPARQL 1.2 RL entry passes.
@@ -1053,7 +1200,7 @@ fn non_canonical_expectations_are_really_non_canonical() {
             .find(|c| c.id == *id)
             .unwrap_or_else(|| panic!("{id}: no such test"));
         assert!(
-            case.listed,
+            case.root.is_listed(),
             "{id}: a non-canonical expected decimal is an entry of the approved suite"
         );
         let Body::NodeExpr(tc) = &case.body else {
@@ -1125,7 +1272,7 @@ fn unlisted_file_deltas_are_exact() {
             .find(|c| c.id == *id)
             .unwrap_or_else(|| panic!("{id}: no such test"));
         assert!(
-            !case.listed,
+            !case.root.is_listed(),
             "{id}: a delta amends only an entry of a file no upstream manifest includes"
         );
         let Body::Validate(tc) = &case.body else {
@@ -1572,17 +1719,19 @@ fn the_grader_grades_the_source_shape_both_ways() {
     );
 }
 
-/// The shared grader grades `sh:detail` exactly where the approved report states
+/// The shared grader grades `sh:detail` exactly where an expected report states
 /// it, and not where it states none.
 ///
-/// Over the approved `core/node/memberShape-001` — whose `ex:list2` result states
-/// the one detail `"Bob"` and whose `ex:list5` result states exactly `"Charlie"`
-/// and `"Donna"` — the case passes as written, and fails when the stated details
-/// lose one, gain one, or change one field of one. Then the control: with
-/// `ex:list5`'s stated details removed from the expectation, the case still
-/// passes while the engine's own `ex:list5` result carries two details — a
-/// produced detail the expectation does not spell is not graded (SHACL 1.2 Core
-/// §6.7.2.6, quoted in the grader's docs).
+/// No vendored report states `sh:detail` today, so the stated details are built
+/// here over the approved `core/node/memberShape-001`: its `ex:list2` result gets
+/// the one detail `"Bob"` and its `ex:list5` result exactly `"Charlie"` and
+/// `"Donna"`, which are the details the engine really produces. The case passes
+/// as approved with none stated and passes with them stated, and fails when the
+/// stated details lose one, gain one, or change one field of one. Then the
+/// control: with `ex:list5`'s stated details removed from the expectation, the
+/// case still passes while the engine's own `ex:list5` result carries two details
+/// — a produced detail the expectation does not spell is not graded (SHACL 1.2
+/// Core §6.7.2.6, quoted in the grader's docs).
 #[test]
 fn the_grader_grades_sh_detail_where_it_is_stated() {
     use shacl_corpora::ExpectedResult;
@@ -1595,20 +1744,46 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
     let Body::Validate(tc) = &mut case.body else {
         panic!("memberShape-001 is an sht:Validate test");
     };
-    let list5 = "<http://example.com/ns#list5>";
-    let stated: Vec<(String, usize)> = tc
-        .expected_details
-        .iter()
-        .map(|e| (e.tuple.0.clone(), e.details.as_ref().map_or(0, Vec::len)))
-        .collect();
-    assert_eq!(
-        stated,
-        [
-            ("<http://example.com/ns#list2>".to_owned(), 1),
-            (list5.to_owned(), 2)
-        ],
-        "the approved report states details on ex:list2 and ex:list5"
+    assert!(
+        tc.expected_details.is_empty(),
+        "the approved report states no sh:detail"
     );
+    shacl_corpora::report_grading::run_validate_case(tc)
+        .expect("the case passes as approved with no details stated");
+
+    let Expected::Report { results, .. } = &tc.expected else {
+        panic!("memberShape-001 expects a report");
+    };
+    let list2 = "<http://example.com/ns#list2>";
+    let list5 = "<http://example.com/ns#list5>";
+    let parent = |focus: &str| -> Tuple {
+        let mut found = results.keys().filter(|tuple| tuple.0 == focus);
+        let tuple = found.next().expect("the approved report has the result");
+        assert!(found.next().is_none(), "one approved result per focus node");
+        tuple.clone()
+    };
+    let detail = |name: &str| ExpectedResult {
+        tuple: (
+            format!("\"{name}\""),
+            None,
+            Some(format!("\"{name}\"")),
+            "<http://www.w3.org/ns/shacl#NodeKindConstraintComponent>".to_owned(),
+            "<http://www.w3.org/ns/shacl#Violation>".to_owned(),
+            "<http://example.com/ns#IRIShape>".to_owned(),
+        ),
+        details: None,
+    };
+    let stated = vec![
+        ExpectedResult {
+            tuple: parent(list2),
+            details: Some(vec![detail("Bob")]),
+        },
+        ExpectedResult {
+            tuple: parent(list5),
+            details: Some(vec![detail("Charlie"), detail("Donna")]),
+        },
+    ];
+    tc.expected_details = stated;
     shacl_corpora::report_grading::run_validate_case(tc)
         .expect("the engine carries exactly the stated details");
 

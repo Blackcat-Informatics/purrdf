@@ -122,7 +122,7 @@ use shacl_corpora::{
 
 /// The `sht:Validate` entries of the vendored W3C SHACL 1.2 suite — the third
 /// corpus whose shapes graphs the product must carry.
-const W3C12_VALIDATE_CASES: usize = 174;
+const W3C12_VALIDATE_CASES: usize = 213;
 
 /// Every case the three corpora contribute. Asserted exactly, so a corpus that grew
 /// or shrank without this harness noticing fails rather than quietly measuring less.
@@ -151,7 +151,7 @@ const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_L
 /// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
 /// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
 /// unloadable bucket by the same rule as the seven SHACL 1.0 ones.
-const W3C12_DECLARED_FAILURES: usize = 5;
+const W3C12_DECLARED_FAILURES: usize = 6;
 
 /// W3C SHACL 1.2 `sht:Validate` entries whose shapes graph this engine REFUSES at
 /// load, each with the reason — SHACL 1.2 features `w3c12_conformance.rs` ledgers
@@ -159,11 +159,47 @@ const W3C12_DECLARED_FAILURES: usize = 5;
 /// about them. The ledger runs both ways: an entry whose shapes graph starts
 /// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
 ///
-/// It is empty: every SHACL 1.2 `sht:Validate` shapes graph that is not a declared
+/// Every other SHACL 1.2 `sht:Validate` shapes graph that is not a declared
 /// failure loads, packs and agrees — including
 /// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
 /// regime runs the rules before validation.
-const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[];
+const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[
+    (
+        "w3c12/inference-rules/rules-entailment-ruleset-and-all",
+        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
+         sh:RulesEntailment and refuses the shapes graph at load",
+    ),
+    (
+        "w3c12/inference-rules/rules-entailment-ruleset-includes",
+        "sh:entailment names a rule set (ex:AllRules); the engine supports only \
+         sh:RulesEntailment and refuses the shapes graph at load",
+    ),
+    (
+        "w3c12/inference-rules/rules-entailment-ruleset-multiple",
+        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
+         sh:RulesEntailment and refuses the shapes graph at load",
+    ),
+    (
+        "w3c12/inference-rules/rules-entailment-ruleset-validation",
+        "sh:entailment names a rule set (ex:FullNameRules); the engine supports only \
+         sh:RulesEntailment and refuses the shapes graph at load",
+    ),
+    (
+        "w3c12/sparql/node/deactivated-select-001",
+        "sh:deactivated is a node expression, which the engine does not evaluate there; \
+         it refuses the shapes graph at load",
+    ),
+    (
+        "w3c12/sparql/node/prefixes-003",
+        "the sh:select query uses a prefix declared in no scope the engine resolves; it \
+         refuses the query as a syntax error (undeclared prefix test) at load",
+    ),
+    (
+        "w3c12/sparql/pre-binding/pre-binding-009",
+        "the sh:sparql query contains VALUES, which the engine refuses with pre-bound \
+         variables (stricter than the Working Draft's mentions-a-pre-bound-variable rule)",
+    ),
+];
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -202,8 +238,10 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 ///
 /// # What it counts
 ///
-/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 169 of the
-/// suite's 174 — all but its [`W3C12_DECLARED_FAILURES`]. `validator-001` is among
+/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report but one: 199 of
+/// the suite's 213 — all but its [`W3C12_DECLARED_FAILURES`], its
+/// [`W3C12_REFUSED_AT_LOAD`] and `sparql/functions/singleInstanceOf-001`, whose three
+/// lanes agree on the same validation error instead. `validator-001` is among
 /// them in both suites: its `owl:imports <http://datashapes.org/dash>` sits on a node
 /// that is not an import anchor, so it is data, and the shapes graph loads with an
 /// empty import table. The other 195 come from the SHACL 1.0 suite and the
@@ -211,7 +249,7 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
 /// which the product round trip carries without refusing the function.
-const AGREED_ON_REPORT_CASES: usize = 364;
+const AGREED_ON_REPORT_CASES: usize = 394;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -252,7 +290,7 @@ const AGREED_ON_REPORT_CASES: usize = 364;
 /// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
 /// deactivates) and `property-select-001` (whose computed full name satisfies
 /// `sh:hasValue "John Muir"`).
-const AGREED_WITH_RESULTS_CASES: usize = 343;
+const AGREED_WITH_RESULTS_CASES: usize = 371;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

@@ -28,7 +28,8 @@ not first-party: its SHACL Advanced Features tests come from the pySHACL/DASH
 suite (Apache-2.0 — see `LICENSING.md`'s carve-out table), because the W3C
 suite at the pinned commit ships no AF tests of its own. The harness discovers
 `af/manifest.ttl` directly, so the vendored W3C root `manifest.ttl` stays
-pristine; the seam contributes **6** `sht:Validate` entries of the harness's
-126 total (120 from `core/` + `sparql/`). First-party AF coverage (e.g.
+pristine; the seam contributes **9** `sht:Validate` entries (6 vendored from
+pySHACL, 3 first-party) of the harness's 129 total (120 from `core/` +
+`sparql/`). First-party AF coverage (e.g.
 `sh:expression`) lives separately in the shapes corpus
 (`crates/shapes/corpus`).

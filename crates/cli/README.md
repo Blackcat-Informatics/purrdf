@@ -1095,7 +1095,7 @@ sections:
 ```text
 load accepted
 shacl-shacl 1
-result <http://www.w3.org/ns/shacl#DatatypeConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#closed> value <http://www.w3.org/ns/shacl#ByTypes> shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded closed-by-types
+result <http://www.w3.org/ns/shacl#InConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#nodeKind> value _:… shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded list-valued-node-kind
 functions 1
 call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
 validators 1

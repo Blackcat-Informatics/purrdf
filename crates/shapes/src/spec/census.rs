@@ -286,6 +286,11 @@ static EXPLICIT: &[CensusRow] = &[
     vocabulary(sh::RULES_GRAPH),
     structural(sh_iri!("shapesGraph"), Role::Graph),
     structural(sh_iri!("suggestedShapesGraph"), Role::Graph),
+    // Data-graph markers of incomplete nodes. They are written in the data graph, never
+    // on a shape, so a shape or node expression carrying one is a load error; this
+    // engine does not read them from the data graph.
+    structural(sh_iri!("incomplete"), Role::Graph),
+    structural(sh_iri!("incompleteURIStart"), Role::Graph),
     // "The IRI sh:RulesEntailment represents the SHACL rules entailment regime" — the one
     // regime this processor supports; any other `sh:entailment` value is refused at load.
     structural(sh::ENTAILMENT, Role::Graph),
@@ -300,8 +305,10 @@ static EXPLICIT: &[CensusRow] = &[
     structural(sh_iri!("shapesGraphWellFormed"), Role::Report),
     structural(sh_iri!("usedShapesGraph"), Role::Report),
     structural(sh_iri!("usedDataGraph"), Role::Report),
-    structural(sh_iri!("usedConfiguration"), Role::Report),
     structural(sh_iri!("AbstractResult"), Role::Report),
+    // The provenance classes of a validation: its activity and the agent responsible.
+    structural(sh_iri!("ValidationActivity"), Role::Report),
+    structural(sh_iri!("ValidationAgent"), Role::Report),
     structural(sh::VALIDATION_RESULT, Role::Report),
     structural(sh::DETAIL, Role::Report),
     structural(sh::FOCUS_NODE, Role::Report),
@@ -387,6 +394,7 @@ static EXPLICIT: &[CensusRow] = &[
     // ── Non-validating shape characteristics (Core §5.7) ──
     non_validating(sh_iri!("agentInstruction")),
     non_validating(sh_iri!("codeIdentifier")),
+    non_validating(sh_iri!("codeType")),
     non_validating(sh::DESCRIPTION),
     non_validating(sh_iri!("formalized")),
     non_validating(sh::GROUP),

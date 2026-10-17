@@ -139,9 +139,9 @@ validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
 ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
 whether or not a shape uses the component.
 
-**Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
-`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
-tests) runs, and of the 544 an upstream manifest lists, 538 pass as approved
+**Conformance.** The whole W3C `shacl12-test-suite` (592 tests: 213
+`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 209 SPARQL 1.2 RL
+tests) runs, and of the 591 an upstream manifest lists, 571 pass as approved
 and 6 are counted apart as non-canonical expected decimals, with an empty
 expected-failure ledger:
 
