@@ -1,0 +1,81 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling crossbeam-utils v0.8.21
+   Compiling inout v0.2.2
+   Compiling rayon-core v1.13.0
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/ed25519)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/jsonschema)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/sparql-results)
+   Compiling structured-zstd v0.0.49
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling ctutils v0.4.2
+   Compiling universal-hash v0.6.1
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling polyval v0.7.3
+   Compiling crossbeam-deque v0.8.6
+   Compiling ghash v0.6.0
+   Compiling syn v2.0.118
+   Compiling rayon v1.12.0
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/datalog)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/gts)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 4m 09s
+     Running tests/content_id_byte_determinism.rs (/opt/.cargo/fa/d9eeaffa630619/debug/build/purrdf-rdf/7bb40ab516ad4880/out/content_id_byte_determinism-7bb40ab516ad4880)
+
+running 18 tests
+test a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused ... ok
+test content_addressing_does_not_perturb_serialized_bytes ... ok
+test blank_count_is_invariant_between_flat_and_overlay_presentations ... ok
+test differential_annotations ... ok
+test differential_blank_coreference_across_graphs ... ok
+test differential_blank_label_collision_across_scopes ... ok
+test differential_default_and_named_graph_worlds ... ok
+test differential_deeply_quoted_triple_terms ... ok
+test differential_language_and_direction_literals ... ok
+test differential_reifier_and_annotation_case_under_both_hash_algorithms ... ok
+test differential_reifiers ... ok
+test differential_row_spelled_natively_and_as_base_quad_in_both_graph_placements ... ok
+test flat_and_overlay_agree_without_a_statement_layer_and_diverge_with_one ... ok
+test differential_composite_literals_with_embedded_blank_labels ... ok
+test flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact ... ok
+test flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs ... ok
+test flat_canon_is_idempotent_under_both_reachable_reingestion_loaders ... ok
+test the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/named_graph_view.rs (/opt/.cargo/fa/d9eeaffa630619/debug/build/purrdf-shapes/b479eb821498102b/out/named_graph_view-b479eb821498102b)
+
+running 8 tests
+test collection_and_object_readers_honor_the_selected_default_graph ... ok
+test blank_empty_and_absent_graphs_are_selected_without_leaking_the_source ... ok
+test construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids ... ok
+test explicit_materialization_contains_exactly_the_projected_selected_graph ... ok
+test metadata_in_an_invisible_graph_does_not_allocate_a_base_row_dedup_table ... ok
+test every_prepared_pattern_reads_only_the_selected_graph ... ok
+test shape_only_class_terms_preserve_the_selection_after_dictionary_supplementation ... ok
+test core_classes_paths_and_sparql_return_the_same_complete_report_as_an_owned_graph ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

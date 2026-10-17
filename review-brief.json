@@ -1,0 +1,22 @@
+{
+  "issue": 566,
+  "branch": "paudley/566-unify-native-graph-projection-across",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "03902c2f586fba5680db14c7d9c5abb2e7fd040f",
+      "subject": "feat(core): project default and named RDF graphs through one operation",
+      "date": "2026-10-16"
+    }
+  ],
+  "files": [
+    "crates/rdf-core/src/ir/canon.rs",
+    "crates/rdf-core/src/ir/dataset.rs",
+    "crates/rdf-core/src/ir/pipeline_bundle.rs",
+    "crates/rdf-core/tests/shared_views.rs",
+    "crates/rdf/tests/content_id_byte_determinism.rs",
+    "crates/shapes/benches/shared_views.rs",
+    "crates/shapes/tests/named_graph_view.rs"
+  ],
+  "adrs_touched": []
+}

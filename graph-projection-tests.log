@@ -1,0 +1,134 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/deflate)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/stack)
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/xsd)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/testkit)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/cdt)
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/dataset.rs:4430:55
+     |
+4430 |             let triple = RdfTerm::TripleTerm(Box::new(crate::RdfTriple::new(
+     |                                                       ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+4430 -             let triple = RdfTerm::TripleTerm(Box::new(crate::RdfTriple::new(
+4430 +             let triple = RdfTerm::TripleTerm(Box::new(RdfTriple::new(
+     |
+
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/dataset.rs:4436:34
+     |
+4436 |                 RdfTerm::Literal(crate::RdfLiteral::plain("invalid")),
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4436 -                 RdfTerm::Literal(crate::RdfLiteral::plain("invalid")),
+4436 +                 RdfTerm::Literal(RdfLiteral::plain("invalid")),
+     |
+
+error[E0599]: no variant, associated function, or constant named `TripleTerm` found for enum `model::RdfTerm` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:4391:30
+     |
+4391 |                 let RdfTerm::TripleTerm(inner) = &reifiers[0].statement.subject else {
+     |                              ^^^^^^^^^^ variant, associated function, or constant not found in `model::RdfTerm`
+     |
+    ::: crates/rdf-core/src/model.rs:187:1
+     |
+ 187 | pub enum RdfTerm {
+     | ---------------- variant, associated function, or constant `TripleTerm` not found for this enum
+     |
+help: there is an associated function `triple` with a similar name
+    --> crates/rdf-core/src/model.rs:218:5
+     |
+ 218 |     pub fn triple(triple: RdfTriple) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `TripleTerm` found for enum `model::RdfTerm` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:4430:35
+     |
+4430 |             let triple = RdfTerm::TripleTerm(Box::new(crate::RdfTriple::new(
+     |                                   ^^^^^^^^^^ variant, associated function, or constant not found in `model::RdfTerm`
+     |
+    ::: crates/rdf-core/src/model.rs:187:1
+     |
+ 187 | pub enum RdfTerm {
+     | ---------------- variant, associated function, or constant `TripleTerm` not found for this enum
+     |
+note: if you're trying to build a new `model::RdfTerm` consider using one of the following associated functions:
+      model::RdfTerm::iri
+      model::RdfTerm::blank_node
+      model::RdfTerm::literal
+      model::RdfTerm::triple
+    --> crates/rdf-core/src/model.rs:198:1
+     |
+ 198 | / purrdf_lex::constructors! {
+ 199 | |     impl RdfTerm {
+ 200 | |         /// An IRI term from its full string.
+ 201 | |         #[must_use]
+...    |
+ 207 | | }
+     | |_^
+...
+ 212 |       pub fn literal(literal: RdfLiteral) -> Self {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 218 |       pub fn triple(triple: RdfTriple) -> Self {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: this error originates in the macro `$crate::constructors` which comes from the expansion of the macro `purrdf_lex::constructors` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: there is an associated function `triple` with a similar name
+     |
+4430 -             let triple = RdfTerm::TripleTerm(Box::new(crate::RdfTriple::new(
+4430 +             let triple = RdfTerm::triple(Box::new(crate::RdfTriple::new(
+     |
+
+error[E0599]: no associated function or constant named `plain` found for struct `model::RdfLiteral` in the current scope
+    --> crates/rdf-core/src/ir/dataset.rs:4436:53
+     |
+4436 |                 RdfTerm::Literal(crate::RdfLiteral::plain("invalid")),
+     |                                                     ^^^^^ associated function or constant not found in `model::RdfLiteral`
+     |
+    ::: crates/rdf-core/src/model.rs:31:1
+     |
+  31 | pub struct RdfLiteral {
+     | --------------------- associated function or constant `plain` not found for this struct
+     |
+note: if you're trying to build a new `model::RdfLiteral` consider using one of the following associated functions:
+      model::RdfLiteral::simple
+      model::RdfLiteral::typed
+      model::RdfLiteral::language_tagged
+    --> crates/rdf-core/src/model.rs:147:5
+     |
+ 147 |     pub fn simple(lexical_form: impl Into<String>) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 157 |     pub fn typed(lexical_form: impl Into<String>, datatype: impl Into<String>) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 168 |     pub fn language_tagged(lexical_form: impl Into<String>, language: impl Into<String>) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 5 previous errors

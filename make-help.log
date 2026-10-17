@@ -1,0 +1,72 @@
+  help               Show this help.
+  metadata           Regenerate + verify workspace metadata and generated artifacts.
+  fmt                Auto-format the workspace.
+  hooks              Install the pre-commit and pre-merge-commit hooks: the quick subset of `make check`, run on the staged snapshot.
+  check              The full local gate: fmt, clippy, build, tests, hygiene.
+  check-issue-refs   Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
+  check-brand-casing Reject bare lowercase 'purrdf' in prose (project is PurRDF in prose).
+  check-spec-attribution Reject attributing a first-party extension (the quad template) to a SPARQL spec.
+  changelog          Regenerate the deterministic CHANGELOG.md from conventional-commit history.
+  bump               Set the crates.io/PyPI/npm version in lockstep (make bump VERSION=x.y.z).
+  release-tags       Cut + push rust-v/py-v/npm-v tags for VERSION after coherence checks (make release-tags VERSION=x.y.z).
+  binaryen-prerequisite Require the pinned structural wasm validator used by wasm-link.
+  node-prerequisite  Require Node for the native Unicode ECMAScript conformance oracle.
+  test               Run the workspace test suite.
+  test-shard         Run one CI shard of `make test` (SHARD=lib|doc|integration-1..5).
+  lint-gts-selected-blobs Lint the selected native-import production and test surfaces only.
+  doc-gts-selected-blobs Check the native-import and shared shape-dataset public API documentation.
+  test-gts-selected-blobs Check bounded selected-blob import and native scope contracts only.
+  doc                Build docs for the 33 publishable crates with rustdoc warnings denied.
+  book-samples       Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
+  book               Build The PurRDF Book (mdBook user guide) into docs/book/book/.
+  book-zh            Build the zh-Hans book into $(BOOK_ZH_DIR), served at $(BOOK_ZH_SITE_URL) (after `book`; search off — see book.toml).
+  book-pot           Extract the translation template docs/book/po/messages.pot (ignored) from the English book.
+  book-po-update     Refresh docs/book/po/zh-Hans.po against the current English source (msgmerge; fuzzy/obsolete entries render as English until retranslated).
+  bench-prepared-reuse Measure cold/warm preparation and prepared execution on O3/full-LTO code (report-only).
+  bench              Run the purrdf_testkit::bench suites (report-only; never a gate).
+  scale-corpus       Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
+  columnar-oracle    Verify production Parquet files through the dev-only DuckDB oracle.
+  csvw-conformance   Run every pinned W3C CSVW RDF and validation manifest case.
+  csvw-oracle        Validate canonical CSVW output with the locked independent csvw 4.1.0 implementation.
+  obographs-oracle   Validate deterministic output against the pinned official OBO Graphs 0.3.2 schema.
+  projection-oracles Run graph/tabular conformance and independent corruption oracles.
+  pydantic-oracle    Execute emitted Pydantic v2 models and compare model_json_schema() with CompiledSchema.
+  linkml-oracle      Validate emitted LinkML through the locked official 1.11 toolchain.
+  typescript-oracle  Compile emitted declarations with TypeScript 7.0 and compare assignability with CompiledSchema.
+  graphql-oracle     Validate emitted SDL and variable coercion with locked GraphQL.js and purrdf-jsonschema.
+  jsonschema-pattern-oracle Re-ask JavaScript's RegExp for every frozen purrdf-jsonschema pattern verdict; fails if any answer moved.
+  bench-python       Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
+  pytest             Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
+  miri               Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
+  conformance        Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
+  iri-resolver-hygiene Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
+  layer-hygiene      Prove every first-party crate edge is one layers.toml allows, and the table is exact.
+  helpers-hygiene    Prove helpers-ledger.toml holds (one home per job, no forbidden copy, no stale exemption, no cross-crate #[path]) and every hash domain is a unique, prefix-free purrdf_hash::Domain.
+  serializer-rewind-hygiene Prove no serializer takes back output it already produced.
+  python-binding-hygiene Prove no Rust test module hides in the PyO3 extension crate (it would never compile or run).
+  terminal-hygiene   Prove no scanner decides a token boundary with a Unicode property.
+  thread-local-hygiene Prove every thread_local! in crates/ is in the wasm interleaving ledger with its reason, and nothing stale is.
+  build-profile-hygiene Prove the gate really compiles at opt-level 3 with debug-assertions and overflow-checks on.
+  rdf-core-hygiene   Prove the kernel ring-fence: no PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
+  cnschema-probe     Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
+  benchmark-acquire  Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
+  lubm               Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
+  watdiv             Run the WatDiv comparison workload end to end - acquire the frozen dataset, instantiate the 20 templates deterministically, load through the purrdf CLI, and run them (pure BGP, no entailment; report-only, never a gate). See docs/BENCHMARKS.md.
+  wasm               Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
+  doctor             Report which build pins this machine actually enforces (never gates; run it when a gate SKIPs).
+  geo-determinism    Compare frozen numerical, geometry and cell transcripts on native and both actual WASM builds.
+  geodtest           Qualify every distance/inverse/direct record in the pinned 500,000-row public corpus (GEODTEST_INPUT is the uncompressed input).
+  simd-asm           Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
+  wasm-test          Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface and numeric byte-identity probes in Node.
+  wasm-pkg           Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
+  wasm-pkg-test      Build and test the optimized npm/wasm package.
+  wasm-pkg-bench     Build the wasm package and run the Node parse-throughput and poison-gate benchmarks (report-only; never a gate).
+  playground         Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/playground (serve it to preview).
+  playground-smoke   Smoke the assembled console's worker dispatch and every pane's package calls (Node-side; a CI gate).
+  capi-build         Build libpurrdf (cdylib + staticlib + header + pkg-config) via cargo-c.
+  capi-header        Regenerate the committed purrdf.h ABI contract from the crate.
+  capi-check         Verify the committed purrdf.h is current + the C smoke links and runs.
+  capi-install       Install libpurrdf + purrdf.pc + header to PREFIX (default /usr/local).
+  python-release-check Build, audit and jointly install both exact Python distributions.
+  license-bundles    Regenerate recipient license texts, notice inventories and dependency evidence.
+  capi-bundle        Build and audit the native C distribution, including all recipient notices.

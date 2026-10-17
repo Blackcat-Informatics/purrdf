@@ -1,0 +1,38 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 9,
+      "rules": [
+        "modal"
+      ],
+      "text": "produces 180,062. That shortcut is not the production world and must be removed.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 16,
+      "rules": [
+        "modal"
+      ],
+      "text": "them into fabricated IRI strings. Invalid graph names must fail explicitly.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 31,
+      "rules": [
+        "modal"
+      ],
+      "text": "benchmark must select the default world after complete production assembly,",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

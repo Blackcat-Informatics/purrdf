@@ -1,0 +1,105 @@
+{
+  "issue": 566,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Unify native graph projection across default and named RDF worlds",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "link_relations": {},
+  "related": [
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 407,
+      "title": "text: analyzer stages for stemming, accent folding, dictionary segmentation, void stripping, token bounds, phonetic codes and substring matching",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 330,
+      "title": "Serializers build one whole-output allocation; offer an incremental io::Write sink",
+      "state": "CLOSED"
+    },
+    {
+      "number": 317,
+      "title": "perf(shapes): restore prepared SHACL products across processes without reparsing",
+      "state": "CLOSED"
+    },
+    {
+      "number": 116,
+      "title": "fix(playground): update JSON-LD smoke assertions after the native-registry unification (CI red on main)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 105,
+      "title": "feat(rdf): unify JSON-LD/YAML-LD into the native format registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 93,
+      "title": "Discussion: HDT-style succinct queryable-while-compressed codec for read-only reference bundles",
+      "state": "CLOSED"
+    },
+    {
+      "number": 157,
+      "title": "SHACL engine: close asserted rdfs:subClassOf for SPARQL-based constraints/targets (or offer opt-in rdf:type materialization)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 284,
+      "title": "purrdf-markdown: a structural Markdown-to-RDF 1.2 slicer under a caller-supplied vocabulary",
+      "state": "CLOSED"
+    },
+    {
+      "number": 106,
+      "title": "feat(cli): the purrdf CLI \u2014 convert / query / reason",
+      "state": "CLOSED"
+    },
+    {
+      "number": 111,
+      "title": "epic(rdf): research-object codecs (Croissant, RO-Crate, DataCite, DCAT, Frictionless)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "performance": 3,
+    "none": 19,
+    "correctness": 1,
+    "bug": 2,
+    "semantic-identity-loss": 2
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/566-unify-native-graph-projection-across"
+  },
+  "coverage": [
+    "issue #566 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Unify', 'native', 'graph']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #566 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #566: 0",
+    "requirement candidates: 3 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 1 identifier(s), 0 workspace package(s), 0 URL(s)"
+  ]
+}

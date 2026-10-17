@@ -1,0 +1,561 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Request\n\nExpose purrdf's error types as structured data, so a consumer can record every variant and field\nof an error, typed, without rendering it through `Display` or `Debug`.\n\n## Why\n\nKatamari logs structurally (its ADR-0051): every field of an error reaches the log typed -- counts\nas counts, codes as codes -- and nothing is flattened to a string. Today it can do that for a\npurrdf error only by mirroring the enum variant by variant on its side, as it now does for\n`SegmentedError` and `StorageError`. That falls short in three ways:\n\n1. **`#[non_exhaustive]` enums cannot be mirrored completely.** A variant purrdf adds later falls\n   into the consumer's wildcard arm and is logged as \"unlisted\", losing its fields, until the\n   consumer notices and extends its mirror. This affects `SegmentedError`, `TextError`,\n   `XsdError`, `CanonError`, `EvalError`, `PackError` and `FallibleSparqlError`.\n2. **Some variants carry text where the cause has structure.** For example `TextError::Config`,\n   `TextError::Data`, `TextError::Overflow`, `TextError::Domain`, `EvalError::Parse`,\n   `EvalError::Internal`, `EvalError::Remote`, `EvalError::ServiceUnconfigured`,\n   `CanonError::Read` and `PackError::ViewNotReady { cause }` hold a `String`. A consumer\n   cannot recover from that string what the producer knew when it wrote it.\n3. **Nested errors multiply the mirroring.** Mirroring `TextError` means mirroring\n   `CapacityFailure`, `NativeDiagnostic`, `SubstringRefusal`, `PhoneticRefusal` and the HTML\n   diagnostics; `PackError` brings `PackDictError`, `PackTriplesError` and `PackSideError`;\n   `EvalError` brings `RetainedServiceFailure`, `ServiceDenial` and the XPath regex error. Every\n   consumer that wants structured errors repeats this, and every purrdf change silently breaks\n   it.\n\n## What would solve it\n\n- **A structured visitor every error type implements**, for example a trait with\n  `fn visit(&self, visitor: &mut dyn ErrorVisitor)`. The error reports its variant name (stable\n  across releases, like a diagnostic code) and then each field by name and kind: unsigned,\n  signed, boolean, static code or string, IRI or term, byte count, a nested error (visited the\n  same way), or a list of these. A consumer encodes it without knowing the enum, so a new\n  variant arrives with its fields intact, and `#[non_exhaustive]` stays as it is.\n- **Typed causes in place of `String` payloads** wherever the producer has the structure: a\n  diagnostic (`RdfDiagnostic`, which is already structured), or a small enum of the reasons\n  that site can produce. Where the text genuinely is the data (a remote server's message, say),\n  keep it, and mark it as such in the visitor.\n- **Accessors for private fields**, where a type keeps fields private (as `CapacityError` does\n  for its counts, which already has `attempted()` and `limit()`). The visitor covers this if\n  each type reports its own fields.\n\n## Scope in Katamari today\n\nKatamari logs `SegmentedError`, `StorageError`, `CapacityError`, `NativeBuildError`,\n`RdfDiagnostic`, `FallibleSparqlError`, `TextError`, `XsdError`, `CanonError`, `EvalError` and\nthe JSON error. Until a visitor exists, Katamari mirrors each of them on its side, with an\n\"unlisted\" arm for variants added later.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABccFEfg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Preserve typed errors through a single borrowed visitor\n\nExpose a consumer-facing visitor with stable variant identity, named typed\nfields and nested/list values, without rendering an error or cloning its cause.\nComplete all first-party shipping errors, the named Katamari types and known\nstring-flattening producers. Keep non_exhaustive enums, human presentation,\noriginal refusal priority, physical grants and portable semantics intact.\n\nUse purrdf-hash's zero-dependency root for the protocol and shared implementation\nmacro. No new external runtime dependency or semantic feature is needed. The\nevents protocol may depend on that root, as explicitly allowed by layers.toml,\nwhile staying independent of the IR and GTS. Reuse lex diagnostic/constructor\nhomes. The inspection protocol borrows semantic data; it does not serialize\nallocator addresses or make new copies of retained payloads. Root-wide scalar\ntypes must preserve u128/i128, not narrow counters to u64 or host JSON numbers.\n\nThe shared macro must generate exhaustive own-crate patterns without wildcard\nor rest patterns. A new variant or payload field then requires producer-side\ninspection support to compile, while an existing consumer remains generic.\nNested causes are handed out as borrowed structured values; a consumer may use\na heap work list instead of recursive callbacks. Native source identity, codes,\ncounts, terms, bytes and external messages remain distinct field kinds.\n\nNo subagents are used. Owner assessments are not independent approval. Actual\nhosted source review and the final equivalent full gate remain required before\nmerge; no simulated reviewer report or extra approval ceremony is introduced.\n\n## Completeness contract\n\n| Requirement | Task | Actual acceptance |\n|---|---|---|\n| Stable variants and all named typed fields | 1\u20136 | Consumer records native error values through one visitor with no enum match; exact variant/field/type/value assertions |\n| Non_exhaustive evolution | 1, 7 | Same generic recorder accepts a further producer variant and fields; exhaustive producer patterns prevent omitted variants/fields |\n| Full-width signed/unsigned, bool, code/text, IRI/term, bytes and lists | 1\u20133, 7 | Values above u64 and binary64 exact-integer range, negative values, real terms and nested heterogeneous payloads survive without formatting |\n| Eleven explicitly named consumer error families | 2\u20135, 7 | Actual SegmentedError, StorageError, CapacityError, NativeBuildError, RdfDiagnostic, FallibleSparqlError, TextError, XsdError, CanonError, EvalError and JSON error captures |\n| All other first-party shipping errors | 6 | Reviewed source inventory includes explicit and macro-generated errors, target-gated families and nested payloads; every entry has a compiled visitor and applicable execution/control |\n| Known structure currently flattened to String | 3\u20136 | Actual invalid configuration/data, overflow/domain, parse/internal/SERVICE, canonical read and pack readiness failures expose their original codes/fields/causes |\n| Genuine text remains message data | 4\u20137 | Remote/caller message preserves bytes and its message field kind, without pretending text is a parsed native cause |\n| Private semantic fields | 2\u20136 | Producer-owned visitors read original private counters/payloads; consumer does not mirror private layout |\n| Original grants, clone/drop, first faults and row shape | 2\u20137 | Existing admission/lifetime/refusal controls, zero-allocation inspection and affected layout/fixed-work controls; no timing acceptance |\n| Portable and host parity | 7\u20138 | Native and standard scalar/SIMD WASM inspection executions, strict affected compilation and existing host error mapping controls |\n| Real delivery | 8\u20139 | Complete hosted gate/review, ghprsq integration, verified closure/archive/mirror and delivery cleanup |\n\n## Task 1: Borrowed inspection protocol and exhaustive shared macro\n\nImplement the protocol once in the root, preserving exact scalar widths and\nborrowed lifetimes for nested values/lists. Supply no default Display/Debug or\nunlisted fallback. Wire actual root HexError and events EventError as the first\nproduction consumers; update the events root edge and explanatory metadata.\nRun focused root/event controls, zero-allocation inspection and native/portable\ncompilation. Review the actual interface and exhaustive field handling locally,\ncommit with normal hooks and publish the coherent slice to this issue branch.\nNo foundation-only PR or closure is permitted.\n\n## Task 2: Foundation diagnostics and complete native scalar causes\n\nWire allocation, lexical/JSON/XML/HTML/CBOR/YAML, IRI, XSD, CDT and other\nfoundation error families through the same protocol. Preserve exact private\ncapacity counts, diagnostic codes/ranges/typed arguments, nested causes and\nreal RDF term payloads through their existing homes. Compile coherent package\nslices before widening the migration. Record exact inventory coverage and\nmeaningful captures; commit/push after focused checks.\n\n## Task 3: Native storage, canonicalization and retained failures\n\nCover native builds, segmented/paged storage, every pack sub-error and canonical\nerrors. Replace CanonError::Read and pack readiness strings wherever their\nproducer has a typed source. Keep real faults and their original owners across\nfallible query boundaries; generic caller causes participate through the same\ntrait rather than a blanket formatter. Exercise actual corrupt-source and\ncapacity/refund paths, private fields and retained snapshots. Rebind unchanged\ncapacity proof contracts only when their actual source closure changes.\n\n## Task 4: Evaluator and SERVICE producers\n\nExpose all evaluator/fallible/governor/service error payloads, including retained\ndiagnostics, policy denials and XPath causes. Replace known parse/internal/\nremote/unconfigured formatting with typed causes at production creation and\ntransport sites. Preserve external message data and current SILENT/operational-\nfailure precedence. Check actual query parse/runtime/SERVICE failures and their\ncomplete nested captures, plus original query completion and host mappings.\nMeasure affected layouts before broad qualification; keep default rows stable.\n\n## Task 5: Text configuration, data, numeric and search refusals\n\nReplace known Config/Data/Overflow/Domain strings with typed reasons and fields,\nincluding the actual producer values. Visit capacity/native diagnostics,\nsubstring, phonetic and HTML diagnostics completely and preserve them when\ncrossing into evaluator errors. Use actual index/query failures and existing\nfixed-point/refusal controls. No consumer regex-parses a human message.\n\n## Task 6: Finish the shipping inventory and remaining producers\n\nInspect every remaining first-party shipping error declaration and macro-generated\nerror, including codecs, geometry, rules/entailment, validation, retrieval and\nhost-owned Rust errors. Maintain the concrete source inventory with each native\nvisitor, semantic fields, nested types and executed/compiled coverage. A candidate\ncount or a public-name search is not completeness. Adapt actual callers and\nremove obsolete flattening routes; do not accumulate an uncompiled whole-tree\nmigration. Run affected checks and publish coherent units with normal hooks.\n\n## Task 7: Real generic consumer and unchanged error behavior\n\nExecute a consumer that knows only the inspection protocol on actual native\nfailures from every listed family. Assert variant identity, named field types,\nexact wide values, nested/list contents and genuine external-message tags.\nUse a caller cause whose Display/Debug panic to prove generic transport does\nnot format it. Exercise deep nested capture with heap traversal, normal\nreadiness/failure/clone/drop paths and zero-allocation inspection. Compare\nexisting public codes/presentation and logical results, including host paths.\nFix demonstrated regressions at their production homes.\n\n## Task 8: Portable and final qualification\n\nRun affected native/scalar/SIMD portable executions and strict packages, exact\nallocation/layout/fixed-work controls and generated/manual metadata. Use the\nnormal hosted workflow as the equivalent final full gate after implementation\nsettles; do not duplicate a local whole-workspace suite or use elapsed-time\nperformance acceptance. Resolve actual material hosted review findings and\nindependently reported source concerns without inventing approval.\n\n## Task 9: Publish and integrate the complete contract\n\nCreate one complete PR with the full issue closure and current evidence, post\nthis plan and actual results, assess the real integration base, and satisfy\nrequired hosted checks/review. Merge only through ghprsq; verify issue closure,\nselected evidence archive, mirror and immediate branch/worktree cleanup. Update\nREWORK_LIST.md with real delivery accounting. No follow-up issue or opaque/string\nfallback substitutes for required native structure.\n",
+      "createdAt": "2026-10-15T22:19:52Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6203458686",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcc-L0Q",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `315806042` and `6d52a5c11` through normal hooks. The borrowed protocol\nand exhaustive producer macros now inspect actual hash/event errors and six\nallocation/JSON types, including private capacity counters and nested causes.\n\nNative controls preserve u128::MAX and a real next-slot refusal beyond u64::MAX,\nincluding through StorageError and the JSON error. A real lone-surrogate parse\nfailure retains its typed escape reason and byte offset. Three compile-fail\ncontrols reject omitted producer variants/enum fields/struct members. Affected\nstrict checks, standard WASM library compilation and helper checks pass.\n\nThe helper check found duplicate panic-only test callbacks. The test recorder\nnow captures list metadata and end counts; updated checks pass without an\nexemption. The reviewed allocation authority refresh changes no proof contract,\nsink, refusal check, layout or constructor binding.\n\nThis is a partial implementation. The remaining foundation/core/evaluator/text\nfamilies, complete shipping inventory, known string-flattening producer fixes,\nreal host consumers, runtime portability and final hosted review/gate remain\nrequired. No PR or issue closure is claimed. The next lexical/diagnostic unit\nis in progress on this same branch.\n",
+      "createdAt": "2026-10-15T23:26:25Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6204394449",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcdFH6A",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `cfb86417b` through normal hooks. Twelve additional lexical error and\ndiagnostic payload types implement the existing borrowed protocol, bringing\nthe implemented subset to twenty. Lexical and umbrella modules expose that\nsame protocol through existing dependency edges.\n\nFour focused native controls pass, covering original wide capacity/JSON causes,\nactual parser/scalar/YAML refusals, and diagnostic typed arguments, lists and\noptional detail. Umbrella library compilation, affected strict Clippy, standard\nWASM lexical compilation and the explicit-root helper check pass. No proof,\nexemption, error layout, admission behavior or human presentation changed in\nthis unit.\n\nThe inventory explicitly distinguishes executed variants from compile-only\nfamilies. It is an implemented subset, not shipping completeness. Remaining\nXML/HTML/CBOR/record and other foundation families, core/evaluator/text causes,\nknown string-flattening producers, full inventory, real portable/host consumers\nand final hosted review/gates remain required. This branch has no PR yet.\n",
+      "createdAt": "2026-10-15T23:35:12Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6204508136",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcdaAcQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `7e8dc47d5` with normal hooks. XML and HTML now expose six additional\nproducer/payload types through the shared visitor. All six XML namespace\nproduction branches retain one of five typed reasons rather than allocating\na rendered native cause; their exact previous human messages are preserved.\nHTML retains its standard classification and original source byte range.\n\nAll six focused native controls and all 55 XML unit tests pass. Strict affected\nchecks, standard WASM lexical compilation and the explicit-root helper check\npass. The initial redundant err().expect() in the new test was fixed, with no\nlint suppression. No capacity proof, exemption, dependency or tool setting\nchanged. The complete shipping inventory and other issue requirements remain\nopen; this is not a whole-issue delivery or PR.\n",
+      "createdAt": "2026-10-16T00:02:28Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6204850289",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcde4Dg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `6fcedbfaa` through normal hooks. CBOR's two native error types now\nexpose their complete variants/fields, including original offsets, configured\nlimits and the actual reader's I/O category. The implemented first-party subset\nis 28 producer/payload types; the full shipping inventory is still open.\n\nThe root adapts standard I/O categories once: public stable categories have\nportable names, and every category retains its exact native discriminant.\nHidden/future categories are not relabeled Other or formatted. The protocol\ndocumentation explicitly states that the discriminant is compiler-specific,\nnot a persistent error code. No private/unstable API, dependency, compiler or\ntool change is used.\n\nThree root and seven lexical focused controls pass, including zero-allocation\nI/O inspection, actual refusing-reader transport and configured CBOR depth\nrefusal. Strict affected, standard WASM library compilation and helper checks\npass. Runtime portable/host execution, remaining error families/typed-cause\nproducers and final hosted review/gates remain required. No PR or full issue\ncompletion is claimed.\n",
+      "createdAt": "2026-10-16T00:08:01Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6204930062",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcd-MbQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `7f74c8ff9` through normal hooks. Twenty-two XSD error/payload types,\nincluding the private numeric-reader error, now expose their original fields\nthrough the shared visitor. The implemented first-party subset is 50 types;\nthis is not the complete shipping inventory or issue completion.\n\nA shared testkit consumer records ordered typed fields, unnamed entries and\nlist boundaries without native enum mirrors or formatting. XSD and lexical\ndiagnostic controls reuse it. Four XSD and seven lexical controls pass for\ntheir exercised paths, including real parse/range/exact-division refusals,\nbounded scratch refusal with healthy retry, a real caller admission carrying\nu128::MAX whose formatting panics, and original RFC 3339 range/offset fields.\nThe float evidence control is constructed data, not an altered FPU environment.\n\nStrict affected, standard WASM compilation and the standard Cargo helper check\npass. The old cached checker path no longer existed; the existing Cargo command\nbuilds the actual checker normally. The shared result has must_use after the\ninitial strict finding. No runtime dependency, feature, error layout, admission,\narithmetic, F&O code, human message, proof or exemption changes in this unit.\nMany variants retain compile-only coverage. Remaining foundation/core/evaluator/\ntext types and causes, full inventory, portable/host execution and final hosted\nreview/gates remain required.\n",
+      "createdAt": "2026-10-16T00:47:29Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6205443181",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcldFBw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `6a3c79364` through normal hooks. Paged validation now retains typed\ncounts, capabilities, term identities, summary reasons/digests/fields and native\ncauses. Stack/subset routing preserves the original provider failure and page\nidentity; generation conversion retains additional provider details. Both read\npaths share one metadata validator.\n\nAll 76 affected native cases and 22 paged units pass at their recorded scope.\nActual wide-byte failures and zero-allocation inspection pass. Strict core and\nevaluator checks, fresh helper hygiene and standard WASM compilation pass. The\nsame twelve paged-fallible cases now use the existing portable harness.\n\nWASM compilation is not runtime acceptance. Scalar/SIMD execution and full engine\nruntime acceptance remain required before this issue merges. The extra engine\nruntime launch was stopped with status 143; it is not a pass. Its consumer\nadapters pass strict compilation.\n\nThe remaining RDF-to-segmented and drain causes, evaluator/text families,\ncomplete shipping inventory and whole-issue acceptance remain open. This branch\nhas no whole-issue PR yet.\n",
+      "createdAt": "2026-10-16T10:17:06Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6213289223",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcmWzFw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `30ff15d12`: storage and drain boundaries retain original RDF, I/O and DEFLATE causes. Structured inspection preserves native fields without rendering known causes, and clones share the original I/O payload.\n\nAll 29 directly affected native cases, strict checks, standard WASM compilation, layout guards and helper hygiene pass. Normal commit hooks and push pass. WASM execution and complete issue acceptance remain open. Parser, evaluator and text cause migrations are next; this commit does not complete #558.\n",
+      "createdAt": "2026-10-16T11:11:42Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6214234903",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcmrqOA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `6006ad063`: evaluator parse failures now retain the original ParseError and expose it through the standard source chain, preserving the existing human message and classification. The conversion uses the existing shared variant macro.\n\nAll 19 selected native cases pass, including the actual parser rejection and final source-checkpoint precedence regression. Strict evaluator/test checks, the final macro check, standard WASM compilation and helper hygiene pass. Normal hooks and push pass.\n\nParser-internal IRI causes, the complete evaluator visitor, SERVICE/text and the remaining shipping inventory are still open. This is not whole-issue completion or portable execution acceptance.\n",
+      "createdAt": "2026-10-16T11:33:16Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6214576696",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcnERBA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `ddd0e99a8`: SPARQL parser errors retain original IRI validation failures, with typed reasons for valid relative references refused in absolute term positions. The parser, configured-base and NamedNode callers use that same path. Human presentation uses the retained cause; reparsing and message matching are removed.\n\nAll 14 native cases, four scalar WASM cases and four SIMD WASM cases pass. These include exact original admission/refund, zero-allocation generic inspection, clone/source retention and public-engine diagnostic parity. Strict parser/evaluator library and test checks, the existing payload bound and helper hygiene pass. Normal hooks and push pass.\n\nThe remaining native parser reasons, evaluator/SERVICE/text and complete shipping inventory are still open. No whole-issue completion is claimed.\n",
+      "createdAt": "2026-10-16T11:57:21Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6214979844",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcntLQw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `d2163864d`: all ten native lexer refusal paths retain their original typed fields and Unicode decoder category. Native errors need no reason-text allocation; genuine caller strings remain Message data. CDT arity failures retain the registry signature, with presentation at its existing native home. Lexer cleanup now preserves caller-owned buffers through the existing Memory scope.\n\nAll 87 affected native cases pass: 63 lexer, six error presentation, nine CDT parser, eight admission/capture and one public-engine diagnostic case. The same eight admission/capture cases pass on scalar and SIMD WASM. Strict affected packages/tests, the existing payload bound, helper hygiene, normal hooks and push pass.\n\nSyntax/unsupported native reasons, evaluator/SERVICE/text and the remaining shipping inventory are still open; no whole-issue completion is claimed.\n",
+      "createdAt": "2026-10-16T12:37:07Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6215650115",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcoBmKQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `f728fb309`: aggregate-construction refusals now expose all private\nfields and native function identities through the borrowed visitor. The parser\nretains the original constructor cause. Rejected scalar keys move from their\noriginal owner instead of being cloned; human syntax presentation is preserved.\n\nAll 31 focused native cases and ten admission/capture cases on each scalar/SIMD\nWASM mode pass. The original key pointer/capacity and zero-allocation refusal/\ninspection are checked. Strict parser/evaluator library/test checks, the existing\npayload bound, fresh helper hygiene and normal hooks/push pass.\n\nNo issue is closed by this unit. Syntax/unsupported reasons, evaluator/SERVICE/\ntext families and the complete shipping inventory remain unfinished under #558.\n",
+      "createdAt": "2026-10-16T12:56:47Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6215984681",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcqrx5Q",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published 6041a28a3 through normal hooks. The borrowed visitor now covers every current evaluator arm and its SERVICE, XPath, governor and function-admission children. Actual SHACL admission exposes its private fields through the original erased cause; standard source/downcast identity is preserved.\n\nThe scoped native controls pass: six public captures, four root captures, 23 invocation/observer cases, one actual SHACL refusal and one SERVICE clone/last-owner grant case. Six scalar WASM captures and strict affected library/test checks pass. The normal helper check passes after refreshing only unchanged capacity-proof constructor bindings. SIMD execution for this unit is not claimed.\n\nThe whole issue remains open: known native message flattening, text producers, the remaining shipping inventory and final hosted/portable acceptance are still required.\n",
+      "createdAt": "2026-10-16T15:24:53Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6218772965",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcsFgdg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `1ab53fe45`: forwarded SERVICE failures retain original evaluator,\nRDF and admitted diagnostic causes. Resident conversion retains the original\nendpoint and remote cause; missing-source failures have a typed reason.\nKnown native causes no longer become Decode strings at these seams.\n\nAll 56 focused native cases pass: 36 remote-module cases, 13 existing resolver\nintegration cases and seven public structured captures. They cover SILENT and\noperational precedence, unformattable caller causes, exact wide values,\nzero-allocation inspection, original source chains, refused admission and\nclone/last-owner release. Strict evaluator library/test checks and fresh helper\nhygiene pass. Existing error-size lints remain intact; boxing uses the existing\nfallible allocator with original admission. Normal commit hooks and push pass.\n\nThis unit has no new portable execution claim. Text producers, the remaining\nshipping error inventory and final whole-issue hosted/portable acceptance are\nstill required; no issue closure is claimed.\n",
+      "createdAt": "2026-10-16T16:42:35Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6220243062",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcseKKg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `9b75b9eb4`: protocol errors retain original parser, IRI and\nform-decoder causes, native query-form reasons and operation ambiguity counts.\nTheir visitor, operation-kind visitor, four query-control variants and LOAD\ncauses/messages are exhaustive. The WASM effective-text reader retains these\nnative causes and uses the shared protocol HTTP classification. Storage and\nenvironment faults are 500; malformed requests keep their existing statuses.\n\nAll 36 native protocol cases, ten final public captures and 13 WASM-adapter\nnative controls pass. The final resource correction preserves existing\nstorage/control/allocator/capacity refusals without another allocation, including\nu128::MAX counts and the original allocation construct. Ordinary request and\nadapter results were reused after that correction because their routes are\nunchanged. Native error inspection and resource conversion allocate zero;\nthe protocol error stays below the existing 128-byte lint boundary.\nFinal strict evaluator/WASM library/test checks, fresh helper hygiene, normal\ncommit hooks and push pass. No tooling, lint or ledger exemption was changed.\n\nThis remains scoped implementation under the open issue. Text producers,\nremaining native losses and the complete shipping inventory still require\nimplementation; final whole-issue portable execution, hosted checks and review\nare not claimed by this unit.\n",
+      "createdAt": "2026-10-16T17:05:44Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6220646954",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABctjNhA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `067fc633e`: original substring, phonetic and HTML failures now survive\ntext-to-evaluator conversion as typed native causes. Their visitors expose\ncounters, limits, generation, Unicode scalars, every HTML diagnostic and source\nrange. The existing immutable diagnostic owner retains the original cause and\ngrants; structured capture omits the derived presentation cache.\n\nDictionary, occurrence, relation and scorer callers use their original workspace\nfor fresh error allocations. The owned HTML reader retains its original vector\nand lease. Its text/source construction buffers are destroyed before their grants.\nThe scorer keeps one computation for native and evaluator error channels.\n\nAll 32 focused native cases pass: two cause-owner/admission cases, 15 text error\nand owned-HTML controls, one bounded carrier control, ten evaluator public\ncaptures and four text captures. The four text cases also pass on scalar and\nSIMD WASM using the existing runner and Makefile flags. These include original\nsource identity, zero-allocation inspection/refusal, last-owner release and\nfull-width counters. Final strict affected library/tests, helper hygiene, normal\ncommit hooks and push pass. No tooling, target directory, dependency, lint or\nledger exemption was changed; Cargo registers the new portable Rust test target.\n\nThe complete issue is still open. Native Config/Data/arithmetic/source-read\nproducers that already flattened fields to strings, remaining parser/evaluator\nlosses, the shipping inventory and final whole-issue acceptance still need work.\n",
+      "createdAt": "2026-10-16T18:09:20Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6221778308",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABct_ZoA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Native text arithmetic causes\n\nOwner source assessment; this is not independent approval or issue completion.\n\nAll native fixed-point refusal callers now construct ArithmeticRefusal values\nat the computation that fails. Addition, subtraction, multiplication and\ndivision retain their exact i128 operands; logarithm and reduction retain their\ndomain/intermediate values. Ranking bounds, normalization, merged frequencies,\nfield lengths and predicate ordinals retain their original typed values.\nThe exact-integer operation preserves its actual ExactError rather than naming\nevery value failure as division by zero.\n\nOverflow and Domain retain the existing NativeDiagnostic owner. Classification\nis exhaustive at ArithmeticRefusal; the visitor is exhaustive over all payload\nfields. The public message constructors remain available for genuine caller\nmessages. Human reason bodies remain unchanged. No scoring or numeric kernel\nalgorithm, threshold, ordinary row or stored hit layout changes.\n\nNarrowing moves the original Scaled value into the cause, including its Integer\nand destination allocation grant. The payload dies before its grant. Diagnostic\nclone shares that original cause instead of copying its large integer. BigInt\nand Integer expose borrowed sign/limbs and the original small representation;\nneither inspection path formats or clones a numeric value.\n\nProduction library compilation and strict XSD/text library/test Clippy pass.\nAll 13 fixed-point controls pass, including the original-buffer narrowing and\nclone lifetime check. All six error constructor/mapping controls pass. The six\npublic generic captures pass, including real extreme-operand refusals and the\nindependent binary-limb identity (2^127 - 1)^2 = 2^254 - 2^128 + 1.\nAll eight affected BM25F controls pass. The six public cases pass on scalar\nand SIMD WASM using the repository runner and installed standard toolchain.\nFresh helper hygiene and normal commit hooks pass. Commit 3acac9f3a is pushed.\n\nNative Config/Data/SourceRead and parser/evaluator producer losses, the remaining\nshipping inventory and whole-issue qualification remain open. No full issue,\nPR readiness, independent review, timing or throughput result is claimed here.\n",
+      "createdAt": "2026-10-16T18:36:21Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6222240160",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcuKkdA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Native configuration values\n\nOwner assessment; no independent approval or whole-issue completion is claimed.\n\nNative token/phonetic bounds, ranking field parameters and mappings, predicate\nand graph validation, graph-free source admission and query field scopes now\nretain their original values in ConfigurationRefusal. Its producer visitor\nexhaustively matches every variant and field. Invalid ranking IRIs retain the\nactual IriError as a nested source; terms use the existing TermValue visitor.\nThe native diagnostic owner provides shared clone/lifetime and admission.\n\nTextError::Config now holds that owner instead of a string. Genuine public\nconfig(message) calls still preserve their supplied message. TextError's human\nprefix and each migrated reason body remain unchanged. Evaluator conversion\nmoves the existing diagnostic, retaining configuration classification and the\noriginal cause rather than making a new string or allocation. Ordinary scoring,\nindex, row and hit representations do not change.\n\nOne existing relation test now reads the diagnostic's message accessor. Other\nconfiguration matches retain the public Config variant. The first production\ncheck exposed a borrowed str at the field-scope boundary, corrected to an owned\ntoken in this cold error. The initial strict run exposed a test API typo\n(with_phonetic instead of with_phonetics), corrected against the actual method.\nBoth failed logs remain failures. Corrected strict library/test Clippy passes.\n\nAll nine public captures and eight affected BM25F controls pass, including\nactual usize::MAX requests, i128::MIN weight, field count/index, named graph\nand IRI parse causes. Six constructor/mapping cases, three actual index refusal\ncases and the adapted multi-partition declaration/healthy-neighbor case also\npass, for 27 focused native cases. All nine public captures pass on scalar and\nSIMD WASM through the existing runner. Fresh helper hygiene, normal hooks and\npush pass. Commit b01fb1aae is published on the existing delivery branch.\n\nDictionary/artifact configuration reasons, multi-partition/binding admission,\nData/SourceRead and remaining parser/evaluator/native shipping producers remain\nopen. This unit does not claim that a visitor recovers fields already flattened\nby those remaining sites. No timing acceptance or full issue delivery is claimed.\n",
+      "createdAt": "2026-10-16T18:47:09Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6222423156",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcucyqQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Native ranking input facts\n\nOwner assessment in progress; no independent approval or issue completion.\n\nAll native ranking data-validation producers now retain typed counts, bounds,\nindices, frequencies and field lengths. Ordered-query refusals own their\noriginal strings under the actual query capability. Aggregate-frequency\nrefusals move the original exact Integer buffers and their grants through the\nexisting Scaled owner. Inspection is exhaustive over these private fields.\nThe affected missing-document helper also retains its original document id.\n\nData now uses the existing immutable NativeDiagnostic owner. Public caller\nmessages reuse query_error's one rendering path. Bounded query_error/data_error\nkeep the original Diagnostic presentation and outer variant; unbounded Data\nkeeps its original text-index prefix. The arithmetic helper also restores that\noriginal bounded Diagnostic presentation while preserving its native cause.\nEvaluator conversion moves the original diagnostic and account.\n\nThe first production check caught the two imports made obsolete by removing all\nranking string producers. Corrected strict library/test compilation passed.\nThat evidence predates the later metadata/test correction and is not final\nstrict qualification for the current unit.\n\nThe first public run passed eight BM25F controls and 11 of 12 captures. Its one\nfailure exposed an incorrect test expectation and inspection metadata: Scaled's\nfrom_count stores unscaled token counts, so the query totals are 2 and 1, not\n2e12 and 1e12. The numeric computation is unchanged. The generic Scaled record\nnow reports its actual Integer without inventing a unit. Fixed scale is stated\nat the actual narrowing refusal, and query-frequency totals explicitly carry\nthe tokens unit. The original failure remains in T5-data-causes-public-native.log.\nThe corrected run passes all 12 public captures and all eight BM25F controls.\nFinal strict text library/test Clippy also passes. Six constructor/mapping\ncontrols, the promoted-buffer original-owner case and the bounded native text\nsearch/occurrence/focus case pass, for 28 focused native cases. All 12 public\ncaptures pass on scalar and SIMD WASM. Fresh helper hygiene and normal hooks\npass. Commit af2cc780d is pushed on the existing delivery branch.\n\nOther native Data producers (surface, source binding, positions and source/index\ncounts), SourceRead, remaining dictionary/artifact configuration and the rest\nof the shipping inventory remain open. This is not the complete #558 contract.\n",
+      "createdAt": "2026-10-16T19:05:05Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6222721705",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcvhJRQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Original text source-read causes\n\nOwner assessment in progress; no independent approval or issue completion.\n\nText source collection and term resolution no longer erase a backend error\nwith to_string. SourceRead owns the existing NativeDiagnostic retaining the\nactual native error and its original owners. Human presentation is cached by\nthe existing rendering constructor; this is not a claim that construction\nnever formats. Structured inspection borrows the original cause and omits\nthe derived presentation cache. Clone shares that cause rather than copying it.\nGenuine source_read(message) calls still preserve their supplied text.\n\nThe StructuredError bound is required only by the text build/binding APIs that\nerase a backend's concrete error. DatasetView and unrelated generic consumers\nare unchanged. The character-index build callers propagate the same contract.\nCustom text-source backends must provide inspection for their ReadError.\nThe ledger-backed source's read error and its complete nested LedgerError,\nLedgerNodeKey, ReasonError/ReasonId, standpoint, information and aggregate-bound\npayloads now also support inspection, keeping that first-party backend eligible\nfor text building under the same bound. No evidence algorithm or owner changes.\n\nCompiler feedback exposed the missing TripleReadError visitor; all three native\nvariants and their storage/shared-ownership children now participate. Foreign\nterm ids retain a typed reason and use the original core formatter. The source\nclassification review exposed a second gap: is_native_storage_failure only\nrecognized the older SourceRead variant. It now also recognizes a diagnostic\nwith SourceRead kind, preserving operational failure behavior and the existing\nnative-sparql-source-read code.\nThe same native error can cross a resolver's forwarded-evaluation wrapper.\nIt now survives SERVICE SILENT, retains its operational code and original human\npresentation, and keeps bounded endpoint/error grants. The classification helper\nfollows nested service evaluation wrappers iteratively. It is no longer const:\nretained failures require reading their shared error owner. Its return type and\nordinary call sites are unchanged. No error/row layout field was added.\nThe protocol classifier and raw remote presentation also recognize forwarded\nnative storage failures as evaluation/source failures, rather than decode\nfailures. The retained SERVICE test checks that protocol category explicitly.\n\nAll 13 native public captures pass after that correction. The new case exercises\nan actual triple-only backend refusing a named graph and verifies the original\nhuman text, error code, operational classification, concrete source/downcast,\nshared pointer identity and capture after the original error is dropped.\nCore/text strict library/test checking passed before the classification fix;\nfinal affected core/evaluator/text all-target Clippy now passes. The new ledger\ncapture initially borrowed a temporary enum; it now binds that owner explicitly,\nand the original failed test-compilation log remains a failure. Current native\nruntime, SERVICE controls, portable execution, helper hygiene and publication\nremain in progress. Initial missing-bound/missing-visitor checks remain failures.\nThe current 14 public captures pass, including the rich constructed ledger key\nand the actual native reason-admission refusal. Four evaluator source controls\npass before the final protocol/presentation alias correction; their focused\nrecheck is running. That recheck does not invalidate the unchanged public\ncapture fields or ledger/triple inspection behavior.\n\nThe final four evaluator source controls pass after the protocol/presentation\ncorrection, as do all six current text constructor/mapping controls. No Cargo\njob remains from these executions. Remaining qualification: the existing two\nphysical_shapes graph_free cases; strict evaluator/text all-target checking for\nthe final alias guards (reuse completed core qualification); standard scalar\nand SIMD 14-case structured_errors executions; fresh helper --check; normal\nhooked commit/push, issue update and tracker update. Preserve all earlier logs.\nNo additional source redesign is needed to start these concrete checks.\n\nQualification now passes all 26 focused native cases (14 public captures, four\nevaluator source/SERVICE cases, six constructor/mapping cases and two graph-free\nphysical-shape cases), final affected all-target Clippy, and all 14 scalar WASM\ncaptures. SIMD, helper hygiene and normal hooked publication remain pending.\n\nAll 14 SIMD WASM captures now pass. The fresh helper gate initially rejected all\n40 capacity proofs and their 40 undischarged sinks because seven additive core\nvisitor files changed the pinned constructor-source closure. Source review and\nthe standard helper JSON index confirm the source set and every proof authority\nare unchanged; no constructor or ID-minting computation changed. Exactly 40\nconstructor binding fields are refreshed to source:84329f7f73274e51. Sinks,\nclasses, authorities, lines and reasons are unchanged. The fresh helper gate\npasses. No checker/toolchain/cache/target machinery changes are involved.\nNormal hooks pass and commit 897a50e4a is pushed. All 26 focused native cases,\n14 scalar and 14 SIMD WASM captures, final affected strict checking and helper\nhygiene pass for this unit. The full issue remains incomplete as stated below.\n\nRemaining native Data/configuration reasons, parser/evaluator losses and the\nshipping inventory remain open. This is not a complete issue or a PR handoff.\n",
+      "createdAt": "2026-10-16T20:13:29Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6223841605",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcvws_Q",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "# Native dictionary, artifact and ranked-declaration refusals\n\nOwner assessment; no independent approval or issue completion.\n\nBaseline resolution retains artifact counts, actual hashes and the five original\npresence flags. Ranked declarations retain their actual partition count.\nDictionary construction retains entry/arena/input bounds, conflicting canonical\ncosts, the offending canonical key and the original protected-emoji byte span.\nArtifact admission/decoding retains physical and semantic identities, header\narity/profile/Unicode edition, offset and table sizes, key order/normalization,\ncanonical-head sizes, original u64 lengths/integers and native UTF-8 offsets.\nAll reasons use the existing ConfigurationRefusal and diagnostic owner.\n\nThe original messages and refusal order remain: size before physical hashing,\narity before profile before Unicode, layout before offsets, key order before\nnormalization, semantic identity before re-encoding. The original shared CBOR\ncodec still reads/writes every head. Error-only values are captured in cold\nbranches; the invalid-head first byte is read only after the shared reader\nrefuses without advancing. Conflicting word ownership moves out of the failed\nconstruction instead of cloning it. No new decoder or numeric implementation.\n\nProduction compilation and final text all-target Clippy pass. All 17 public\ncaptures pass. Existing artifact-contract, baseline-resolution, canonical words,\nprofile-normalization and complete five-artifact key/cost controls pass. The\nranked-declaration refusal and healthy neighbors also pass with exact typed\npartition count. There are 23 unique native cases; the canonical filter also\nreplayed the already-passing artifact case, which is not counted twice.\nAll 17 captures pass on scalar and SIMD WASM. Fresh helper hygiene and normal\nhooks pass; commit 18cb993f6 is pushed. No capacity-proof or tool setting changed\nin this unit.\n\nThe remaining configuration-binding mismatch still uses a message-only reason.\nOther native Data/parser/evaluator losses and the shipping inventory remain\nrequired. No complete #558 delivery or PR readiness is claimed.\n",
+      "createdAt": "2026-10-16T20:28:40Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6224096509",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcwCRsg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Binding refusals are pushed at 392487567. They retain both semantic\nconfigurations, original source digests and missing predicate terms through the\nexisting native diagnostic owner. Original refusal order and messages remain.\n\nStrict text all-target compilation, 22 focused native cases, 18 scalar WASM\ncaptures, 18 SIMD WASM captures, fresh helper hygiene and normal hooks/push pass.\nRemaining native Data/parser/evaluator causes and the complete shipping inventory\nare still required. This is a qualified implementation unit, not issue completion.\n",
+      "createdAt": "2026-10-16T20:46:45Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6224384434",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcwN8jw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Native text data causes are pushed at d680d8d24. All production TextError::data\nsites retain typed original counts, source bounds, projection ranges/spellings,\npartition keys or missing-document IDs. Edit-distance errors explicitly mark\ntheir observed prefix count as incomplete; validation still stops at the\noriginal scalar limit. Ranking overflow retains its original Diagnostic shape\nand presentation.\n\nFinal strict text all-target compilation, 27 focused native cases, 19 scalar\nWASM captures, 19 SIMD WASM captures, helper hygiene and normal hooks/push pass.\nNo timing or broad suite ran. Relation function/internal causes, evaluator/parser\nlosses, shipping inventory and whole-issue acceptance remain required.\n",
+      "createdAt": "2026-10-16T20:58:44Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6224575631",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcwrwrA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Native text invocation causes are pushed at 194d237ff. Search, occurrence,\nphrase and dictionary refusals retain their native inputs, original query\nvectors/grants, analyzer identities and invariant reasons. The public\nopen_contained adapter also preserves these causes and its existing operational\nclassification. Opaque message-only behavior is unchanged.\n\nAll 30 focused native cases, complete affected core/evaluator/text all-target\nstrict checking, helper hygiene and normal hooks/push pass. The only changed\nconstructor-source file adds the lexical-scope visitor; exactly 40 proof binding\nfields are refreshed, with no source-set, authority, sink, class, line or reason\nchange.\n\nThe next repair retains native evaluator causes through the main query's\nRdfDiagnostic/RetainedDiagnostic publication paths. Portable execution will\ncover that repaired boundary before delivery; it is not claimed for this unit\nyet. Remaining parser/evaluator producers, the shipping inventory and final\nwhole-issue qualification remain required. This does not close the issue.\n",
+      "createdAt": "2026-10-16T21:29:45Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6225064108",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcxmcSw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "The query diagnostic repair is committed and pushed at `26195e875`. Resident and bounded query diagnostics retain the original evaluator cause and its original physical grant through caller copies; the final owner releases it. Eight focused native controls, strict affected compilation, fresh helper hygiene and normal hooks/push pass. The 22 scalar and 22 SIMD captures retain their recorded logical-field scope; the accounting correction is qualified by native exact allocator/account controls.\n\nThe whole issue remains open: generic fallible-container and partial/evidence inspection, remaining native producers, shipping-family inventory and final acceptance are unfinished. The next delivery is the independent segmented scan repair in #563, then this issue resumes.\n",
+      "createdAt": "2026-10-16T22:38:52Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6226025547",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcyCb5w",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `38ac2be87`: graph-build refusals and their governor receipts now expose borrowed typed fields through the common visitor. This includes all resource counters/limits, trip data, silenced invocation records and nested expression-error code/count pairs. The actual non-CONSTRUCT path retains its original diagnostic layers and code; cancelled CONSTRUCT leaves the destination unchanged.\n\nThirteen focused native cases, twelve scalar and twelve SIMD WASM captures, strict affected compilation, fresh helper hygiene and normal hooks/push pass. Inspection adds no producer allocation. The constructor source set is unchanged; only governor.rs changes within it. All 40 metadata bindings retain their authority sources, sinks, classes, lines and reasons.\n\nThe full issue remains open: generic fallible-container/partial-result inspection, native SILENT and other known-cause migrations, remaining shipping families/inventory and final acceptance are unfinished. This publication is not an issue closure.\n",
+      "createdAt": "2026-10-16T23:17:37Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6226484199",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcyuX6g",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published the fallible-query and resident-result inspection unit at 4388a3e6e.\n\nEvery current FallibleSparqlError arm and partial-result classification now exposes its fields, including retained SELECT cells, CONSTRUCT graph data and withheld aggregate operators. Graph inspection preserves original dictionary IDs, RDF streams, declared graphs, locations and caller configuration. Temporary term views retain original field lifetimes through balanced record events.\n\nFive root tests and 17 evaluator captures pass natively; all 17 evaluator cases pass on scalar and SIMD WASM. Strict affected checks, helper hygiene, normal commit hooks and push pass. Production inspection allocates no new storage in the measured capture windows.\n\nThis is a completed implementation unit, not completion of this issue. Native segmented/paged evidence, remaining known-cause migrations, the complete shipping inventory and final acceptance remain open.\n",
+      "createdAt": "2026-10-17T00:15:38Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6227204074",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcy6ipA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published native read-evidence inspection at d9bb6dd42.\n\nSegmented snapshots, requests, immutable checkpoint prefixes and paged query receipts now expose original typed fields through the shared consumer. Inspection releases the request ledger lock before invoking external callbacks and retains exact source identities without borrowing temporary copies. It changes no read behavior, allocation grants or stored layouts.\n\nAll 20 focused captures pass natively and on scalar/SIMD WASM, including actual authentication and page-budget failures, exact request comparisons, retained prefixes, reentrant access and zero inspection allocations. Strict affected checks, source-bound metadata review, helper hygiene and normal hooks/push pass.\n\nStack evidence, remaining native cause migrations, the complete shipping inventory and whole-issue acceptance remain open. This unit does not close the issue.\n",
+      "createdAt": "2026-10-17T00:34:47Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6227403428",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABczJpqw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published the native stack evidence unit at 079ca3fa4.\n\nSegmented stack failures now expose their original certification receipts,\nchronological layers, metadata carriers and resident heads. Paged stack failures\nexpose source generations, head rows, graph declarations, removals, page receipts\nand qualified request origins. Concrete scalar evidence uses exact widening.\nInspection borrows retained owners and performs no source I/O or producer\nallocation in the measured windows.\n\nAll 23 focused captures pass natively and on scalar/SIMD WASM. Actual query\nfailures preserve their metadata after source/view/snapshot destruction. Original\nremoval and graph fields, exact source seals and full-width origin fields are\nchecked. Strict affected compilation, reviewed source-bound metadata, full\nhelper hygiene and normal commit hooks/push pass. The source worktree is clean.\n\nThe remaining native cause migrations, shipping-error families/inventory and\nfinal whole-issue acceptance remain open. No PR or issue closure is claimed.\n",
+      "createdAt": "2026-10-17T00:56:49Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6227650987",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABczbm-A",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published the native invariant migration at e23a015a0.\n\nFifty-six production Internal-message sites now use 51 canonical typed reasons.\nVM stack mismatches retain their expected category as structured data. Original\nguards, diagnostic codes, protocol classification and display text remain; the\nhost error layout remains 112 bytes. Producer construction and inspection\nallocate zero bytes in the measured capture windows.\n\nThree actual VM refusal tests, two corrected SERVICE controls and all 25 public\ncaptures pass. The 25 captures also pass on scalar and SIMD WASM. The SERVICE\ncontrols now inspect their already-retained endpoint and transport cause rather\nthan expecting the old string variant; presentation and row behavior remain.\nStrict affected compilation, fresh helper indexing/hygiene and normal hooks/push\npass. Capacity constructor bindings remain unchanged. The source tree is clean.\n\nDynamic/internal/admitted diagnostic causes, other Function/Data/Config/SILENT\nnative producers, remaining shipping families/inventory and whole-issue\nacceptance remain open. This unit does not close the issue.\n",
+      "createdAt": "2026-10-17T01:27:08Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6227945208",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABczucQQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `7fa01a9f3`: native graph, standpoint, evidence and description errors expose their original fields. The existing admitted diagnostic owner now retains their original causes; 48 static producer sites use 34 typed invariant reasons.\n\nAll 29 focused captures pass natively and on scalar and SIMD WASM. Five actual ownership/admission controls, strict affected compilation, helper hygiene and normal commit/push hooks pass. Source tree is clean.\n\nThe issue remains open: raw-entry-point truncation, dynamic SHACL and other native Function/Data/Config/SILENT producers, remaining shipping families and complete acceptance are still required.\n",
+      "createdAt": "2026-10-17T02:01:40Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6228253761",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcz4EEw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `b5f8e1881`: both raw completion-only entry points retain the original governor certificate, row count and query form. Inspection exposes the original path edges, governor and withholding barrier; retained path capacity keeps its admission through last-owner destruction. Partial rows still release.\n\nBoth new public cases pass natively and on scalar/SIMD WASM: six SELECT/ASK/CONSTRUCT cancellation calls and actual aggregate execution across 24 fuel limits. Original presentation, cloned ownership and zero inspection allocation pass. All ten affected lift tests, strict affected compilation, helper hygiene and normal hooks/push pass. No capacity proof change was needed.\n\nThe complete issue remains open. Dynamic SHACL and other native Function/Data/Config/SILENT producers, unknown XPath publication, remaining shipping families and final whole-issue acceptance remain required.\n",
+      "createdAt": "2026-10-17T02:18:13Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6228411411",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcz8HQw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `cea885fce`: both SHACL SELECT return-value refusals retain their function IRI and projection/solution count as typed fields. Their required/maximum values are unsigned fields. The existing SharedText and admitted diagnostic owners preserve the payload; successful execution is unchanged.\n\nThe actual public evaluation case passes natively and on scalar/SIMD WASM. It destroys the original context, function registry and dataset before inspecting a retained clone, checking Unicode IRI bytes, counts, original text and zero inspection allocation. Strict affected compilation, helper hygiene and normal hooks/push pass; constructor bindings remain unchanged.\n\nThe full issue remains open. Native prebinding diagnostic transport, body-kind mismatch, invocation/constraint and other native Function/Data/Config/SILENT producers, remaining shipping families and final acceptance are still required.\n",
+      "createdAt": "2026-10-17T02:25:39Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6228477763",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc0CyYw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `7fe93d871`: SHACL prebinding retains its original GroundFailure diagnostic through the existing admitted native cause owner. The resident clone and diagnostic-to-String conversion are removed. Operational failures propagate directly. No rewrite or successful execution changes.\n\nThe actual host-computed relative-IRI case passes natively and on scalar/SIMD WASM. Standard downcasting proves the diagnostic is the same retained object after context/registry/dataset and original-error destruction. Its original fields, text/class and zero inspection allocation pass. Strict affected compilation, helper hygiene and normal hooks/push pass.\n\nNative IRI reason retention at the underlying producer remains required; this transport fix does not complete that migration. Dynamic body mismatch, constraints/invocation and other native producers, remaining shipping families and whole-issue acceptance are still open.\n",
+      "createdAt": "2026-10-17T02:37:08Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6228587107",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc0NGuQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `7d03a73ee`: native IRI prebinding refusals retain the original ParseError::Iri, spelling and canonical IriTermReason through the existing diagnostic cause attachment. The ordinary query diagnostic and new producer share one admitted boxing/report/publication body. Original validation buffers keep their grant.\n\nThe actual expanded case preserves relative, malformed-IP/address and character/offset fields after original owners are destroyed. It passes natively; 32 unchanged native captures retain their earlier pass. All 33 scalar and 33 SIMD captures pass on corrected source. Two native owner/refusal controls, strict affected test-target compilation, helper hygiene and normal hooks/push pass.\n\nExact accounting found a 26-byte undercharge during the uncommitted factory generalization: boxing restarted Memory at zero. Resuming the original live total fixes it; retained bytes now match the ledger and final-owner release returns it to zero. The failing and corrected runs are retained.\n\nThe full issue remains open: body-kind mismatch, constraints/invocation, other native Function/Data/Config/SILENT and prebinding producers, remaining shipping families and whole-issue acceptance are still required. The refreshed forge list contains 21 open issues.\n",
+      "createdAt": "2026-10-17T02:56:02Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6228756153",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABc0gwCQ",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Published `21921295c`: twelve function execution/configuration refusal paths retain typed fields through the existing admitted cause owner. Parameter errors preserve variable, expected kind/datatype and original term. Arity, focus/depth, fixed panic categories and standard interception preserve their original fields; parser conflicts include the matching namespace.\n\nThe public algebra check exposed a resident preparation bypass. Its adapter now calls the existing admitted validation body, so standard-function interception is checked consistently. The unused resident height wrapper is removed; the original height law is unchanged.\n\nAll nine runtime scenarios and three interception paths pass natively. Both exact public capture cases pass on scalar/SIMD for seven runtime branches plus three interception APIs. Caught-panic execution is native unwind coverage only: this WASM profile aborts Rust panics. No compiler, panic strategy or runner was changed. Positive constrained-function and exact parser/compiler flat-boundary controls, strict affected test-target compilation, helper hygiene and normal hooks/push pass.\n\nThe cancelled broad filter (status 130), first public bypass failure and initial scalar abort run are retained and are not represented as passing runs. The corrected exact checks pass. Source tree is clean. Body-kind mismatch, other native producers, remaining shipping families and whole-issue acceptance remain open.\n",
+      "createdAt": "2026-10-17T03:32:11Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558#issuecomment-6229078025",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-15T20:56:20Z",
+  "labels": [],
+  "milestone": null,
+  "number": 558,
+  "state": "OPEN",
+  "title": "Structured access to error variants and fields, so consumers never render errors to text",
+  "updatedAt": "2026-10-17T03:32:11Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/558"
+}

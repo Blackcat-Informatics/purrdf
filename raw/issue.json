@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "The resident dataset exposes only `project_named_graph(&str)`. A consumer cannot\nselect the actual default world using the same native graph-faithful,\ngraph-erasing operation across base assertions, reifier declarations and\nannotations. Reconstructing those tables downstream duplicates a kernel job.\n\nThis surfaced while benchmarking GMEOW's recorded production worlds: its full\nobject-world assembler lists 179,177 default-world assertions, while a shortcut\nthat reads the authored default before the assembler's meta-level filtering\nproduces 180,062. That shortcut is not the production world and must be removed.\n\nReplace the named-only projection with one native `project_graph` operation\nwhose explicit selector addresses the default graph or a named RDF graph.\nKeep one implementation for all three native tables. Remove the superseded\nnamed-only API and migrate its repository callers and documentation. Preserve\nexisting named-graph isolation and support graph names without converting\nthem into fabricated IRI strings. Invalid graph names must fail explicitly.\n\nAcceptance:\n\n- Select the true default graph and erase only that selected graph slot.\n- Preserve every selected base assertion, reifier declaration and annotation;\n  never infer statement-layer membership from a reifier's use as a subject.\n- Isolate default, IRI-named and blank-named graphs even when the same reifier\n  identity occurs in more than one graph.\n- Missing and declared-empty graphs yield an empty selected dataset without\n  importing content from another world.\n- Keep named-world canonicalization and bundle identity controls passing.\n- Use first-party Rust, no dependency, legacy alias or fallback.\n\nDownstream integration is part of GMEOW's engine responsibility split. Its\nbenchmark must select the default world after complete production assembly,\nusing this native operation, and remove the authored-default shortcut.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-17T03:48:39Z",
+  "labels": [],
+  "milestone": null,
+  "number": 566,
+  "state": "OPEN",
+  "title": "Unify native graph projection across default and named RDF worlds",
+  "updatedAt": "2026-10-17T03:48:39Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/566"
+}

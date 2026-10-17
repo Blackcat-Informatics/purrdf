@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/566-unify-native-graph-projection-across/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 11s
+     Running unittests src/lib.rs (/opt/.cargo/fa/d9eeaffa630619/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 6 tests
+
+thread 'ir::dataset::tests::graph_projection::projection_isolates_default_iri_and_blank_worlds_in_every_table' (2515079) panicked at crates/rdf-core/src/ir/dataset.rs:4372:33:
+called `Result::unwrap()` on an `Err` value: RdfDiagnostic { severity: Error, code: "rdf-ir-triple-subject", message: "triple term #7 subject must be an IRI or blank node; RDF 1.2 nests a triple term only in the OBJECT of another triple term", detail: None, location: None, presentation: None, storage: None }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test ir::dataset::tests::graph_projection::projection_isolates_default_iri_and_blank_worlds_in_every_table ... FAILED
+test ir::dataset::tests::graph_projection::projection_of_missing_and_declared_empty_worlds_is_empty ... ok
+test ir::dataset::tests::graph_projection::projection_never_claims_a_default_graph_statement_row ... ok
+test ir::dataset::tests::graph_projection::projection_does_not_absorb_another_graphs_statement_layer ... ok
+test ir::dataset::tests::graph_projection::projection_rejects_non_graph_names_even_when_no_row_can_match ... ok
+test ir::canon::tests::graph_scoped_canonicalization_matches_the_named_graph_projection ... ok
+
+failures:
+
+failures:
+    ir::dataset::tests::graph_projection::projection_isolates_default_iri_and_blank_worlds_in_every_table
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 1367 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-core --lib`
