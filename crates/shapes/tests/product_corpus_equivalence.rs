@@ -279,7 +279,7 @@ const AGREED_ON_REPORT_CASES: usize = 397;
 /// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
 /// deactivates) and `property-select-001` (whose computed full name satisfies
 /// `sh:hasValue "John Muir"`).
-const AGREED_WITH_RESULTS_CASES: usize = 374;
+const AGREED_WITH_RESULTS_CASES: usize = 375;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

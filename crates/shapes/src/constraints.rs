@@ -768,7 +768,15 @@ impl PropertyStamp<'_> {
         // THE materialization boundary for the focus node on the property path:
         // a result is being built, so the owned term is finally needed.
         result.focus_node = self.focus.to_term(self.store.core_view());
-        result.apply_box_roles(self.source_roles(), self.path_roles());
+        // A `sh:closed` result's path is the OFFENDING predicate (§7.9.1), and the
+        // constraint resolved that predicate's roles when it built the result; they
+        // are kept, where every other result takes the roles of the shape's path.
+        if result.source_constraint_component.as_str() == sh::CLOSED_CONSTRAINT_COMPONENT {
+            let offending = std::mem::take(&mut result.path_box_roles);
+            result.apply_box_roles(self.source_roles(), &offending);
+        } else {
+            result.apply_box_roles(self.source_roles(), self.path_roles());
+        }
     }
 }
 
@@ -1302,7 +1310,7 @@ fn walk_shape<S: ResultSink>(
         if eval_closed(
             context,
             focus,
-            shape,
+            &shape.box_roles,
             ConstraintSource::of_shape(shape, index, context.report_profile()),
             permitted,
             by_types,
@@ -1317,7 +1325,12 @@ fn walk_shape<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
-/// Evaluate `sh:closed` against a focus node (SHACL 1.2 Core §7.9.1).
+/// Evaluate `sh:closed` against one value node (SHACL 1.2 Core §7.9.1).
+///
+/// `focus` is the node whose outgoing triples are checked: the focus node of a
+/// node shape, or one value node of a property shape. For a property shape the
+/// caller's stamp supplies its focus node and source roles; the result keeps the
+/// offending predicate as its `sh:resultPath` and that predicate's path roles.
 ///
 /// Under `sh:closed true` the permitted predicate set is the union of:
 /// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
@@ -1360,7 +1373,7 @@ fn walk_shape<S: ResultSink>(
 fn eval_closed<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
-    shape: &Shape,
+    source_roles: &[NamedNode],
     source: ConstraintSource<'_>,
     permitted: &FastSet<TermId>,
     by_types: Option<crate::plan::ClosedByTypes<'_>>,
@@ -1402,7 +1415,7 @@ fn eval_closed<S: ResultSink>(
                 path_structure: None,
                 value: Some(term_id_to_native(ds, quad.o)),
                 source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
-                source_shape: shape.id.clone(),
+                source_shape: source.id.clone(),
                 severity: source.severity.clone(),
                 messages: source.messages.to_vec(),
                 source_box_roles: vec![],
@@ -1412,7 +1425,7 @@ fn eval_closed<S: ResultSink>(
                 details: vec![],
                 annotations: vec![],
             };
-            result.apply_box_roles(&shape.box_roles, &path_roles);
+            result.apply_box_roles(source_roles, &path_roles);
             ResultRecord::plain(result)
         });
         if flow.stopped() {
@@ -3049,12 +3062,37 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Closed (node-shape-level; evaluated in validate_shape) ─────────────
-        // The closed-world check needs the SET of permitted predicates, derived
-        // from the sibling property shapes — data `eval_constraint` does not
-        // receive. It is evaluated directly in `validate_shape`; here it is a
-        // no-op so the match stays exhaustive.
-        PlannedConstraint::Closed { .. } => Flow::Continue,
+        // ── Closed ─────────────────────────────────────────────────────────────
+        // The permitted set is lowered with the declaring shape's `sh:property`
+        // children. A node shape evaluates it directly in `validate_shape`; a
+        // property shape evaluates it here, over its value nodes.
+        PlannedConstraint::Closed {
+            permitted,
+            by_types,
+        } => {
+            // On a node shape the value node is the focus node and
+            // `validate_shape` has already evaluated this. On a property shape
+            // the constraint applies to each value node (§7.9.1: "a validation
+            // result for each triple that has a value node as its subject").
+            if path.is_some() {
+                for value in value_nodes {
+                    if eval_closed(
+                        context,
+                        &value.as_focus(ds),
+                        &[],
+                        source,
+                        permitted,
+                        by_types,
+                        sink,
+                    )
+                    .stopped()
+                    {
+                        return Ok(Flow::Stop);
+                    }
+                }
+            }
+            Flow::Continue
+        }
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         PlannedConstraint::UniqueLang(true) => {

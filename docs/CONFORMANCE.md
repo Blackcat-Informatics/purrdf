@@ -61,7 +61,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 262 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 578 | 6 | 6 | 0 | RED |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 579 | 6 | 6 | 0 | RED |
 | SHACL 1.2 unlisted vendored files | W3C shacl12-test-suite files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | Community SHACL dated profiles (REC 2017 / WD 2026) | community-proposed corpus, agent-reviewed | 115 | 0 | 0 | 0 | GREEN |
@@ -122,7 +122,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** pass as approved · 0 ledgered |
-| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **578 / 591** pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered, of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
+| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **579 / 591** pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered, of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
 | SHACL 1.2 unlisted vendored files | the 1 files of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
 | Community SHACL dated profiles | `corpora/community/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
@@ -673,7 +673,7 @@ way the matrix stays honest:
 
 - **SHACL 1.2** — the harness discovers all **592** entries of the vendored W3C
   `shacl12-test-suite`. Of the **591** an upstream manifest lists, it passes
-  **578 / 591** as approved, with **6 non-canonical expected decimals** counted
+  **579 / 591** as approved, with **6 non-canonical expected decimals** counted
   apart, and an empty expected-failure ledger. The 592 are 213
   `sht:Validate` (graded like the SHACL 1.0 suite), 143
   `sht:EvalNodeExpr` (output compared term for term, in order unless the entry
@@ -686,8 +686,8 @@ way the matrix stays honest:
   against. One vendored file
   that no upstream manifest includes (`inference-rules/rdfs/rdfs1.ttl`) is
   graded exactly as written by a test of its own and reported apart from the
-  approved suite, never counted among its passes. Seven approved entries do
-  not pass: `core/property/closed-001`,
+  approved suite, never counted among its passes. Six approved entries do
+  not pass:
   `inference-rules/rules-entailment-ruleset-{and-all,includes,multiple,validation}` and
   `sparql-rl/stratification/manifest#test_13` and `#test_14`. `core/property/reifierShape-001` and `-002` are
   graded as approved: §7.8.5's textual definition names both the triple term
