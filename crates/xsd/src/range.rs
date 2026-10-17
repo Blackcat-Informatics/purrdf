@@ -1964,10 +1964,9 @@ enum LengthKind {
     Octets,
 }
 
-/// A lower bound on how many characters the `xsd:string` value space admits at one
-/// position: the XML 1.0 `Char` production allows at least this many code points
+/// The XML 1.0 `Char` alphabet size used by the `xsd:string` value space
 /// (`#x9`, `#xA`, `#xD`, `[#x20-#xD7FF]`, `[#xE000-#xFFFD]`, `[#x10000-#x10FFFF]`).
-/// Only ever used to LOWER-bound a count.
+/// It also supplies a lower bound when counting only one admitted length.
 const STRING_ALPHABET_FLOOR: u64 = 3 + 55_264 + 8_190 + 1_048_576;
 
 /// The alphabet of one octet.
@@ -2137,14 +2136,37 @@ impl LengthSet {
 
     /// Whether the space holds more than `n` values of length `length`.
     ///
-    /// Deliberately generous for characters: one character position admits over a
-    /// million values, so only a length-0 string can be exhausted by a finite exception
-    /// list. Over-reporting here can only withhold an `Empty` answer, never invent one.
+    /// Count only up to `n + 1`: even a positive character length has a finite
+    /// alphabet, so a finite exception set can exhaust it. Saturation above the
+    /// queried count preserves the exact comparison without a length-sized loop.
     fn holds_more_than(&self, length: u64, n: usize) -> bool {
-        match self.kind {
-            LengthKind::Characters | LengthKind::CollapsedCharacters => length > 0 || n < 1,
-            LengthKind::Octets => u128::from(saturating_pow(OCTET_ALPHABET, length)) > n as u128,
+        let cap = n as u128 + 1;
+        let alphabet = u128::from(match self.kind {
+            LengthKind::Characters => STRING_ALPHABET_FLOOR,
+            LengthKind::CollapsedCharacters => STRING_ALPHABET_FLOOR - 4,
+            LengthKind::Octets => OCTET_ALPHABET,
+        });
+        let mut nonspace = 1_u128;
+        let mut space = 0_u128;
+        for position in 0..length {
+            if nonspace >= cap {
+                return true;
+            }
+            let next = nonspace
+                .saturating_add(space)
+                .saturating_mul(alphabet)
+                .min(cap);
+            // Collapsed values have neither leading/trailing nor adjacent XML
+            // spaces. A space can follow any nonempty nonspace-ending prefix;
+            // only nonspace-ending values contribute to the final count.
+            space = if self.kind == LengthKind::CollapsedCharacters && position > 0 {
+                nonspace
+            } else {
+                0
+            };
+            nonspace = next;
         }
+        nonspace >= cap
     }
 
     /// The greatest admitted length, or `None` when the set admits none.
@@ -3451,6 +3473,42 @@ mod tests {
     }
 
     // ── The length-selected shape ─────────────────────────────────────────────────
+
+    #[test]
+    fn finite_character_spaces_can_be_exhausted_and_large_lengths_stay_bounded() {
+        let xml_characters = (0..=0x10_ffff)
+            .filter_map(char::from_u32)
+            .filter(|value| purrdf_lex::terminals::is_xml_char(*value))
+            .count();
+        assert_eq!(xml_characters as u64, STRING_ALPHABET_FLOOR);
+        let xml = xml_characters as u128;
+        let uri = xml - 4;
+        // Three-character collapsed values are either NNN or N-space-N.
+        for (kind, length, count) in [
+            (LengthKind::Characters, 0, 1),
+            (LengthKind::Characters, 1, xml),
+            (LengthKind::Characters, 2, xml * xml),
+            (LengthKind::CollapsedCharacters, 0, 1),
+            (LengthKind::CollapsedCharacters, 1, uri),
+            (LengthKind::CollapsedCharacters, 2, uri * uri),
+            (
+                LengthKind::CollapsedCharacters,
+                3,
+                uri * uri * uri + uri * uri,
+            ),
+            (LengthKind::Octets, 1, 256),
+            (LengthKind::Octets, 8, 1_u128 << 64),
+        ] {
+            let set = LengthSet::empty(kind);
+            if let Ok(count) = usize::try_from(count) {
+                assert!(set.holds_more_than(length, count - 1));
+                assert!(!set.holds_more_than(length, count));
+            } else {
+                assert!(set.holds_more_than(length, usize::MAX));
+            }
+            assert!(set.holds_more_than(u64::MAX, usize::MAX));
+        }
+    }
 
     #[test]
     fn length_set_complement_swaps_lengths_and_the_two_finite_lists() {
