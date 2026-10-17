@@ -33,6 +33,7 @@
 //! | double | `xsd:double` | as float, at double width |
 //! | boolean | `xsd:boolean` | the two-element set |
 //! | string | `xsd:string` | length-selected, length in CHARACTERS |
+//! | URI | `xsd:anyURI` | disjoint from string; collapsed character lengths |
 //! | hex / base64 | `xsd:hexBinary`, `xsd:base64Binary` | length-selected, length in OCTETS |
 //! | one space each | `dateTime` (its zoned `dateTimeStamp` subset and timezone-less remainder), `date`, `time`, the `duration` family, and the five Gregorian types | listed sets and their complements |
 //! | two term-identified spaces | `rdf:langString`, `rdf:dirLangString` | disjoint infinite sets; finite members are normalized identities supplied by the consumer |
@@ -41,7 +42,7 @@
 //! `xsd:yearMonthDuration` value spaces overlap at the zero duration.
 //!
 //! Beyond those spaces lies the **remainder**: the values of datatypes this module does
-//! not model (`owl:real`, `owl:rational`, `xsd:anyURI`, a
+//! not model (`owl:real`, `owl:rational`, a
 //! user-defined datatype). [`DataRange::Any`] holds the remainder, a modelled
 //! [`DataRange::Datatype`] does not, and [`DataRange::Opaque`] leaves it — and every
 //! modelled space — unknown, because an unmodelled value space may overlap a modelled

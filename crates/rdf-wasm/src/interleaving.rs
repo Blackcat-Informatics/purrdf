@@ -73,6 +73,12 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
+        file: "crates/text/src/analysis.rs",
+        name: "PROJECTION_CALLS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/tests/expr_vm_owned_strings.rs",
         name: "TEXT_WINDOW",
         safety: Safety::NotCompiledIn,

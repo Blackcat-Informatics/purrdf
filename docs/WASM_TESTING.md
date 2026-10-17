@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 135 named cases in 23 integration targets,
-with 140 executions across 27 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 138 named cases in 23 integration targets,
+with 143 executions across 27 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -36,7 +36,7 @@ N-Triples and JSON-LD bytes, and reconstructs every original through the actual
 RDF parser and shared cover decoder. The Turtle-chain target reproduces frozen
 native bytes for actual100,000- and1,000,000-node packed, Turtle and TriG routes,
 with exact layout, graph and statement-metadata preservation. The regular-role
-target executes the same sixteen production reasoning and refusal cases on the
+target executes the same seventeen production reasoning and refusal cases on the
 portable build, including recursive and inverse chains, blocking, proof replay,
 query services, fixed roles, resource exhaustion and cancellation.
 Runner preflight additionally exercises panic handling, refused flags
@@ -83,7 +83,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-core` / `model_traits` | scalar | `owned_term_walks_stay_inside_the_wasm_shadow_stack_floor` | Measures the derive's per-level shadow-stack growth and the owned-term walks' depth-independent peak, runs the 100,000-level walks and drops inside the actual 128 KiB scoped span, restores the caller context, and refuses an over-floor neighbor before its closure runs. |
 | `purrdf-rdf` / `turtle_chains` | scalar | `blank_chains_at_one_hundred_thousand`, `blank_chains_at_one_million` | Runs actual packed rendering, native Turtle/default-graph and TriG/named-graph output at both depths against frozen per-route native byte receipts; reparses native output with graph and statement metadata fidelity. |
 | `purrdf-rdf` / `turtle_chains` | scalar | `exact_guard_neighbors_and_permuted_interning`, `cycles_shared_and_quoted_blanks_preserve_statements`, `tied_guarded_branches_keep_order_under_permutation`, `a_long_collection_keeps_every_member`, `continuation_objects_saturate_at_the_same_indent_guard` | Checks exact layout around the permanent forty-level guard, input permutation, cyclic/shared/quoted blank identity, continuation indentation and the indexed strict 100,000-member collection route. |
-| `purrdf-entail` / `regular_role_chains` | scalar | All sixteen exact production cases registered in `make wasm-test` | Replays the native recursive/inverse role, blocking, proof, query-service, fixed-role, malformed-input, exhaustion and cancellation expectations through the portable reasoning implementation. |
+| `purrdf-entail` / `regular_role_chains` | scalar | All seventeen exact production cases registered in `make wasm-test` | Replays the native recursive/inverse role, blocking, proof, query-service, fixed-role, malformed-input, source-witness retention, exhaustion and cancellation expectations through the portable reasoning implementation. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Refuses an image naming a different WASM arithmetic path with its typed admission error. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Records wasm32 and the actual SIMD feature bit and arithmetic path in the image. |
 | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Explicitly calls the wasm simd128 encoder over lengths, alignments and write boundaries and asserts its selection. |
@@ -102,6 +102,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of a seeded transcript of every tower operation over operands from one digit to hundreds. |
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_oracle_vectors_replay_on_this_target` | Replays the 7,164 oracle-generated `xsd:integer`/`xsd:decimal` operator, division, comparison, conversion and canonical-form records through the `XsdValue` operators, byte for byte. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target` | Reproduces hand-checked query answers past `i128`, under two division policies, and the F&O code of an absorbed error. |
+| `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `any_uri_casts_keep_their_primitive_domain_on_this_target` | Preserves native URI whitespace collapse and string/self casts while refusing casts into unrelated primitive domains through the governed query entry point. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_numeric_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of every numeric query result (arithmetic, all division policies, casts, `ORDER BY`, aggregates, functions, absorbed F&O codes) and the governor's fuel and scratch-byte refusals beside their answering neighbours. |
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Asserts Simd128 selection with simd128 and Portable selection without it. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `every_kernel_path_encodes_and_decodes_the_same_bytes` | Explicitly selects the simd128 encoder and decoder and compares their composed output with the portable backend. |
@@ -109,6 +110,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `match_length_kernels_match_portable` | Calls the simd128 match-length kernel against the portable kernel over vector widths and mismatch positions. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `hash_kernels_match_portable` | Calls the simd128 window-hash kernel against the scalar reference over lengths and offsets. |
 | `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Reproduces pinned borrowed UTF-8 sentence bytes and offsets from the same versioned Sentence_Break tables, including the alphanumeric filter and empty input. |
+| `purrdf-text` / `wasm_determinism` | scalar | `delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target` | Compares public delta updates with fresh construction, including ranked and surface evidence, empty results and nonliteral source coverage. |
 | `purrdf-text` / `wasm_determinism` | scalar | `five_thousand_term_index` | Indexes and ranks all 5,000 needle terms, compares full ranking, a bounded heap and every explanation against independent unbounded arithmetic, and carries the prepared score certificate. |
 | `purrdf-text` / `wasm_determinism` | scalar | `declared_large_corpora_are_exact` | Scores declared 2^41 and full-u64 populations against independent exact expectations; query-derived bounds and scores exceed the former global score width. |
 | `purrdf-text` / `wasm_determinism` | scalar | `promoted_field_arithmetic_is_exact` | Preserves every truncation while maximal nonnegative weights and thirty-two fields promote intermediates through the existing exact integer home; genuine invalid data still refuses. |
