@@ -119,9 +119,11 @@ use std::sync::OnceLock;
 use purrdf_core::{TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::GraphPattern;
 
+#[cfg(test)]
+use crate::governor::soundness::PrefixFidelity;
 use crate::governor::soundness::{
-    ChildEdge, ChildEdges, OrderCertainty, PrefixFidelity, SpineClass, SpineContext,
-    child_edges_admitted, pattern_label,
+    ChildEdge, ChildEdges, OrderCertainty, SpineClass, SpineContext, child_edges_admitted,
+    pattern_label,
 };
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -258,6 +260,102 @@ impl Certificate {
     }
 }
 
+impl purrdf_hash::error::StructuredError for Certificate {
+    purrdf_hash::error_visit! {
+        @record self { path, tripped, barrier } => "governor-lift-certificate" {
+            "path" => List(self.path.iter().map(|edge| purrdf_hash::error::ErrorValue::Record(edge))),
+            "tripped" => Record(&self.tripped),
+            "barrier" => Value(self.barrier.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |barrier| purrdf_hash::error::ErrorValue::Record(barrier))),
+        }
+    }
+}
+
+impl Certificate {
+    const fn description(&self, rows: usize) -> CertificateDescription<'_> {
+        CertificateDescription {
+            certificate: self,
+            rows,
+        }
+    }
+}
+
+struct CertificateDescription<'a> {
+    certificate: &'a Certificate,
+    rows: usize,
+}
+
+impl core::fmt::Display for CertificateDescription<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self { certificate, rows } = self;
+        let spine = certificate.spine();
+        let bound = match spine.class() {
+            SpineClass::Certain => "a certified lower bound",
+            SpineClass::Possible => "an upper bound",
+            SpineClass::Unknown => "bounded on neither side",
+        };
+        let fidelity = match spine.order() {
+            OrderCertainty::Ordered => "positional",
+            OrderCertainty::Unordered => "bag-only",
+        };
+        let selected = if spine.under_positional_selection() {
+            ", position-selected"
+        } else {
+            ""
+        };
+        let stable = if spine.admits_cap_pushdown() {
+            "; rows are an ordered prefix of the complete result"
+        } else {
+            ""
+        };
+        write!(
+            formatter,
+            "{} tripped, leaving {bound} of {rows} row(s), {fidelity}{selected}{stable}",
+            certificate.tripped
+        )?;
+        if let Some(barrier) = certificate.barrier {
+            write!(formatter, "; {barrier}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Original complete-only boundary and governor certificate, without retained rows.
+#[derive(Debug)]
+struct CompletionRefusal {
+    form: Option<&'static str>,
+    rows: usize,
+    certificate: Certificate,
+    // The original path allocation now survives the evaluation context. Keep
+    // its exact capacity charged until after the path itself is destroyed.
+    _allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl purrdf_hash::error::StructuredError for CompletionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { form, rows, certificate, _allocation } => "eval-invariant-completion-required" {
+            "form" => Value(self.form.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Code)),
+            "rows" => Unsigned(self.rows as u128),
+            "certificate" => Record(&self.certificate),
+        }
+    }
+}
+
+impl core::fmt::Display for CompletionRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.form {
+            None => formatter.write_str("a governor tripped on an evaluation entry point that can only return a complete bag"),
+            Some(form) => write!(formatter, "a governor tripped on a query entry point that can only return a complete {form} result"),
+        }?;
+        write!(
+            formatter,
+            "; run a bounding governor configuration through `NativeSparqlEngine::query_governed`, which returns the certified partial answers: {}",
+            self.certificate.description(self.rows)
+        )
+    }
+}
+
+impl std::error::Error for CompletionRefusal {}
+
 /// A partial result: the rows an operator holds, and what they bound.
 ///
 /// Constructing one is the only way to attach rows to a [`Certificate`], and it enforces
@@ -323,6 +421,7 @@ impl<I: ViewTermId> Truncation<I> {
 
     /// Whether these rows are a positional prefix of this node's true output, or only a
     /// sub-bag (or super-bag) of it.
+    #[cfg(test)]
     pub(crate) fn fidelity(&self) -> PrefixFidelity {
         match self.certificate.spine().order() {
             OrderCertainty::Ordered => PrefixFidelity::Positional,
@@ -368,39 +467,40 @@ impl<I: ViewTermId> Truncation<I> {
     /// which side of the interval the rows bound and whether their *positions* mean
     /// anything. A positional lower bound licenses resumption under a deterministic
     /// ceiling; the diagnostic deliberately makes no promise about wall-clock reruns.
+    #[cfg(test)]
     pub(crate) fn describe(&self) -> String {
-        let bound = match self.bound() {
-            SpineClass::Certain => "a certified lower bound",
-            SpineClass::Possible => "an upper bound",
-            SpineClass::Unknown => "bounded on neither side",
+        self.certificate.description(self.rows.len()).to_string()
+    }
+
+    /// Refuse a partial at a complete-only boundary, preserving its original
+    /// certificate while releasing the rows just as the previous text path did.
+    pub(crate) fn completion_error(
+        self,
+        form: Option<&'static str>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> crate::EvalError {
+        let rows = self.rows.len();
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let Some(bytes) = self
+            .certificate
+            .path
+            .capacity()
+            .checked_mul(size_of::<ChildEdge>())
+        else {
+            return crate::EvalError::WorkspaceBoundOverflow;
         };
-        let fidelity = match self.fidelity() {
-            PrefixFidelity::Positional => "positional",
-            PrefixFidelity::BagOnly => "bag-only",
-        };
-        let stable = if self.is_positional_prefix() {
-            "; rows are an ordered prefix of the complete result"
-        } else {
-            ""
-        };
-        let barrier = match self.barrier() {
-            Some(barrier) => format!("; {barrier}"),
-            None => String::new(),
-        };
-        // Whether a restricting `Slice` was crossed on the way up is worth saying out
-        // loud: it is the one thing that turns a merely bag-only bound into no bound at
-        // all, so a caller reading "bag-only" and "position-selected" together knows the
-        // shape of the query is what cost them the rows, not the size of the budget.
-        let selected = if self.certificate.spine().under_positional_selection() {
-            ", position-selected"
-        } else {
-            ""
-        };
-        format!(
-            "{} tripped, leaving {} of {} row(s), {fidelity}{selected}{stable}{barrier}",
-            self.tripped(),
-            bound,
-            self.rows.len()
+        if let Err(error) = frame.resize_live(bytes) {
+            return error;
+        }
+        crate::NativeDiagnostic::error_cause(
+            crate::NativeDiagnosticKind::Internal,
+            CompletionRefusal {
+                form,
+                rows,
+                certificate: self.certificate,
+                _allocation: frame.into_allocation(),
+            },
+            workspace,
         )
     }
 

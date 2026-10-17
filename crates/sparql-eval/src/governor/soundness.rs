@@ -167,6 +167,31 @@ pub(crate) struct ChildEdge {
     pub(crate) selects_by_position: bool,
 }
 
+impl purrdf_hash::error::StructuredError for ChildRole {
+    purrdf_hash::error_visit! {
+        PrefixMonotone => "spine-prefix-monotone" {},
+        Antitone => "spine-antitone" {},
+        Opaque => "spine-opaque" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for PrefixFidelity {
+    purrdf_hash::error_visit! {
+        Positional => "prefix-positional" {},
+        BagOnly => "prefix-bag-only" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ChildEdge {
+    purrdf_hash::error_visit! {
+        @record self { role, fidelity, selects_by_position } => "spine-child-edge" {
+            "role" => Record(&self.role),
+            "fidelity" => Record(&self.fidelity),
+            "selects_by_position" => Boolean(self.selects_by_position),
+        }
+    }
+}
+
 impl ChildEdge {
     /// The edge of an operator that both preserves prefixes and imposes nothing:
     /// truncation below it keeps whatever bound it had, positionally.

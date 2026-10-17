@@ -1544,7 +1544,130 @@ fn native_evidence_alignment_and_answer_state_failures_remain_structured() {
     );
 }
 
+fn raw_completion_refusals_retain_original_governor_certificates() {
+    use purrdf_sparql_algebra::Query;
+    use purrdf_sparql_eval::eval::{EvalCtx, eval, evaluate_query};
+    use purrdf_sparql_eval::{CancellationFlag, GovernorState, QueryGovernors};
+    use std::sync::Arc;
+
+    let dataset = support::empty_dataset();
+    for (text, form) in [
+        ("SELECT * WHERE { ?s ?p ?o }", "solution"),
+        ("ASK WHERE { ?s ?p ?o }", "boolean"),
+        ("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "graph"),
+    ] {
+        let query = SparqlParser::new().parse_query(text).unwrap();
+        for raw_bag in [false, true] {
+            let signal = CancellationFlag::new();
+            signal.cancel();
+            let governors = QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(signal));
+            let state = Arc::new(GovernorState::new(&governors));
+            let mut ctx = EvalCtx::new(&dataset).with_governors(state);
+            let error = if raw_bag {
+                let pattern = match &query {
+                    Query::Select { pattern, .. }
+                    | Query::Ask { pattern, .. }
+                    | Query::Construct { pattern, .. } => pattern,
+                    Query::Describe { .. } => unreachable!(),
+                };
+                eval(pattern, &mut ctx).unwrap_err()
+            } else {
+                evaluate_query(&query, &mut ctx).unwrap_err()
+            };
+            drop(ctx);
+            let retained = error.clone();
+            drop(error);
+            let fields = Capture::read(&retained).child("cause").child("cause");
+            assert_eq!(fields.code, "eval-invariant-completion-required");
+            assert!(matches!(fields.field("rows"), ErrorValue::Unsigned(0)));
+            if raw_bag {
+                assert!(matches!(fields.field("form"), ErrorValue::Absent));
+            } else {
+                assert!(matches!(fields.field("form"), ErrorValue::Code(value) if value == form));
+            }
+            let certificate = fields.child("certificate");
+            assert_eq!(certificate.code, "governor-lift-certificate");
+            assert_eq!(certificate.child("tripped").code, "governor-stopped");
+            assert_eq!(
+                certificate.child("tripped").child("cause").code,
+                "stop-cancelled"
+            );
+            let events = Vec::with_capacity(8);
+            let window = CurrentThreadWindow::open();
+            let _capture = Capture::read_with_buffer(&retained, events);
+            assert_eq!(window.close().allocations, 0);
+            let entry = if raw_bag {
+                "an evaluation entry point that can only return a complete bag".to_owned()
+            } else {
+                format!("a query entry point that can only return a complete {form} result")
+            };
+            assert_eq!(
+                retained.to_string(),
+                format!(
+                    "internal evaluator error: a governor tripped on {entry}; run a bounding governor configuration through `NativeSparqlEngine::query_governed`, which returns the certified partial answers: cancelled tripped, leaving a certified lower bound of 0 row(s), positional; rows are an ordered prefix of the complete result"
+                )
+            );
+        }
+    }
+}
+
+fn raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    use purrdf_sparql_eval::{GovernorState, QueryGovernors};
+    use std::sync::Arc;
+
+    let dataset = structured_graph_fixture();
+    let query = SparqlParser::new()
+        .parse_query("SELECT (COUNT(?o) AS ?n) WHERE { ?s <https://example.org/p> ?o }")
+        .unwrap();
+    let mut withheld = 0;
+    for fuel in 0..24 {
+        let governors = QueryGovernors::UNBOUNDED.with_fuel(fuel);
+        let state = Arc::new(GovernorState::new(&governors));
+        let mut ctx = EvalCtx::new(&dataset).with_governors(state);
+        let Err(error) = evaluate_query(&query, &mut ctx) else {
+            continue;
+        };
+        drop(ctx);
+        let certificate = Capture::read(&error)
+            .child("cause")
+            .child("cause")
+            .child("certificate");
+        assert_eq!(certificate.child("tripped").code, "governor-budget");
+        if let ErrorValue::Record(barrier) = certificate.field("barrier") {
+            withheld += 1;
+            assert!(matches!(
+                Capture::read(barrier).field("operator"),
+                ErrorValue::Code("Group")
+            ));
+            let path = certificate.records("path");
+            assert!(!path.is_empty());
+            let mut opaque = false;
+            for edge in path {
+                assert_eq!(edge.code, "spine-child-edge");
+                opaque |= edge.child("role").code == "spine-opaque";
+                assert!(matches!(
+                    edge.field("selects_by_position"),
+                    ErrorValue::Boolean(false)
+                ));
+                assert!(matches!(
+                    edge.child("fidelity").code,
+                    "prefix-positional" | "prefix-bag-only"
+                ));
+            }
+            assert!(opaque);
+            assert!(error.to_string().ends_with("; no bound survives Group"));
+        }
+    }
+    assert!(
+        withheld > 0,
+        "the actual grouped raw entry point must retain its withholding path"
+    );
+}
+
 purrdf_testkit::harness_main!(
+    raw_completion_refusals_retain_actual_path_edges_and_withholding_barriers,
+    raw_completion_refusals_retain_original_governor_certificates,
     native_graph_and_standpoint_failures_keep_original_keys,
     native_aggregate_bound_failures_retain_digest_bytes_and_original_cause,
     native_missing_reason_failures_survive_the_admitted_query_boundary,

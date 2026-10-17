@@ -5617,15 +5617,8 @@ pub fn eval<D: DatasetView + Sync>(
     let previous_plan = ctx.plan.take();
     ctx.install_plan(&tree);
     let result = (|| {
-        let rows = eval_evaluated(pattern, ctx)?.into_complete(|truncation| {
-            EvalError::internal(format!(
-                "a governor tripped on an evaluation entry point that can only return a \
-                 complete bag; run a bounding governor configuration through \
-                 `NativeSparqlEngine::query_governed`, which returns the certified partial \
-                 answers: {}",
-                truncation.describe()
-            ))
-        })?;
+        let rows = eval_evaluated(pattern, ctx)?
+            .into_complete(|truncation| truncation.completion_error(None, &ctx.growth))?;
         let rows = match source_schema.as_ref() {
             Some(schema) => rows.reorder_like_admitted(schema, &ctx.growth)?,
             None => rows,
@@ -6154,14 +6147,7 @@ pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
         EvaluatedOutcome::Truncated {
             outcome,
             certificate,
-        } => Err(EvalError::internal(format!(
-            "a governor tripped on a query entry point that can only return a complete {} \
-             result; run a bounding governor configuration through \
-             `NativeSparqlEngine::query_governed`, which returns the certified partial \
-             answers: {}",
-            outcome.form_label(),
-            certificate.describe()
-        ))),
+        } => Err(certificate.completion_error(Some(outcome.form_label()), &ctx.growth)),
     }
 }
 
