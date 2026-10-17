@@ -2318,9 +2318,9 @@ impl ReasonerSession {
     /// The ontology this session reasons over — the premise merged with its imports closure
     /// when [`Self::open_premise`] resolved one — as canonical (RDFC-1.0) N-Quads.
     ///
-    /// The document a consumer hands [`check_dl_proof`] to check a proof this session
-    /// recorded: a proof binds the ontology it was produced over, and for an importing
-    /// premise that is the merge rather than the text the caller wrote.
+    /// This is a data export, not a copy of the native checking context: canonical
+    /// ordering can change first-seen DL term identifiers. Check a proof against
+    /// this session's actual resolved source with [`Self::check_proof`].
     ///
     /// # Errors
     ///
@@ -2328,6 +2328,35 @@ impl ReasonerSession {
     /// the RDFC-1.0 search budget).
     pub fn premise_nquads(&self) -> Result<String, String> {
         caller_flat_nquads(&self.dataset, "the reasoned premise")
+    }
+
+    /// Check a supplied proof against this consumer's actual parsed/imported source.
+    ///
+    /// Builds a fresh checking context from the frozen dataset, without a search
+    /// or a serialization/reparse that could change native term coordinates.
+    /// This session need not record proofs; neither its search state nor a
+    /// producer's context participates in checking. All proof, question, answer
+    /// and certificate checks are the same as [`check_dl_proof`].
+    ///
+    /// # Errors
+    /// The refusals of [`check_dl_proof`], over this session's source snapshot.
+    pub fn check_proof(
+        &self,
+        service: &str,
+        argument: &str,
+        answer: &str,
+        certificate: &str,
+        proof: &str,
+    ) -> Result<String, String> {
+        check_dl_proof_from_source(
+            || Ok(std::sync::Arc::clone(&self.dataset)),
+            self.resolved_imports,
+            service,
+            argument,
+            answer,
+            certificate,
+            proof,
+        )
     }
 
     /// Whether this session records proof terms.
@@ -4705,13 +4734,38 @@ pub fn check_dl_proof(
     certificate: &str,
     proof: &str,
 ) -> Result<String, String> {
+    check_dl_proof_from_source(
+        || {
+            purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
+                .map_err(|diagnostic| diagnostic.to_string())
+        },
+        false,
+        service,
+        argument,
+        answer,
+        certificate,
+        proof,
+    )
+}
+
+fn check_dl_proof_from_source(
+    source: impl FnOnce() -> Result<std::sync::Arc<purrdf_rdf::RdfDataset>, String>,
+    resolved_imports: bool,
+    service: &str,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    proof: &str,
+) -> Result<String, String> {
     let asked = parse_proof_service(service)?;
     let term = decode_dl_proof(proof)?;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())?;
+    let dataset = source()?;
     // The consumer's own reverse mapping, never the producer's: this is the step that rests on
     // the `refutation-encoding` and `reverse-mapping` entries the report names.
     let mut reasoner = Reasoner::with_proofs(&dataset).map_err(|e| format!("reasoner: {e}"))?;
+    if resolved_imports {
+        reasoner = reasoner.with_resolved_imports();
+    }
     let question = proof_question(&reasoner, asked, argument)?;
     reasoner
         .prepare(&question)

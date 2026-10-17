@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 145 named cases in 25 integration targets,
-with 150 executions across 29 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 146 named cases in 25 integration targets,
+with 151 executions across 29 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -87,6 +87,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-entail` / `recorded_stop` | scalar | All seven exact cases registered in `make wasm-test` | Checks one caller signal through canonical identity, every observed ontology-preparation poll and decision search; preserves completed proof identity/replay and selected preparation ceilings, and reports cancellation without a semantic verdict. |
 | `purrdf-entail` / `current_clash_support` | scalar | All five exact cases registered in `make wasm-test` | Checks source-bound ordinary clash replay, named/scoped-blank identities and disconnected controls, public service/certificate parity, generated existential nodes, nominal equality and fresh refutation assumptions through the shared support arena. |
 | `purrdf-validate` / `dl_proof_vectors` | scalar | `all_shared_dl_proof_vectors_match_the_current_native_boundary` | Runs all sixteen shared service/schema proof vectors through the same producer/checker invoked by the packaged WASM golden entry, including exact canonical proof bytes and replay reports. |
+| `purrdf-validate` / `dl_proof_vectors` | scalar | `imported_closure_proofs_check_against_the_consumers_native_snapshot` | Checks independently loaded imported-source proofs against the consumer's original snapshot, including an IRI, document-scoped equal blank labels and role-derived membership; rejects changed source, wrong verdict and altered proof. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Refuses an image naming a different WASM arithmetic path with its typed admission error. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Records wasm32 and the actual SIMD feature bit and arithmetic path in the image. |
 | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Explicitly calls the wasm simd128 encoder over lengths, alignments and write boundaries and asserts its selection. |
