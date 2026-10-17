@@ -70,8 +70,8 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                 produced.proof_document(),
             )
             .unwrap();
-        assert!(checked.contains("\nanswer checked 0\n"), "{checked}");
-        assert!(checked.contains("\nunattested 0\n"), "{checked}");
+        assert!(checked.contains("\nanswer checked 0\n"));
+        assert!(checked.contains("\nunattested 0\n"));
         assert!(
             consumer
                 .check_proof(
