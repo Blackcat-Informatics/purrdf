@@ -988,6 +988,14 @@ impl Parser<'_> {
         ps_id: &Term,
         own_qvs: &Term,
     ) -> Result<Vec<Shape>, String> {
+        self.sibling_qualified_shape_nodes(ps_id, own_qvs)
+            .into_iter()
+            .map(|node| self.parse_inline_shape(node))
+            .collect()
+    }
+
+    /// The shared sibling identity lookup for parsing and dependency analysis.
+    pub(crate) fn sibling_qualified_shape_nodes(&self, ps_id: &Term, own_qvs: &Term) -> Vec<Term> {
         let property = Term::NamedNode(NamedNode::from(sh::PROPERTY));
         let mut sibling_nodes: Vec<Term> = Vec::new();
         let mut seen: FastSet<Term> = FastSet::default();
@@ -1017,11 +1025,7 @@ impl Parser<'_> {
                 }
             }
         }
-        let mut siblings = Vec::with_capacity(sibling_nodes.len());
-        for node in sibling_nodes {
-            siblings.push(self.parse_inline_shape(node)?);
-        }
-        Ok(siblings)
+        sibling_nodes
     }
 
     // ── SHACL-AF node expressions (spec §5) ─────────────────────────────────────

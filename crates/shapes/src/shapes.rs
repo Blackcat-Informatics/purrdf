@@ -1638,6 +1638,8 @@ pub(crate) struct Parser<'s> {
     /// The unsupported-custom-target refusal of the parse, when it raised one, so
     /// [`Self::load_error`] returns it typed ([`ShapesError::UnsupportedTarget`]).
     unsupported_target: std::cell::RefCell<Option<crate::error::UnsupportedTargetRefusal>>,
+    /// The original static-analysis refusal, retained across textual parser context.
+    recursion_refusal: std::cell::RefCell<Option<ShapesError>>,
     /// The pre-binding violation of every well-formed `sh:SPARQLFunction` body that
     /// has one, by IRI. Filled by `check_sparql_function_declarations`; a call a shape
     /// reaches refuses the load, and the rest are unexecuted (see
@@ -1837,6 +1839,7 @@ impl<'s> Parser<'s> {
             ill_formed: std::cell::RefCell::new(None),
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
+            recursion_refusal: std::cell::RefCell::new(None),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
@@ -1899,6 +1902,9 @@ impl<'s> Parser<'s> {
     /// parse recorded, [`ShapesError::ShaclJs`] when it carries the recorded SHACL-JS
     /// refusal (a caller may prefix context to it), [`ShapesError::Invalid`] otherwise.
     fn load_error(&self, message: String) -> ShapesError {
+        if let Some(refusal) = self.recursion_refusal.borrow_mut().take() {
+            return refusal;
+        }
         if let Some(refusal) = self.ill_formed.borrow_mut().take()
             && message == refusal.to_string()
         {
@@ -2072,6 +2078,11 @@ impl<'s> Parser<'s> {
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
         self.refuse_rec_declarations()?;
+        if let Err(refusal) = self.check_shape_recursion() {
+            let message = refusal.to_string();
+            *self.recursion_refusal.borrow_mut() = Some(refusal);
+            return Err(message);
+        }
 
         // SHACL-AF parameterized target types are parsed up-front so that
         // `sh:target` blank nodes can be instantiated during shape target parsing.

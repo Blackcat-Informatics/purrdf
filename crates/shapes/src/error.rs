@@ -47,6 +47,8 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// A recursive shapes catalog requires an explicit recursion semantics.
+    Recursion(RecursionRefusal),
     /// Logical capacity or physical storage refused an operation.
     Storage(purrdf_lex::allocation::StorageError),
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table the
@@ -88,6 +90,7 @@ impl ShapesError {
         match self {
             Self::Imports(error) => Some(error),
             Self::ShaclJs(_)
+            | Self::Recursion(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -103,6 +106,7 @@ impl ShapesError {
         match self {
             Self::ShaclJs(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -118,6 +122,7 @@ impl ShapesError {
         match self {
             Self::IllFormed(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
@@ -133,6 +138,7 @@ impl ShapesError {
         match self {
             Self::UnsupportedTarget(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -148,6 +154,7 @@ impl ShapesError {
         match self {
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
@@ -163,6 +170,7 @@ impl ShapesError {
         match self {
             Self::Prebinding(violation) => Some(violation),
             Self::Imports(_)
+            | Self::Recursion(_)
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::UnsupportedTarget(_)
@@ -176,6 +184,7 @@ impl ShapesError {
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Recursion(refusal) => refusal.fmt(f),
             Self::Storage(error) => error.fmt(f),
             Self::Imports(error) => error.fmt(f),
             Self::ShaclJs(refusal) => refusal.fmt(f),
@@ -191,6 +200,7 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Recursion(refusal) => Some(refusal),
             Self::Storage(error) => Some(error),
             Self::Imports(error) => Some(error),
             Self::ShaclJs(refusal) => Some(refusal),
@@ -202,6 +212,53 @@ impl std::error::Error for ShapesError {
         }
     }
 }
+
+/// How a shape reference affects the containing constraint's truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RecursionPolarity {
+    /// Growing the referenced conformance relation preserves satisfaction.
+    Positive,
+    /// Growing the referenced conformance relation can remove satisfaction.
+    Negative,
+    /// The constraint is nonmonotone in the referenced conformance relation.
+    Both,
+    /// A where-target dependency, separate from the conformance formula.
+    Target,
+}
+
+/// One reference inside a recursive strongly connected component.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RecursionDependency {
+    /// Source shape, in native RDF term spelling.
+    pub source: String,
+    /// Referenced shape, in native RDF term spelling.
+    pub target: String,
+    /// IRI of the shape-expecting parameter.
+    pub parameter: String,
+    /// The reference's role in conformance or target selection.
+    pub polarity: RecursionPolarity,
+}
+
+/// A recursive component refused before shapes are recursively expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursionRefusal {
+    /// Every shape of the component, in canonical RDF term order.
+    pub members: Vec<String>,
+    /// Every internal reference, sorted and deduplicated.
+    pub edges: Vec<RecursionDependency>,
+}
+
+impl fmt::Display for RecursionRefusal {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            out,
+            "cyclic SHACL shape reference requires explicit recursion semantics: {}",
+            self.members.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for RecursionRefusal {}
 
 purrdf_lex::variant_from!(ShapesError { Storage(purrdf_lex::allocation::StorageError) });
 

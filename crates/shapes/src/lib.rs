@@ -84,8 +84,9 @@ pub mod validator_alternatives;
 pub mod xpath;
 
 pub use error::{
-    IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
-    SparqlTargetDisagreement, UnsupportedTargetRefusal,
+    IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, RecursionDependency,
+    RecursionPolarity, RecursionRefusal, ShaclJsRefusal, ShapesError, SparqlTargetDisagreement,
+    UnsupportedTargetRefusal,
 };
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,

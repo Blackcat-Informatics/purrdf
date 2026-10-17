@@ -61,6 +61,134 @@ fn shared_shape_references_are_not_cycles() {
 }
 
 #[test]
+fn recursion_failure_names_component_parameters_and_polarity() {
+    use purrdf_shapes::{RecursionPolarity, ShapesError};
+    for (body, expected) in [
+        ("ex:S sh:node ex:S .", RecursionPolarity::Positive),
+        ("ex:S sh:not ex:S .", RecursionPolarity::Negative),
+        ("ex:S sh:xone (ex:S) .", RecursionPolarity::Both),
+        ("ex:S sh:targetWhere ex:S .", RecursionPolarity::Target),
+        ("ex:S sh:memberShape ex:S .", RecursionPolarity::Positive),
+        ("ex:S sh:someValue ex:S .", RecursionPolarity::Positive),
+        (
+            "ex:S sh:path ex:p; sh:reifierShape ex:S .",
+            RecursionPolarity::Positive,
+        ),
+        (
+            "ex:S sh:path ex:p; sh:qualifiedValueShape ex:S; sh:qualifiedMinCount 1 .",
+            RecursionPolarity::Positive,
+        ),
+        (
+            "ex:S sh:path ex:p; sh:qualifiedValueShape ex:S; sh:qualifiedMaxCount 1 .",
+            RecursionPolarity::Negative,
+        ),
+        (
+            "ex:S sh:path ex:p; sh:qualifiedValueShape ex:S; sh:qualifiedMinCount 1; sh:qualifiedMaxCount 2 .",
+            RecursionPolarity::Both,
+        ),
+    ] {
+        let error = parse_shapes(&format!("{NODE_EXPR_PREFIXES}{body}"), None)
+            .expect_err("recursive catalogs require explicit semantics");
+        let ShapesError::Recursion(refusal) = error else {
+            panic!("{body}: expected a typed recursive-component refusal, got {error}");
+        };
+        assert_eq!(refusal.members, ["<http://example.org/ns#S>"]);
+        assert_eq!(refusal.edges.len(), 1, "{body}: {refusal:?}");
+        assert_eq!(refusal.edges[0].polarity, expected, "{body}");
+    }
+}
+
+#[test]
+fn recursive_component_refusal_is_independent_of_statement_order() {
+    let a = "ex:A sh:node ex:B . ex:B sh:not ex:A .";
+    let b = "ex:B sh:not ex:A . ex:A sh:node ex:B .";
+    let error = |body| parse_shapes(&format!("{NODE_EXPR_PREFIXES}{body}"), None).unwrap_err();
+    assert_eq!(error(a), error(b));
+}
+
+#[test]
+fn recursion_analysis_uses_all_shapes_including_parameter_declarations() {
+    let error = parse_shapes(
+        &format!(
+            "{NODE_EXPR_PREFIXES}\
+             ex:C a sh:ConstraintComponent; sh:parameter ex:P .\
+             ex:P sh:path ex:argument; sh:node ex:P ."
+        ),
+        None,
+    )
+    .expect_err("the refers graph includes shapes that are not explicit-target candidates");
+    let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
+        panic!("expected the complete specification census to detect recursion: {error}");
+    };
+    assert_eq!(refusal.members, ["<http://example.org/ns#P>"]);
+}
+
+#[test]
+fn disjoint_qualified_siblings_contribute_the_opposite_count_polarity() {
+    use purrdf_shapes::{RecursionPolarity, ShapesError};
+    for (bounds, expected) in [
+        ("sh:qualifiedMinCount 1", RecursionPolarity::Negative),
+        ("sh:qualifiedMaxCount 1", RecursionPolarity::Positive),
+        (
+            "sh:qualifiedMinCount 1; sh:qualifiedMaxCount 2",
+            RecursionPolarity::Both,
+        ),
+    ] {
+        let error = parse_shapes(
+            &format!(
+                "{NODE_EXPR_PREFIXES}\
+                 ex:Root sh:property ex:P, ex:Q .\
+                 ex:P sh:path ex:p; sh:qualifiedValueShape ex:S;\
+                     sh:qualifiedValueShapesDisjoint true; {bounds} .\
+                 ex:Q sh:path ex:q; sh:qualifiedValueShape ex:T; sh:qualifiedMinCount 1 .\
+                 ex:S sh:nodeKind sh:IRI . ex:T sh:node ex:P ."
+            ),
+            None,
+        )
+        .unwrap_err();
+        let ShapesError::Recursion(refusal) = error else {
+            panic!("expected the implicit sibling dependency to close the cycle: {error}");
+        };
+        assert_eq!(
+            refusal.members,
+            ["<http://example.org/ns#P>", "<http://example.org/ns#T>"]
+        );
+        let sibling = refusal
+            .edges
+            .iter()
+            .find(|edge| edge.parameter == purrdf_iri::vocab::sh::QUALIFIED_VALUE_SHAPES_DISJOINT)
+            .expect("the implicit edge must identify its disjoint-count origin");
+        assert_eq!(sibling.polarity, expected, "{bounds}");
+    }
+}
+
+#[test]
+fn lower_stratum_negation_is_not_recursive() {
+    parse_shapes(
+        &format!("{NODE_EXPR_PREFIXES}ex:S sh:not ex:T . ex:T sh:nodeKind sh:IRI ."),
+        None,
+    )
+    .expect("a negative reference outside an SCC is stratified");
+}
+
+#[test]
+fn long_recursive_catalog_is_analyzed_before_model_expansion() {
+    use std::fmt::Write as _;
+    let mut document = NODE_EXPR_PREFIXES.to_owned();
+    for index in 0..2000 {
+        writeln!(document, "ex:S{index} sh:node ex:S{} .", (index + 1) % 2000).unwrap();
+    }
+    let error = purrdf_stack::on_stack(1024 * 1024, move || parse_shapes(&document, None))
+        .unwrap()
+        .expect_err("the complete cycle must be detected without unfolding it");
+    let purrdf_shapes::ShapesError::Recursion(refusal) = error else {
+        panic!("expected static SCC refusal rather than native stack exhaustion: {error}");
+    };
+    assert_eq!(refusal.members.len(), 2000);
+    assert_eq!(refusal.edges.len(), 2000);
+}
+
+#[test]
 fn deep_acyclic_shape_loading_refuses_before_native_stack_exhaustion() {
     for property in [false, true] {
         let mut document = NODE_EXPR_PREFIXES.to_owned();
