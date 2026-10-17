@@ -72,7 +72,7 @@
 //! A `SERVICE ?e` evaluated where no solution names an endpoint has no endpoint to be sent
 //! to, and makes no invocation. Returning the join identity there would make the
 //! enclosing join a no-op and the answer look complete when nothing was asked, so the
-//! refusal is a hard [`EvalError::Unsupported`] that names the shapes that do evaluate
+//! refusal carries [`EvalError::UNSUPPORTED_CODE`] and names the shapes that do evaluate
 //! and the rewrite, with or without `SILENT`: `SILENT` absorbs an invocation that fails,
 //! and there is none.
 
@@ -1518,7 +1518,7 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Unsupported`] naming the value when a left solution binds `?v` to a term
+/// A refusal under [`EvalError::UNSUPPORTED_CODE`] naming the value when a left solution binds `?v` to a term
 /// that is not an IRI and the clause is not `SILENT` ([`non_iri_endpoint`]), and when
 /// one leaves it unbound and no enclosing operator lists its endpoints
 /// ([`unbound_endpoint`]), `SILENT` or not.
@@ -1569,13 +1569,8 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
         match binding_for(&ctx.endpoint_frames, &variable) {
             Some(EndpointBinding::Endpoints(_)) => {}
             binding => {
-                let cause = if unbound < left.rows.len()
-                    || matches!(binding, Some(EndpointBinding::PartlyUnbound))
-                {
-                    "some solutions of the pattern before it leave it unbound"
-                } else {
-                    "it is not bound to an IRI where the SERVICE is evaluated"
-                };
+                let cause = unbound < left.rows.len()
+                    || matches!(binding, Some(EndpointBinding::PartlyUnbound));
                 return Err(unbound_endpoint(&variable, cause, &ctx.growth));
             }
         }
@@ -1714,7 +1709,7 @@ pub(crate) fn eval_projected<D: DatasetView + Sync>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Unsupported`] when no enclosing solution names an endpoint (`SILENT` or
+/// [`EvalError::UNSUPPORTED_CODE`] when no enclosing solution names an endpoint (`SILENT` or
 /// not) and, without `SILENT`, when the clause's variable is bound to a term that is not
 /// an IRI; and whatever each endpoint's invocation raises.
 pub(crate) fn eval_variable_endpoint<D: DatasetView + Sync>(
@@ -1736,50 +1731,58 @@ pub(crate) fn eval_variable_endpoint<D: DatasetView + Sync>(
         Some(EndpointFrame {
             binding: EndpointBinding::PartlyUnbound,
             ..
-        }) => Err(unbound_endpoint(
-            variable,
-            "some solutions of the pattern before it leave it unbound",
-            &ctx.growth,
-        )),
+        }) => Err(unbound_endpoint(variable, true, &ctx.growth)),
         Some(EndpointFrame {
             binding: EndpointBinding::Hidden,
             ..
         })
-        | None => Err(unbound_endpoint(
-            variable,
-            "it is not bound to an IRI where the SERVICE is evaluated",
-            &ctx.growth,
-        )),
+        | None => Err(unbound_endpoint(variable, false, &ctx.growth)),
     }
 }
 
-/// Preserve the resident refusal variant and the exact original diagnostic law;
-/// bounded execution retains the native text grant through terminal publication.
-fn unsupported_endpoint(
-    message: impl std::fmt::Display,
-    workspace: &crate::WorkspaceCapability,
-) -> EvalError {
-    if workspace.is_bounded() {
-        crate::NativeDiagnostic::error(
-            crate::NativeDiagnosticKind::UnclassifiedUnsupported,
-            message,
-            workspace,
-        )
-    } else {
-        EvalError::unsupported(message.to_string())
+#[derive(Debug)]
+enum EndpointRefusal {
+    Unbound {
+        variable: purrdf_lex::allocation::SharedText,
+        partly_unbound: bool,
+    },
+    NonIri {
+        variable: purrdf_lex::allocation::SharedText,
+        actual: crate::WorkspaceTerm,
+        spelling: Option<purrdf_lex::allocation::SharedText>,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for EndpointRefusal {
+    purrdf_hash::error_visit! {
+        Unbound { variable, partly_unbound } => "service-endpoint-unbound" {
+            "variable" => Text(variable.as_str()), "partly_unbound" => Boolean(*partly_unbound),
+        },
+        NonIri { variable, actual, spelling } => "service-endpoint-not-iri" {
+            "variable" => Text(variable.as_str()), "actual" => Term(&**actual),
+            "spelling" => Value(spelling.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |text| purrdf_hash::error::ErrorValue::Text(text.as_str()))),
+        },
     }
 }
 
-/// The refusal for a `SERVICE ?variable` no solution names an endpoint for.
-pub(crate) fn unbound_endpoint(
-    variable: &Variable,
-    cause: &str,
-    workspace: &crate::WorkspaceCapability,
-) -> EvalError {
-    let v = variable.as_str();
-    unsupported_endpoint(
-        format_args!(
-            "SERVICE ?{v} with no endpoint: ?{v} names the endpoint, but {cause}, so there is \
+impl std::error::Error for EndpointRefusal {}
+
+impl std::fmt::Display for EndpointRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unbound {
+                variable: v,
+                partly_unbound,
+            } => {
+                let cause = if *partly_unbound {
+                    "some solutions of the pattern before it leave it unbound"
+                } else {
+                    "it is not bound to an IRI where the SERVICE is evaluated"
+                };
+                write!(
+                    formatter,
+                    "SERVICE ?{v} with no endpoint: ?{v} names the endpoint, but {cause}, so there is \
          no endpoint to send the request to. A variable endpoint is evaluated once per \
          distinct IRI ?{v} is bound to, wherever ?{v} is bound in every solution that \
          reaches the SERVICE: by a pattern earlier in the same group (a triple pattern, \
@@ -1791,7 +1794,58 @@ pub(crate) fn unbound_endpoint(
          `?s <p> ?{v} . SERVICE ?{v} {{ … }}` or `?s <p> ?{v} LATERAL {{ SERVICE ?{v} {{ … }} \
          }}`. SILENT does not change this: no invocation is made, so there is no failed \
          invocation for it to absorb"
+                )
+            }
+            Self::NonIri {
+                variable: v,
+                actual,
+                spelling,
+            } => {
+                let description = match &**actual {
+                    TermValue::Blank { .. } => "a blank node",
+                    TermValue::Triple { .. } => "a triple term",
+                    TermValue::Literal { .. } => "the literal ",
+                    TermValue::Iri(_) => "",
+                };
+                write!(
+                    formatter,
+                    "SERVICE ?{v}: ?{v} is bound to {description}{}, which is not an IRI, so there is \
+         no endpoint to send the request to",
+                    spelling.as_ref().map_or("", |text| text.as_str())
+                )
+            }
+        }
+    }
+}
+
+/// Preserve native endpoint fields and the original Unsupported diagnostic law.
+fn unsupported_endpoint(
+    refusal: Result<EndpointRefusal, EvalError>,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    match refusal {
+        Ok(refusal) => crate::RetainedNativeFailure::error(
+            crate::NativeDiagnosticKind::UnclassifiedUnsupported,
+            refusal,
+            workspace,
         ),
+        Err(error) => error,
+    }
+}
+
+/// The refusal for a `SERVICE ?variable` no solution names an endpoint for.
+pub(crate) fn unbound_endpoint(
+    variable: &Variable,
+    partly_unbound: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    unsupported_endpoint(
+        workspace
+            .authored_text(&variable.as_str())
+            .map(|variable| EndpointRefusal::Unbound {
+                variable,
+                partly_unbound,
+            }),
         workspace,
     )
 }
@@ -1815,19 +1869,14 @@ pub(crate) fn non_iri_endpoint(
             }
         }
     };
-    let description = match value {
-        TermValue::Blank { .. } => "a blank node",
-        TermValue::Triple { .. } => "a triple term",
-        TermValue::Literal { .. } => "the literal ",
-        TermValue::Iri(_) => "",
-    };
-    let v = variable.as_str();
     unsupported_endpoint(
-        format_args!(
-            "SERVICE ?{v}: ?{v} is bound to {description}{}, which is not an IRI, so there is \
-         no endpoint to send the request to",
-            spelling.as_ref().map_or("", |text| text.as_str()),
-        ),
+        (|| {
+            Ok(EndpointRefusal::NonIri {
+                variable: workspace.authored_text(&variable.as_str())?,
+                actual: workspace.clone_term(value)?,
+                spelling,
+            })
+        })(),
         workspace,
     )
 }
@@ -2673,10 +2722,10 @@ mod tests {
         ] {
             let source = Endpoints::default();
             let error = run(&source, &q(shape)).expect_err(shape);
+            assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
             assert!(
-                matches!(&error, EvalError::Unsupported { what, .. }
-                    if what.contains("SERVICE ?e with no endpoint")
-                        && what.contains("LATERAL")),
+                error.to_string().contains("SERVICE ?e with no endpoint")
+                    && error.to_string().contains("LATERAL"),
                 "{shape}: {error}"
             );
             assert_eq!(
@@ -2709,9 +2758,11 @@ mod tests {
             &q("{ ?g ex:endpoint ?e } UNION { ?g ex:other ?o } OPTIONAL { SERVICE ?e { ?s ?p ?x } }"),
         )
         .expect_err("a left row without an endpoint names none");
+        assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
         assert!(
-            matches!(&error, EvalError::Unsupported { what, .. }
-                if what.contains("some solutions of the pattern before it leave it unbound")),
+            error
+                .to_string()
+                .contains("some solutions of the pattern before it leave it unbound"),
             "{error}"
         );
         assert_eq!(source.requests(), Vec::<String>::new());
@@ -2737,9 +2788,9 @@ mod tests {
         ] {
             let source = Endpoints::default();
             let error = run(&source, &q(shape)).expect_err(shape);
+            assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
             assert!(
-                matches!(&error, EvalError::Unsupported { what, .. }
-                    if what.contains("SERVICE ?e with no endpoint")),
+                error.to_string().contains("SERVICE ?e with no endpoint"),
                 "{shape}: {error}"
             );
             assert_eq!(source.requests(), Vec::<String>::new(), "{shape}");

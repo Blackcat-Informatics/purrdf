@@ -1727,6 +1727,85 @@ fn silent_service_receipts_keep_original_causes_after_owner_release() {
     }
 }
 
+fn endpoint_refusals_preserve_native_scope_and_rdf_values() {
+    use purrdf_sparql_eval::eval::{EvalCtx, evaluate_query};
+    for (prefix, partly_unbound) in [
+        ("", false),
+        ("VALUES ?endpoint { <https://example.org/a> UNDEF }", true),
+    ] {
+        let dataset = support::empty_dataset();
+        let query = SparqlParser::new()
+            .parse_query(&format!(
+                "SELECT * WHERE {{ {prefix} SERVICE ?endpoint {{ ?s ?p ?o }} }}"
+            ))
+            .unwrap();
+        let mut ctx = EvalCtx::new(&dataset);
+        let original = evaluate_query(&query, &mut ctx).unwrap_err();
+        let retained = original.clone();
+        drop(original);
+        drop(ctx);
+        drop(dataset);
+        drop(query);
+        let fields = memory_failure_fields(
+            &retained,
+            NativeDiagnosticKind::UnclassifiedUnsupported,
+            "service-endpoint-unbound",
+        );
+        assert!(matches!(
+            fields.field("variable"),
+            ErrorValue::Text("endpoint")
+        ));
+        assert!(
+            matches!(fields.field("partly_unbound"), ErrorValue::Boolean(value) if value == partly_unbound)
+        );
+        assert_eq!(retained.code(), Some(EvalError::UNSUPPORTED_CODE));
+        assert!(retained.diagnostic_code().is_none());
+        assert!(
+            retained
+                .to_string()
+                .starts_with("unsupported: SERVICE ?endpoint with no endpoint:")
+        );
+    }
+    let dataset = support::empty_dataset();
+    let query = SparqlParser::new()
+        .parse_query("SELECT * WHERE { VALUES ?endpoint { \"original\"@en } SERVICE ?endpoint { ?s ?p ?o } }")
+        .unwrap();
+    let mut ctx = EvalCtx::new(&dataset);
+    let original = evaluate_query(&query, &mut ctx).unwrap_err();
+    let retained = original.clone();
+    drop(original);
+    drop(ctx);
+    drop(dataset);
+    drop(query);
+    let fields = memory_failure_fields(
+        &retained,
+        NativeDiagnosticKind::UnclassifiedUnsupported,
+        "service-endpoint-not-iri",
+    );
+    assert!(matches!(
+        fields.field("variable"),
+        ErrorValue::Text("endpoint")
+    ));
+    let ErrorValue::Term(term) = fields.field("actual") else {
+        panic!("the original RDF value must survive")
+    };
+    let events = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let actual = Capture::read_with_buffer(term, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(actual.code, "rdf-term-literal");
+    assert!(matches!(
+        actual.field("lexical_form"),
+        ErrorValue::Text("original")
+    ));
+    assert!(matches!(actual.field("language"), ErrorValue::Text("en")));
+    assert_eq!(retained.code(), Some(EvalError::UNSUPPORTED_CODE));
+    assert_eq!(
+        retained.to_string(),
+        "unsupported: SERVICE ?endpoint: ?endpoint is bound to the literal \"original\"@en, which is not an IRI, so there is no endpoint to send the request to"
+    );
+}
+
 fn memory_failure_fields<'a>(
     error: &'a EvalError,
     kind: NativeDiagnosticKind,
@@ -2919,6 +2998,7 @@ purrdf_testkit::harness_main!(
     actual_service_builder_preserves_original_failure_under_its_admission,
     admitted_service_native_causes_survive_without_rendering_or_inspection_allocation,
     actual_protocol_errors_keep_parser_form_iri_and_operation_fields,
+    endpoint_refusals_preserve_native_scope_and_rdf_values,
     control_and_load_errors_keep_native_causes_and_genuine_messages,
     native_protocol_resource_refusals_remain_allocation_free,
 );

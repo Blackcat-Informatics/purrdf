@@ -4240,7 +4240,7 @@ pub(crate) mod owned_row_regressions {
         assert_eq!(error.code(), expected.code());
         assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
         assert_eq!(error.diagnostic_code(), expected.diagnostic_code());
-        assert!(matches!(&error, EvalError::NativeDiagnostic(value)
+        assert!(matches!(&error, EvalError::RetainedNativeFailure(value)
             if value.kind() == crate::NativeDiagnosticKind::UnclassifiedUnsupported));
         let live = ledger.live.load(Ordering::Relaxed);
         assert!(live > base);
