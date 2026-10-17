@@ -12,6 +12,36 @@ const MISSING: &str = "http://example.org/Missing";
 const PREDICATE: &str = "http://example.org/p";
 
 #[test]
+fn large_neighbourhood_backtracks_without_using_the_native_call_stack() {
+    let schema = parse_shexc(
+        "PREFIX ex: <http://example.org/> ex:S { ex:p .* ; ex:p . }",
+        None,
+    )
+    .unwrap();
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("http://example.org/focus").unwrap();
+    let predicate = builder.intern_iri(PREDICATE).unwrap();
+    for value in 0..10_000 {
+        let object = builder
+            .intern_iri(&format!("http://example.org/value/{value}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    let data = builder.freeze().unwrap();
+    let map = [(
+        purrdf_core::TermValue::iri("http://example.org/focus"),
+        purrdf_shex::ShapeSelector::Label(SHAPE.to_owned()),
+    )];
+    let report =
+        purrdf_stack::on_stack_scoped(256 * 1024, || validate(&schema, &data, &map)).unwrap();
+    assert_eq!(report.entries.len(), 1);
+    assert_eq!(
+        report.entries[0].status,
+        purrdf_shex::ConformanceStatus::Conformant
+    );
+}
+
+#[test]
 fn deep_dependency_walk_keeps_missing_references_and_odd_negation() {
     // Construction and owned AST teardown are outside the small-stack check.
     // This specifically qualifies the borrowed admission walk, not AST Drop.

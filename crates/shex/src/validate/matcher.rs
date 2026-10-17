@@ -30,6 +30,7 @@
 //!    interval contains 1.
 
 use purrdf_core::FastMap;
+use purrdf_lex::walk::WorkList;
 
 use crate::ast::{SemAct, ShapeExpr, TripleConstraint, TripleExpr};
 
@@ -322,39 +323,59 @@ pub(crate) fn assignment_search(
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
     let mut assignment = vec![None; arcs.len()];
     let mut budget = SEARCH_BUDGET;
-    let found = search(compiled, arcs, 0, &mut counts, &mut assignment, &mut budget)?;
+    let found = search(compiled, arcs, &mut counts, &mut assignment, &mut budget)?;
     Ok(found.then_some((counts, assignment)))
 }
 
 fn search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
-    index: usize,
-    counts: &mut Vec<(u64, u64)>,
-    assignment: &mut Vec<Option<usize>>,
+    counts: &mut [(u64, u64)],
+    assignment: &mut [Option<usize>],
     budget: &mut u64,
 ) -> Result<bool, String> {
-    if *budget == 0 {
-        return Err("triple-expression matcher budget exhausted".to_owned());
+    enum Frame {
+        Enter(usize),
+        NextCandidate(usize, usize),
     }
-    *budget -= 1;
-    let Some(arc) = arcs.get(index) else {
-        return Ok(counts_match(compiled, counts));
-    };
-    for &slot in &arc.candidates {
-        counts[slot].0 += 1;
-        counts[slot].1 += 1;
-        assignment[index] = Some(slot);
-        if search(compiled, arcs, index + 1, counts, assignment, budget)? {
-            return Ok(true);
+    let mut pending = WorkList::<_, 16>::with(Frame::Enter(0));
+    while let Some(frame) = pending.pop() {
+        match frame {
+            Frame::Enter(index) => {
+                // A step is charged exactly where the recursive search entered
+                // a call, including its terminal count check. Resuming a choice
+                // and undoing it do not consume additional work.
+                if *budget == 0 {
+                    return Err("triple-expression matcher budget exhausted".to_owned());
+                }
+                *budget -= 1;
+                if index == arcs.len() {
+                    if counts_match(compiled, counts) {
+                        return Ok(true);
+                    }
+                } else {
+                    pending.push(Frame::NextCandidate(index, 0));
+                }
+            }
+            Frame::NextCandidate(index, next) => {
+                if let Some(slot) = assignment[index].take() {
+                    counts[slot].0 -= 1;
+                    counts[slot].1 -= 1;
+                }
+                let arc = &arcs[index];
+                if let Some(&slot) = arc.candidates.get(next) {
+                    counts[slot].0 += 1;
+                    counts[slot].1 += 1;
+                    assignment[index] = Some(slot);
+                    pending.push(Frame::NextCandidate(index, next + 1));
+                    pending.push(Frame::Enter(index + 1));
+                } else if arc.extra_allowed {
+                    // EXTRA is the final alternative, so no choice continuation
+                    // is needed and this arc contributes to no slot count.
+                    pending.push(Frame::Enter(index + 1));
+                }
+            }
         }
-        counts[slot].0 -= 1;
-        counts[slot].1 -= 1;
-        assignment[index] = None;
-    }
-    if arc.extra_allowed {
-        assignment[index] = None;
-        return search(compiled, arcs, index + 1, counts, assignment, budget);
     }
     Ok(false)
 }
@@ -374,6 +395,62 @@ mod tests {
 
     fn compile_simple(expr: &TripleExpr) -> Compiled<'_> {
         compile(expr, &FastMap::default()).expect("compile")
+    }
+
+    #[test]
+    fn backtracking_keeps_candidate_order_rollback_and_exact_work_charges() {
+        let expr = TripleExpr::EachOf(crate::ast::TripleExprGroup {
+            expressions: vec![tc("p", Some(0), Some(-1)), tc("p", Some(1), Some(1))],
+            ..crate::ast::TripleExprGroup::default()
+        });
+        let compiled = compile_simple(&expr);
+        let arcs = [ArcOptions {
+            candidates: vec![0, 1],
+            extra_allowed: false,
+        }];
+        for allowed in [1, 2, 3] {
+            let mut counts = [(0, 0); 2];
+            let mut assignment = [None];
+            let mut budget = allowed;
+            let result = search(&compiled, &arcs, &mut counts, &mut assignment, &mut budget);
+            if allowed == 3 {
+                assert_eq!(result, Ok(true));
+                assert_eq!(counts, [(0, 0), (1, 1)]);
+                assert_eq!(assignment, [Some(1)]);
+            } else {
+                assert_eq!(
+                    result,
+                    Err("triple-expression matcher budget exhausted".to_owned())
+                );
+            }
+            assert_eq!(budget, 0);
+        }
+    }
+
+    #[test]
+    fn extra_diversion_keeps_its_terminal_work_charge_and_empty_assignment() {
+        let expr = tc("p", None, None);
+        let compiled = compile_simple(&expr);
+        let arcs = [
+            ArcOptions {
+                candidates: vec![],
+                extra_allowed: true,
+            },
+            ArcOptions {
+                candidates: vec![0],
+                extra_allowed: false,
+            },
+        ];
+        let mut counts = [(0, 0)];
+        let mut assignment = [None; 2];
+        let mut budget = 3;
+        assert_eq!(
+            search(&compiled, &arcs, &mut counts, &mut assignment, &mut budget),
+            Ok(true)
+        );
+        assert_eq!(counts, [(1, 1)]);
+        assert_eq!(assignment, [None, Some(0)]);
+        assert_eq!(budget, 0);
     }
 
     #[test]
