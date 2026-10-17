@@ -1,0 +1,11 @@
+# Implementation assessment
+
+This is the implementing agent's assessment, not an independent review verdict. Actual CodeRabbit review is pending on PR 573; no local subagent API is available.
+
+The new native primitive is dispatched by the existing datatype resolver, ordinary parser and admitted parser. Validation borrows the input and checks the canonical XML Char terminal before allocating. Both paths format CollapsedWhitespace; neither performs URL parsing, percent decoding, Unicode normalization or URI rewriting. Owned heap accounting includes the new String carrier. Numeric and calendar operations classify the new primitive explicitly; equality is total within the primitive while ordering and effective Boolean value remain unsupported.
+
+The range partition gives anyURI a separate stratum and uses XsdValue::facet_length, the same method downstream now consumes. Primitive separation is therefore preserved in membership, enumeration deduplication and Boolean combinations. Positive-length cardinality is a lower bound from the XML alphabet excluding the four collapse characters; empty length is exactly one. The implementation does not assert a made-up exact count. Existing conservative character-space satisfiability is preserved rather than weakened.
+
+The production entailment literal prepass resolves the new primitive through its existing native calls. Its regression proves alias equality, distinct primitive separation, recognized membership and invalid lexical classification. The same three primitive/range cases execute on native and WASM/Node. Existing native XSD tests and admitted-parser allocation tests passed. The small facet-method extraction was followed by native anyURI and data-range tests and all-target clippy; actual WASM replay also completed successfully.
+
+Pending work is explicit: final CodeRabbit dispositions, hosted full-workspace qualification, and GMEOW's pin/deletion validation and merge. Issue 572 must stay open until its downstream criterion lands; issue 1803 covers substantially more than this unit. There is no compatibility shim, second normalizer or runtime dependency addition. Source documentation contains no issue/PR references or tool attribution.

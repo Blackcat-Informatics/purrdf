@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "The native XSD engine leaves xsd:anyURI uninterpreted, so GMEOW maintains whitespace, equality and length branches (Blackcat-Informatics/gmeow-ontology#1803). Implement native XsdDatatype/XsdValue parsing, identity, storage accounting and data ranges. Use fixed XML whitespace collapse and XML Char validation; accept empty, relative and fragment references without URL normalization. Keep the primitive disjoint from string. Verify enumerations, Boolean range combinations, length facets, sound cardinality, governed parsing and WASM portability. Then integrate downstream and delete the superseded branches with no fallback. Normative source: https://www.w3.org/TR/xmlschema11-2/#anyURI",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-17T08:29:53Z",
+  "labels": [],
+  "milestone": null,
+  "number": 572,
+  "state": "OPEN",
+  "title": "Model the XSD anyURI value space in the native datatype engine",
+  "updatedAt": "2026-10-17T08:29:53Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/572"
+}

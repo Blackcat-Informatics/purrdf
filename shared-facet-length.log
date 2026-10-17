@@ -1,0 +1,53 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 13.14s
+     Running tests/any_uri.rs (/opt/.cargo/13/fd31473041f40c/debug/build/purrdf-xsd/0ff65881cbf112c8/out/any_uri-0ff65881cbf112c8)
+
+running 3 tests
+test lexical_mapping_preserves_everything_except_xml_whitespace ... ok
+test primitive_identity_is_disjoint_and_unordered ... ok
+test ranges_use_collapsed_character_lengths_and_primitive_identity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/data_range.rs (/opt/.cargo/13/fd31473041f40c/debug/build/purrdf-xsd/f7c848b0a0ccaf14/out/data_range-f7c848b0a0ccaf14)
+
+running 36 tests
+test a_bound_facet_excludes_the_nan_of_its_space ... ok
+test a_bound_outside_a_subtypes_own_range_is_empty ... ok
+test a_datatype_and_its_complement_are_empty ... ok
+test a_facet_on_the_boolean_space_is_not_decided ... ok
+test a_timezone_shifted_temporal_literal_is_the_same_value ... ok
+test a_lower_bound_above_the_upper_bound_is_empty_in_every_numeric_space ... ok
+test a_length_zero_space_holds_exactly_one_value ... ok
+test a_temporal_enumeration_and_its_complement_are_decided_exactly ... ok
+test adjacent_float_values_leave_no_room_between_them ... ok
+test an_enumerated_float_zero_is_exhibited_rather_than_exact ... ok
+test an_exclusive_temporal_bound_meeting_its_inclusive_twin_is_empty ... ok
+test an_enumeration_counts_distinct_values ... ok
+test an_inapplicable_facet_is_not_silently_ignored ... ok
+test an_opaque_range_is_undecided_but_cannot_defeat_a_witness ... ok
+test binary_length_counts_octets_not_lexical_characters ... ok
+test contradictory_date_bounds_are_empty_and_satisfiable_ones_are_witnessed ... ok
+test contradictory_datetime_endpoints_refute_zoned_and_local_value_strata ... ok
+test contradictory_length_facets_are_empty ... ok
+test datetime_stamp_requires_a_timezone_at_both_native_parse_doors ... ok
+test datetime_stamp_enumerations_count_value_identity_and_complements_exactly ... ok
+test derived_integer_datatypes_carry_their_own_value_space ... ok
+test disjoint_value_spaces_intersect_to_nothing ... ok
+test datetime_stamp_is_the_exact_proper_timezone_stratum_of_datetime ... ok
+test normalized_rdf_language_spaces_are_disjoint_infinite_exact_ranges ... ok
+test the_complement_of_one_datatype_is_witnessed_by_another ... ok
+test removing_one_value_from_a_populous_length_leaves_the_rest ... ok
+test tagged_enumerations_and_their_boolean_combinations_have_exact_finite_counts ... ok
+test the_boolean_space_is_exhaustible ... ok
+test the_duration_subtypes_are_inhabited_but_not_exact ... ok
+test the_complement_of_the_whole_domain_is_empty ... ok
+test the_integers_are_a_subset_of_the_decimals ... ok
+test the_integers_are_discrete_and_the_decimals_are_dense ... ok
+test value_space_identity_differs_from_sparql_equality_in_exactly_two_places ... ok
+test the_non_integral_decimals_are_inhabited_and_a_pinned_integer_is_not ... ok
+test ranges_over_the_non_temporal_spaces_with_applicable_facets_are_exact ... ok
+test prop::emptiness_and_membership_never_contradict ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

@@ -1,0 +1,5 @@
+Model `xsd:anyURI` in the native XSD engine so consumers can delete their ad-hoc datatype handling. Parsing applies XML whitespace collapse, rejects non-XML characters, and preserves relative references, case and percent spelling. The unordered primitive remains disjoint from strings; range operations support its enumerations and character-length facets with sound cardinality bounds. Both ordinary and admitted readers share the lexical implementation, including native retained-storage accounting. Entailment consumes the same primitive.
+
+Validation: the complete XSD crate suite passed; the three new contract cases passed natively and in actual WASM/Node execution; admitted parser allocation/refusal controls and the entailment prepass regression passed; XSD and entailment clippy passed on all targets with warnings denied. Normal commit hooks passed. Full workspace CI is separate and pending. No GMEOW corpus producer or machine probes were run.
+
+Advances #572 and Blackcat-Informatics/gmeow-ontology#1803. The downstream deletion is being integrated on the existing GMEOW issue branch; broader reasoning ownership remains open.

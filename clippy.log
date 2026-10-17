@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on build directory
+    Checking const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/rdf-core)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/deflate)
+   Compiling libc v0.2.186
+    Checking either v1.16.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/xsd)
+    Checking regex-automata v0.4.14
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/iri)
+    Checking hashbrown v0.17.1
+    Checking digest v0.11.3
+    Checking crossbeam-epoch v0.9.18
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/testkit)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/stack)
+    Checking rayon v1.12.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/572-model-the-xsd-anyuri-value-space-in-the/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 40.36s
