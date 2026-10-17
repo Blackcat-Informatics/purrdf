@@ -1762,6 +1762,19 @@ pub struct QuadValues {
     pub g: Option<TermValue>,
 }
 
+impl purrdf_hash::error::StructuredError for QuadValues {
+    purrdf_hash::error_visit! {
+        @record self { s, p, o, g } => "rdf-quad-values" {
+            "subject" => Term(&self.s),
+            "predicate" => Term(&self.p),
+            "object" => Term(&self.o),
+            "graph" => Value(self.g.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |graph| purrdf_hash::error::ErrorValue::Term(graph))),
+        }
+    }
+}
+
 /// Shared graph-scoped RDF 1.2 statement classification. Source-specific indexed
 /// probes supply visibility and reifier presence; an explicitly typed orphan
 /// annotation stays typed unless its originally applicable declaration disappears.

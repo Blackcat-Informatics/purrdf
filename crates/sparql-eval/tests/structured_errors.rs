@@ -1074,7 +1074,241 @@ fn paged_operational_failure_exposes_the_native_page_receipt() {
     )));
 }
 
+fn segmented_stack_query_failure_retains_complete_snapshot_metadata() {
+    use purrdf_core::{
+        RdfDatasetBuilder, SegmentedLayer, SegmentedLayerMetadata, SegmentedReadLimits,
+        SegmentedResidentHead, SegmentedStack, SparqlRequest,
+    };
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    use std::sync::Arc;
+    let (image, _) = support::segmented::fixture();
+    let data = structured_graph_fixture();
+    let mut declarations = RdfDatasetBuilder::new();
+    let graph = declarations
+        .intern_iri("https://example.org/declared")
+        .unwrap();
+    declarations.declare_named_graph(graph).unwrap();
+    let metadata =
+        SegmentedLayerMetadata::new(Some(data.clone()), Some(declarations.freeze().unwrap()))
+            .unwrap();
+    let limits = SegmentedReadLimits::new(8_000_000, 2, 2048, 20_000_000, 8);
+    let mut stack = SegmentedStack::default();
+    stack
+        .publish(
+            vec![Arc::new(
+                SegmentedLayer::new(
+                    Arc::new(image.provider()),
+                    image.receipt().clone(),
+                    metadata.clone(),
+                )
+                .unwrap(),
+            )],
+            limits,
+        )
+        .unwrap();
+    stack.set_head(Some(SegmentedResidentHead::new(data, metadata).unwrap()));
+    let snapshot = stack.snapshot().unwrap();
+    let view = snapshot.query(limits).unwrap();
+    let error = NativeSparqlEngine::new()
+        .query_fallible_view(
+            &view,
+            SparqlRequest {
+                query: "%",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    drop(view);
+    drop(snapshot);
+    stack.set_head(None);
+    drop(stack);
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "sparql-fallible-query");
+    let evidence = capture.child("evidence");
+    let identity = evidence.child("snapshot");
+    assert_eq!(identity.code, "segmented-stack-snapshot");
+    let layers = identity.records("layers");
+    assert_eq!(layers.len(), 1);
+    let receipt = layers[0].child("receipt");
+    assert_eq!(receipt.code, "segmented-receipt");
+    assert!(
+        matches!(receipt.field("byte_len"), ErrorValue::ByteCount(length) if length == u128::from(image.receipt().byte_len()))
+    );
+    assert!(
+        matches!(receipt.field("block_count"), ErrorValue::Unsigned(count) if count == u128::from(image.receipt().block_count()))
+    );
+    assert!(
+        matches!(receipt.field("root"), ErrorValue::Bytes(root) if root == &image.receipt().encode()[40..72])
+    );
+    let metadata = layers[0].child("metadata");
+    assert_eq!(metadata.child("removals").code, "rdf-dataset");
+    assert_eq!(metadata.child("declarations").code, "rdf-dataset");
+    assert!(
+        matches!(metadata.field("max_owned_term_bytes"), ErrorValue::ByteCount(bytes) if bytes > 0)
+    );
+    let head = identity.child("head");
+    assert_eq!(head.child("dataset").code, "rdf-dataset");
+    assert_eq!(head.child("metadata").code, "segmented-layer-metadata");
+    let ErrorValue::Record(original) = evidence.field("snapshot") else {
+        panic!("original retained snapshot")
+    };
+    let events = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(original, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.records("layers").len(), 1);
+}
+
+fn paged_stack_failure_exposes_sources_head_removals_and_qualified_requests() {
+    use purrdf_core::{
+        InMemoryPageProvider, PageGeneration, PagedDataset, PagedQueryLimits, PagedStack,
+        QuadValues, SparqlRequest, StackPageOrigin, TermValue,
+    };
+    use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+    use std::sync::Arc;
+    let page = support::local_dataset([("s", "p", "o")]);
+    let dataset = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page, 25)],
+        PageGeneration(u64::MAX),
+    )))
+    .unwrap();
+    let mut stack = PagedStack::new(vec![Arc::new(dataset)]).unwrap();
+    let removed = QuadValues {
+        s: TermValue::iri("http://example.org/s"),
+        p: TermValue::iri("http://example.org/p"),
+        o: TermValue::iri("http://example.org/o"),
+        g: None,
+    };
+    assert!(stack.remove(&removed).unwrap());
+    let mut inserted = removed;
+    inserted.s = TermValue::iri("http://example.org/head");
+    assert!(stack.insert(inserted).unwrap());
+    assert!(
+        stack
+            .declare_named_graph(TermValue::iri("http://example.org/empty"))
+            .unwrap()
+    );
+    let snapshot = stack.snapshot().unwrap();
+    let view = snapshot.query_view(PagedQueryLimits::new(0, 0));
+    let error = NativeSparqlEngine::new()
+        .query_fallible_view(
+            &view,
+            SparqlRequest {
+                query: "SELECT ?s WHERE { ?s ?p ?o }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .unwrap_err();
+    drop(view);
+    drop(snapshot);
+    drop(stack);
+    let capture = Capture::read(&error);
+    assert_eq!(capture.code, "sparql-fallible-operational");
+    let evidence = capture.child("evidence");
+    assert_eq!(evidence.code, "paged-stack-evidence");
+    let sources = evidence.records("sources");
+    assert_eq!(sources.len(), 1);
+    assert!(
+        matches!(sources[0].field("generation"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(matches!(
+        sources[0].field("page_count"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert_eq!(evidence.records("head").len(), 1);
+    let head = evidence.records("head");
+    assert_eq!(head[0].code, "rdf-quad-values");
+    assert!(matches!(
+        head[0].child("subject").field("iri"),
+        ErrorValue::Iri("http://example.org/head")
+    ));
+    assert!(matches!(head[0].field("graph"), ErrorValue::Absent));
+    assert!(matches!(evidence.field("head_bytes"), ErrorValue::ByteCount(bytes) if bytes > 0));
+    assert_eq!(evidence.child("pages").code, "paged-query-evidence");
+    assert_eq!(evidence.records("requested_origins").len(), 1);
+    assert!(evidence.events.iter().any(|event| matches!(
+        event,
+        purrdf_testkit::error_capture::Event::BeginList(Some("removals"), 2)
+    )));
+    assert!(evidence.events.iter().any(|event| matches!(
+        event,
+        purrdf_testkit::error_capture::Event::BeginList(Some("graph_declarations"), 2)
+    )));
+    assert!(evidence.events.iter().any(|event| {
+        let purrdf_testkit::error_capture::Event::Value(None, ErrorValue::Record(row)) = event
+        else {
+            return false;
+        };
+        let row = Capture::read(*row);
+        row.code == "rdf-quad-values"
+            && matches!(
+                row.child("subject").field("iri"),
+                ErrorValue::Iri("http://example.org/s")
+            )
+    }));
+    assert!(evidence.events.iter().any(|event| {
+        let purrdf_testkit::error_capture::Event::Value(None, ErrorValue::Term(graph)) = event
+        else {
+            return false;
+        };
+        matches!(
+            Capture::read(*graph).field("iri"),
+            ErrorValue::Iri("http://example.org/empty")
+        )
+    }));
+    let ErrorValue::Record(original) = capture.field("evidence") else {
+        panic!("original stack receipt")
+    };
+    let events = Vec::with_capacity(64);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(original, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.code, "paged-stack-evidence");
+    for origin in [
+        StackPageOrigin::Head,
+        StackPageOrigin::Sealed {
+            layer: u64::MAX,
+            page: purrdf_core::PageId(u64::MAX),
+        },
+    ] {
+        let captured = Capture::read(&origin);
+        assert!(matches!(
+            captured.code,
+            "paged-stack-head-page" | "paged-stack-sealed-page"
+        ));
+        if captured.code == "paged-stack-sealed-page" {
+            assert!(
+                matches!(captured.field("layer"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+            );
+            assert!(
+                matches!(captured.field("page"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+            );
+        }
+    }
+}
+
+fn scalar_native_view_evidence_keeps_its_original_unsigned_width() {
+    use purrdf_sparql_eval::FallibleSparqlError;
+    let error = FallibleSparqlError::<core::convert::Infallible, usize>::AllocationFailed {
+        construct: "constructed control shape",
+        evidence: usize::MAX,
+    };
+    assert!(
+        matches!(Capture::read(&error).child("evidence").field("value"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(
+        matches!(Capture::read(&u32::MAX).field("value"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+    );
+}
+
 purrdf_testkit::harness_main!(
+    segmented_stack_query_failure_retains_complete_snapshot_metadata,
+    paged_stack_failure_exposes_sources_head_removals_and_qualified_requests,
+    scalar_native_view_evidence_keeps_its_original_unsigned_width,
     segmented_failure_inspection_keeps_the_exact_request_prefix_and_original_cause,
     segmented_inspection_releases_the_ledger_lock_before_consumer_callbacks,
     paged_operational_failure_exposes_the_native_page_receipt,

@@ -374,6 +374,20 @@ pub struct SegmentedReceipt {
     byte_len: u64,
 }
 
+impl purrdf_hash::error::StructuredError for SegmentedReceipt {
+    purrdf_hash::error_visit! {
+        @record self { snapshot, root, block_bytes, block_count, leaf_count, byte_len }
+        => "segmented-receipt" {
+            "snapshot" => Record(&self.snapshot),
+            "root" => Bytes(&self.root),
+            "block_bytes" => ByteCount(u128::from(self.block_bytes)),
+            "block_count" => Unsigned(u128::from(self.block_count)),
+            "leaf_count" => Unsigned(u128::from(self.leaf_count)),
+            "byte_len" => ByteCount(u128::from(self.byte_len)),
+        }
+    }
+}
+
 impl SegmentedReceipt {
     /// Fixed byte length of the v1 full-certification receipt.
     pub const ENCODED_BYTES: usize = 104;

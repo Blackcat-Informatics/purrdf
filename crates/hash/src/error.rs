@@ -187,6 +187,20 @@ impl StructuredError for () {
     }
 }
 
+// Native views use these scalar counters as their original evidence. The
+// consumer sees the exact count rather than needing a wrapper or a downcast.
+macro_rules! unsigned_evidence {
+    ($($integer:ty => $widen:expr),* $(,)?) => {$ (
+        impl StructuredError for $integer {
+            fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+                visitor.variant("unsigned-evidence");
+                visitor.value(Some("value"), ErrorValue::Unsigned(($widen)(*self)));
+            }
+        }
+    )*};
+}
+unsigned_evidence!(u32 => u128::from, usize => |value: usize| value as u128);
+
 /// Emit a borrowed list without materializing or cloning its items.
 ///
 /// The iterator's exact length includes absent entries. A consumer receives an

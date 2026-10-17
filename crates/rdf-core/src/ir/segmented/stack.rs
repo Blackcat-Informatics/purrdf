@@ -24,6 +24,22 @@ pub struct SegmentedLayerMetadata {
     pub(super) statistics_revision: u64,
 }
 
+impl purrdf_hash::error::StructuredError for SegmentedLayerMetadata {
+    purrdf_hash::error_visit! {
+        @record self { removals, declarations, max_owned_term_bytes, statistics_revision }
+        => "segmented-layer-metadata" {
+            "removals" => Value(self.removals.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |data| purrdf_hash::error::ErrorValue::Record(data.as_ref()))),
+            "declarations" => Value(self.declarations.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |data| purrdf_hash::error::ErrorValue::Record(data.as_ref()))),
+            "max_owned_term_bytes" => ByteCount(u128::from(self.max_owned_term_bytes)),
+            "statistics_revision" => Unsigned(u128::from(self.statistics_revision)),
+        }
+    }
+}
+
 impl SegmentedLayerMetadata {
     /// Adopt already-normalized immutable carriers without copying their terms.
     ///
@@ -91,6 +107,18 @@ pub struct SegmentedLayer {
     pub(super) metadata: SegmentedLayerMetadata,
 }
 
+impl purrdf_hash::error::StructuredError for SegmentedLayer {
+    // The opaque provider is a physical reader. Its retained certification
+    // receipt is the original immutable source authority; inspection performs
+    // no provider calls and does not substitute its current descriptor.
+    purrdf_hash::error_visit! {
+        @record self { provider, receipt, metadata } => "segmented-layer" {
+            "receipt" => Record(&self.receipt),
+            "metadata" => Record(&self.metadata),
+        }
+    }
+}
+
 impl SegmentedLayer {
     /// Attach an exact certified descriptor. Block authentication is performed
     /// under the read operation's limits, rather than decoding a dictionary here.
@@ -142,6 +170,18 @@ pub struct SegmentedResidentHead {
     pub(super) metadata: SegmentedLayerMetadata,
     pub(super) max_owned_term_bytes: u64,
     pub(super) statistics_revision: u64,
+}
+
+impl purrdf_hash::error::StructuredError for SegmentedResidentHead {
+    purrdf_hash::error_visit! {
+        @record self { dataset, metadata, max_owned_term_bytes, statistics_revision }
+        => "segmented-resident-head" {
+            "dataset" => Record(self.dataset.as_ref()),
+            "metadata" => Record(&self.metadata),
+            "max_owned_term_bytes" => ByteCount(u128::from(self.max_owned_term_bytes)),
+            "statistics_revision" => Unsigned(u128::from(self.statistics_revision)),
+        }
+    }
 }
 
 impl SegmentedResidentHead {
@@ -246,6 +286,18 @@ impl SegmentedStack {
 pub struct SegmentedStackSnapshot {
     pub(super) layers: Arc<Vec<Arc<SegmentedLayer>>>,
     pub(super) head: Option<SegmentedResidentHead>,
+}
+
+impl purrdf_hash::error::StructuredError for SegmentedStackSnapshot {
+    purrdf_hash::error_visit! {
+        @record self { layers, head } => "segmented-stack-snapshot" {
+            "layers" => List(self.layers.iter().map(|layer|
+                purrdf_hash::error::ErrorValue::Record(layer.as_ref()))),
+            "head" => Value(self.head.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |head| purrdf_hash::error::ErrorValue::Record(head))),
+        }
+    }
 }
 
 impl PartialEq for SegmentedStackSnapshot {
