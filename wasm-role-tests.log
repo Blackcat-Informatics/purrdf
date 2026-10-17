@@ -1,0 +1,54 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/rdf-core)
+   Compiling bumpalo v3.20.3
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling once_cell v1.21.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/deflate)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling wasm-bindgen v0.2.125
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-deque v0.8.6
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling syn v2.0.118
+   Compiling digest v0.11.3
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/iri)
+   Compiling rayon v1.12.0
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/testkit)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/cdt)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/entail)
+    Finished `test` profile [optimized] target(s) in 48.57s
+     Running tests/regular_role_chains.rs (/opt/.cargo/3a/5a7a96546afee6/wasm32-unknown-unknown/debug/build/purrdf-entail/b853416d725f1aa8/out/regular_role_chains-b853416d725f1aa8.wasm)
+
+running 3 tests
+test class_expression_role_refusals_retain_original_source_terms ... ok
+test top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling ... ok
+test stopping_during_regular_role_reads_never_publishes_a_completed_answer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.06s
+

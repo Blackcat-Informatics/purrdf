@@ -1,0 +1,64 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/entail)
+    Finished `test` profile [optimized] target(s) in 4.34s
+     Running tests/reasoner.rs (/opt/.cargo/3a/5a7a96546afee6/debug/build/purrdf-entail/b61d132a6bd82428/out/reasoner-b61d132a6bd82428)
+
+running 56 tests
+test a_bare_hierarchy_certifies_every_profile ... ok
+test a_construct_locality_does_not_decide_is_kept_conservatively_and_reported ... ok
+test a_contradictory_ontology_is_reported_inconsistent_rather_than_thrown ... ok
+test a_consistent_ontology_is_reported_consistent_and_decided ... ok
+test a_module_carries_the_whole_class_expression_under_a_kept_axiom ... ok
+test a_narrowed_budget_reports_unknown_rather_than_a_false_negative ... ok
+test a_class_forced_into_an_empty_datatype_range_is_unsatisfiable ... ok
+test a_regular_property_chain_is_decided_for_dl_but_excluded_from_ql ... ok
+test a_nominal_class_is_subsumed_through_an_assertion ... ok
+test a_class_expression_scaffold_blank_node_is_not_a_non_distinguished_variable ... ok
+test a_finite_tagged_enumeration_cannot_supply_two_distinct_qualified_values ... ok
+test a_union_is_in_rl_beneath_an_inclusion_and_in_neither_el_nor_ql ... ok
+test a_short_property_chain_is_refused_before_any_certificate ... ok
+test an_empty_seed_extracts_an_empty_module ... ok
+test a_malformed_operand_collection_blocks_dl ... ok
+test an_axiom_whose_only_signature_contact_is_inside_its_complex_left_side_is_kept ... ok
+test an_empty_datatype_range_is_reported_inconsistent_and_decided ... ok
+test a_satisfiable_datatype_range_is_reported_consistent_and_decided ... ok
+test a_reserved_term_the_mapping_does_not_know_blocks_dl ... ok
+test an_existential_is_in_el_and_in_rl_only_beneath_an_inclusion ... ok
+test an_unplaceable_class_expression_is_checked_against_both_positions ... ok
+test a_refutation_symbol_avoids_a_colliding_blank_label_in_the_data ... ok
+test a_narrowed_work_budget_reports_unknown_through_the_same_channel ... ok
+test bot_follows_the_chain_upward_and_top_follows_it_downward ... ok
+test an_undecidable_facet_is_reported_within_boundaries_rather_than_guessed ... ok
+test a_query_blank_node_outside_a_class_expression_raises_the_residue_boundary ... ok
+test classification_finds_an_equivalence_and_an_unsatisfiable_class ... ok
+test class_satisfiability_decides_thing_nothing_and_a_forced_empty_class ... ok
+test classification_computes_the_transitive_relation_and_its_reduction ... ok
+test el_admits_a_singleton_enumeration_and_refuses_a_larger_one ... ok
+test counting_a_transitive_role_blocks_dl ... ok
+test instance_retrieval_reaches_a_class_nothing_asserts ... ok
+test one_iri_declared_both_an_object_and_a_data_property_blocks_dl ... ok
+test ql_excludes_equality_functionality_transitivity_and_keys ... ok
+test malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals ... ok
+test owl_full_is_certified_unconditionally ... ok
+test bottom_roles_are_empty_through_assertions_subroles_and_restrictions ... ok
+test finite_cyclic_class_equations_have_meaningful_positive_and_negative_models ... ok
+test profile_certification_is_reproducible ... ok
+test realization_reports_every_entailed_type_and_the_most_specific_ones ... ok
+test every_service_is_reproducible_answer_and_certificate_alike ... ok
+test rl_admits_a_max_cardinality_of_one_and_refuses_a_max_of_two ... ok
+test module_extraction_is_reproducible ... ok
+test the_step_cap_can_be_narrowed_and_never_widened ... ok
+test every_axiom_form_is_decided_by_refutation ... ok
+test the_work_cap_can_be_narrowed_and_never_widened ... ok
+test the_object_domain_is_nonempty_even_without_an_abox ... ok
+test tagged_value_identity_counts_normalized_tags_and_base_directions ... ok
+test language_enumeration_and_complement_are_checked_on_stored_literal_singletons ... ok
+test the_augmentation_states_a_subsumption_only_an_assertion_entails ... ok
+test the_augmentation_states_a_role_assertion_transitivity_entails ... ok
+test datetime_stamp_ranges_check_timezone_and_value_identity_without_a_boundary ... ok
+test tagged_string_range_clashes_are_exact_in_both_rdf_language_spaces ... ok
+test the_augmentation_states_a_role_assertion_the_property_hierarchy_entails ... ok
+test a_narrow_work_cap_exhausts_promptly_over_a_large_role_scan_and_is_deterministic ... ok
+test a_module_entails_everything_the_full_ontology_entails_over_its_signature ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

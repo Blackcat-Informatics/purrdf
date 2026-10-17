@@ -1,0 +1,5 @@
+Class-expression role refusals lost their original source spelling when the private interner was dropped, leaving consumers with an unusable local term ID. Route this producer through the existing native source-witness helper before converting the error. Typed classification, source arguments and the original error chain now survive constructor failure; accepted inputs and the existing allocation/cancellation behavior are unchanged.
+
+The new public regression fails before the repair and passes afterward. All 17 public role tests, 56 public reasoner service tests, 718 entailment library tests (one ignored), strict all-target clippy and three actual WebAssembly controls pass. Normal hooks and push pass. The portable case is also added to the exact WASM inventory. No new grant, error type, dependency, fallback or premise filtering is introduced. CodeRabbit is unavailable because of the organization usage cap; full hosted qualification remains pending.
+
+Closes #580. Advances the bounded producer work within #558; its broader structured-error inventory remains open.

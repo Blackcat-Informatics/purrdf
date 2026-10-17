@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 580,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class",
+  "branch": "paudley/580-retain-source-terms-for-class",
+  "slug": "retain-source-terms-for-class",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/.stage/retain-source-terms-for-class",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "0994332d93bc89747f95e5a942715faf36129648",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class",
+    "branch:paudley/580-retain-source-terms-for-class",
+    "stage:/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/.stage/retain-source-terms-for-class",
+    "issue:/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/.stage/retain-source-terms-for-class/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T07:06:00-0600"
+}

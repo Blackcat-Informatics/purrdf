@@ -1,0 +1,52 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/rdf-core)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/rdf-events)
+   Compiling libc v0.2.186
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/alloc-probe)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/deflate)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/stack)
+   Compiling digest v0.11.3
+   Compiling rayon v1.12.0
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/cdt)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/580-retain-source-terms-for-class/crates/entail)
+    Finished `test` profile [optimized] target(s) in 6.12s
+     Running tests/regular_role_chains.rs (/opt/.cargo/3a/5a7a96546afee6/debug/build/purrdf-entail/806846aa0c139a3c/out/regular_role_chains-806846aa0c139a3c)
+
+running 1 test
+test class_expression_role_refusals_retain_original_source_terms ... FAILED
+
+failures:
+
+---- class_expression_role_refusals_retain_original_source_terms stdout ----
+thread 'class_expression_role_refusals_retain_original_source_terms' panicked at crates/entail/tests/regular_role_chains.rs:761:18:
+original source must be retained
+
+
+failures:
+    class_expression_role_refusals_retain_original_source_terms
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --test regular_role_chains`
