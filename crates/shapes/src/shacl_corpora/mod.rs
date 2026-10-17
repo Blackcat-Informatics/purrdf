@@ -232,6 +232,13 @@ pub struct W3cCase {
     /// distinct produced result with the same tuple whose details are exactly
     /// the stated ones (see [`ExpectedResult`]).
     pub expected_details: Vec<ExpectedResult>,
+    /// The SHACL law the shared report grader ([`report_grading`]) loads and
+    /// validates this case under; nothing else reads it. [`parse_entry`] sets the
+    /// compatibility law and the SHACL 1.2 discovery sets the dated 1.2 law. Lanes
+    /// that load shapes themselves (the SHACL 1.0 harness's own loaders, the
+    /// prepared-product, vocabulary-import and shacl-shacl lanes) ignore it by
+    /// design and always run the compatibility law.
+    pub profile: crate::profile::ShaclProfile,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -540,6 +547,7 @@ pub fn parse_entry(
         expected_messages,
         expected_annotations,
         expected_details,
+        profile: crate::profile::ShaclProfile::LEGACY,
     })
 }
 

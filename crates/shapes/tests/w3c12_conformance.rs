@@ -75,7 +75,7 @@ use purrdf_shapes::expression::{
 };
 use purrdf_shapes::srl::{self, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
-use purrdf_shapes::{apply_rules, engine, shapes, sparql, text_ingest};
+use purrdf_shapes::{ShaclProfile, apply_rules, engine, shapes, sparql, text_ingest};
 
 use shacl_corpora::node_expr_grading::{
     ABSENT_FOCUS, NON_CANONICAL_EXPECTATIONS, NON_CANONICAL_EXPECTATIONS_COUNT,
@@ -274,6 +274,8 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
     let doc_prefixes = text_ingest::parse_turtle_document(&text, Some(&file_iri(&tc.file)))
         .map_err(|errors| format!("node-expression graph parse error: {}", errors.join("; ")))?
         .prefixes;
+    // The node-expression loader and evaluator take no profile: node expressions exist
+    // only in SHACL 1.2, so there is no compatibility alternative to select.
     let (shapes, mut exprs) = shapes::from_dataset_with_node_expressions(
         &tc.dataset,
         &doc_prefixes,
@@ -342,13 +344,15 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         ..
     } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = shapes::from_dataset_with_base(
+    // Rules run under the dated law the suite is written against.
+    let shapes = shapes::from_dataset_with_options(
         &shapes_dataset,
         None,
         &doc_prefixes,
         None,
         Some(tc.shapes_graph_iri.clone()),
         &purrdf_shapes::ShapesImports::new(),
+        &engine::ValidationOptions::default().with_profile(ShaclProfile::WD_20260918),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data_dataset = if tc.data_path == tc.shapes_path {
@@ -487,6 +491,8 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
     let text = fs::read_to_string(&tc.ruleset)
         .map_err(|e| format!("cannot read {}: {e}", tc.ruleset.display()))?;
     let base = file_iri(&tc.ruleset);
+    // SPARQL 1.2 RL exists only in the 1.2 family; `srl::check` and `srl::infer` take no
+    // profile because there is no compatibility alternative to select.
     let check = |level| srl::check(&text, Some(&base), &[], level);
     let positive = |level| check(level).map(drop).map_err(|e| e.to_string());
     let expect_stage = |stage: &str| -> Result<(), String> {
