@@ -79,30 +79,6 @@ impl purrdf_hash::error::StructuredError for SignatureError {
     }
 }
 
-#[cfg(test)]
-mod inspection_tests {
-    use super::{Signature, VerifyingKey};
-    use purrdf_hash::error::ErrorValue;
-    use purrdf_testkit::error_capture::Capture;
-
-    #[test]
-    fn original_signature_and_key_length_failures_expose_typed_counts() {
-        for (error, expected, actual) in [
-            (Signature::try_from(&[0; 63][..]).unwrap_err(), 64, 63),
-            (VerifyingKey::try_from(&[0; 31][..]).unwrap_err(), 32, 31),
-        ] {
-            let fields = Capture::read(&error);
-            assert_eq!(fields.code, "ed25519-invalid-length");
-            assert!(
-                matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == expected)
-            );
-            assert!(
-                matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == actual)
-            );
-        }
-    }
-}
-
 fn exact<const N: usize>(bytes: &[u8]) -> Result<[u8; N], SignatureError> {
     bytes.try_into().map_err(|_| SignatureError::InvalidLength {
         expected: N,
@@ -387,4 +363,28 @@ fn challenge(r: &[u8; 32], a: &[u8; 32], message: &[u8]) -> Scalar {
     hasher.update(message);
     let wide: [u8; 64] = hasher.finalize().into();
     Scalar::from_bytes_wide(&wide)
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::{Signature, VerifyingKey};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn original_signature_and_key_length_failures_expose_typed_counts() {
+        for (error, expected, actual) in [
+            (Signature::try_from(&[0; 63][..]).unwrap_err(), 64, 63),
+            (VerifyingKey::try_from(&[0; 31][..]).unwrap_err(), 32, 31),
+        ] {
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, "ed25519-invalid-length");
+            assert!(
+                matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == expected)
+            );
+            assert!(
+                matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == actual)
+            );
+        }
+    }
 }
