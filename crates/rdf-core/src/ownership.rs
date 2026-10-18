@@ -19,6 +19,7 @@ pub enum OwnedOrBorrowed<'a, T> {
 impl<T> std::ops::Deref for OwnedOrBorrowed<'_, T> {
     type Target = T;
 
+    /// Read the original immutable payload through either storage choice.
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(value) => value,
@@ -39,11 +40,13 @@ mod tests {
         value: usize,
     }
     impl Drop for Payload<'_> {
+        /// Count destruction of the original payload independently of its carrier.
         fn drop(&mut self) {
             self.drops.set(self.drops.get() + 1);
         }
     }
 
+    /// Moving the inline non-Clone payload transfers its single drop obligation.
     #[test]
     fn owned_nonclone_payload_moves_and_drops_once() {
         let drops = Cell::new(0);
@@ -58,6 +61,7 @@ mod tests {
         assert_eq!(drops.get(), 1);
     }
 
+    /// Borrowing preserves pointer identity and leaves destruction to the owner.
     #[test]
     fn borrowed_nonclone_payload_is_the_original_and_outlives_the_carrier() {
         let drops = Cell::new(0);

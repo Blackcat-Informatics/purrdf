@@ -2394,9 +2394,11 @@ pub struct FusionStream<'p, S: RankedStream> {
 }
 
 impl<S: RankedStream> fmt::Debug for FusionStream<'_, S> {
+    /// Render stratum names, the profile and frontier metadata without inspecting streams.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         struct Strata<'a, S>(&'a [(Iri, S)]);
         impl<S> fmt::Debug for Strata<'_, S> {
+            /// List registered stratum IRIs without requiring stream debug rendering.
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_list()
                     .entries(self.0.iter().map(|(iri, _)| iri.as_str()))
@@ -2467,6 +2469,7 @@ impl<S: RankedStream> FusionStream<'static, S> {
 }
 
 impl<'p, S: RankedStream> FusionStream<'p, S> {
+    /// Use the caller's exact immutable profile for the engine's admitted lifetime.
     pub(crate) fn borrowed(
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
         profile: &'p FusionProfile,
@@ -2481,6 +2484,7 @@ impl<'p, S: RankedStream> FusionStream<'p, S> {
         &self.workspace
     }
 
+    /// Admit producer declarations once and build the engine for either storage choice.
     fn with_profile(
         streams: purrdf_sparql_eval::AdmittedVec<(Iri, S)>,
         profile: purrdf_core::ownership::OwnedOrBorrowed<'p, FusionProfile>,
