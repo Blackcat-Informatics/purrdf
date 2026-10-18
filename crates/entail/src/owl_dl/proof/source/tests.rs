@@ -27,6 +27,101 @@ fn checked_fixture(input: &purrdf_core::RdfDataset) -> (DlProof, DlProofContext<
     (proof, consumer.proof_context().unwrap())
 }
 
+/// A selected fresh successor retains its actual birth, parent and original source.
+#[test]
+fn checked_existential_support_retains_original_effects_and_excludes_unrelated_input() {
+    use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+    use crate::owl_dl::input_source::Source;
+    for inverse in [false, true] {
+        let mut f = Fixture::default();
+        let class = f.name("A");
+        let filler = f.name("B");
+        let forbidden = f.name("C");
+        let property = f.name("p");
+        let role = if inverse {
+            let role = f.blank();
+            f.edge(role, owl::INVERSE_OF, property);
+            role
+        } else {
+            property
+        };
+        let restriction = f.blank();
+        f.edge(class, rdfs::SUB_CLASS_OF, restriction);
+        f.edge(restriction, owl::ON_PROPERTY, role);
+        f.edge(restriction, owl::SOME_VALUES_FROM, filler);
+        f.edge(
+            property,
+            if inverse { rdfs::DOMAIN } else { rdfs::RANGE },
+            forbidden,
+        );
+        f.edge(filler, owl::DISJOINT_WITH, forbidden);
+        f.instance("subject", class);
+        let unrelated = f.name("Unrelated");
+        f.instance("unrelated", unrelated);
+        let (proof, ctx) = checked_fixture(&f.freeze());
+        let index = proof
+            .clashes
+            .iter()
+            .position(|step| step.current.is_some())
+            .unwrap();
+        assert!(
+            proof
+                .resolve_clash(index, &ctx)
+                .unwrap()
+                .replay()
+                .current_supported()
+        );
+        let (_, journal, schema) = proof
+            .replay_clash_recording(index, &ctx, Journal::default())
+            .unwrap();
+        let journal = journal.unwrap();
+        let slice = journal
+            .normalized_slice_with_schema(&ctx.kb, schema)
+            .unwrap();
+        let births = slice
+            .effects
+            .iter()
+            .filter_map(|(ordinal, event)| {
+                assert_eq!(*event, journal.events()[*ordinal]);
+                match event.mutation {
+                    Mutation::Node {
+                        node,
+                        parent: Some(parent),
+                        reserved: false,
+                        ..
+                    } => {
+                        assert_eq!(event.cause.origin, Origin::Application);
+                        assert!(
+                            slice
+                                .effects
+                                .iter()
+                                .any(|(_, effect)| matches!(effect.mutation,
+                        Mutation::Node { node, .. } if node == parent))
+                        );
+                        Some(node)
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(births, []);
+        assert!(slice.inputs().all(|input| match input.unwrap().source {
+            Source::Anchor(crate::owl_dl::AxiomSource::Triple(subject, _, _)) => {
+                !matches!(ctx.kb.interner.value(subject), TermValue::Iri(iri) if iri == "https://example.org/unrelated")
+            }
+            _ => true,
+        }));
+        let support = slice.into_support().unwrap();
+        assert!(
+            births
+                .iter()
+                .all(|born| support.effects.iter().any(|(_, event)| matches!(
+                    event.mutation, Mutation::Node { node, parent: Some(_), .. } if node == *born
+                )))
+        );
+    }
+}
+
 /// A real derived clash; the consumer prepares the original input independently.
 fn derived() -> (DlProof, DlProofContext<'static>) {
     derived_for(None)
@@ -358,20 +453,23 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
         ReadOwner::Application { index, .. } if *index == unrelated_step)));
     assert!(
         !selected
-            .causes
+            .effects
             .iter()
+            .map(|(_, event)| &event.cause)
             .any(|cause| cause.origin == Origin::Application && cause.index == unrelated_step)
     );
     assert!(
         !selected
-            .causes
+            .effects
             .iter()
+            .map(|(_, event)| &event.cause)
             .any(|cause| cause.origin == Origin::TermDenotation && cause.index == earlier as usize)
     );
     assert!(
         selected
-            .causes
+            .effects
             .iter()
+            .map(|(_, event)| &event.cause)
             .any(|cause| cause.origin == Origin::PreparedRole)
     );
     // Native dependency selection is now checked; original RDF/schema licenses
@@ -778,8 +876,9 @@ fn checked_clash_retains_selected_transitive_role_path() {
     for index in 0..2 {
         assert!(
             slice
-                .causes
+                .effects
                 .iter()
+                .map(|(_, event)| &event.cause)
                 .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index)
         );
     }
@@ -881,9 +980,13 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
                     assert_ne!(member.proof.branches().len(), 0);
                 }
                 assert!(member.supports().all(|support| {
-                    !support.causes.iter().any(|cause| {
-                        cause.origin == crate::owl_dl::graph::changes::Origin::PreparedEquality
-                    })
+                    !support
+                        .effects
+                        .iter()
+                        .map(|(_, event)| &event.cause)
+                        .any(|cause| {
+                            cause.origin == crate::owl_dl::graph::changes::Origin::PreparedEquality
+                        })
                 }));
             }
             let values = ctx.kb.inputs.key_values.as_ref().unwrap().get(0).unwrap();

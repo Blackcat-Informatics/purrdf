@@ -64,14 +64,16 @@ fn transitive_cache_composes_appended_edges_with_owner_and_destination_paths() {
         );
         assert!(
             !slice
-                .causes
+                .effects
                 .iter()
+                .map(|(_, event)| &event.cause)
                 .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 3)
         );
         assert!(
             slice
-                .causes
+                .effects
                 .iter()
+                .map(|(_, event)| &event.cause)
                 .any(|cause| cause.origin == Origin::AssumedRole && cause.index == 0)
         );
         assert!(

@@ -91,8 +91,9 @@ fn recorded_key_memberships_are_checked_in_the_original_world_with_all_branches(
                         .support
                         .as_ref()
                         .unwrap()
-                        .causes
+                        .effects
                         .iter()
+                        .map(|(_, event)| &event.cause)
                         .all(|cause| cause.origin != Origin::PreparedEquality),
                     "a derived key equality cannot license its own membership"
                 );

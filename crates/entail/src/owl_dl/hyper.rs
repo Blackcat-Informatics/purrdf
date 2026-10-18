@@ -3408,14 +3408,16 @@ mod tests {
             }));
             assert!(
                 slice
-                    .causes
+                    .effects
                     .iter()
+                    .map(|(_, event)| &event.cause)
                     .any(|cause| cause.origin == Origin::PreparedType && cause.index == 1)
             );
             assert!(
                 !slice
-                    .causes
+                    .effects
                     .iter()
+                    .map(|(_, event)| &event.cause)
                     .any(|cause| cause.origin == Origin::Application && cause.index == 0)
             );
             driver.g.begin_changes(journal);
@@ -3478,14 +3480,16 @@ mod tests {
         let slice = journal.normalized_slice(&kb).unwrap();
         assert!(
             slice
-                .causes
+                .effects
                 .iter()
+                .map(|(_, event)| &event.cause)
                 .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 1)
         );
         assert!(
             !slice
-                .causes
+                .effects
                 .iter()
+                .map(|(_, event)| &event.cause)
                 .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 0)
         );
         assert!(slice.owners.contains(&ReadOwner::Application {
@@ -3596,8 +3600,9 @@ mod tests {
             for index in 0..5 {
                 assert_eq!(
                     slice
-                        .causes
+                        .effects
                         .iter()
+                        .map(|(_, event)| &event.cause)
                         .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index),
                     index >= 2
                 );
@@ -3758,11 +3763,11 @@ mod tests {
         );
     }
 
-    /// A birth record alone cannot license a witness-reuse or counting effect.
+    /// An existential head retains its checked application and actual generated effects.
     #[test]
-    fn selected_reads_refuse_unlicensed_generated_effect() {
+    fn selected_reads_retain_licensed_generated_effect() {
         use super::{ApplySite, Ground};
-        use crate::owl_dl::graph::changes::{Journal, ReadFact, ReadOwner, slice::Error};
+        use crate::owl_dl::graph::changes::{Journal, Mutation, ReadFact, ReadOwner};
         let mut kb = Kb::empty();
         let filler = kb.table.intern(Concept::Named(A));
         kb.abox_types.push((IND, kb.top));
@@ -3792,10 +3797,39 @@ mod tests {
         driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
         assert!(driver.g.has_concept(&state, witness, filler));
         driver.g.select_reads(None);
-        assert!(matches!(
-            driver.g.finish_changes().unwrap().normalized_slice(&kb),
-            Err(Error::MissingEffect)
-        ));
+        let journal = driver.g.finish_changes().unwrap();
+        let slice = journal.normalized_slice(&kb).unwrap();
+        assert!(slice.owners.contains(&ReadOwner::Application {
+            index: 0,
+            clause: 0
+        }));
+        for mutation in [
+            Mutation::Node {
+                node: witness,
+                named: None,
+                parent: Some(root),
+                reserved: false,
+                concrete: false,
+            },
+            Mutation::Label {
+                node: witness,
+                concept: filler,
+            },
+        ] {
+            assert!(
+                slice
+                    .effects
+                    .iter()
+                    .any(|(_, effect)| effect.mutation == mutation)
+            );
+        }
+        assert!(
+            slice
+                .effects
+                .iter()
+                .any(|(_, effect)| matches!(effect.mutation,
+            Mutation::Node { node, .. } if node == root))
+        );
     }
 
     /// A merge transfers the original fact and alias cause, not just its latest head.

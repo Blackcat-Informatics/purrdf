@@ -18,6 +18,8 @@ use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
 mod key;
 mod schema;
+#[cfg(test)]
+mod tests;
 
 /// One normalized transitivity/hierarchy license for a selected immutable path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +51,7 @@ enum Fact {
 }
 
 struct Dependency {
-    cause: Option<Cause>,
+    event: Option<usize>,
     owner: Option<ReadOwner>,
     parents: Range<usize>,
     paths: Range<usize>,
@@ -83,7 +85,8 @@ pub(crate) enum Error {
 /// Owned dependencies selected while their original source phase is still active.
 /// Schema reads address the enclosing captured proof's checked terminal evidence.
 pub(crate) struct Support {
-    pub(crate) causes: Vec<Cause>,
+    /// Original journal ordinals and effects, local to this checked clash's replay.
+    pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
     pub(crate) transitive: Vec<TransitiveRead>,
@@ -100,7 +103,7 @@ pub(crate) struct Support {
 impl std::fmt::Debug for Support {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Support")
-            .field("causes", &self.causes)
+            .field("effects", &self.effects)
             .field("owners", &self.owners)
             .field("paths", &self.paths)
             .field("transitive", &self.transitive)
@@ -133,7 +136,7 @@ fn poll(kb: &Kb) -> Result<(), Error> {
 /// Checked native dependencies, with separately bound original input anchors.
 pub(crate) struct Slice<'a> {
     kb: &'a Kb,
-    pub(crate) causes: Vec<Cause>,
+    pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
     pub(crate) transitive: Vec<TransitiveRead>,
@@ -150,8 +153,8 @@ pub(crate) struct Slice<'a> {
 impl std::fmt::Debug for Slice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Slice")
+            .field("effects", &self.effects)
             .field("source_terms", &self.kb.source_terms)
-            .field("causes", &self.causes)
             .field("owners", &self.owners)
             .field("paths", &self.paths)
             .field("transitive", &self.transitive)
@@ -188,7 +191,7 @@ impl Slice<'_> {
         let roles = self.role_inputs()?;
         let key_equalities = memory.collect(self.keys.iter().map(|key| key.equality))?;
         Ok(Support {
-            causes: self.causes,
+            effects: self.effects,
             owners: self.owners,
             paths: self.paths,
             transitive: self.transitive,
@@ -283,8 +286,9 @@ impl Slice<'_> {
             }
         }
         let internalized = self
-            .causes
+            .effects
             .iter()
+            .map(|(_, event)| &event.cause)
             .filter(|cause| cause.origin == Origin::Internalized)
             .map(|cause| {
                 let at = kb
@@ -335,16 +339,20 @@ impl Slice<'_> {
     /// query and effect licenses remain separate graph obligations.
     pub(crate) fn inputs(&self) -> impl Iterator<Item = Result<SelectedInput, Error>> + '_ {
         let kb = self.kb;
-        let facts = self.causes.iter().filter_map(|&cause| {
-            let input = match cause.origin {
-                Origin::PreparedType => Input::Type(cause.index),
-                Origin::PreparedRole => Input::Role(cause.index),
-                Origin::PreparedEquality => Input::Equality(cause.index),
-                Origin::PreparedDistinct => Input::Distinct(cause.index),
-                _ => return None,
-            };
-            Some((Some(cause), input))
-        });
+        let facts = self
+            .effects
+            .iter()
+            .map(|(_, event)| &event.cause)
+            .filter_map(|&cause| {
+                let input = match cause.origin {
+                    Origin::PreparedType => Input::Type(cause.index),
+                    Origin::PreparedRole => Input::Role(cause.index),
+                    Origin::PreparedEquality => Input::Equality(cause.index),
+                    Origin::PreparedDistinct => Input::Distinct(cause.index),
+                    _ => return None,
+                };
+                Some((Some(cause), input))
+            });
         facts
             .chain(self.rules.iter().map(|&input| (None, input)))
             .chain(
@@ -569,6 +577,7 @@ impl Builder {
 
     fn event(
         &mut self,
+        ordinal: usize,
         event: Event,
         kb: &Kb,
         memory: &mut Memory<'_, Resident>,
@@ -592,7 +601,13 @@ impl Builder {
                 reserved,
                 concrete,
             } => {
-                incomplete = parent.is_some() || reserved;
+                // The native checker already validated this application and its
+                // head. Retain the actual birth and original predecessor rather
+                // than treating every generated successor as an opaque leaf.
+                incomplete = reserved || (parent.is_some() && cause.origin != Origin::Application);
+                if let Some(parent) = parent {
+                    self.parent(Fact::Node(parent), memory)?;
+                }
                 self.facts.insert(Fact::Node(node), id, memory)?;
                 if !concrete {
                     self.facts.insert(Fact::Domain(node), id, memory)?;
@@ -654,6 +669,8 @@ impl Builder {
             }
             Mutation::Distinct { left, right } => {
                 incomplete = cause.origin == Origin::Application;
+                self.parent(Fact::Node(left), memory)?;
+                self.parent(Fact::Node(right), memory)?;
                 self.facts.insert(distinct(left, right), id, memory)?;
             }
             Mutation::DistinctTransfer {
@@ -698,7 +715,7 @@ impl Builder {
         memory.push(
             &mut self.nodes,
             Dependency {
-                cause: Some(cause),
+                event: Some(ordinal),
                 owner: None,
                 parents: start..self.parents.len(),
                 paths: 0..0,
@@ -762,7 +779,7 @@ impl Journal {
             let selected = self.reads[read];
             while event < selected.checkpoint {
                 poll(kb)?;
-                graph.event(self.events[event], kb, &mut memory)?;
+                graph.event(event, self.events[event], kb, &mut memory)?;
                 event += 1;
             }
             let start = graph.parents.len();
@@ -795,7 +812,7 @@ impl Journal {
             memory.push(
                 &mut graph.nodes,
                 Dependency {
-                    cause: None,
+                    event: None,
                     owner: Some(selected.owner),
                     parents: start..graph.parents.len(),
                     paths: path_start..graph.paths.len(),
@@ -822,7 +839,7 @@ impl Journal {
         memory.push(&mut pending, root.ok_or(Error::MissingClash)?)?;
         let mut result = Slice {
             kb,
-            causes: Vec::new(),
+            effects: Vec::new(),
             owners: Vec::new(),
             paths: Vec::new(),
             transitive: Vec::new(),
@@ -849,8 +866,9 @@ impl Journal {
                     Error::MissingEffect
                 });
             }
-            if let Some(cause) = node.cause {
-                memory.push(&mut result.causes, cause)?;
+            if let Some(ordinal) = node.event {
+                let event = self.events[ordinal];
+                memory.push(&mut result.effects, (ordinal, event))?;
             }
             if let Some(owner) = node.owner {
                 memory.push(&mut result.owners, owner)?;
@@ -904,7 +922,8 @@ impl Journal {
             result.schema_reads = schema::select(kb, schema.bounds(), &mut memory)?;
         }
         let mut selected_keys = OrderedTable::default();
-        for cause in &result.causes {
+        for (_, event) in &result.effects {
+            let cause = event.cause;
             poll(kb)?;
             if cause.origin == Origin::PreparedEquality
                 && matches!(
