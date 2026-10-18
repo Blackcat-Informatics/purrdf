@@ -789,6 +789,167 @@ fn public_causal_service_checks_nested_reserved_origin() {
     assert!(nested > 0);
 }
 
+/// Literal provenance must survive actual checked key equality, not just a view helper.
+fn public_causal_service_preserves_literal_metadata_in_key_support() {
+    use purrdf_core::{RdfLiteral, RdfTextDirection};
+    use purrdf_entail::proof_source::ResolvedTerm;
+    for literal in [
+        RdfLiteral {
+            lexical_form: "007".into(),
+            datatype: Some(purrdf_xsd::datatype::XSD_INTEGER.into()),
+            language: None,
+            direction: None,
+        },
+        RdfLiteral {
+            lexical_form: "chat".into(),
+            datatype: Some(rdf::LANG_STRING.into()),
+            language: Some("fr".into()),
+            direction: None,
+        },
+        RdfLiteral {
+            lexical_form: "chat".into(),
+            datatype: Some(rdf::DIR_LANG_STRING.into()),
+            language: Some("fr".into()),
+            direction: Some(RdfTextDirection::Rtl),
+        },
+    ] {
+        let mut f = Fixture::default();
+        let [a, b, keyed, left, right, property] =
+            ["A", "B", "Keyed", "left", "right", "key"].map(|name| f.name(name));
+        let datatype_property = f.builder.intern_iri(owl::DATATYPE_PROPERTY).unwrap();
+        let list = f
+            .builder
+            .intern_blank("properties", BlankScope(94))
+            .unwrap();
+        let nil = f.builder.intern_iri(rdf::NIL).unwrap();
+        let value = f.builder.intern_literal(literal).unwrap();
+        for (subject, predicate, object) in [
+            (a, owl::DISJOINT_WITH, b),
+            (left, rdf::TYPE, a),
+            (right, rdf::TYPE, b),
+            (left, rdf::TYPE, keyed),
+            (right, rdf::TYPE, keyed),
+            (property, rdf::TYPE, datatype_property),
+            (keyed, owl::HAS_KEY, list),
+            (list, rdf::FIRST, property),
+            (list, rdf::REST, nil),
+        ] {
+            f.edge(subject, predicate, object);
+        }
+        f.builder.push_quad(left, property, value, None).unwrap();
+        f.builder.push_quad(right, property, value, None).unwrap();
+        let source = f.freeze();
+        let expected = source.term_value(value);
+        let producer = Reasoner::with_proofs(&source).unwrap();
+        let answer = producer.consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let context = consumer.borrowed_proof_context().unwrap();
+        let checked = proof
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
+            .unwrap();
+        let mut keys = 0;
+        for (_, refutation) in checked.refutations() {
+            assert!(refutation.replay().is_closed());
+            for clash in refutation.clashes() {
+                for input in clash.inputs() {
+                    if let Some(values) = input.key_values() {
+                        let values: Vec<_> = values.collect();
+                        assert_eq!(values.len(), 1);
+                        assert_eq!(values[0].value(), ResolvedTerm::Source(&expected));
+                        keys += 1;
+                    }
+                }
+            }
+        }
+        assert!(keys > 0);
+    }
+}
+
+/// Public replay retains both signed edges and all three laws of a transitive path.
+fn public_causal_service_checks_inverse_transitive_path_licenses() {
+    use purrdf_entail::proof_source::causal::{CausalInputSource, CausalTransitiveKind};
+    use purrdf_entail::proof_source::{ResolvedAxiomSource, ResolvedTerm};
+    let mut f = Fixture::default();
+    let [
+        a,
+        filler,
+        disjoint,
+        role,
+        subrole,
+        inverse,
+        from,
+        middle,
+        target,
+    ] = [
+        "A", "F", "D", "r", "s", "inverse", "from", "middle", "target",
+    ]
+    .map(|name| f.name(name));
+    let restriction = f
+        .builder
+        .intern_blank("restriction", BlankScope(95))
+        .unwrap();
+    let transitive = f.builder.intern_iri(owl::TRANSITIVE_PROPERTY).unwrap();
+    for (subject, predicate, object) in [
+        (filler, owl::DISJOINT_WITH, disjoint),
+        (role, rdf::TYPE, transitive),
+        (subrole, rdfs::SUB_PROPERTY_OF, role),
+        (role, owl::INVERSE_OF, inverse),
+        (a, rdfs::SUB_CLASS_OF, restriction),
+        (restriction, owl::ON_PROPERTY, role),
+        (restriction, owl::ALL_VALUES_FROM, filler),
+        (from, rdf::TYPE, a),
+        (target, rdf::TYPE, disjoint),
+    ] {
+        f.edge(subject, predicate, object);
+    }
+    f.builder.push_quad(from, subrole, middle, None).unwrap();
+    f.builder.push_quad(target, inverse, middle, None).unwrap();
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let context = consumer.borrowed_proof_context().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
+        .unwrap();
+    let mut edges = 0;
+    let mut reversed = false;
+    let mut licenses = [false; 3];
+    for (_, refutation) in checked.refutations() {
+        assert!(refutation.replay().is_closed());
+        for clash in refutation.clashes() {
+            for step in clash.steps() {
+                for path in step.transitive_steps() {
+                    if let CausalTransitiveKind::Edge { role, .. } = path.kind {
+                        edges += 1;
+                        reversed |= role.inverse;
+                    }
+                }
+            }
+            for input in clash.inputs() {
+                if let CausalInputSource::Axiom(ResolvedAxiomSource::Triple {
+                    predicate: ResolvedTerm::Source(TermValue::Iri(predicate)),
+                    object,
+                    ..
+                }) = input.source()
+                {
+                    licenses[0] |= predicate == rdfs::SUB_PROPERTY_OF;
+                    licenses[1] |= predicate == owl::INVERSE_OF;
+                    licenses[2] |= predicate == rdf::TYPE
+                        && matches!(object, ResolvedTerm::Source(TermValue::Iri(iri)) if iri == owl::TRANSITIVE_PROPERTY);
+                }
+            }
+        }
+    }
+    assert!(edges >= 2);
+    assert!(reversed);
+    assert_eq!(licenses, [true; 3]);
+}
+
 purrdf_testkit::harness_main!(
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
@@ -801,4 +962,6 @@ purrdf_testkit::harness_main!(
     public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip,
     public_causal_service_checks_reserved_birth_and_generative_trigger,
     public_causal_service_checks_nested_reserved_origin,
+    public_causal_service_preserves_literal_metadata_in_key_support,
+    public_causal_service_checks_inverse_transitive_path_licenses,
 );
