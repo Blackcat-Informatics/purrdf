@@ -58,7 +58,7 @@ fn derived_for(individual: Option<TermValue>) -> (DlProof, DlProofContext<'stati
 /// A checked application prefix is not a causal slice: retain this counterexample.
 #[test]
 fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
-    use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
+    use crate::owl_dl::graph::changes::{Journal, Mutation, Origin, ReadOwner};
     let mut f = Fixture::default();
     let unrelated = f.name("Unrelated");
     let derived = f.name("UnrelatedDerived");
@@ -136,7 +136,34 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
             .iter()
             .any(|event| event.cause.origin == Origin::PreparedRole)
     );
-    // This is the actual mutation history, not yet the required backward causal slice.
+    assert!(journal.reads().iter().any(|read| matches!(read.owner,
+        ReadOwner::Application { index, .. } if index == unrelated_step)));
+    let selected = journal.normalized_slice().unwrap();
+    assert!(selected.owners.contains(&ReadOwner::Clash {
+        clause: step.clause
+    }));
+    assert!(!selected.owners.iter().any(|owner| matches!(owner,
+        ReadOwner::Application { index, .. } if *index == unrelated_step)));
+    assert!(
+        !selected
+            .causes
+            .iter()
+            .any(|cause| cause.origin == Origin::Application && cause.index == unrelated_step)
+    );
+    assert!(
+        !selected
+            .causes
+            .iter()
+            .any(|cause| cause.origin == Origin::TermDenotation && cause.index == earlier as usize)
+    );
+    assert!(
+        selected
+            .causes
+            .iter()
+            .any(|cause| cause.origin == Origin::PreparedRole)
+    );
+    // Native dependency selection is now checked; original RDF/schema licenses
+    // and all remaining path/effect families still block the public operation.
 }
 
 /// A failed native recording keeps its original refusal and cannot publish an empty trace.

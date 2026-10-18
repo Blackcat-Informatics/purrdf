@@ -2276,6 +2276,14 @@ impl<'a> Hyper<'a> {
         }
         for (index, application) in applications.iter().enumerate() {
             check()?;
+            if observing {
+                driver
+                    .g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Application {
+                        index,
+                        clause: application.clause,
+                    }));
+            }
             let supported = application.clause < driver.clauses.count()
                 && Self::frame_is_supported(
                     &driver,
@@ -2283,6 +2291,7 @@ impl<'a> Hyper<'a> {
                     application.clause,
                     &application.frame,
                 );
+            driver.g.select_reads(None);
             check()?;
             if !supported {
                 return Err(super::proof::malformed(
@@ -2362,8 +2371,16 @@ impl<'a> Hyper<'a> {
                 ));
             }
         }
+        if observing {
+            driver
+                .g
+                .select_reads(Some(super::graph::changes::ReadOwner::Clash {
+                    clause: clause_index,
+                }));
+        }
         let supported = clause_index < driver.clauses.count()
             && Self::frame_is_supported(&driver, &state, clause_index, frame);
+        driver.g.select_reads(None);
         check()?;
         if !supported {
             return Err(super::proof::malformed(
@@ -2394,6 +2411,22 @@ impl<'a> Hyper<'a> {
         {
             return false;
         }
+        if driver.g.selecting_reads() {
+            use super::graph::changes::ReadFact;
+            for &node in frame {
+                driver.g.observe_read(ReadFact::Node(node));
+                // The public frame's selected name is also a premise. An equality
+                // may introduce that name without changing an existing label.
+                if let NodeRef::Individual(individual) = node_ref(state, node) {
+                    driver
+                        .g
+                        .observe_read(ReadFact::Denotes { node, individual });
+                }
+            }
+            if driver.clauses.is_tbox(index) {
+                driver.g.observe_read(ReadFact::ObjectDomain(root));
+            }
+        }
         // The proof supplies one complete binding. Read that binding through the
         // native graph predicates instead of enumerating unrelated join/subset
         // alternatives. This also gives dependency recording a selected-body
@@ -2408,10 +2441,19 @@ impl<'a> Hyper<'a> {
                         && driver.g.has_concept(state, frame[var as usize], concept)
                 }
                 BodyAtom::Denotes { var, individual } => {
-                    (var as usize) < bound
+                    let holds = (var as usize) < bound
                         && state.nodes[frame[var as usize]]
                             .nominals
-                            .contains(&individual)
+                            .contains(&individual);
+                    if holds {
+                        driver
+                            .g
+                            .observe_read(super::graph::changes::ReadFact::Denotes {
+                                node: frame[var as usize],
+                                individual,
+                            });
+                    }
+                    holds
                 }
                 BodyAtom::Role { from, to, role } => {
                     if (from as usize) >= bound || (to as usize) > bound {
@@ -3298,6 +3340,231 @@ mod tests {
     const R: u32 = 20;
     /// An individual term id.
     const IND: u32 = 30;
+
+    /// A transferred fact keeps its original version and the actual merge dependency.
+    #[test]
+    fn selected_reads_slice_original_label_and_selected_identity_after_merge() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Origin, ReadFact, ReadOwner};
+        let mut kb = Kb::empty();
+        let a = kb.table.intern(Concept::Named(A));
+        let b = kb.table.intern(Concept::Named(B));
+        kb.abox_types.extend([(IND, a), (IND + 1, b)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let left = state.root_of[&IND];
+        let right = state.root_of[&(IND + 1)];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+        }));
+        assert!(driver.g.has_concept(&state, right, b));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Concept(right, a)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 1,
+            clause: 1,
+        }));
+        assert!(driver.g.has_concept(&state, left, a));
+        assert!(driver.g.has_concept(&state, right, b));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Equal(left, right)],
+            &ApplySite::Observed { application: 1 }
+        ));
+        // A label already present on the keeper does not depend on the merge.
+        // The selected name nevertheless does, so identity alone must retain it.
+        // Then select the transferred label, checking both immutable versions.
+        for (clause, concept) in [(2, a), (3, b)] {
+            driver.g.select_reads(Some(ReadOwner::Clash { clause }));
+            assert!(driver.g.has_concept(&state, left, concept));
+            driver.g.observe_read(ReadFact::Denotes {
+                node: left,
+                individual: IND + 1,
+            });
+            driver.g.select_reads(None);
+            let journal = driver.g.finish_changes().unwrap();
+            let slice = journal.normalized_slice().unwrap();
+            assert!(slice.owners.contains(&ReadOwner::Application {
+                index: 1,
+                clause: 1
+            }));
+            assert!(!slice.owners.contains(&ReadOwner::Application {
+                index: 0,
+                clause: 0
+            }));
+            assert!(
+                slice
+                    .causes
+                    .iter()
+                    .any(|cause| cause.origin == Origin::PreparedType && cause.index == 1)
+            );
+            assert!(
+                !slice
+                    .causes
+                    .iter()
+                    .any(|cause| cause.origin == Origin::Application && cause.index == 0)
+            );
+            driver.g.begin_changes(journal);
+        }
+    }
+
+    /// The role reader publishes the selected raw edge, not visited alternatives.
+    #[test]
+    fn selected_reads_slice_inverse_edges_and_aliases_without_visited_edges() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, Origin, ReadFact, ReadOwner, RoleWitness};
+        let mut kb = Kb::empty();
+        kb.abox_types.extend([(IND, kb.top), (IND + 1, kb.top)]);
+        kb.abox_roles
+            .extend([(IND + 1, R, IND + 3), (IND + 1, R, IND + 2)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let left = state.root_of[&IND];
+        let right = state.root_of[&(IND + 1)];
+        let target = state.root_of[&(IND + 2)];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+        }));
+        driver.g.observe_read(ReadFact::Node(left));
+        driver.g.observe_read(ReadFact::Node(right));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::Equal(left, right)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.is_neighbour(&state, target, Role::Inv(R), left));
+        driver.g.select_reads(None);
+        let journal = driver.g.finish_changes().unwrap();
+        assert_eq!(
+            journal
+                .reads()
+                .iter()
+                .filter(|read| matches!(read.fact, ReadFact::Role { .. }))
+                .count(),
+            1
+        );
+        assert!(journal.reads().iter().any(|read| matches!(
+            read.fact,
+            ReadFact::Role {
+                witness: RoleWitness::Edge(1),
+                ..
+            }
+        )));
+        let slice = journal.normalized_slice().unwrap();
+        assert!(
+            slice
+                .causes
+                .iter()
+                .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 1)
+        );
+        assert!(
+            !slice
+                .causes
+                .iter()
+                .any(|cause| cause.origin == Origin::PreparedRole && cause.index == 0)
+        );
+        assert!(slice.owners.contains(&ReadOwner::Application {
+            index: 0,
+            clause: 0
+        }));
+    }
+
+    /// An unresolved native path is never an empty successful justification.
+    #[test]
+    fn selected_reads_refuse_pending_transitive_path() {
+        use crate::owl_dl::graph::changes::{Journal, ReadOwner, slice::Error};
+        let mut kb = Kb::empty();
+        kb.transitive.insert(R);
+        kb.abox_roles
+            .extend([(IND, R, IND + 1), (IND + 1, R, IND + 2)]);
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let state = driver.g.init_state(&Assumptions::of_kb());
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+        assert!(driver.g.is_neighbour(
+            &state,
+            state.root_of[&IND],
+            Role::Named(R),
+            state.root_of[&(IND + 2)]
+        ));
+        driver.g.select_reads(None);
+        assert!(matches!(
+            driver.g.finish_changes().unwrap().normalized_slice(),
+            Err(Error::MissingPath)
+        ));
+    }
+
+    /// A birth record alone cannot license a witness-reuse or counting effect.
+    #[test]
+    fn selected_reads_refuse_unlicensed_generated_effect() {
+        use super::{ApplySite, Ground};
+        use crate::owl_dl::graph::changes::{Journal, ReadFact, ReadOwner, slice::Error};
+        let mut kb = Kb::empty();
+        let filler = kb.table.intern(Concept::Named(A));
+        kb.abox_types.push((IND, kb.top));
+        kb.finalize().unwrap();
+        let driver = Hyper::new(
+            &kb,
+            Budget {
+                steps: u64::MAX,
+                work: u64::MAX,
+            },
+        );
+        driver.g.begin_changes(Journal::default());
+        let mut state = driver.g.init_state(&Assumptions::of_kb());
+        let root = state.root_of[&IND];
+        driver.g.select_reads(Some(ReadOwner::Application {
+            index: 0,
+            clause: 0,
+        }));
+        driver.g.observe_read(ReadFact::Node(root));
+        driver.g.select_reads(None);
+        assert!(driver.apply(
+            &mut state,
+            &[Ground::AtLeast(root, 1, Role::Named(R), filler)],
+            &ApplySite::Observed { application: 0 }
+        ));
+        let witness = driver.g.neighbors(&state, root, Role::Named(R))[0];
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.has_concept(&state, witness, filler));
+        driver.g.select_reads(None);
+        assert!(matches!(
+            driver.g.finish_changes().unwrap().normalized_slice(),
+            Err(Error::MissingEffect)
+        ));
+    }
 
     /// A merge transfers the original fact and alias cause, not just its latest head.
     #[test]

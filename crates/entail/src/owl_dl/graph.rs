@@ -43,7 +43,7 @@ use crate::owl_dl::clause::{BodyAtom, TransitivePatterns};
 use crate::owl_dl::concept::{Decomp, Role};
 
 pub(super) mod changes;
-use changes::{Cause, Journal, Mutation, Origin};
+use changes::{Cause, Journal, Mutation, Origin, ReadFact, ReadOwner, RoleWitness};
 
 /// A single completion-graph node.
 #[derive(Clone)]
@@ -1882,6 +1882,34 @@ impl<'a> Graph<'a> {
     }
 
     fn observe_change(&self, mutation: Mutation, cause: Option<Cause>) {
+        self.publish_observation(|journal| journal.push(mutation, cause));
+    }
+
+    /// Select a checked body, and end it before any consequence is applied.
+    pub(super) fn select_reads(&self, owner: Option<ReadOwner>) {
+        if let Some(journal) = self.changes.borrow_mut().as_mut() {
+            journal.read_owner = owner;
+        }
+    }
+
+    pub(super) fn selecting_reads(&self) -> bool {
+        self.changes
+            .borrow()
+            .as_ref()
+            .is_some_and(|journal| journal.read_owner.is_some())
+    }
+
+    pub(super) fn observe_read(&self, fact: ReadFact) {
+        if self.selecting_reads() {
+            self.publish_observation(|journal| journal.read(fact));
+        }
+    }
+
+    /// Metadata publication shares one stop, work, and typed storage boundary.
+    fn publish_observation(
+        &self,
+        publish: impl FnOnce(&mut Journal) -> Result<(), purrdf_lex::allocation::StorageError>,
+    ) {
         if self.work.storage_refusal.get().is_some() {
             return;
         }
@@ -1894,7 +1922,7 @@ impl<'a> Graph<'a> {
                 return;
             }
             self.work.charge(1);
-            if let Err(original) = journal.push(mutation, cause) {
+            if let Err(original) = publish(journal) {
                 self.work.storage_refusal.set(Some(original));
             }
         }
@@ -2528,7 +2556,17 @@ impl<'a> Graph<'a> {
 
     /// Whether node `y` satisfies concept `c` (with `⊤` always satisfied).
     pub(crate) fn has_concept(&self, st: &State, y: usize, c: u32) -> bool {
-        matches!(self.kb.table.decomp(c), Decomp::Top) || st.nodes[find(st, y)].label.contains(&c)
+        let top = matches!(self.kb.table.decomp(c), Decomp::Top);
+        let node = find(st, y);
+        let holds = top || st.nodes[node].label.contains(&c);
+        if holds {
+            self.observe_read(if top {
+                ReadFact::Top(node)
+            } else {
+                ReadFact::Label { node, concept: c }
+            });
+        }
+        holds
     }
 
     /// Create a fresh tree successor of `x` under `role`, labelled with `fillers`.
@@ -2844,6 +2882,12 @@ impl<'a> Graph<'a> {
                 }
                 self.work.charge(1);
                 if find(st, node) == node && !st.nodes[node].concrete && visit(node) {
+                    self.observe_read(ReadFact::Role {
+                        from: find(st, x),
+                        to: node,
+                        role,
+                        witness: RoleWitness::Universal,
+                    });
                     return true;
                 }
             }
@@ -2852,7 +2896,23 @@ impl<'a> Graph<'a> {
         if let Some(program) = &self.kb.role_program
             && let Some(machine) = program.machine(role)
         {
-            return match self.read_role_language(st, x, machine, visit) {
+            let mut selected = None;
+            let result = self.read_role_language(st, x, machine, &mut |node| {
+                let accepted = visit(node);
+                if accepted {
+                    selected = Some(node);
+                }
+                accepted
+            });
+            if let Some(to) = selected {
+                self.observe_read(ReadFact::Role {
+                    from: find(st, x),
+                    to,
+                    role,
+                    witness: RoleWitness::PendingPath,
+                });
+            }
+            return match result {
                 Ok(found) => found,
                 Err(original) => {
                     if self.work.storage_refusal.get().is_none() {
@@ -2879,9 +2939,21 @@ impl<'a> Graph<'a> {
             let f = find(st, from);
             let t = find(st, to);
             if realizes(&ach, (prop, true)) && f == x && scratch.emit(t) && visit(t) {
+                self.observe_read(ReadFact::Role {
+                    from: x,
+                    to: t,
+                    role,
+                    witness: RoleWitness::Edge(edge),
+                });
                 return true;
             }
             if realizes(&ach, (prop, false)) && t == x && scratch.emit(f) && visit(f) {
+                self.observe_read(ReadFact::Role {
+                    from: x,
+                    to: f,
+                    role,
+                    witness: RoleWitness::Edge(edge),
+                });
                 return true;
             }
         }
@@ -2900,6 +2972,12 @@ impl<'a> Graph<'a> {
                 self.work.charge(reach.order.len() as u64 + 1);
                 for &y in &reach.order {
                     if scratch.emit(y) && visit(y) {
+                        self.observe_read(ReadFact::Role {
+                            from: x,
+                            to: y,
+                            role,
+                            witness: RoleWitness::PendingPath,
+                        });
                         return true;
                     }
                 }
@@ -2932,6 +3010,12 @@ impl<'a> Graph<'a> {
                     scratch.members.push(y);
                 }
                 if !stopped && scratch.emit(y) && visit(y) {
+                    self.observe_read(ReadFact::Role {
+                        from: x,
+                        to: y,
+                        role,
+                        witness: RoleWitness::PendingPath,
+                    });
                     if !record {
                         return true;
                     }

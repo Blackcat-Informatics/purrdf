@@ -6,8 +6,58 @@
 //! Source ordinals refer to the consumer's prepared arrays. They are not asserted
 //! RDF premises until their original parser/normalization licenses are resolved.
 
+use super::super::concept::Role;
+#[cfg(test)]
+pub(crate) mod slice;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
 use std::fmt;
+
+/// Only the independently checked binding owns these reads, never search candidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadOwner {
+    Application { index: usize, clause: usize },
+    Clash { clause: usize },
+}
+
+/// The native fact selected by a successful body predicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadFact {
+    Node(usize),
+    ObjectDomain(usize),
+    Label {
+        node: usize,
+        concept: u32,
+    },
+    Top(usize),
+    Denotes {
+        node: usize,
+        individual: u32,
+    },
+    Role {
+        from: usize,
+        to: usize,
+        role: Role,
+        witness: RoleWitness,
+    },
+}
+
+/// Direct edges retain raw endpoints in their mutation; other paths require their
+/// own native path licenses before a causal graph may be published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoleWitness {
+    Edge(usize),
+    Universal,
+    PendingPath,
+}
+
+/// Reads precede the write at `checkpoint`. Later identification cannot change
+/// which version of a fact established this checked body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Read {
+    pub(crate) owner: ReadOwner,
+    pub(crate) checkpoint: usize,
+    pub(crate) fact: ReadFact,
+}
 
 /// The native owner of a write. No producer label supplies a source fact.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -198,12 +248,14 @@ impl fmt::Debug for Event {
     }
 }
 
-/// One replay owns one fallible native buffer and its original resident account.
+/// One replay owns its fallible observation buffers and original resident account.
 #[derive(Debug, Default)]
 pub(crate) struct Journal {
     pub(crate) cause: Cause,
     pub(super) stopped: bool,
     events: Vec<Event>,
+    reads: Vec<Read>,
+    pub(super) read_owner: Option<ReadOwner>,
     storage: Resident,
     live: usize,
     #[cfg(test)]
@@ -211,6 +263,29 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    /// Admit selected reads into the same resident account as their write history.
+    pub(crate) fn read(&mut self, fact: ReadFact) -> Result<(), StorageError> {
+        let Some(owner) = self.read_owner else {
+            return Ok(());
+        };
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = memory.push(
+            &mut self.reads,
+            Read {
+                owner,
+                checkpoint: self.events.len(),
+                fact,
+            },
+        );
+        self.live = memory.admitted_bytes();
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reads(&self) -> &[Read] {
+        &self.reads
+    }
+
     /// Inject one typed refusal at the same publication boundary as allocation.
     #[cfg(test)]
     pub(crate) fn with_injected_refusal(original: StorageError) -> Self {
