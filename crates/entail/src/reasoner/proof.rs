@@ -65,7 +65,7 @@
 //! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
 
 use purrdf_core::TermBox;
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::convert::Infallible;
@@ -853,7 +853,11 @@ impl ServiceProof {
     /// [`DlProofError::Canonicalization`] if `ontology` — wholly caller-supplied — refuses
     /// canonicalization; otherwise [`DlProofError::InputMismatch`] or
     /// [`DlProofError::WrongQuestion`].
-    pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
+    pub fn binds<D: DatasetView>(
+        &self,
+        ontology: &D,
+        question: &Question,
+    ) -> Result<(), DlProofError> {
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
             .map_err(DlProofError::Canonicalization)?;
         self.binds_identity(expected, question)
@@ -1007,9 +1011,9 @@ impl ServiceProof {
     /// # Errors
     ///
     /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
-    pub fn verify(
+    pub fn verify<D: DatasetView>(
         &self,
-        ontology: &RdfDataset,
+        ontology: &D,
         question: &Question,
         certificate: Option<&DlCertificate>,
         ctx: &DlProofContext<'_>,
@@ -2399,7 +2403,7 @@ pub(crate) fn refutation_claim(subject: ClaimSubject, answer: Verdict, runs: &[u
 mod tests {
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::*;
     use crate::EntailError;
