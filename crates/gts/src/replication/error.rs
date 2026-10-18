@@ -15,10 +15,7 @@ pub enum InventoryProblem {
     /// A file-level reader refusal.
     Fatal(Diagnostic),
     /// An incomplete or malformed trailing item.
-    Torn {
-        /// Original byte offset of that item.
-        offset: u64,
-    },
+    Torn(crate::wire::TornAppendError),
     /// A reader finding in a particular segment.
     Segment {
         /// Original segment ordinal.
@@ -34,19 +31,20 @@ impl core::fmt::Display for InventoryProblem {
             Self::Fatal(diagnostic) | Self::Segment { diagnostic, .. } => {
                 write!(f, "{}: {}", diagnostic.code, diagnostic.detail)
             }
-            Self::Torn { offset } => write!(f, "torn at offset {offset}"),
+            Self::Torn(cause) => cause.fmt(f),
         }
     }
 }
 
 purrdf_lex::error_source!(InventoryProblem => {
     Self::Fatal(diagnostic) | Self::Segment { diagnostic, .. } => diagnostic,
+    Self::Torn(cause) => cause,
 });
 
 impl purrdf_hash::error::StructuredError for InventoryProblem {
     purrdf_hash::error_visit! {
         Fatal(diagnostic) => "gts-replication-fatal" { "diagnostic" => Cause(diagnostic) },
-        Torn { offset } => "gts-replication-torn" { "offset" => Unsigned(u128::from(*offset)) },
+        Torn(cause) => "gts-replication-torn" { "offset" => Unsigned(u128::from(cause.offset)), "cause" => Cause(&cause.cause) },
         Segment { segment, diagnostic } => "gts-replication-segment" { "segment" => Unsigned(u128::from(*segment)), "diagnostic" => Cause(diagnostic) },
     }
 }

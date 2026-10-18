@@ -111,6 +111,41 @@ pub fn iter_items(data: &[u8]) -> (Vec<(usize, Value)>, Option<usize>) {
     purrdf_lex::cbor::decode_sequence(data, Limits::DEFAULT)
 }
 
+/// Original decode failure at a GTS sequence item boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TornAppendError {
+    /// Absolute byte offset where the refused item starts.
+    pub offset: u64,
+    /// Original decoder failure, with its item-relative location and I/O owner.
+    pub cause: purrdf_lex::cbor::DecodeError,
+}
+
+impl core::fmt::Display for TornAppendError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "torn at offset {}", self.offset)
+    }
+}
+
+purrdf_lex::error_source!(TornAppendError, cause);
+
+impl purrdf_hash::error::StructuredError for TornAppendError {
+    purrdf_hash::error_visit! {
+        @record self { offset, cause } => "gts-torn-append" {
+            "offset" => Unsigned(u128::from(self.offset)), "cause" => Cause(&self.cause)
+        }
+    }
+}
+
+/// Decode through the same CBOR parser while retaining the original refusal.
+pub fn iter_items_with_error(data: &[u8]) -> (Vec<(usize, Value)>, Option<TornAppendError>) {
+    let decoded = purrdf_lex::cbor::decode_sequence_checked(data, Limits::DEFAULT);
+    let failure = decoded.failure.map(|failure| TornAppendError {
+        offset: failure.offset as u64,
+        cause: failure.cause,
+    });
+    (decoded.items, failure)
+}
+
 /// Return the Header map, unwrapping the optional self-describe tag (§3).
 pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, HeaderError> {
     let inner = match item {

@@ -58,9 +58,6 @@ pub(super) enum FoldError {
         actual: Vec<u8>,
         expected: Vec<u8>,
     },
-    Torn {
-        offset: u64,
-    },
     HeaderHash {
         stored: Option<Vec<u8>>,
         computed: Vec<u8>,
@@ -88,7 +85,6 @@ impl FoldError {
             Self::EmptyFile => "EmptyFile",
             Self::SegmentBoundary { .. } => "SegmentBoundary",
             Self::ExpectedHead { .. } => "TruncatedLog",
-            Self::Torn { .. } => "TornAppendError",
             Self::ByteOffset { .. } | Self::ItemOrdinal { .. } => "ResourceLimit",
             Self::Language { .. }
             | Self::Direction { .. }
@@ -146,7 +142,6 @@ impl fmt::Display for FoldError {
                 "segment boundary at item {item} but reader is in pre-segment mode; remainder of file NOT folded (folding it with file-global term-ids would silently misfold — §16)"
             ),
             Self::ExpectedHead { .. } => f.write_str("observed head does not match expected head"),
-            Self::Torn { offset } => write!(f, "torn at offset {offset}"),
             Self::HeaderHash { .. } => f.write_str("header self-hash mismatch"),
             Self::HeaderVersion { magic, version } => {
                 write!(f, "unsupported header magic/version {magic:?}/{version:?}")
@@ -181,7 +176,6 @@ impl purrdf_hash::error::StructuredError for FoldError {
         FirstHeader => "gts-first-item-not-header" {},
         SegmentBoundary { item } => "gts-segment-boundary" { "item" => Unsigned(u128::from(*item)) },
         ExpectedHead { actual, expected } => "gts-expected-head" { "actual" => Bytes(actual), "expected" => Bytes(expected) },
-        Torn { offset } => "gts-torn-append" { "offset" => Unsigned(u128::from(*offset)) },
         HeaderHash { stored, computed } => "gts-header-self-hash" { "stored" => Value(stored.as_deref().map_or(ErrorValue::Absent, ErrorValue::Bytes)), "computed" => Bytes(computed) },
         HeaderVersion { magic, version } => "gts-header-version" { "magic" => Value(magic.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))), "version" => Value(version.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))) },
         ByteOffset { position, read } => "gts-byte-offset-overflow" { "position" => Unsigned(u128::from(*position)), "read" => Unsigned(*read as u128) },

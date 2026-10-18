@@ -80,7 +80,7 @@ pub struct Inventory {
     /// Fatal file-level diagnostic, if no segment inventory can be trusted.
     pub fatal: Option<Diagnostic>,
     /// Offset of a torn trailing CBOR item.
-    pub torn: Option<u64>,
+    pub torn: Option<crate::wire::TornAppendError>,
     /// End offset of the last complete CBOR item.
     pub clean_end: u64,
     /// Number of complete CBOR items parsed before any torn append.
@@ -131,8 +131,8 @@ impl Inventory {
         if let Some(fatal) = &self.fatal {
             return Some(InventoryProblem::Fatal(fatal.clone()));
         }
-        if let Some(offset) = self.torn {
-            return Some(InventoryProblem::Torn { offset });
+        if let Some(error) = &self.torn {
+            return Some(InventoryProblem::Torn(error.clone()));
         }
         self.segments.iter().find_map(|segment| {
             segment
@@ -246,7 +246,7 @@ pub fn inventory(data: &[u8]) -> Inventory {
         return Inventory {
             segments: Vec::new(),
             fatal: fs.fatal,
-            torn: torn.map(|offset| offset as u64),
+            torn: fs.torn,
             clean_end: clean_end as u64,
             item_count: items.len() as u64,
         };
@@ -262,7 +262,7 @@ pub fn inventory(data: &[u8]) -> Inventory {
         return Inventory {
             segments: Vec::new(),
             fatal: fs.fatal,
-            torn: torn.map(|offset| offset as u64),
+            torn: fs.torn,
             clean_end: clean_end as u64,
             item_count: items.len() as u64,
         };
@@ -313,7 +313,7 @@ pub fn inventory(data: &[u8]) -> Inventory {
     Inventory {
         segments,
         fatal: fs.fatal,
-        torn: torn.map(|offset| offset as u64),
+        torn: fs.torn,
         clean_end: clean_end as u64,
         item_count: items.len() as u64,
     }
@@ -422,7 +422,8 @@ pub fn heads_json(inventory: &Inventory) -> String {
         json_optional_hex(file_head),
         inventory
             .torn
-            .map_or_else(|| "null".to_string(), |offset| offset.to_string()),
+            .as_ref()
+            .map_or_else(|| "null".to_string(), |error| error.offset.to_string()),
         fatal_json(inventory.fatal.as_ref())
     )
 }
@@ -461,7 +462,8 @@ pub fn segments_json(inventory: &Inventory) -> String {
         inventory.item_count,
         inventory
             .torn
-            .map_or_else(|| "null".to_string(), |offset| offset.to_string()),
+            .as_ref()
+            .map_or_else(|| "null".to_string(), |error| error.offset.to_string()),
         fatal_json(inventory.fatal.as_ref())
     )
 }

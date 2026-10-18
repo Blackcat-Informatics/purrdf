@@ -266,7 +266,10 @@ fn refusal_gate(data: &[u8], seal_original: bool) -> Result<(Graph, String), Com
         return Err(CompactRefusedError::InputDiagnostic(fatal.clone()));
     }
     if let Some(torn) = fs.torn {
-        return Err(CompactRefusedError::Torn { offset: torn });
+        return Err(CompactRefusedError::Torn {
+            offset: torn.offset,
+            cause: torn.cause,
+        });
     }
     for (idx, seg) in fs.segments.iter().enumerate() {
         if let Some(first) = seg.diagnostics.first() {

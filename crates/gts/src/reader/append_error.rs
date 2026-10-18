@@ -14,6 +14,8 @@ pub enum AppendError {
     Torn {
         /// Byte offset of the incomplete trailing item.
         offset: usize,
+        /// Original item decoder refusal.
+        cause: purrdf_lex::cbor::DecodeError,
     },
     /// No segment header was found.
     MissingHeader,
@@ -69,7 +71,7 @@ pub enum AppendError {
 impl fmt::Display for AppendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Torn { offset } => write!(
+            Self::Torn { offset, .. } => write!(
                 f,
                 "cannot append to a file with a torn append at byte {offset}"
             ),
@@ -97,11 +99,14 @@ impl fmt::Display for AppendError {
     }
 }
 
-purrdf_lex::error_source!(AppendError { Header });
+purrdf_lex::error_source!(AppendError => {
+    Self::Header(cause) => cause,
+    Self::Torn { cause, .. } => cause,
+});
 
 impl purrdf_hash::error::StructuredError for AppendError {
     purrdf_hash::error_visit! {
-        Torn { offset } => "gts-append-torn" { "offset" => ByteCount(*offset as u128) },
+        Torn { offset, cause } => "gts-append-torn" { "offset" => ByteCount(*offset as u128), "cause" => Cause(cause) },
         MissingHeader => "gts-append-missing-header" {},
         Header(cause) => "gts-append-header" { "cause" => Cause(cause) },
         CatalogEntry { id, entry } => "gts-append-catalog-entry" { "id" => Record(id), "entry" => Record(entry) },

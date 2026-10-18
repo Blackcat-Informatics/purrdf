@@ -16,7 +16,7 @@ use purrdf_testkit::error_capture::Capture;
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 struct HeaderFault {
-    prefix: std::io::Cursor<[u8; 4]>,
+    prefix: std::io::Cursor<Vec<u8>>,
     error: Option<std::io::Error>,
 }
 
@@ -25,7 +25,7 @@ impl std::io::Read for HeaderFault {
         if bytes.is_empty() {
             return Ok(0);
         }
-        if self.prefix.position() < 4 {
+        if self.prefix.position() < self.prefix.get_ref().len() as u64 {
             return self.prefix.read(bytes);
         }
         Err(self
@@ -60,7 +60,7 @@ fn tar_and_files_public_io_retain_unformattable_original_causes() {
         ..files::FileEntry::default()
     }];
     let failure = || HeaderFault {
-        prefix: std::io::Cursor::new([0; 4]),
+        prefix: std::io::Cursor::new(vec![0; 4]),
         error: Some(purrdf_hash::error::io_error(
             std::io::ErrorKind::Other,
             CallerRefusal { limit: u128::MAX },
@@ -238,7 +238,7 @@ fn transport_retains_native_source_errors_before_foreign_formatting() {
     use purrdf_gts::transport::{TransportEncoding, transport_reader};
     use purrdf_testkit::error_capture::CallerRefusal;
     let source = HeaderFault {
-        prefix: std::io::Cursor::new([0x28, 0xb5, 0x2f, 0xfd]),
+        prefix: std::io::Cursor::new(vec![0x28, 0xb5, 0x2f, 0xfd]),
         error: Some(purrdf_hash::error::io_error(
             std::io::ErrorKind::Other,
             CallerRefusal { limit: u128::MAX },
@@ -266,7 +266,7 @@ fn transport_retains_native_source_errors_before_foreign_formatting() {
     let original = std::io::Error::from_raw_os_error(5);
     let kind = original.kind();
     let source = HeaderFault {
-        prefix: std::io::Cursor::new([0x28, 0xb5, 0x2f, 0xfd]),
+        prefix: std::io::Cursor::new(vec![0x28, 0xb5, 0x2f, 0xfd]),
         error: Some(original),
     };
     let Err(error) = transport_reader(source, Some(TransportEncoding::Zstd)) else {
@@ -486,6 +486,137 @@ fn reader_causes_survive_input_graph_and_streaming_owners() {
     let fields = fields.child("detail").child("cause");
     assert_eq!(fields.code, "gzip-reserved-flags");
     assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
+}
+
+fn reader_preserves_terminal_io_and_sequence_causes() {
+    use purrdf_gts::{
+        reader::{self, ReadOptions},
+        wire,
+        writer::Writer,
+    };
+    use purrdf_testkit::error_capture::CallerRefusal;
+    let mut writer = Writer::new("generic");
+    let header = writer.to_bytes();
+    writer.add_blob(b"payload", None, None);
+    let valid = writer.into_bytes();
+    for (prefix, kind, code, offset) in [
+        (vec![], std::io::ErrorKind::Other, "EmptyFile", 0),
+        (vec![], std::io::ErrorKind::UnexpectedEof, "EmptyFile", 0),
+        (vec![0xd9], std::io::ErrorKind::Other, "EmptyFile", 0),
+        (
+            header.clone(),
+            std::io::ErrorKind::Other,
+            "TornAppendError",
+            header.len(),
+        ),
+        (
+            valid.clone(),
+            std::io::ErrorKind::UnexpectedEof,
+            "TornAppendError",
+            valid.len(),
+        ),
+    ] {
+        let source = HeaderFault {
+            prefix: std::io::Cursor::new(prefix),
+            error: Some(purrdf_hash::error::io_error(
+                kind,
+                CallerRefusal { limit: u128::MAX },
+            )),
+        };
+        let mut sink = DiagnosticSink::default();
+        let result =
+            reader::read_to_sink_from_reader(source, ReadOptions::new(true, None), &mut sink);
+        assert_eq!(result.torn, Some(offset as u64));
+        let returned = result
+            .diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap();
+        let observed = sink
+            .diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap();
+        assert!(core::ptr::eq(
+            returned.native_cause().unwrap(),
+            observed.native_cause().unwrap()
+        ));
+        drop(returned);
+        let native = observed.native_cause().unwrap();
+        let fields = Capture::read(native);
+        assert_eq!(fields.code, "gts-torn-append");
+        assert!(
+            matches!(fields.field("offset"), ErrorValue::Unsigned(value) if value == offset as u128)
+        );
+        let io = fields.child("cause").child("kind").child("cause");
+        assert_eq!(io.code, "std-io");
+        let original = io.child("cause").child("cause");
+        assert_eq!(original.code, "caller-refused");
+        assert!(matches!(
+            original.field("limit"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+        let events = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(native, events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(captured.code, "gts-torn-append");
+    }
+    let bytes = [valid.as_slice(), &[0x5a]].concat();
+    let offline = reader::read(&bytes, true, None);
+    let cause = offline
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "TornAppendError")
+        .unwrap()
+        .native_cause()
+        .unwrap();
+    assert_eq!(
+        Capture::read(cause).child("cause").child("kind").code,
+        "cbor-truncated"
+    );
+    let segments = reader::read_file_segments(&bytes);
+    assert_eq!(segments.torn.as_ref().unwrap().offset, valid.len() as u64);
+    let compact = purrdf_gts::compact::compact_streamable(
+        &bytes,
+        purrdf_gts::compact::CompactionParams {
+            timestamp: "2026-01-01T00:00:00Z",
+            seal_original: false,
+            plan: purrdf_gts::compact::DictPlan::undicted(),
+            content_digest: None,
+            packaging_signer: (
+                purrdf_ed25519::SigningKey::from_bytes(&[1; 32]),
+                "test".to_owned(),
+            ),
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&compact);
+    assert_eq!(fields.code, "gts-compact-torn");
+    assert!(
+        matches!(fields.field("offset"), ErrorValue::ByteCount(value) if value == valid.len() as u128)
+    );
+    assert_eq!(fields.child("cause").child("kind").code, "cbor-truncated");
+    let inventory = purrdf_gts::replication::inventory(&bytes);
+    let torn_at = format!("\"torn_at\":{}", valid.len());
+    assert!(purrdf_gts::replication::heads_json(&inventory).contains(&torn_at));
+    assert!(purrdf_gts::replication::segments_json(&inventory).contains(&torn_at));
+    let problem = inventory.problem().unwrap();
+    drop((bytes, segments, offline, inventory));
+    assert_eq!(
+        Capture::read(&problem).child("cause").child("kind").code,
+        "cbor-truncated"
+    );
+    let error = reader::segment_append_state(&[0x9f]).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).child("cause").child("kind").code,
+        "cbor-truncated"
+    );
+    let error = wire::iter_items_with_error(&[0xff]).1.unwrap();
+    assert_eq!(
+        Capture::read(&error).child("cause").child("kind").code,
+        "cbor-malformed"
+    );
 }
 
 fn replication_callers_keep_native_findings_heads_and_full_width_ranges() {
@@ -2149,7 +2280,167 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
     assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(1)));
 }
 
+fn policy_findings_keep_native_counts_identifiers_and_vocabulary() {
+    use purrdf_gts::model::{Graph, OpaqueNode, Signature, Term};
+    use purrdf_gts::policy::{FILES_NS, TrustPolicy, evaluate_profile_policy};
+    use purrdf_lex::cbor::Value;
+
+    let mut graph = Graph {
+        segment_profiles: vec!["evidence".into()],
+        segment_heads: vec![vec![1; 32]],
+        ..Graph::default()
+    };
+    let findings = evaluate_profile_policy(&graph, None, Some(u64::MAX));
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].code, "ProfileSignatureRequired");
+    assert_eq!(
+        findings[0].detail,
+        "profile 'evidence' requires signed frames"
+    );
+    assert_eq!(
+        Capture::read(&findings[0]).child("reason").code,
+        "gts-profile-signature-required"
+    );
+    assert_eq!(
+        Capture::read(&findings[1]).child("reason").code,
+        "gts-profile-head-commitment-required"
+    );
+
+    graph.signatures = ["invalid", "invalid", "unverified"]
+        .map(|status| Signature {
+            frame_id: vec![2; 32],
+            kid: Some("signer".into()),
+            status: status.into(),
+            cose: None,
+            packaging: false,
+        })
+        .into();
+    let mut policy = TrustPolicy::new(["trusted"], true);
+    let findings = evaluate_profile_policy(&graph, Some(&policy), Some(u64::MAX));
+    assert_eq!(findings.len(), 4);
+    for (finding, (code, count)) in findings.iter().zip([
+        ("gts-profile-signature-invalid", 2),
+        ("gts-profile-signature-unverified", 1),
+    ]) {
+        let fields = Capture::read(finding);
+        assert_eq!(fields.child("reason").code, code);
+        assert!(
+            matches!(fields.child("reason").field("count"), ErrorValue::Unsigned(value) if value == count)
+        );
+        assert!(
+            matches!(fields.field("segment_index"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+    }
+    assert_eq!(
+        Capture::read(&findings[2]).child("reason").code,
+        "gts-profile-signer-untrusted"
+    );
+    graph.signatures.truncate(1);
+    graph.signatures[0].status = "valid".into();
+    graph.signatures[0].frame_id = vec![1; 32];
+    let findings = evaluate_profile_policy(&graph, None, None);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        Capture::read(&findings[0]).child("reason").code,
+        "gts-profile-signer-trust-not-evaluated"
+    );
+
+    graph.segment_profiles = vec!["opaque".into()];
+    policy = TrustPolicy::default();
+    policy.pseudonymous_kid_pattern = "^private$".into();
+    graph.opaque.push(OpaqueNode {
+        id: vec![3; 32],
+        frame_type: "data".into(),
+        reason: "missing-key".into(),
+        sigstat: "none".into(),
+        pub_meta: None,
+        recipients: Some(vec![
+            Value::Map(vec![(
+                Value::Text("kid".into()),
+                Value::Text("public".into()),
+            )]),
+            Value::Map(vec![(
+                Value::Text("kid".into()),
+                Value::Float(f64::from_bits(0x7ff8_0000_0000_0001)),
+            )]),
+            Value::Map(vec![]),
+            Value::Map(vec![(
+                Value::Text("kid".into()),
+                Value::Text("private".into()),
+            )]),
+        ]),
+    });
+    let findings = evaluate_profile_policy(&graph, Some(&policy), None);
+    let retained = findings.clone();
+    assert_eq!(findings, retained);
+    drop(findings);
+    drop(policy);
+    drop(graph);
+    assert_eq!(retained.len(), 4);
+    let events = Vec::with_capacity(6);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&retained[1], events);
+    assert_eq!(window.close().allocations, 0);
+    let reason = fields.child("reason");
+    assert_eq!(reason.code, "gts-profile-recipient-kid-public");
+    assert!(matches!(
+        reason.field("pattern"),
+        ErrorValue::Text("^private$")
+    ));
+    assert!(matches!(reason.field("kid"), ErrorValue::Text("public")));
+    let fields = Capture::read(&retained[2]);
+    assert_eq!(fields.child("reason").child("actual").code, "cbor-float");
+    assert!(matches!(
+        fields.child("reason").child("actual").field("bits"),
+        ErrorValue::Float64Bits(0x7ff8_0000_0000_0001)
+    ));
+    assert!(matches!(
+        Capture::read(&retained[3]).child("reason").field("actual"),
+        ErrorValue::Absent
+    ));
+
+    let mut graph = Graph {
+        terms: vec![Term::iri(format!("{FILES_NS}path"))],
+        quads: vec![(0, 0, 0, None)],
+        ..Graph::default()
+    };
+    let findings = evaluate_profile_policy(&graph, None, None);
+    assert_eq!(findings.len(), 1);
+    let fields = Capture::read(&findings[0]);
+    assert_eq!(
+        fields.child("reason").code,
+        "gts-profile-vocabulary-undeclared"
+    );
+    assert!(matches!(
+        fields.child("reason").field("vocabulary"),
+        ErrorValue::Iri(FILES_NS)
+    ));
+    graph.segment_profiles = vec!["files".into()];
+    assert_eq!(evaluate_profile_policy(&graph, None, None), []);
+    graph.quads.clear();
+    let findings = evaluate_profile_policy(&graph, None, None);
+    assert_eq!(
+        Capture::read(&findings[0]).child("reason").code,
+        "gts-profile-vocabulary-unused"
+    );
+    graph.segment_profiles.clear();
+    graph.terms[0] = Term::iri(format!("{}source", purrdf_gts::stream::STREAM_NS));
+    graph.quads.push((0, 0, 0, None));
+    let findings = evaluate_profile_policy(&graph, None, None);
+    let fields = Capture::read(&findings[0]);
+    assert_eq!(
+        fields.child("reason").code,
+        "gts-profile-stream-without-layout"
+    );
+    assert!(matches!(
+        fields.child("reason").field("layout"),
+        ErrorValue::Code("streamable")
+    ));
+}
+
 purrdf_testkit::harness_main!(
+    policy_findings_keep_native_counts_identifiers_and_vocabulary,
+    reader_preserves_terminal_io_and_sequence_causes,
     replication_callers_keep_native_findings_heads_and_full_width_ranges,
     verification_errors_keep_original_key_integrity_and_signature_counts,
     reader_layout_findings_keep_counts_heads_and_roots,

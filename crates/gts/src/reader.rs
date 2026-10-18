@@ -42,9 +42,9 @@ use crate::reader_rows::{
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
 use crate::wire::{
-    MAGIC, VERSION, content_id, digest_label, digest_str, header_id, iter_items, map_get,
-    unwrap_header,
+    MAGIC, VERSION, content_id, digest_label, digest_str, header_id, map_get, unwrap_header,
 };
+use crate::wire::{TornAppendError, iter_items_with_error};
 
 pub(crate) fn as_i128(v: &Value) -> Option<i128> {
     v.as_integer().map(i128::from)
@@ -1576,9 +1576,13 @@ pub struct SegmentAppendState {
 /// segment header, or its last item has no `"id"` — appending onto any of those
 /// would silently break the chain.
 pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
-    let (items, torn) = iter_items(data);
-    if let Some(offset) = torn {
-        return Err(AppendError::Torn { offset });
+    let (items, torn) = iter_items_with_error(data);
+    if let Some(error) = torn {
+        return Err(AppendError::Torn {
+            offset: usize::try_from(error.offset)
+                .expect("buffered item offsets fit the address space"),
+            cause: error.cause,
+        });
     }
     let Some(last_header) = items.iter().rposition(|(_, item)| is_header_item(item)) else {
         return Err(AppendError::MissingHeader);
@@ -1699,18 +1703,19 @@ pub fn read(data: &[u8], allow_segments: bool, expected_head: Option<&[u8]>) -> 
 
 /// Read and fold a GTS file using explicit options.
 pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
-    let (items, torn) = iter_items(data);
+    let (items, torn) = iter_items_with_error(data);
     if items.is_empty() {
         let mut g = Graph::default();
-        g.diagnostics.push(
-            Diagnostic {
-                cause: None,
-                code: "EmptyFile".to_string(),
-                detail: "no CBOR items".to_string(),
-                frame_index: None,
-            }
-            .with_native_cause(FoldError::EmptyFile),
-        );
+        let diagnostic = Diagnostic {
+            cause: None,
+            code: "EmptyFile".to_string(),
+            detail: "no CBOR items".to_string(),
+            frame_index: None,
+        };
+        g.diagnostics.push(match torn {
+            Some(error) => diagnostic.with_native_cause(error),
+            None => diagnostic.with_native_cause(FoldError::EmptyFile),
+        });
         return g;
     }
 
@@ -1785,17 +1790,15 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
             );
         }
     }
-    if let Some(offset) = torn {
+    if let Some(error) = torn {
         g.diagnostics.push(
             Diagnostic {
                 cause: None,
                 code: "TornAppendError".to_string(),
-                detail: format!("torn at offset {offset}"),
+                detail: error.to_string(),
                 frame_index: None,
             }
-            .with_native_cause(FoldError::Torn {
-                offset: offset as u64,
-            }),
+            .with_native_cause(error),
         );
     }
     g
@@ -1858,12 +1861,15 @@ impl<R: Read> Read for StreamingCountingReader<R> {
 
 fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
-) -> Result<Option<(Value, u64, u64)>, u64> {
+) -> Result<Option<(Value, u64, u64)>, TornAppendError> {
     let start = reader.pos;
     match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
         Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
         Ok(None) => Ok(None),
-        Err(_) => Err(start),
+        Err(cause) => Err(TornAppendError {
+            offset: start,
+            cause,
+        }),
     }
 }
 
@@ -2222,6 +2228,7 @@ pub fn read_to_sink_from_reader<R: Read>(
         address_exhausted: None,
     };
     let mut result = StreamingReadResult::default();
+    let mut torn_cause = None;
     let mut item_index = 0u64;
     let mut current: Option<ActiveStreamingSegment> = None;
     loop {
@@ -2243,7 +2250,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                     );
                     return result;
                 }
-                result.torn = Some(torn);
+                result.torn = Some(torn.offset);
+                torn_cause = Some(torn);
                 break;
             }
         };
@@ -2332,16 +2340,19 @@ pub fn read_to_sink_from_reader<R: Read>(
     }
 
     if item_index == 0 {
+        let diagnostic = Diagnostic {
+            cause: None,
+            code: "EmptyFile".to_string(),
+            detail: "no CBOR items".to_string(),
+            frame_index: None,
+        };
         push_result_diagnostic(
             &mut result,
             sink,
-            Diagnostic {
-                cause: None,
-                code: "EmptyFile".to_string(),
-                detail: "no CBOR items".to_string(),
-                frame_index: None,
-            }
-            .with_native_cause(FoldError::EmptyFile),
+            match torn_cause {
+                Some(error) => diagnostic.with_native_cause(error),
+                None => diagnostic.with_native_cause(FoldError::EmptyFile),
+            },
         );
         return result;
     }
@@ -2368,17 +2379,17 @@ pub fn read_to_sink_from_reader<R: Read>(
             );
         }
     }
-    if let Some(offset) = result.torn {
+    if let Some(error) = torn_cause {
         push_result_diagnostic(
             &mut result,
             sink,
             Diagnostic {
                 cause: None,
                 code: "TornAppendError".to_string(),
-                detail: format!("torn at offset {offset}"),
+                detail: error.to_string(),
                 frame_index: None,
             }
-            .with_native_cause(FoldError::Torn { offset }),
+            .with_native_cause(error),
         );
     }
     result
@@ -2391,8 +2402,8 @@ pub fn read_to_sink_from_reader<R: Read>(
 pub struct FileSegments {
     /// One fold per segment, in file order, each carrying its OWN diagnostics.
     pub segments: Vec<Graph>,
-    /// Byte offset of a torn trailing item (§3), if any.
-    pub torn: Option<u64>,
+    /// Original refusal at a torn trailing item (§3), if any.
+    pub torn: Option<TornAppendError>,
     /// Set when the file never reaches segmentation (empty, or the first item
     /// is not a header) — `segments` is empty in that case.
     pub fatal: Option<Diagnostic>,
@@ -2401,20 +2412,22 @@ pub struct FileSegments {
 /// Fold a file segment-by-segment WITHOUT unioning — the composition ledger
 /// view that `gts info`/`gts verify` report per-segment (§14.1).
 pub fn read_file_segments(data: &[u8]) -> FileSegments {
-    let (items, torn) = iter_items(data);
+    let (items, torn) = iter_items_with_error(data);
     if items.is_empty() {
+        let diagnostic = Diagnostic {
+            cause: None,
+            code: "EmptyFile".to_string(),
+            detail: "no CBOR items".to_string(),
+            frame_index: None,
+        };
+        let diagnostic = match &torn {
+            Some(error) => diagnostic.with_native_cause(error.clone()),
+            None => diagnostic.with_native_cause(FoldError::EmptyFile),
+        };
         return FileSegments {
             segments: Vec::new(),
-            torn: torn.map(|offset| offset as u64),
-            fatal: Some(
-                Diagnostic {
-                    cause: None,
-                    code: "EmptyFile".to_string(),
-                    detail: "no CBOR items".to_string(),
-                    frame_index: None,
-                }
-                .with_native_cause(FoldError::EmptyFile),
-            ),
+            torn,
+            fatal: Some(diagnostic),
         };
     }
     let bounds: Vec<usize> = items
@@ -2426,7 +2439,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     if bounds.first() != Some(&0) {
         return FileSegments {
             segments: Vec::new(),
-            torn: torn.map(|offset| offset as u64),
+            torn,
             fatal: Some(
                 Diagnostic {
                     cause: None,
@@ -2443,7 +2456,7 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
     let segments = fold_segments(&items, &ranges, None);
     FileSegments {
         segments,
-        torn: torn.map(|offset| offset as u64),
+        torn,
         fatal: None,
     }
 }
@@ -2701,6 +2714,10 @@ mod transformed_payload_tests {
     #[test]
     fn streaming_offsets_cross_u32_and_refuse_terminal_overflow() {
         use super::{StreamingCountingReader, next_stream_item};
+        assert_eq!(
+            size_of::<Result<Option<(Value, u64, u64)>, super::TornAppendError>>(),
+            size_of::<Result<Option<(Value, u64, u64)>, u64>>()
+        );
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,
@@ -2714,7 +2731,7 @@ mod transformed_payload_tests {
             pos: u64::MAX,
             address_exhausted: None,
         };
-        assert_eq!(next_stream_item(&mut reader).unwrap_err(), u64::MAX);
+        assert_eq!(next_stream_item(&mut reader).unwrap_err().offset, u64::MAX);
         assert_eq!(reader.address_exhausted, Some((u64::MAX, 1)));
         assert_eq!(reader.pos, u64::MAX);
     }

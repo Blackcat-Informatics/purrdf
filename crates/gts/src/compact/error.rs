@@ -132,6 +132,8 @@ pub enum CompactRefusedError {
     Torn {
         /// Original byte offset.
         offset: u64,
+        /// Original decoder refusal.
+        cause: purrdf_lex::cbor::DecodeError,
     },
     /// A segment did not verify cleanly.
     SegmentDiagnostic {
@@ -307,7 +309,7 @@ impl fmt::Display for CompactRefusedError {
             Self::UnusedDictionaries { count, transform } => write!(f, "the plan pins {count} dictionar(y/ies) but its transform chain {transform:?} carries no zstd-family codec, so nothing could ever use them"),
             Self::LevelTransform { transform, .. } => write!(f, "the plan declares a zstd level but its transform chain {transform:?} carries no zstd-family codec to encode at it"),
             Self::InputDiagnostic(cause) => write!(f, "input is not a clean GTS file: {}: {}", cause.code, cause.detail),
-            Self::Torn { offset } => write!(f, "input has a torn append at byte {offset}"),
+            Self::Torn { offset, .. } => write!(f, "input has a torn append at byte {offset}"),
             Self::SegmentDiagnostic { segment, cause } => write!(f, "segment {segment} does not verify cleanly: {}: {}", cause.code, cause.detail),
             Self::MixedProfiles { profiles } => {
                 f.write_str("mixed segment profiles [")?;
@@ -348,6 +350,7 @@ impl fmt::Display for CompactRefusedError {
 }
 
 purrdf_lex::error_source!(CompactRefusedError => {
+    Self::Torn { cause, .. } => cause,
     Self::PinnedDictionary { cause, .. } => cause,
     Self::InputDiagnostic(cause) => cause,
     Self::SegmentDiagnostic { cause, .. } => cause,
@@ -377,7 +380,7 @@ impl purrdf_hash::error::StructuredError for CompactRefusedError {
         UnusedDictionaries { count, transform } => "gts-compact-unused-dictionaries" { "count" => Unsigned(*count as u128), "transform" => List(transform.iter().map(|name| ErrorValue::Text(name))) },
         LevelTransform { level, transform } => "gts-compact-level-transform" { "level" => Signed(i128::from(*level)), "transform" => List(transform.iter().map(|name| ErrorValue::Text(name))) },
         InputDiagnostic(cause) => "gts-compact-input" { "cause" => Cause(cause) },
-        Torn { offset } => "gts-compact-torn" { "offset" => ByteCount(u128::from(*offset)) },
+        Torn { offset, cause } => "gts-compact-torn" { "offset" => ByteCount(u128::from(*offset)), "cause" => Cause(cause) },
         SegmentDiagnostic { segment, cause } => "gts-compact-segment" { "segment" => Unsigned(*segment as u128), "cause" => Cause(cause) },
         MixedProfiles { profiles } => "gts-compact-mixed-profiles" { "profiles" => List(profiles.iter().map(|profile| ErrorValue::Text(profile))) },
         EvidenceProfile => "gts-compact-evidence-profile" {},
