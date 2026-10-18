@@ -275,7 +275,7 @@ def verify_assets(
         name: digest for name, digest in hashes.items() if name != "SHA256SUMS"
     }:
         raise ReleaseError(
-            "retained release checksums do not match the four distribution assets"
+            "retained release checksums do not match the distribution assets"
         )
     if expected is not None and hashes != expected:
         raise ReleaseError("draft assets differ from the audited local distribution")
