@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 172 named cases in 28 integration targets,
-with 182 executions across 33 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 176 named cases in 28 integration targets,
+with 186 executions across 33 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -107,6 +107,10 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of a seeded transcript of every tower operation over operands from one digit to hundreds. |
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_oracle_vectors_replay_on_this_target` | Replays the 7,164 oracle-generated `xsd:integer`/`xsd:decimal` operator, division, comparison, conversion and canonical-form records through the `XsdValue` operators, byte for byte. |
 | `purrdf-xsd` / `any_uri` | scalar | `lexical_mapping_preserves_everything_except_xml_whitespace`, `primitive_identity_is_disjoint_and_unordered`, `ranges_use_collapsed_character_lengths_and_primitive_identity` | Preserves URI whitespace mapping, primitive-domain identity and ordering refusal, and collapsed-character length constraints. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_decimal_group_parse_replays_on_this_target` | Parses and independently re-renders decimal inputs across the balanced-reader crossover and at 40,000 digits on the actual wasm target. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_binary_products_match_the_schoolbook_oracle` | Replays large, asymmetric and signed binary products against the independent schoolbook kernel and a frozen transcript on the actual wasm target. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_binary_division_replays_exact_shift_equations` | Reconstructs large exact shifted quotient/remainder equations on the 32-bit lowering. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `wide_gap_gcd_replays_on_this_target` | Preserves the exact common factor when the operands start hundreds of limbs apart. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target` | Reproduces hand-checked query answers past `i128`, under two division policies, and the F&O code of an absorbed error. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `borrowed_value_equality_matches_the_query_operator_on_this_target` | Compares original borrowed RDF values against actual query equality, preserving numeric, scope, language/direction, triple/composite and expression-error distinctions. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `any_uri_casts_keep_their_primitive_domain_on_this_target` | Preserves native URI whitespace collapse and string/self casts while refusing casts into unrelated primitive domains through the governed query entry point. |

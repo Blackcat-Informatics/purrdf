@@ -715,6 +715,21 @@ fn exact_first_division_preserves_physical_admission_refusal() {
 }
 
 #[test]
+fn admitted_small_exact_division_uses_one_initial_grant() {
+    let one = Decimal::ONE;
+    let eight = Decimal::from(8);
+    let mut calls = 0;
+    let quotient = one
+        .try_div_admitted(&eight, DivisionPolicy::default(), &mut |_| {
+            calls += 1;
+            Ok(())
+        })
+        .expect("admitted exact quotient");
+    assert_eq!(quotient.to_string(), "0.125");
+    assert_eq!(calls, 1, "the word path needs no general integer scratch");
+}
+
+#[test]
 fn lexical_refusals_have_valid_neighbours() {
     for refused in [
         "", "+", "-", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",

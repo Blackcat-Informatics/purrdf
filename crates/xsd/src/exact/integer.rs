@@ -208,7 +208,7 @@ impl Integer {
         self.sub_using(rhs, &crate::bigint::scratch::Fallible)
     }
 
-    /// Multiply through the same schoolbook/Karatsuba implementation.
+    /// Multiply through the same native schoolbook/recursive/transform dispatch.
     /// # Errors
     /// Returns physical destination refusal without infallible fallback.
     pub fn try_mul(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {

@@ -9,7 +9,12 @@
 
 use core::{cmp::Ordering, fmt};
 mod compat;
+mod division;
+mod ntt;
 pub use compat::KARATSUBA_THRESHOLD;
+pub(crate) use compat::TOOM3_THRESHOLD;
+pub(crate) use division::{DIVISION_BLOCK_THRESHOLD, normalized_divisor_limbs};
+pub(crate) use ntt::{THRESHOLD as NTT_THRESHOLD, selected_length as transform_product_len};
 #[cfg(test)]
 mod arithmetic_tests;
 pub(crate) mod scratch;
@@ -277,17 +282,23 @@ fn mag_divmod_small(
     divisor: u64,
     storage: &impl Allocate,
 ) -> Result<(Mag, u64), LimbScratchError> {
+    let mut quotient = storage.copy(a)?;
+    let remainder = mag_divmod_small_in_place(&mut quotient, divisor);
+    Ok((quotient, remainder))
+}
+
+/// The one small-divisor quotient loop, retaining its admitted destination.
+fn mag_divmod_small_in_place(quotient: &mut Mag, divisor: u64) -> u64 {
     debug_assert_ne!(divisor, 0, "division by zero");
     let d = u128::from(divisor);
-    let mut out: Mag = storage.destination(a.len(), a.len())?;
     let mut rem: u128 = 0;
-    for (slot, &limb) in out.iter_mut().zip(a.iter()).rev() {
-        let cur = (rem << 64) | u128::from(limb);
+    for slot in quotient.iter_mut().rev() {
+        let cur = (rem << 64) | u128::from(*slot);
         *slot = (cur / d) as u64;
         rem = cur % d;
     }
-    mag_trim(&mut out);
-    Ok((out, rem as u64))
+    mag_trim(quotient);
+    rem as u64
 }
 
 /// Writes a sub-limb left shift into initialized storage.
@@ -476,6 +487,9 @@ fn mag_div_rem(
         mag_shr_in_place(&mut remainder, u64::from(shift));
         return Ok((quotient, remainder));
     }
+    if division::use_block_division(a.len(), b.len()) {
+        return division::divide_blocks(a, b, storage);
+    }
     let length = a
         .len()
         .checked_add(1)
@@ -494,6 +508,10 @@ fn mag_div_rem(
 }
 
 /// Stein's binary greatest common divisor on magnitudes.
+///
+/// One Euclidean reduction removes a wide initial limb imbalance before the
+/// subtraction loop. Comparable operands retain the allocation-light binary
+/// path; a later imbalance does not add another division destination.
 fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
     if a.is_empty() {
         return storage.copy(b);
@@ -506,6 +524,19 @@ fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
     }
     if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
         return Ok(mag_from_u128(crate::wide::gcd(x, y)));
+    }
+    let reduced = if a.len() >= b.len().saturating_mul(2) {
+        Some((b, mag_div_rem(a, b, storage)?.1))
+    } else if b.len() >= a.len().saturating_mul(2) {
+        Some((a, mag_div_rem(b, a, storage)?.1))
+    } else {
+        None
+    };
+    let (a, b) = reduced
+        .as_ref()
+        .map_or((a, b), |(short, remainder)| (*short, &remainder[..]));
+    if b.is_empty() {
+        return storage.copy(a);
     }
     let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
     let mut u = mag_shr(a, mag_trailing_zeros(a), storage)?;
@@ -565,34 +596,264 @@ fn mag_sqrt_floor(value: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
     Ok(x)
 }
 
-/// Accumulates a run of ASCII digit bytes into a magnitude.
-///
-/// The caller must have already established that every byte is an ASCII digit.
+// Retain scalar Horner through the measured 4,000-digit window; tree products
+// become useful only for substantially longer inputs.
+const DECIMAL_TREE_START_RANK: usize = 8;
+pub(crate) const DECIMAL_TREE_START_GROUPS: usize = 1 << DECIMAL_TREE_START_RANK;
+// A root must contain a full subtree whose balanced divisor reaches the
+// recursive division range. Smaller renders retain the original quotient loop.
+pub(crate) const DECIMAL_RENDER_TREE_START_GROUPS: usize = 4 * DIVISION_BLOCK_THRESHOLD;
+
+/// The one validating reader for both the small Horner and large tree paths.
+/// Leading zeros consume input but form no group, matching parse admission's
+/// significant-digit bound. An invalid suffix still refuses an all-zero run.
+struct DecimalGroupReader<I> {
+    digits: I,
+    any: bool,
+    significant: bool,
+}
+
+impl<I: Iterator<Item = u8>> DecimalGroupReader<I> {
+    fn next_group(&mut self) -> Result<Option<(u64, usize)>, ()> {
+        let mut value = 0_u64;
+        let mut length = 0;
+        loop {
+            let Some(byte) = self.digits.next() else {
+                return Ok((length != 0).then_some((value, length)));
+            };
+            if !byte.is_ascii_digit() {
+                return Err(());
+            }
+            self.any = true;
+            if !self.significant && byte == b'0' {
+                continue;
+            }
+            self.significant = true;
+            value = value * 10 + u64::from(byte - b'0');
+            length += 1;
+            if length == DECIMAL_CHUNK {
+                return Ok(Some((value, length)));
+            }
+        }
+    }
+}
+
+/// Accumulates a run of ASCII digit bytes into a magnitude. Ordinary values
+/// retain the original two-destination Horner path.
 fn mag_from_digit_bytes(
     digits: impl Iterator<Item = u8>,
     storage: &impl Allocate,
 ) -> Result<Option<Mag>, LimbScratchError> {
+    let mut reader = DecimalGroupReader {
+        digits,
+        any: false,
+        significant: false,
+    };
     let mut acc = Mag::new();
-    let mut any = false;
-    let mut chunk_value = 0u64;
-    let mut chunk_len = 0usize;
-    for byte in digits {
-        if !byte.is_ascii_digit() {
+    let mut full_groups = 0_usize;
+    loop {
+        let Ok(group) = reader.next_group() else {
             return Ok(None);
+        };
+        let Some((value, length)) = group else {
+            return Ok(reader.any.then_some(acc));
+        };
+        if length != DECIMAL_CHUNK {
+            acc = mag_mul_small_add(&acc, POW10_U64[length], value, storage)?;
+            return Ok(Some(acc));
         }
-        any = true;
-        chunk_value = chunk_value * 10 + u64::from(byte - b'0');
-        chunk_len += 1;
-        if chunk_len == DECIMAL_CHUNK {
-            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value, storage)?;
-            chunk_value = 0;
-            chunk_len = 0;
+        full_groups = full_groups
+            .checked_add(1)
+            .ok_or(LimbScratchError::SizeOverflow)?;
+        if full_groups == DECIMAL_TREE_START_GROUPS + 1 {
+            return mag_from_large_digit_groups(reader, acc, value, storage);
+        }
+        acc = mag_mul_small_add(&acc, CHUNK_BASE, value, storage)?;
+    }
+}
+
+fn decimal_tree_insert(
+    slots: &mut [Option<BigInt>; usize::BITS as usize],
+    powers: &mut [Option<BigInt>; usize::BITS as usize],
+    mut block: BigInt,
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    for (rank, slot) in slots.iter_mut().enumerate().skip(DECIMAL_TREE_START_RANK) {
+        if let Some(high) = slot.take() {
+            let power = decimal_group_power(powers, rank, storage)?;
+            let shifted = high.mul_fast_using(power, storage)?;
+            block = shifted.add_using(&block, storage)?;
+        } else {
+            *slot = Some(block);
+            return Ok(());
         }
     }
-    if chunk_len > 0 {
-        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value, storage)?;
+    Err(LimbScratchError::SizeOverflow)
+}
+
+/// The larger frame is entered only after the first 256 complete groups.
+fn mag_from_large_digit_groups(
+    mut reader: DecimalGroupReader<impl Iterator<Item = u8>>,
+    first_groups: Mag,
+    next_group: u64,
+    storage: &impl Allocate,
+) -> Result<Option<Mag>, LimbScratchError> {
+    let mut slots: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
+    let mut powers: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
+    slots[DECIMAL_TREE_START_RANK] = Some(BigInt::from_parts(false, first_groups));
+    powers[0] = Some(BigInt::from_u128(u128::from(CHUNK_BASE)));
+    let mut pending = [0_u64; DECIMAL_TREE_START_GROUPS];
+    pending[0] = next_group;
+    let mut pending_len = 1;
+    let mut tail = None;
+    loop {
+        match reader.next_group() {
+            Ok(Some((value, DECIMAL_CHUNK))) => {
+                pending[pending_len] = value;
+                pending_len += 1;
+                if pending_len == DECIMAL_TREE_START_GROUPS {
+                    let mut block = Mag::new();
+                    for &group in &pending {
+                        block = mag_mul_small_add(&block, CHUNK_BASE, group, storage)?;
+                    }
+                    decimal_tree_insert(
+                        &mut slots,
+                        &mut powers,
+                        BigInt::from_parts(false, block),
+                        storage,
+                    )?;
+                    pending_len = 0;
+                }
+            }
+            Ok(Some(group)) => {
+                tail = Some(group);
+                break;
+            }
+            Ok(None) => break,
+            Err(()) => return Ok(None),
+        }
     }
-    Ok(any.then_some(acc))
+    // Higher slots are earlier decimal groups. Concatenate occupied blocks
+    // in that order, using the cached power for the lower block's width.
+    let mut result: Option<BigInt> = None;
+    for rank in (0..slots.len()).rev() {
+        if let Some(block) = slots[rank].take() {
+            result = Some(if let Some(high) = result {
+                let power = decimal_group_power(&mut powers, rank, storage)?;
+                high.mul_fast_using(power, storage)?
+                    .add_using(&block, storage)?
+            } else {
+                block
+            });
+        }
+    }
+    let mut acc = result.expect("more than 256 groups have a block").magnitude;
+    for &group in &pending[..pending_len] {
+        acc = mag_mul_small_add(&acc, CHUNK_BASE, group, storage)?;
+    }
+    if let Some((value, length)) = tail {
+        acc = mag_mul_small_add(&acc, POW10_U64[length], value, storage)?;
+    }
+    Ok(Some(acc))
+}
+
+/// Cache B^(2^rank), B=10^19, for the balanced decimal group reader.
+fn decimal_group_power<'a>(
+    powers: &'a mut [Option<BigInt>; usize::BITS as usize],
+    rank: usize,
+    storage: &impl Allocate,
+) -> Result<&'a BigInt, LimbScratchError> {
+    for at in 1..=rank {
+        if powers[at].is_none() {
+            let previous = powers[at - 1].as_ref().expect("base power exists");
+            powers[at] = Some(previous.mul_fast_using(previous, storage)?);
+        }
+    }
+    Ok(powers[rank].as_ref().expect("requested power exists"))
+}
+
+/// The one mutable quotient-to-group leaf used by both rendering paths.
+fn append_decimal_group_leaf(
+    magnitude: &[u64],
+    groups: &mut Mag,
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let mut quotient = storage.copy(magnitude)?;
+    while !quotient.is_empty() {
+        let remainder = mag_divmod_small_in_place(&mut quotient, CHUNK_BASE);
+        storage.push(groups, remainder)?;
+    }
+    Ok(())
+}
+
+/// Split by cached B^(2^rank), B=10^19, and emit low groups before high ones.
+/// Low subtrees are padded to their specified width; the root is not padded.
+fn append_decimal_group_tree(
+    magnitude: &[u64],
+    width: usize,
+    padded: bool,
+    groups: &mut Mag,
+    powers: &[Option<BigInt>; usize::BITS as usize],
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let start = groups.len();
+    if !magnitude.is_empty() {
+        if width <= DECIMAL_TREE_START_GROUPS {
+            append_decimal_group_leaf(magnitude, groups, storage)?;
+        } else {
+            let rank = (width - 1).ilog2();
+            let lower_width = 1_usize << rank;
+            let power = powers[rank as usize]
+                .as_ref()
+                .expect("prepared decimal power");
+            let (quotient, remainder) = mag_div_rem(magnitude, &power.magnitude, storage)?;
+            append_decimal_group_tree(
+                &remainder,
+                lower_width,
+                padded || !quotient.is_empty(),
+                groups,
+                powers,
+                storage,
+            )?;
+            drop(remainder);
+            append_decimal_group_tree(
+                &quotient,
+                width - lower_width,
+                padded,
+                groups,
+                powers,
+                storage,
+            )?;
+        }
+    }
+    let end = start
+        .checked_add(width)
+        .ok_or(LimbScratchError::SizeOverflow)?;
+    if groups.len() > end {
+        return Err(LimbScratchError::SizeOverflow);
+    }
+    if padded {
+        while groups.len() < end {
+            storage.push(groups, 0)?;
+        }
+    }
+    Ok(())
+}
+
+/// Keep the cached-power array off ordinary render frames. Cached powers are
+/// shared with decimal parsing; every native owner uses the supplied allocator.
+#[inline(never)]
+fn append_large_decimal_groups(
+    magnitude: &[u64],
+    width: usize,
+    groups: &mut Mag,
+    storage: &impl Allocate,
+) -> Result<(), LimbScratchError> {
+    let mut powers: [Option<BigInt>; usize::BITS as usize] = core::array::from_fn(|_| None);
+    powers[0] = Some(BigInt::from_u64(CHUNK_BASE));
+    let rank = usize::try_from((width - 1).ilog2()).map_err(|_| LimbScratchError::SizeOverflow)?;
+    decimal_group_power(&mut powers, rank, storage)?;
+    append_decimal_group_tree(magnitude, width, false, groups, &powers, storage)
 }
 
 // ---------------------------------------------------------------------------
@@ -1617,17 +1878,15 @@ impl BigInt {
         let mut groups = storage.destination(layout.group_capacity(), 0)?;
         if self.is_zero() {
             storage.push(&mut groups, 0)?;
+        } else if layout.group_capacity() > DECIMAL_RENDER_TREE_START_GROUPS {
+            append_large_decimal_groups(
+                &self.magnitude,
+                layout.group_capacity(),
+                &mut groups,
+                storage,
+            )?;
         } else {
-            let mut quotient: Option<Mag> = None;
-            loop {
-                let current: &[u64] = quotient.as_ref().map_or(&self.magnitude, |value| value);
-                if current.is_empty() {
-                    break;
-                }
-                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, storage)?;
-                storage.push(&mut groups, remainder)?;
-                quotient = Some(next);
-            }
+            append_decimal_group_leaf(&self.magnitude, &mut groups, storage)?;
         }
         let leading = groups.last().copied().expect("zero includes one group");
         let leading_digits = if leading == 0 {
@@ -2082,5 +2341,37 @@ mod tests {
         assert!(BigInt::from_decimal_bytes(core::iter::empty()).is_none());
         assert!(BigInt::from_decimal_bytes(b"12x".iter().copied()).is_none());
         assert!(BigInt::from_decimal_bytes(b"-1".iter().copied()).is_none());
+    }
+
+    #[test]
+    fn balanced_decimal_group_parse_replays_original_decimal_spelling() {
+        for digits in [
+            607, 608, 609, 626, 627, 628, 1_196, 1_197, 1_198, 1_215, 1_216, 1_217, 1_234, 1_235,
+            1_236, 1_824, 4_000, 4_882, 4_883, 4_884, 40_000,
+        ] {
+            let mut lexical = String::with_capacity(digits);
+            lexical.push('7');
+            for at in 1..digits {
+                lexical.push(char::from(b'0' + (at % 10) as u8));
+            }
+            let parsed = BigInt::try_from_decimal_bytes(lexical.bytes(), false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(parsed.to_string(), lexical, "{digits} digits");
+        }
+        let padded = format!("{}123456789", "0".repeat(627));
+        assert_eq!(
+            BigInt::try_from_decimal_bytes(padded.bytes(), false)
+                .unwrap()
+                .unwrap()
+                .to_string(),
+            "123456789"
+        );
+        let invalid = format!("{}x", "7".repeat(627));
+        assert!(
+            BigInt::try_from_decimal_bytes(invalid.bytes(), false)
+                .unwrap()
+                .is_none()
+        );
     }
 }

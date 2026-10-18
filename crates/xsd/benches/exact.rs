@@ -21,6 +21,8 @@
 //!   decimal digits: binary addition stays linear; decimal parsing and rendering
 //!   include base conversion, products grow as Karatsuba's `n^1.585`, and
 //!   division as quotient × divisor length.
+//!   `gcd_wide_gap` uses a constructed exact multiple whose left operand has
+//!   about three times the decimal width of the right operand.
 //! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
 //!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
 //!   it sits.
@@ -273,6 +275,14 @@ fn bench_growth(c: &mut Bench) {
         group.bench_function(format!("div_rem/{digits}"), |bench| {
             bench.iter(|| black_box(black_box(&wide).div_rem(black_box(&a)).expect("nonzero")));
         });
+        if digits >= 4_000 {
+            // Same exact divisor/factor on both sides of a wide initial gap.
+            // The operation, not fixture construction, is the registered row.
+            let gap = &wide * &a;
+            group.bench_function(format!("gcd_wide_gap/{digits}"), |bench| {
+                bench.iter(|| black_box(black_box(&gap).gcd(black_box(&a))));
+            });
+        }
         group.bench_function(format!("decimal_div_scale18/{digits}"), |bench| {
             bench.iter(|| {
                 black_box(
@@ -291,6 +301,18 @@ fn bench_growth(c: &mut Bench) {
                 )
             });
         });
+        if digits == 40_000 {
+            // One fixed-work render window over the existing 40k decimal fixture.
+            group.bench_function("render_canonical_fixed100/40000", |bench| {
+                bench.iter(|| {
+                    let mut bytes = 0;
+                    for _ in 0..100 {
+                        bytes += black_box(black_box(&decimal).canonical_lexical()).len();
+                    }
+                    black_box(bytes)
+                });
+            });
+        }
         group.bench_function(format!("to_f64/{digits}"), |bench| {
             bench.iter(|| black_box(black_box(&decimal).to_f64()));
         });
@@ -310,6 +332,19 @@ fn bench_karatsuba(c: &mut Bench) {
         });
         group.bench_function(format!("karatsuba/{limbs}"), |bench| {
             bench.iter(|| black_box(black_box(&a).mul_fast(black_box(&b))));
+        });
+    }
+    // Keep the original fixtures and their draw sequence intact. These larger
+    // balanced rows measure the transform range through the same public route.
+    for digits in [160_000, 320_000, 640_000] {
+        let a = BigInt::from_digits(&digit_string(&mut state, digits)).expect("digits");
+        let b = BigInt::from_digits(&digit_string(&mut state, digits)).expect("digits");
+        group.throughput(Throughput::Elements(a.limb_len() as u64));
+        group.bench_function(format!("transform_range/{digits}"), |bench| {
+            bench.iter(|| black_box(black_box(&a).mul_fast(black_box(&b))));
+        });
+        group.bench_function(format!("render_range/{digits}"), |bench| {
+            bench.iter(|| black_box(black_box(&a).to_string()));
         });
     }
     group.finish();
