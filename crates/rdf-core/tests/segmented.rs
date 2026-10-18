@@ -158,10 +158,12 @@ fn demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic() {
         g: None,
     };
     builder.push_quad(quad).unwrap();
+    assert_eq!(builder.statement_count(), 1);
     assert!(matches!(
         builder.push_quad(quad),
         Err(SegmentedError::ConstructionLimit)
     ));
+    assert_eq!(builder.statement_count(), 1, "refusal adds no stored row");
     let image = builder.seal().unwrap();
     let read = session(&image, 2);
     assert_eq!(read.term_count(), 2);
@@ -572,24 +574,35 @@ fn rdf12_references_empty_graphs_and_streamed_lines_survive() {
     let mut builder = SegmentedBuilder::new(limits).unwrap();
     let mut ids = Vec::new();
     builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
-    builder
-        .push_quad(QuadIds {
-            s: ids[0],
-            p: ids[1],
-            o: ids[3],
-            g: Some(ids[5]),
-        })
-        .unwrap();
-    builder.push_reifier(ids[4], ids[3], Some(ids[5])).unwrap();
-    builder
-        .push_annotation(QuadIds {
-            s: ids[4],
-            p: ids[1],
-            o: ids[2],
-            g: Some(ids[5]),
-        })
-        .unwrap();
-    builder.declare_named_graph(ids[6]).unwrap();
+    assert_eq!(builder.statement_count(), 0);
+    for _ in 0..3 {
+        builder
+            .push_quad(QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: ids[3],
+                g: Some(ids[5]),
+            })
+            .unwrap();
+        builder.push_reifier(ids[4], ids[3], Some(ids[5])).unwrap();
+        builder
+            .push_annotation(QuadIds {
+                s: ids[4],
+                p: ids[1],
+                o: ids[2],
+                g: Some(ids[5]),
+            })
+            .unwrap();
+        builder.declare_named_graph(ids[6]).unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let count = builder.statement_count();
+        let measured = window.close();
+        assert_eq!(
+            count, 3,
+            "duplicate rows and declarations do not grow the count"
+        );
+        assert_eq!(measured.allocations, 0);
+    }
     let image = builder.seal().unwrap();
     let read = session(&image, 4);
     for (&id, value) in ids.iter().zip(&values) {

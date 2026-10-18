@@ -781,6 +781,12 @@ Storage, commit-log reconstruction and atomic publication remain under G5.
 
 ### Sparse segmented publications
 
+Before sealing, `SegmentedBuilder::statement_count()` reads the sum of the
+distinct rows retained in the ordinary, reifier and annotation streams. Accepted
+repeated pushes preserve that count, and named-graph declarations remain
+separate. The count reads the original store-once tables in constant space;
+successful sealing supplies structural RDF validation and certification.
+
 `SegmentedStack` is the sparse alternative to the layered paged snapshot above.
 Each immutable `SegmentedLayer` retains its original provider, authenticated
 `SegmentedReceipt`, source-local dictionary, and frozen removal and explicit graph

@@ -8,6 +8,15 @@
 //! path ([`validate`]), and the frozen, infallible, zero-allocation [`dataset`]
 //! iteration surface.
 
+// Growable and frozen owners use different containers for the same three RDF
+// streams. Keep their allocation-free row-count expression in one home.
+macro_rules! statement_row_count {
+    ($owner:ident) => {
+        $owner.quads.len() + $owner.reifiers.len() + $owner.annotations.len()
+    };
+}
+pub(super) use statement_row_count;
+
 // The IR-boundary absoluteness invariant: the one gate every term table's IRI arm
 // runs on its MISS path, so a relative IRI reference is unrepresentable in the IR
 // from any ingress rather than being re-checked once per codec seam.
