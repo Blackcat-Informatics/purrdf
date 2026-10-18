@@ -15,6 +15,179 @@ use purrdf_testkit::error_capture::Capture;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+struct HeaderFault {
+    prefix: std::io::Cursor<[u8; 4]>,
+    error: Option<std::io::Error>,
+}
+
+impl std::io::Read for HeaderFault {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        if self.prefix.position() < 4 {
+            return self.prefix.read(bytes);
+        }
+        Err(self
+            .error
+            .take()
+            .expect("the first source failure must terminate header decoding"))
+    }
+}
+
+fn transport_retains_native_source_errors_before_foreign_formatting() {
+    use purrdf_gts::transport::{TransportEncoding, transport_reader};
+    use purrdf_testkit::error_capture::CallerRefusal;
+    let source = HeaderFault {
+        prefix: std::io::Cursor::new([0x28, 0xb5, 0x2f, 0xfd]),
+        error: Some(purrdf_hash::error::io_error(
+            std::io::ErrorKind::Other,
+            CallerRefusal { limit: u128::MAX },
+        )),
+    };
+    let Err(error) = transport_reader(source, Some(TransportEncoding::Zstd)) else {
+        panic!("failed header read must remain a failure")
+    };
+    let copy = error.clone();
+    assert_eq!(error, copy);
+    drop(error);
+    assert_eq!(copy.cause.kind(), std::io::ErrorKind::Other);
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&copy, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "gts-transport");
+    let fields = fields.child("cause").child("cause").child("cause");
+    assert_eq!(fields.code, "caller-refused");
+    assert!(matches!(
+        fields.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+
+    let original = std::io::Error::from_raw_os_error(5);
+    let kind = original.kind();
+    let source = HeaderFault {
+        prefix: std::io::Cursor::new([0x28, 0xb5, 0x2f, 0xfd]),
+        error: Some(original),
+    };
+    let Err(error) = transport_reader(source, Some(TransportEncoding::Zstd)) else {
+        panic!("native OS-code control must fail")
+    };
+    assert_eq!(error.cause.kind(), kind);
+    assert_eq!(error.cause.raw_os_error(), Some(5));
+    assert!(matches!(
+        Capture::read(&error).child("cause").field("raw_os_error"),
+        ErrorValue::Signed(5)
+    ));
+}
+
+fn native_transport_framing_and_decoder_fields_survive() {
+    use purrdf_gts::transport::{TransportEncoding, decode_transport};
+    let mut gzip = encode_chain(&["gzip".into()], b"payload").unwrap();
+    gzip[3] |= 0xe0;
+    let error = decode_transport(&gzip, TransportEncoding::Gzip).unwrap_err();
+    let fields = Capture::read(&error)
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "gzip-reserved-flags");
+    assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
+
+    let cases = [
+        (Vec::new(), "gts-zstd-no-frame", None),
+        (
+            vec![0x50, 0x2a, 0x4d, 0x18, 0, 0],
+            "gts-zstd-skippable-size",
+            Some((2, 4)),
+        ),
+        (
+            vec![0x50, 0x2a, 0x4d, 0x18, 8, 0, 0, 0, 1, 2],
+            "gts-zstd-skippable-payload",
+            Some((2, 8)),
+        ),
+    ];
+    for (bytes, code, counts) in cases {
+        let error = decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err();
+        let fields = Capture::read(&error)
+            .child("cause")
+            .child("cause")
+            .child("cause");
+        assert_eq!(fields.code, code);
+        if let Some((actual, expected)) = counts {
+            assert!(
+                matches!(fields.field("actual"), ErrorValue::ByteCount(value) if value == actual)
+            );
+            assert!(
+                matches!(fields.field("expected"), ErrorValue::ByteCount(value) if value == expected)
+            );
+        }
+    }
+    let mut bytes = encode_chain(&["zstd".into()], b"payload").unwrap();
+    assert_eq!(
+        decode_transport(&bytes, TransportEncoding::Zstd).unwrap(),
+        b"payload"
+    );
+    bytes.extend([1, 2]);
+    let error = decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err();
+    let fields = Capture::read(&error)
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "gts-zstd-trailing-prefix");
+    assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(2)));
+    assert_eq!(
+        error.message(),
+        "2 byte(s) after the last zstd frame do not begin another frame"
+    );
+    assert_eq!(
+        error,
+        decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+    );
+}
+
+fn dictionary_and_key_envelope_errors_keep_native_fields() {
+    use purrdf_gts::dict::{DictSeed, dictionary_id, raw_content_dict, trained_dict};
+    let samples: &[&[u8]] = &[b"", b""];
+    let raw = raw_content_dict(samples, 1024).unwrap_err();
+    let trained = trained_dict(samples, 1024, DictSeed::FromCorpus).unwrap_err();
+    assert_eq!(raw, trained);
+    for (error, operation) in [(raw, "raw-content"), (trained, "train")] {
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-dictionary-empty-corpus");
+        assert!(matches!(fields.field("operation"), ErrorValue::Code(value) if value == operation));
+        assert!(matches!(fields.field("samples"), ErrorValue::Unsigned(2)));
+        assert!(matches!(
+            fields.field("target_len"),
+            ErrorValue::ByteCount(1024)
+        ));
+        assert_eq!(
+            error.to_string(),
+            "dictionary construction failed: empty corpus"
+        );
+    }
+    let error = dictionary_id(&[]).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-dictionary-external");
+    assert!(matches!(
+        fields.field("operation"),
+        ErrorValue::Code("decode")
+    ));
+    assert!(matches!(
+        fields.field("input_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(matches!(fields.field("target_len"), ErrorValue::Absent));
+    assert!(matches!(fields.field("message"), ErrorValue::Message(value) if !value.is_empty()));
+    let error = {
+        let input = String::from("not an armored key");
+        purrdf_gts::openpgp::parse_transport_key(&input).unwrap_err()
+    };
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-openpgp-rule");
+    assert_eq!(fields.child("rule").code, "gts-openpgp-missing-begin");
+    assert_eq!(error.to_string(), "missing armor BEGIN line");
+}
+
 fn refused_frame(
     payload: purrdf_lex::cbor::Value,
     codecs: Vec<purrdf_lex::cbor::Value>,
@@ -442,6 +615,9 @@ fn caller_messages_remain_message_data() {
 }
 
 purrdf_testkit::harness_main!(
+    transport_retains_native_source_errors_before_foreign_formatting,
+    native_transport_framing_and_decoder_fields_survive,
+    dictionary_and_key_envelope_errors_keep_native_fields,
     reader_causes_survive_input_graph_and_streaming_owners,
     reader_missing_catalog_keeps_ordered_native_cbor_fields,
     reader_blob_budget_keeps_original_counts_and_priority,
