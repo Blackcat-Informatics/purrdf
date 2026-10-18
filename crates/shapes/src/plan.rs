@@ -1010,6 +1010,22 @@ impl<'a> ShapePlan<'a> {
     /// a name resolved at evaluation, or a function body, takes the graph-wide
     /// answer. False for every graph without a deactivation expression, so the
     /// short-circuits there are untouched.
+    ///
+    /// The short-circuits it lifts are those over an unordered set of members: the
+    /// member loops of `sh:and` and `sh:or`, the `sh:memberShape` loop, the sibling
+    /// check of `sh:qualifiedValueShape`, and the conformance probe that stops at the
+    /// first violation.
+    ///
+    /// It does not reach the two node-expression kinds that read an ORDERED sequence
+    /// of input nodes. `shnex:findFirst` returns at the first conforming input node and
+    /// `shnex:matchAll` at the first non-conforming one, so a deactivation expression
+    /// in their filter shape is evaluated only at the input nodes up to that one. That
+    /// is a decision, not an omission: each is defined by that node (the first input
+    /// node that conforms; every input node conforms, which one failing settles), so
+    /// the inputs after it are not part of the answer, and the order they are read in
+    /// is the order of the sequence, which the expression's own result already depends
+    /// on. Walking them would make a later input's ill-formed deactivation expression
+    /// fail an expression whose value it cannot change.
     #[inline]
     pub(crate) fn exhaustive(&self) -> bool {
         self.lowered.deactivates || (self.lowered.reaches_opaque && self.graph.any_deactivation)

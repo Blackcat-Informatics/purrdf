@@ -3505,6 +3505,34 @@ const NODE_EXPRESSION_DEACTIVATED_NOTE: &str = "A shape whose sh:deactivated is 
      is deactivated at the focus nodes where that expression produces true; a JSON Schema cannot \
      state a condition on the focus node, so the shape is projected as active.";
 
+/// The shapes that own `node`, when `node` is the object of an `sh:sparql` or
+/// `sh:expression` statement (a constraint node); `node` itself otherwise.
+///
+/// A constraint node's `sh:deactivated` deactivates the constraint of the shape that
+/// declares it, so the loss is recorded against that shape, as for a shape's own value
+/// and a reifier's, and not against the blank constraint node.
+fn owning_shapes(data: &RdfDataset, node: Term) -> Vec<Term> {
+    let owners: Vec<Term> = [crate::model::sh::SPARQL, crate::model::sh::EXPRESSION]
+        .into_iter()
+        .flat_map(|predicate| {
+            let predicate = Term::NamedNode(NamedNode::from(predicate));
+            native_quads(
+                data,
+                None,
+                Some(&predicate),
+                Some(&node),
+                GraphFilter::AnyGraph,
+            )
+        })
+        .map(|(owner, _, _)| owner)
+        .collect();
+    if owners.is_empty() {
+        vec![node]
+    } else {
+        owners
+    }
+}
+
 /// One loss per shape of `shapes` that has a `sh:deactivated` node expression (a
 /// blank node), on the shape or a constraint of it, or on a reifier of one of its
 /// statements, in subject order.
@@ -3521,7 +3549,8 @@ fn node_expression_deactivation_losses(shapes: &Shapes) -> Vec<LossEntry> {
         native_quads(data, None, Some(&predicate), None, GraphFilter::AnyGraph)
             .into_iter()
             .filter(|(_, _, object)| matches!(object, Term::BlankNode(_)))
-            .map(|(subject, _, _)| subject.to_string())
+            .flat_map(|(subject, _, _)| owning_shapes(data, subject))
+            .map(|subject| subject.to_string())
             .collect();
     // The same value on a reifier annotates the statement it reifies: the shape that
     // is that statement's subject is the one projected as active.

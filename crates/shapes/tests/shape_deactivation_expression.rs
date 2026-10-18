@@ -465,9 +465,18 @@ fn each_law_reads_a_node_expression_sh_deactivated_where_its_text_defines_one() 
              sh:datatype xsd:integer {{| sh:deactivated {value} |}} ."
         )
     };
+    let property_reifier = |value: &str| {
+        format!(
+            "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ;
+             sh:property ex:P {{| sh:deactivated {value} |}} .
+             ex:P sh:path rdf:type ; sh:datatype xsd:integer ."
+        )
+    };
     // (position, writer, whether the working draft's text defines an expression there)
-    let written_at: [(&str, Writer, bool); 4] = [
+    let written_at: [(&str, Writer, bool); 6] = [
         ("a shape", node_shape, true),
+        ("a property shape", property_shape, true),
+        ("an sh:property reifier", property_reifier, true),
         ("a SPARQL-based constraint", sparql_constraint, false),
         ("an sh:expression constraint", expression_constraint, false),
         ("a reifier", reifier, true),
@@ -583,4 +592,60 @@ fn a_json_schema_records_a_constraint_s_node_expression_deactivation_as_a_loss()
         &["sh:deactivated"],
     );
     assert!(compiled(&reifier("false")).losses.is_empty());
+}
+
+/// The loss for a constraint node's own node-expression `sh:deactivated` is recorded
+/// against the SHAPE that declares the constraint, as for a shape's own value and a
+/// reifier's, not against the blank constraint node. The neighbours are the constants,
+/// which record nothing.
+#[test]
+fn a_constraint_node_s_deactivation_loss_names_its_shape() {
+    use purrdf_shapes::json_schema::{Namespaces, compile};
+    use purrdf_shapes::shapes::from_dataset;
+    use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+
+    let compiled = |shapes: &str| {
+        let dataset = parse_turtle_to_dataset(shapes, None).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+        let ns = Namespaces::new("ex", &[("ex".to_owned(), "http://example.org/".to_owned())])
+            .expect("namespaces");
+        compile(&shapes, &ns).expect("compile")
+    };
+    let expression_constraint = |value: &str| {
+        format!(
+            "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:expression [
+                 sh:deactivated {value} ; sh:path ex:never ] ."
+        )
+    };
+    let writers: [(&str, Writer); 2] = [
+        ("a SPARQL-based constraint", sparql_constraint),
+        ("an sh:expression constraint", expression_constraint),
+    ];
+    for (what, shapes) in writers {
+        // The compile projects the shapes twice (the schema and the OpenAPI document),
+        // so the ledger holds the loss once for each; the set of subjects is the claim.
+        let subjects: std::collections::BTreeSet<Option<String>> =
+            compiled(&shapes("[ sh:path ex:muted ]"))
+                .losses
+                .entries()
+                .iter()
+                .map(|entry| entry.location.as_ref().and_then(|l| l.subject.clone()))
+                .collect();
+        assert_eq!(
+            subjects,
+            [Some("<http://example.org/S>".to_owned())].into(),
+            "{what}: the loss is recorded against the shape"
+        );
+        for constant in ["true", "false"] {
+            // (The constraint is itself beyond a JSON Schema, which is another loss.)
+            assert!(
+                compiled(&shapes(constant))
+                    .losses
+                    .entries()
+                    .iter()
+                    .all(|entry| &*entry.code != "sh:deactivated"),
+                "{what}: the constant {constant} records no deactivation loss"
+            );
+        }
+    }
 }

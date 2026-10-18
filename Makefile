@@ -421,8 +421,12 @@ w3c-earl: ## Write the two W3C SHACL EARL reports for the current clean HEAD und
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — the EARL reports must name a committed HEAD:"; git status --porcelain; exit 1; }
 	@# The test binaries run from their crate directory, so hand them an absolute path.
 	@mkdir -p -- "$$W3C_EARL_DIR" && dir=$$(cd -- "$$W3C_EARL_DIR" && pwd) && \
+		rm -f -- "$$dir/purrdf-shacl12-earl.ttl" "$$dir/purrdf-shacl-earl.ttl" && \
 		PURRDF_W3C_EARL_DIR="$$dir" PURRDF_W3C_EARL_COMMIT="$$(git rev-parse HEAD)" \
 		cargo test --locked -p purrdf-shapes --test w3c12_conformance --test w3c_conformance && \
+		for f in purrdf-shacl12-earl.ttl purrdf-shacl-earl.ttl; do \
+			test -s "$$dir/$$f" || { echo "ERROR: $$dir/$$f is missing or empty after the run"; exit 1; }; \
+		done && \
 		echo "Wrote $$dir/purrdf-shacl12-earl.ttl and $$dir/purrdf-shacl-earl.ttl"
 
 scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.

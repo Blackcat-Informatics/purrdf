@@ -44,13 +44,19 @@ ex:Bob ex:address ex:Address2 .
 ex:Address2 ex:city \"Paris\" ; ex:zip \"75001\" .
 ";
 
+/// Validate `data` against the property shape `ex:P`, written as `property_shape`
+/// (its path and constraints), under `ex:S` targeting `ex:Alice` and `ex:Bob`.
 #[track_caller]
-fn validate(property_shape_body: &str, shapes_extra: &str, data: &str) -> ValidationReport {
+fn validate_property_shape(
+    property_shape: &str,
+    shapes_extra: &str,
+    data: &str,
+) -> ValidationReport {
     let shapes = parse_shapes(
         &format!(
             "{PREFIXES}
              ex:S a sh:NodeShape ; sh:property ex:P ; sh:targetNode ex:Alice , ex:Bob .
-             ex:P sh:path ex:address ; {property_shape_body} .
+             ex:P {property_shape} .
              {shapes_extra}"
         ),
         None,
@@ -58,6 +64,15 @@ fn validate(property_shape_body: &str, shapes_extra: &str, data: &str) -> Valida
     .unwrap_or_else(|error| panic!("the shapes graph must load: {error}"));
     validate_dataset_with_shapes_graph(&turtle::data(PREFIXES, data), &shapes, None)
         .expect("validation runs")
+}
+
+#[track_caller]
+fn validate(property_shape_body: &str, shapes_extra: &str, data: &str) -> ValidationReport {
+    validate_property_shape(
+        &format!("sh:path ex:address ; {property_shape_body}"),
+        shapes_extra,
+        data,
+    )
 }
 
 /// `(focus node, result path, value)` of every closed result, sorted.
@@ -218,6 +233,87 @@ fn by_types_on_a_property_shape_collects_through_the_value_nodes_types() {
 
     let conforming = "ex:Alice ex:address ex:A1 . ex:A1 a ex:Addr ; ex:zip 1 .";
     assert_conforms(&validate("sh:closed sh:ByTypes", shapes_extra, conforming));
+}
+
+/// Like [`validate`], with the property shape's whole path written by the caller (a
+/// complex path), and `sh:closed true` over `ignored`.
+#[track_caller]
+fn validate_over_path(path: &str, ignored: &str, data: &str) -> ValidationReport {
+    validate_property_shape(
+        &format!("sh:path {path} ; sh:closed true ; sh:ignoredProperties ( {ignored} )"),
+        "",
+        data,
+    )
+}
+
+fn result(focus: &str, path: &str, value: &str) -> (String, String, String) {
+    (
+        format!("<http://example.org/ns#{focus}>"),
+        format!("<http://example.org/ns#{path}>"),
+        value.to_owned(),
+    )
+}
+
+/// An inverse path reaches the nodes that point at the focus node, and those are the
+/// value nodes the closed check runs over; the focus node's own triples are not
+/// checked. Ignoring the offending predicate is the conforming neighbour.
+#[test]
+fn closed_property_shape_over_an_inverse_path_checks_the_nodes_pointing_at_the_focus() {
+    let data = "ex:Alice ex:other 1 .
+                ex:Kid1 ex:parent ex:Alice ; ex:name \"Kay\" .
+                ex:Kid2 ex:parent ex:Alice .";
+    let path = "[ sh:inversePath ex:parent ]";
+    assert_eq!(
+        closed_results(&validate_over_path(path, "ex:parent", data)),
+        vec![result("Alice", "name", "\"Kay\"")]
+    );
+    assert_conforms(&validate_over_path(path, "ex:parent ex:name", data));
+}
+
+/// A sequence path's value nodes are the nodes at its end, not the intermediate ones:
+/// the intermediate node's own triples are not checked.
+#[test]
+fn closed_property_shape_over_a_sequence_path_checks_the_end_of_the_path() {
+    let data = "ex:Alice ex:address ex:A1 . ex:A1 ex:geo ex:G1 ; ex:street \"x\" .
+                ex:G1 ex:lat 1 ; ex:lon 2 .";
+    let path = "( ex:address ex:geo )";
+    assert_eq!(
+        closed_results(&validate_over_path(path, "ex:lat", data)),
+        vec![result(
+            "Alice",
+            "lon",
+            "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        )]
+    );
+    assert_conforms(&validate_over_path(path, "ex:lat ex:lon", data));
+}
+
+/// With `sh:zeroOrMorePath` the focus node itself is a value node (the path reaches it
+/// in zero steps), so its own unlisted triples are reported, beside those of every node
+/// the path reaches. The `sh:oneOrMorePath` neighbour does not reach the focus node, and
+/// reports only the nodes after it.
+#[test]
+fn closed_property_shape_over_zero_or_more_includes_the_focus_node_itself() {
+    let data = "ex:Alice ex:next ex:N1 ; ex:other \"a\" .
+                ex:N1 ex:next ex:N2 .
+                ex:N2 ex:stuff \"z\" .";
+    let reported_by = |path: &str| closed_results(&validate_over_path(path, "ex:next", data));
+    assert_eq!(
+        reported_by("[ sh:zeroOrMorePath ex:next ]"),
+        vec![
+            result("Alice", "other", "\"a\""),
+            result("Alice", "stuff", "\"z\"")
+        ]
+    );
+    assert_eq!(
+        reported_by("[ sh:oneOrMorePath ex:next ]"),
+        vec![result("Alice", "stuff", "\"z\"")]
+    );
+    assert_conforms(&validate_over_path(
+        "[ sh:zeroOrMorePath ex:next ]",
+        "ex:next ex:other ex:stuff",
+        data,
+    ));
 }
 
 const META: &str = "http://example.org/ns/meta#";

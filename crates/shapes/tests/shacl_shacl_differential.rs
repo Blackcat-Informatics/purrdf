@@ -123,10 +123,12 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
         "sparql-constraint-deactivated",
         "sh:deactivated on <",
         1,
-        "a SPARQL-based constraint's sh:deactivated has the rule a shape's has — SHACL 1.2 \
-         Core: \"In SHACL Core, the only valid values for sh:deactivated are the constant \
-         literal node expressions true and false\" — shacl-shacl.ttl checks sh:deactivated on \
-         shapes only, and the object of sh:sparql is not one",
+        "a SPARQL-based constraint's sh:deactivated is read by the engine under the rule its \
+         profile gives: a node expression whose only output node is true or false, \"as for \
+         shapes\" (SHACL 1.2 SPARQL Extensions in the editor's draft), or, under the working \
+         draft, a value that \"is either true or false\" (Syntax of SPARQL-based Constraints); \
+         shacl-shacl.ttl checks sh:deactivated on shapes only, and the object of sh:sparql is \
+         not one",
     ),
     (
         "sparql-query-text",

@@ -808,6 +808,13 @@ impl NativeListCallee {
 /// evaluation failure are the call's SPARQL error (`Ok(None)`, unbound). A failure of the
 /// processor or a refusal of the shapes graph still fails the query
 /// ([`sparql_call_result`]).
+///
+/// A call of the wrong ARITY (an operator form with the wrong operand count, or
+/// `shnex:conformsToShape` with other than two arguments) is not an evaluation failure
+/// and fails the query: §7.3 turns the failure of an EVALUATION into the call's error, and
+/// an evaluation failure is a property of the argument values, whereas a wrong operand
+/// count fails identically for every value. It is a defect of the query as written, as
+/// it is for a custom function, whose registry arity is checked the same way.
 pub(crate) fn invoke_native_list_function(
     iri: &str,
     callee: &NativeListCallee,

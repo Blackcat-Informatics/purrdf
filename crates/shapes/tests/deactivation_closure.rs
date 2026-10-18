@@ -402,3 +402,26 @@ fn a_second_reifier_stating_sh_deactivated_is_refused_when_either_value_is_an_ex
     );
     assert!(purrdf_shapes::engine::parse_shapes(&shapes, None).is_ok());
 }
+
+/// The same expression NODE (one labelled blank node, not two textual copies) as the
+/// value on two reifiers is two values for one triple, and is refused; the same node on
+/// one reifier is the accepted neighbour.
+#[test]
+fn one_expression_node_on_two_reifiers_is_refused() {
+    let shared = |second: &str| {
+        format!(
+            "{PREFIXES}
+             ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:datatype xsd:integer .
+             _:m sh:path ex:m1 .
+             ex:r1 rdf:reifies <<( ex:S sh:datatype xsd:integer )>> ; sh:deactivated _:m .
+             {second}"
+        )
+    };
+    let second = "ex:r2 rdf:reifies <<( ex:S sh:datatype xsd:integer )>> ; sh:deactivated _:m .";
+    let error = validate_graphs(&data(), &shared(second), None)
+        .expect_err("one node on two reifiers is two values")
+        .to_string();
+    assert!(error.contains("at most one reifier"), "{error}");
+    let loaded = purrdf_shapes::engine::parse_shapes(&shared(""), None);
+    assert!(loaded.is_ok(), "{:?}", loaded.err());
+}

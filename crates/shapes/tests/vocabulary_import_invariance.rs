@@ -28,9 +28,9 @@
 //! the document prefix map a SPARQL body falls back on is the original
 //! document's, because a graph-level merge carries no prefix declarations.
 //!
-//! [`INVARIANCE_EXCEPTIONS`] ledgers any case whose answer legitimately depends on
-//! the vocabulary being present — a SPARQL constraint that reads `$shapesGraph` —
-//! with its reason; it is pinned by count and runs both ways.
+//! A case that ends in an error is compared on the error text with the byte offsets
+//! it names normalized ([`normalize_offsets`]): the merge lengthens the prologue before a
+//! SPARQL body, which moves the offset of a syntax error and nothing else.
 
 use purrdf_shapes::shacl_corpora;
 
@@ -63,14 +63,28 @@ const VOCABULARY: [&str; 3] = [
 /// `shnex:conformsToShape` and 77 `sparql:` functions.
 const VOCABULARY_LIST_FUNCTIONS: usize = 78;
 
-/// Cases whose answer legitimately changes when the vocabulary is merged, as
-/// `(case id, reason)`.
-const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[(
-    "w3c12/sparql/node/sparql-syntax-error-001",
-    "a declared sht:Failure whose SPARQL constraint does not parse: the merged vocabulary's \
-     implicit prefix declarations lengthen the prologue the engine puts before the query, \
-     so both runs refuse the graph for the same syntax error at different byte offsets",
-)];
+/// An error message with the byte offsets it names replaced by a placeholder.
+///
+/// The merged vocabulary's implicit prefix declarations lengthen the prologue the
+/// engine puts before a SPARQL body, so a body that does not parse is refused for the
+/// same syntax error at a different byte offset. Only the offset is normalized: the
+/// rest of the message, which names the shape, the construct and the error, is compared
+/// exactly, so a change of the answer on such a case is still seen.
+fn normalize_offsets(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(at) = rest.find("at byte ") {
+        let (head, tail) = rest.split_at(at + "at byte ".len());
+        out.push_str(head);
+        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            out.push_str("<offset>");
+        }
+        rest = &tail[digits..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Every case the three corpora contribute (129 + 73 + 213).
 const TOTAL_CASES: usize = 415;
@@ -103,11 +117,10 @@ const TOTAL_CASES: usize = 415;
 const COMPARED_ON_REPORT: usize = 401;
 
 /// The inputs among [`TOTAL_CASES`] that must end in an error under their own law and are
-/// compared on an identical error: the declared `sht:Failure` inputs (14, one of them in
-/// [`INVARIANCE_EXCEPTIONS`]; some are refused at load, the SHACL 1.2 pre-binding ones
-/// at validation). With [`COMPARED_ON_REPORT`] and the exception they account for every
-/// case.
-const DECLARED_REFUSAL_CASES: usize = 13;
+/// compared on an identical error: the declared `sht:Failure` inputs (14; some are
+/// refused at load, the SHACL 1.2 pre-binding ones at validation). With
+/// [`COMPARED_ON_REPORT`] they account for every case.
+const DECLARED_REFUSAL_CASES: usize = 14;
 
 /// One case, reduced to what both parses need.
 struct Input {
@@ -276,7 +289,9 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
             ));
         }
     };
-    if original_report != merged_report {
+    if original_report.clone().map_err(|e| normalize_offsets(&e))
+        != merged_report.clone().map_err(|e| normalize_offsets(&e))
+    {
         return Err(format!(
             "the report changed:\n  without the vocabulary: {}\n  with it:                {}",
             summary(&original_report),
@@ -335,21 +350,13 @@ fn merging_the_vocabulary_changes_no_answer() {
     assert_eq!(inputs.len(), TOTAL_CASES, "discovered case count");
 
     let mut failures: Vec<String> = Vec::new();
-    let mut excepted = 0usize;
     let mut compared_on_report = 0usize;
     let mut not_on_report: Vec<&Input> = Vec::new();
     for input in &inputs {
-        let outcome = check(input, &vocabulary);
-        let exception = INVARIANCE_EXCEPTIONS.iter().find(|(id, _)| *id == input.id);
-        match (outcome, exception) {
-            (Ok(true), None) => compared_on_report += 1,
-            (Ok(false), None) => not_on_report.push(input),
-            (Err(_), Some(_)) => excepted += 1,
-            (Ok(_), Some((_, reason))) => failures.push(format!(
-                "[{}] is ledgered in INVARIANCE_EXCEPTIONS ({reason}) but is invariant; remove it",
-                input.id
-            )),
-            (Err(why), None) => failures.push(format!("[{}] {why}", input.id)),
+        match check(input, &vocabulary) {
+            Ok(true) => compared_on_report += 1,
+            Ok(false) => not_on_report.push(input),
+            Err(why) => failures.push(format!("[{}] {why}", input.id)),
         }
     }
     assert!(
@@ -357,11 +364,6 @@ fn merging_the_vocabulary_changes_no_answer() {
         "{} case(s) are not invariant under the vocabulary merge:\n{}",
         failures.len(),
         failures.join("\n\n")
-    );
-    assert_eq!(
-        excepted,
-        INVARIANCE_EXCEPTIONS.len(),
-        "the exception ledger is exact"
     );
     println!(
         "VOCABULARY-INVARIANCE: {compared_on_report} compared on a report of {}",
@@ -410,4 +412,24 @@ fn the_vocabulary_alone_indexes_and_registers_nothing() {
         shapes.node_shapes.is_empty(),
         "the vocabulary's sh:Parameter nodes are not shapes"
     );
+}
+
+/// The offset normalization hides the offset and only the offset: two errors that
+/// differ in it alone compare equal, and any other difference still shows.
+#[test]
+fn the_offset_normalization_hides_only_the_offset() {
+    let at = |offset: u32, rest: &str| {
+        format!(
+            "shapes parse error: unparsable sh:select: SPARQL syntax error at byte {offset}: {rest}"
+        )
+    };
+    assert_eq!(
+        normalize_offsets(&at(536, "expected an RDF term, found None")),
+        normalize_offsets(&at(650, "expected an RDF term, found None"))
+    );
+    assert_ne!(
+        normalize_offsets(&at(536, "expected an RDF term, found None")),
+        normalize_offsets(&at(536, "expected a variable, found None"))
+    );
+    assert_eq!(normalize_offsets("no offset here"), "no offset here");
 }

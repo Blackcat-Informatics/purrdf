@@ -161,15 +161,13 @@ impl Parser<'_> {
         let mut rules = false;
         let mut sets: Vec<NamedNode> = Vec::new();
         let mut instances = ShaclInstances::new(self.data);
-        let rule_set_class = self.data.term_id_by_iri(sh::RULE_SET);
         for (subject, _, object) in self.quads_with(None, Some(sh::ENTAILMENT), None) {
             if object == Term::NamedNode(NamedNode::from(sh::RULES_ENTAILMENT)) {
                 rules = true;
                 continue;
             }
-            let is_rule_set = matches!(&object, Term::NamedNode(_))
-                && crate::data::resolve_id(self.data, &object)
-                    .is_some_and(|node| instances.is_instance(node, rule_set_class));
+            let is_rule_set =
+                matches!(&object, Term::NamedNode(_)) && self.is_rule_set(&mut instances, &object);
             if is_rule_set && !self.profile.reads_editors_draft_semantics() {
                 return Err(format!(
                     "the shapes graph declares {subject} sh:entailment {object}, a rule set; \
@@ -200,6 +198,17 @@ impl Parser<'_> {
         }
         sets.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         Ok((rules, sets))
+    }
+
+    /// Whether `term` is a SHACL instance of `sh:RuleSet` in the shapes graph: the one
+    /// test by which a rule set is recognised, for the declarations
+    /// ([`Self::parse_rule_sets`]) and for the values of `sh:entailment`
+    /// ([`Self::parse_entailment`]) alike. An untyped subject of `sh:hasRule` or
+    /// `sh:includesRuleSet` is not one, since SHACL does no RDFS inference from their
+    /// `rdfs:domain`.
+    fn is_rule_set(&self, instances: &mut ShaclInstances<'_>, term: &Term) -> bool {
+        crate::data::resolve_id(self.data, term)
+            .is_some_and(|node| instances.is_instance(node, self.data.term_id_by_iri(sh::RULE_SET)))
     }
 
     /// Every node that is a SHACL instance of `sh:Rule`, `sh:TripleRule` or
@@ -260,11 +269,8 @@ impl Parser<'_> {
     fn parse_rule_sets(&self) -> Result<Vec<RuleSetDeclaration>, String> {
         let mut nodes: Vec<Term> = Vec::new();
         let mut instances = ShaclInstances::new(self.data);
-        let class = self.data.term_id_by_iri(sh::RULE_SET);
         for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), None) {
-            if crate::data::resolve_id(self.data, &subject)
-                .is_some_and(|node| instances.is_instance(node, class))
-            {
+            if self.is_rule_set(&mut instances, &subject) {
                 nodes.push(subject);
             }
         }
