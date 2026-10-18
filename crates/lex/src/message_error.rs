@@ -88,6 +88,8 @@ macro_rules! message_error {
 /// both forms generate the same source implementation.
 /// A cause expression such as `cause.as_ref()` borrows the original error from
 /// a boxed owner without exposing the box as another source-chain layer.
+/// For a struct whose cause is always present, `Type, field` borrows that field
+/// directly without an enum's optional-source match.
 ///
 /// ```rust
 /// #[derive(Debug)]
@@ -111,6 +113,13 @@ macro_rules! message_error {
 /// ```
 #[macro_export]
 macro_rules! error_source {
+    ($type:ty, $field:ident) => {
+        impl ::core::error::Error for $type {
+            fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
+                Some(&self.$field)
+            }
+        }
+    };
     ($type:ty { $($variant:ident),+ $(,)? }) => {
         $crate::error_source!($type => { $(Self::$variant(error) => error),+ });
     };
