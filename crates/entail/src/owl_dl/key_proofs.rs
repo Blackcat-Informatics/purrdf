@@ -49,7 +49,6 @@ pub(crate) struct Phase {
     pub(crate) roles: usize,
     pub(crate) concepts: usize,
     pub(crate) tbox: usize,
-    pub(crate) metas: Vec<(u32, usize)>,
 }
 
 impl std::fmt::Debug for Phase {
@@ -61,7 +60,6 @@ impl std::fmt::Debug for Phase {
             .field("roles", &self.roles)
             .field("concepts", &self.concepts)
             .field("tbox", &self.tbox)
-            .field("metas", &self.metas)
             .finish()
     }
 }
@@ -129,18 +127,9 @@ impl std::fmt::Debug for Evidence {
 }
 
 impl Evidence {
-    pub(crate) fn for_phase(ctx: &DlProofContext<'_>) -> Result<Self, EntailError> {
+    pub(crate) fn for_phase(ctx: &DlProofContext<'_>) -> Self {
         let kb = &ctx.kb;
-        assert_eq!(
-            kb.meta.len(),
-            kb.meta_sources.len(),
-            "every original meta has its source inclusion"
-        );
-        let mut storage = Resident;
-        let mut memory = Memory::new(&mut storage);
-        let metas = memory.collect(kb.meta.iter().copied().zip(kb.meta_sources.iter().copied()))?;
-        let live = memory.admitted_bytes();
-        Ok(Self {
+        Self {
             input: ctx.input(),
             phase: Phase {
                 contract: ctx.contract(),
@@ -149,12 +138,11 @@ impl Evidence {
                 roles: kb.abox_roles.len(),
                 concepts: kb.table.len(),
                 tbox: kb.tbox.len(),
-                metas,
             },
             members: OrderedTable::default(),
-            storage,
-            live,
-        })
+            storage: Resident,
+            live: 0,
+        }
     }
 
     /// Observe the original negative membership query, then check all its branches.
@@ -217,7 +205,6 @@ impl Evidence {
         Ok(true)
     }
 
-    #[cfg(test)]
     pub(crate) fn member(&self, key: usize, individual: u32) -> Option<&Membership> {
         self.members.get(&(key, individual))
     }

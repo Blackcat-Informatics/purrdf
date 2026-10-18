@@ -80,13 +80,20 @@ fn recorded_key_memberships_are_checked_in_the_original_world_with_all_branches(
             for clash in &capture.clashes {
                 assert!(clash.index < member.proof.clashes().len());
                 let step = &member.proof.clashes()[clash.index];
+                assert!(
+                    clash.support.is_ok(),
+                    "original membership selection: {:?}",
+                    clash.support
+                );
                 assert_eq!(clash.schema, step.schema_evidence().map(|_| step.clause()));
                 assert!(
                     clash
-                        .journal
-                        .events()
+                        .support
+                        .as_ref()
+                        .unwrap()
+                        .causes
                         .iter()
-                        .all(|event| event.cause.origin != Origin::PreparedEquality),
+                        .all(|cause| cause.origin != Origin::PreparedEquality),
                     "a derived key equality cannot license its own membership"
                 );
             }
@@ -125,7 +132,7 @@ fn deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
         panic!("retry must retain recording");
     };
     assert_eq!(recorded.phase.equalities, 0);
-    let mut wrong_phase = Evidence::for_phase(&context).unwrap();
+    let mut wrong_phase = Evidence::for_phase(&context);
     wrong_phase.phase.equalities = 0;
     let individual = context
         .kb

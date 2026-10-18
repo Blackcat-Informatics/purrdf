@@ -19,7 +19,6 @@ use crate::owl_dl::parser::{TripleIndex, Vocab};
 mod licence;
 mod order;
 pub(crate) mod source;
-#[cfg(test)]
 pub(crate) use licence::Error as LicenceError;
 use licence::Licence;
 

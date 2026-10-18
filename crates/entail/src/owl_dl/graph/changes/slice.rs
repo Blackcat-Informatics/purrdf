@@ -16,6 +16,7 @@ use crate::owl_dl::{
 };
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
+mod key;
 mod schema;
 
 /// One normalized transitivity/hierarchy license for a selected immutable path.
@@ -68,6 +69,8 @@ pub(crate) enum Error {
     MissingFact,
     MissingPath,
     MissingEffect,
+    MissingKey(usize),
+    MissingMembership { key: usize, individual: u32 },
     MissingClash,
     MissingInput(Input),
     MissingSyntax,
@@ -77,9 +80,53 @@ pub(crate) enum Error {
     RoleLicence(crate::owl_dl::roles::LicenceError),
 }
 
-impl From<StorageError> for Error {
-    fn from(error: StorageError) -> Self {
-        Self::Storage(error)
+/// Owned dependencies selected while their original source phase is still active.
+/// Schema reads address the enclosing captured proof's checked terminal evidence.
+pub(crate) struct Support {
+    pub(crate) causes: Vec<Cause>,
+    pub(crate) owners: Vec<ReadOwner>,
+    pub(crate) paths: Vec<PathStep>,
+    pub(crate) transitive: Vec<TransitiveRead>,
+    pub(crate) transitive_nodes: Vec<TransitiveNode>,
+    pub(crate) tbox: Vec<usize>,
+    pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
+    pub(crate) schema_reads: Vec<schema::Read>,
+    pub(crate) inputs: Vec<SelectedInput>,
+    pub(crate) syntax: Vec<(crate::owl_dl::syntax::Space, usize)>,
+    pub(crate) roles: Vec<crate::owl_dl::roles::source::Input>,
+    pub(crate) key_equalities: Vec<usize>,
+}
+
+impl std::fmt::Debug for Support {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Support")
+            .field("causes", &self.causes)
+            .field("owners", &self.owners)
+            .field("paths", &self.paths)
+            .field("transitive", &self.transitive)
+            .field("transitive_nodes", &self.transitive_nodes)
+            .field("tbox", &self.tbox)
+            .field("role_clauses", &self.role_clauses)
+            .field("schema_reads", &self.schema_reads)
+            .field("inputs", &self.inputs)
+            .field("syntax", &self.syntax)
+            .field("roles", &self.roles)
+            .field("key_equalities", &self.key_equalities)
+            .finish()
+    }
+}
+
+purrdf_lex::variant_from!(Error { Storage(StorageError) });
+
+fn poll(kb: &Kb) -> Result<(), Error> {
+    if kb
+        .stop
+        .as_deref()
+        .is_some_and(purrdf_datalog::StopSignal::stopped)
+    {
+        Err(Error::Stopped)
+    } else {
+        Ok(())
     }
 }
 
@@ -97,6 +144,7 @@ pub(crate) struct Slice<'a> {
     pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
     pub(crate) schema: Option<crate::owl_dl::proof::CheckedSchema<'a>>,
     pub(crate) schema_reads: Vec<schema::Read>,
+    pub(crate) keys: Vec<key::Derivation<'a>>,
 }
 
 impl std::fmt::Debug for Slice<'_> {
@@ -114,6 +162,7 @@ impl std::fmt::Debug for Slice<'_> {
             .field("role_clauses", &self.role_clauses)
             .field("schema", &self.schema)
             .field("schema_reads", &self.schema_reads)
+            .field("keys", &self.keys)
             .finish()
     }
 }
@@ -127,7 +176,48 @@ pub(crate) struct SelectedInput {
 }
 
 impl Slice<'_> {
+    pub(crate) fn into_support(self) -> Result<Support, Error> {
+        let mut storage = Resident;
+        let mut memory = Memory::new(&mut storage);
+        let mut inputs = Vec::new();
+        for input in self.inputs() {
+            poll(self.kb)?;
+            memory.push(&mut inputs, input?)?;
+        }
+        let syntax = self.syntax_roots()?;
+        let roles = self.role_inputs()?;
+        let key_equalities = memory.collect(self.keys.iter().map(|key| key.equality))?;
+        Ok(Support {
+            causes: self.causes,
+            owners: self.owners,
+            paths: self.paths,
+            transitive: self.transitive,
+            transitive_nodes: self.transitive_nodes,
+            tbox: self.tbox,
+            role_clauses: self.role_clauses,
+            schema_reads: self.schema_reads,
+            inputs,
+            syntax,
+            roles,
+            key_equalities,
+        })
+    }
     pub(crate) fn role_inputs(&self) -> Result<Vec<crate::owl_dl::roles::source::Input>, Error> {
+        let mut inputs = self.local_role_inputs()?;
+        let mut storage = Resident;
+        let mut memory = Memory::new(&mut storage);
+        for support in self
+            .keys
+            .iter()
+            .flat_map(|key| &key.members)
+            .flat_map(key::Member::supports)
+        {
+            memory.extend(&mut inputs, support.roles.iter().copied())?;
+        }
+        Ok(inputs)
+    }
+
+    fn local_role_inputs(&self) -> Result<Vec<crate::owl_dl::roles::source::Input>, Error> {
         let Some(program) = &self.kb.role_program else {
             return if self.paths.is_empty() && self.role_clauses.is_empty() {
                 Ok(Vec::new())
@@ -178,9 +268,14 @@ impl Slice<'_> {
         let mut memory = Memory::new(&mut resident);
         let mut roots = Vec::new();
         for input in self.inputs() {
+            poll(kb)?;
+            let input = input?;
+            if matches!(input.source, Source::KeyInference { .. }) {
+                continue;
+            }
             if let Some(root) = kb
                 .inputs
-                .syntax(input?.input)
+                .syntax(input.input)
                 .ok_or(Error::MissingSyntax)?
                 .root()
             {
@@ -213,6 +308,7 @@ impl Slice<'_> {
             .map(Ok)
             .chain(internalized)
         {
+            poll(kb)?;
             let index = index?;
             let source = kb.tbox_sources.get(index).ok_or(Error::MissingSyntax)?;
             let (space, capture) = match source {
@@ -224,6 +320,14 @@ impl Slice<'_> {
             if let Some(root) = capture.ok_or(Error::MissingSyntax)?.root() {
                 memory.push(&mut roots, (space, root))?;
             }
+        }
+        for support in self
+            .keys
+            .iter()
+            .flat_map(|key| &key.members)
+            .flat_map(key::Member::supports)
+        {
+            memory.extend(&mut roots, support.syntax.iter().copied())?;
         }
         Ok(roots)
     }
@@ -243,6 +347,11 @@ impl Slice<'_> {
         });
         facts
             .chain(self.rules.iter().map(|&input| (None, input)))
+            .chain(
+                self.keys
+                    .iter()
+                    .flat_map(|key| key.inputs().map(|input| (None, input))),
+            )
             .chain(self.schema.iter().flat_map(|schema| {
                 schema
                     .bounds()
@@ -254,13 +363,19 @@ impl Slice<'_> {
                 None | Some(Source::Anchor(AxiomSource::Unrecorded)) => {
                     Err(Error::MissingInput(input))
                 }
-                Some(Source::KeyInference { .. }) => Err(Error::MissingEffect),
                 Some(source) => Ok(SelectedInput {
                     cause,
                     input,
                     source,
                 }),
             })
+            .chain(
+                self.keys
+                    .iter()
+                    .flat_map(|key| &key.members)
+                    .flat_map(key::Member::supports)
+                    .flat_map(|support| support.inputs.iter().copied().map(Ok)),
+            )
     }
 }
 
@@ -508,7 +623,7 @@ impl Builder {
                 incomplete = cause.origin == Origin::PreparedEquality
                     && !matches!(
                         kb.inputs.get(Input::Equality(cause.index)),
-                        Some(Source::Anchor(AxiomSource::Triple(..)))
+                        Some(Source::Anchor(AxiomSource::Triple(..)) | Source::KeyInference { .. })
                     );
             }
             Mutation::LabelTransfer {
@@ -626,6 +741,7 @@ const fn distinct(left: usize, right: usize) -> Fact {
 impl Journal {
     /// Consume observations once in replay order, then walk immutable parents.
     /// Unresolved role/effect support is rejected if selected by the terminal slice.
+    #[cfg(test)]
     pub(crate) fn normalized_slice<'a>(&self, kb: &'a Kb) -> Result<Slice<'a>, Error> {
         self.normalized_slice_with_schema(kb, None)
     }
@@ -642,8 +758,10 @@ impl Journal {
         let mut read = 0;
         let mut root = None;
         while read < self.reads.len() {
+            poll(kb)?;
             let selected = self.reads[read];
             while event < selected.checkpoint {
+                poll(kb)?;
                 graph.event(self.events[event], kb, &mut memory)?;
                 event += 1;
             }
@@ -715,8 +833,10 @@ impl Journal {
             role_clauses: Vec::new(),
             schema,
             schema_reads: Vec::new(),
+            keys: Vec::new(),
         };
         while let Some(id) = pending.pop() {
+            poll(kb)?;
             if visited[id] {
                 continue;
             }
@@ -782,6 +902,21 @@ impl Journal {
         }
         if let Some(schema) = result.schema {
             result.schema_reads = schema::select(kb, schema.bounds(), &mut memory)?;
+        }
+        let mut selected_keys = OrderedTable::default();
+        for cause in &result.causes {
+            poll(kb)?;
+            if cause.origin == Origin::PreparedEquality
+                && matches!(
+                    kb.inputs.get(Input::Equality(cause.index)),
+                    Some(Source::KeyInference { .. })
+                )
+                && selected_keys
+                    .insert(cause.index, (), &mut memory)?
+                    .is_none()
+            {
+                memory.push(&mut result.keys, key::select(kb, cause.index)?)?;
+            }
         }
         Ok(result)
     }

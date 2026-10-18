@@ -81,7 +81,6 @@ impl Sources {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn get(&self, input: Input) -> Option<&Origin> {
         self.origins.get(*self.owners.get(&input)?)
     }

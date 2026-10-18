@@ -23,7 +23,6 @@ pub(crate) enum Capture {
 }
 
 impl Capture {
-    #[cfg(test)]
     pub(crate) fn root(self) -> Option<usize> {
         match self {
             Self::Empty => None,

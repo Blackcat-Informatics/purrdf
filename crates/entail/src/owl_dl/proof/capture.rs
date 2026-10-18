@@ -1,24 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Owned native journals retained by the existing whole-refutation checker.
+//! Owned dependencies selected in the original whole-refutation checker's phase.
 
-use crate::owl_dl::graph::changes::Journal;
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use crate::owl_dl::graph::changes::{Journal, slice};
+use purrdf_lex::allocation::{Memory, Resident};
 
 pub(crate) struct Clash {
     pub(crate) index: usize,
-    pub(crate) journal: Journal,
     /// Terminal clause whose bound derivation was checked in this source phase.
     pub(crate) schema: Option<usize>,
+    pub(crate) support: Result<slice::Support, slice::Error>,
 }
 
 impl std::fmt::Debug for Clash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Clash")
             .field("index", &self.index)
-            .field("journal", &self.journal)
             .field("schema", &self.schema)
+            .field("support", &self.support)
             .finish()
     }
 }
@@ -44,19 +44,38 @@ impl Capture {
     pub(super) fn push(
         &mut self,
         index: usize,
-        journal: Journal,
+        journal: &Journal,
         schema: Option<super::CheckedSchema<'_>>,
-    ) -> Result<(), StorageError> {
+        kb: &crate::owl_dl::Kb,
+    ) -> Result<(), super::DlProofError> {
+        let support = journal
+            .normalized_slice_with_schema(kb, schema)
+            .and_then(slice::Slice::into_support);
+        match &support {
+            Err(
+                slice::Error::Storage(original)
+                | slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Storage(original)),
+            ) => {
+                return Err(super::DlProofError::Storage(*original));
+            }
+            Err(
+                slice::Error::Stopped
+                | slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Stopped),
+            ) => {
+                return Err(super::DlProofError::Stopped);
+            }
+            _ => {}
+        }
         let mut memory = Memory::resume(&mut self.storage, self.live);
         let result = memory.push(
             &mut self.clashes,
             Clash {
                 index,
-                journal,
                 schema: schema.map(|checked| checked.clause),
+                support,
             },
         );
         self.live = memory.admitted_bytes();
-        result
+        result.map_err(super::DlProofError::Storage)
     }
 }

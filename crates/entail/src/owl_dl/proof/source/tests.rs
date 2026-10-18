@@ -785,12 +785,12 @@ fn checked_clash_retains_selected_transitive_role_path() {
     }
 }
 
-/// Authored equality binds to its real triple; key inference is not that triple.
+/// Authored equality binds to its triple; key inference retains both original memberships.
 #[test]
 fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
-    use crate::owl_dl::graph::changes::{Journal, slice::Error};
+    use crate::owl_dl::graph::changes::Journal;
     use crate::owl_dl::input_source::{Input, Source};
-    for derived_key in [false, true] {
+    for (derived_key, branching) in [(false, false), (true, false), (true, true)] {
         let mut f = Fixture::default();
         let a = f.name("A");
         let b = f.name("B");
@@ -802,11 +802,30 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
             let property = f.name("key");
             let list = f.list(&[property]);
             f.edge(keyed, owl::HAS_KEY, list);
-            f.edge(left, rdf::TYPE, keyed);
-            f.edge(right, rdf::TYPE, keyed);
+            let membership = if branching {
+                let membership = f.name("Membership");
+                let first = f.name("First");
+                let second = f.name("Second");
+                let union = f.blank();
+                let list = f.list(&[first, second]);
+                f.edge(union, owl::UNION_OF, list);
+                f.edge(membership, rdfs::SUB_CLASS_OF, union);
+                f.edge(first, rdfs::SUB_CLASS_OF, keyed);
+                f.edge(second, rdfs::SUB_CLASS_OF, keyed);
+                membership
+            } else {
+                keyed
+            };
+            f.edge(left, rdf::TYPE, membership);
+            f.edge(right, rdf::TYPE, membership);
             let value = f.name("shared");
             f.builder.push_quad(left, property, value, None).unwrap();
             f.builder.push_quad(right, property, value, None).unwrap();
+            let other = f.name("Other");
+            let unrelated = f.instance("unrelated", other);
+            f.builder
+                .push_quad(unrelated, property, value, None)
+                .unwrap();
         } else {
             f.edge(left, owl::SAME_AS, right);
         }
@@ -836,9 +855,37 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
             Journal::default(),
         )
         .unwrap();
-        let slice = observed.mutations.unwrap().normalized_slice(&ctx.kb);
+        let journal = observed.mutations.unwrap();
+        let slice = journal.normalized_slice(&ctx.kb).unwrap();
         if derived_key {
-            assert!(matches!(slice, Err(Error::MissingEffect)));
+            assert_eq!(slice.keys.len(), 1);
+            assert_eq!(slice.keys[0].members.len(), 2);
+            let inputs = slice.inputs().collect::<Result<Vec<_>, _>>().unwrap();
+            assert!(inputs.iter().any(|input| input.input == Input::Key(0)));
+            assert!(inputs.iter().all(|input| match input.source {
+                Source::Anchor(crate::owl_dl::AxiomSource::Triple(subject, _, _)) => {
+                    !matches!(ctx.kb.interner.value(subject), TermValue::Iri(iri) if iri == "https://example.org/unrelated")
+                }
+                _ => true,
+            }));
+            assert!(
+                inputs
+                    .iter()
+                    .any(|input| matches!(input.source, Source::KeyInference { key: 0, .. }))
+            );
+            assert_ne!(slice.syntax_roots().unwrap().len(), 0);
+            for member in &slice.keys[0].members {
+                assert!(member.supports().next().is_some());
+                if branching {
+                    assert!(member.capture.clashes.len() >= 2);
+                    assert_ne!(member.proof.branches().len(), 0);
+                }
+                assert!(member.supports().all(|support| {
+                    !support.causes.iter().any(|cause| {
+                        cause.origin == crate::owl_dl::graph::changes::Origin::PreparedEquality
+                    })
+                }));
+            }
             let values = ctx.kb.inputs.key_values.as_ref().unwrap().get(0).unwrap();
             assert_eq!(values.len(), 1);
             for read in values {
@@ -852,8 +899,44 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
                 ctx.kb.inputs.get(Input::Equality(0)),
                 Some(Source::KeyInference { key: 0, .. })
             ));
+            drop(slice);
+            let purrdf_core::ownership::OwnedOrBorrowed::Owned(mut kb) = ctx.kb else {
+                panic!("independent fixture owns its source");
+            };
+            let evidence = std::mem::take(&mut kb.key_proofs);
+            assert!(matches!(
+                journal.normalized_slice(&kb),
+                Err(crate::owl_dl::graph::changes::slice::Error::MissingKey(0))
+            ));
+            kb.key_proofs = evidence;
+            let values = kb.inputs.key_values.take();
+            assert!(matches!(
+                journal.normalized_slice(&kb),
+                Err(crate::owl_dl::graph::changes::slice::Error::MissingKey(0))
+            ));
+            kb.inputs.key_values = values;
+            assert!(journal.normalized_slice(&kb).is_ok());
+            let value = &mut kb.inputs.key_values.as_mut().unwrap().values[0];
+            std::mem::swap(&mut value.left, &mut value.right);
+            assert!(matches!(
+                journal.normalized_slice(&kb),
+                Err(crate::owl_dl::graph::changes::slice::Error::MissingKey(0))
+            ));
+            let value = &mut kb.inputs.key_values.as_mut().unwrap().values[0];
+            std::mem::swap(&mut value.left, &mut value.right);
+            #[derive(Debug)]
+            struct Stop;
+            impl purrdf_datalog::StopSignal for Stop {
+                fn stopped(&self) -> bool {
+                    true
+                }
+            }
+            kb.stop = Some(std::sync::Arc::new(Stop));
+            assert!(matches!(
+                journal.normalized_slice(&kb),
+                Err(crate::owl_dl::graph::changes::slice::Error::Stopped)
+            ));
         } else {
-            let slice = slice.unwrap();
             let inputs = slice.inputs().collect::<Result<Vec<_>, _>>().unwrap();
             assert!(inputs.iter().any(|record| match (record.input, record.source) {
                 (Input::Equality(_), Source::Anchor(crate::owl_dl::AxiomSource::Triple(_, predicate, _))) => matches!(ctx.kb.interner.value(predicate), TermValue::Iri(iri) if iri == owl::SAME_AS),

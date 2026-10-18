@@ -154,7 +154,6 @@ impl Reads {
         result
     }
 
-    #[cfg(test)]
     pub(crate) fn get(&self, equality: usize) -> Option<&[Common]> {
         self.values
             .get(self.spans.get(equality.checked_sub(self.base)?)?.clone())

@@ -2314,7 +2314,6 @@ impl CheckedSchema<'_> {
         self.bounds
     }
 
-    #[cfg(test)]
     pub(crate) fn matches(&self, kb: &Kb, clause: usize) -> bool {
         std::ptr::eq(kb, self.kb) && self.clause == clause
     }
@@ -3840,13 +3839,12 @@ impl DlProof {
                 let (replay, journal, schema) =
                     self.replay_clash_inner(index, ctx, assumptions, journal)?;
                 if let Some(capture) = capture.as_deref_mut() {
-                    capture
-                        .push(
-                            index,
-                            journal.expect("requested checked replay owns its journal"),
-                            schema,
-                        )
-                        .map_err(DlProofError::Storage)?;
+                    capture.push(
+                        index,
+                        &journal.expect("requested checked replay owns its journal"),
+                        schema,
+                        &ctx.kb,
+                    )?;
                 }
                 report.clashes += 1;
                 report.checks.absorb(&replay.checks);

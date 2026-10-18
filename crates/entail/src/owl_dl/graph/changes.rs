@@ -9,7 +9,6 @@
 use super::super::concept::Role;
 use super::super::input_source::Input;
 pub(crate) mod reach;
-#[cfg(test)]
 pub(crate) mod slice;
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::fmt;

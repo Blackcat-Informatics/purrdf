@@ -34,7 +34,6 @@ impl std::fmt::Debug for Licence {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Error {
     Storage(purrdf_lex::allocation::StorageError),
@@ -44,10 +43,8 @@ pub(crate) enum Error {
     MissingOrder { sub: Role, sup: Role },
 }
 
-#[cfg(test)]
 purrdf_lex::variant_from!(Error { Storage(purrdf_lex::allocation::StorageError) });
 
-#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Pending {
     Machine(usize, usize),
@@ -55,7 +52,6 @@ enum Pending {
     Component(usize),
 }
 
-#[cfg(test)]
 impl super::RoleProgram {
     /// Follow only retained compiler decisions, never another role search.
     pub(crate) fn path_inputs<S: purrdf_lex::allocation::Admission + ?Sized>(

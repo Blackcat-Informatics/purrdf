@@ -148,7 +148,6 @@ impl Witnesses {
         memory.release_vec(self.steps)
     }
 
-    #[cfg(test)]
     pub(super) fn pair(&self, from: usize, to: usize) -> Option<usize> {
         self.pairs.get(&(from, to)).copied()
     }

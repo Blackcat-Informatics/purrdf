@@ -3,7 +3,7 @@
 
 //! Backward dependencies of an already checked bound proof, never schema search.
 
-use super::{Error, Kb};
+use super::{Error, Kb, poll};
 use crate::owl_dl::{
     bounds::{SchemaBoundEvidence, SchemaRule, SchemaStep, SchemaUpperBound},
     concept::Decomp,
@@ -87,16 +87,4 @@ pub(super) fn select(
         }
     }
     Ok(selected)
-}
-
-fn poll(kb: &Kb) -> Result<(), Error> {
-    if kb
-        .stop
-        .as_deref()
-        .is_some_and(purrdf_datalog::StopSignal::stopped)
-    {
-        Err(Error::Stopped)
-    } else {
-        Ok(())
-    }
 }

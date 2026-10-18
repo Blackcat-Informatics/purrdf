@@ -450,10 +450,7 @@ impl Kb {
         self.finalize()?;
         let input = self.key_proofs.input();
         let context = input.map(|input| proof::DlProofContext::borrowing_prepared_kb(self, input));
-        let mut evidence = context
-            .as_ref()
-            .map(key_proofs::Evidence::for_phase)
-            .transpose()?;
+        let mut evidence = context.as_ref().map(key_proofs::Evidence::for_phase);
         let mut storage = purrdf_lex::allocation::Resident;
         let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
         let values = key_values::Index::new(
