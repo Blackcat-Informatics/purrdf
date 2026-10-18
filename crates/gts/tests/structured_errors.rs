@@ -792,7 +792,54 @@ fn invalid_header_cause_survives_graph_and_streaming_diagnostics() {
     }
 }
 
+fn memory_example_keeps_confidence_bits_and_original_io_cause() {
+    use purrdf_gts::examples::agent_memory::{Memory, MemoryError, StoreOptions};
+    use purrdf_testkit::error_capture::CallerRefusal;
+    let memory = Memory::new("unused.gts");
+    // Admission refuses before any clock or filesystem access.
+    for bits in [
+        0x7ff8_0000_0000_0042,
+        f64::INFINITY.to_bits(),
+        (-0.5_f64).to_bits(),
+    ] {
+        let error = memory
+            .store(
+                "a claim",
+                StoreOptions {
+                    confidence: Some(f64::from_bits(bits)),
+                    ..StoreOptions::default()
+                },
+            )
+            .unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-memory-invalid-confidence");
+        assert!(
+            matches!(fields.field("actual"), ErrorValue::Float64Bits(actual) if actual == bits)
+        );
+        assert_eq!(
+            error.to_string(),
+            "confidence must be finite and in the range [0, 1]"
+        );
+    }
+    let original = purrdf_hash::error::io_error(
+        std::io::ErrorKind::Other,
+        CallerRefusal { limit: u128::MAX },
+    );
+    let error = MemoryError::from(original);
+    assert!(std::error::Error::source(&error).is_some());
+    let fields = Capture::read(&error)
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "caller-refused");
+    assert!(matches!(
+        fields.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+}
+
 purrdf_testkit::harness_main!(
+    memory_example_keeps_confidence_bits_and_original_io_cause,
     writer_catalog_and_frame_failures_keep_original_fields,
     append_and_header_failures_keep_native_values_and_sources,
     invalid_header_cause_survives_graph_and_streaming_diagnostics,
