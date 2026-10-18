@@ -131,6 +131,8 @@ pub mod model;
 pub mod named_graph;
 // CSV and TSV on the W3C CSVW dialect model.
 pub mod csv;
+/// Inline owning or immutable borrowed storage without a cloning contract.
+pub mod ownership;
 pub mod sink;
 // Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
 pub mod small;

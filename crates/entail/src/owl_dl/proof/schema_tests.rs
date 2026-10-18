@@ -243,18 +243,20 @@ fn derived_membership_cannot_be_laundered_as_an_asserted_fact() {
     assert!(forged.replay_refutation(&context).is_err());
 }
 
+/// A prepared owning source preserves caller cancellation as an operational refusal.
 #[test]
 fn the_consumers_stop_signal_preserves_operational_refusal_instead_of_a_bad_proof_verdict() {
     #[derive(Debug)]
     struct Stop(std::sync::atomic::AtomicBool);
     impl purrdf_datalog::StopSignal for Stop {
+        /// Read the fixture's live cancellation flag during native replay.
         fn stopped(&self) -> bool {
             self.0.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
     let (proof, mut context) = derived();
     let stop = std::sync::Arc::new(Stop(std::sync::atomic::AtomicBool::new(true)));
-    let ProofKnowledgeBase::Owned(kb) = &mut context.kb else {
+    let OwnedOrBorrowed::Owned(kb) = &mut context.kb else {
         panic!("the independently prepared fixture owns its knowledge base");
     };
     kb.stop = Some(stop.clone());
