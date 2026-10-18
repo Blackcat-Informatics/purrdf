@@ -5040,7 +5040,7 @@ pub(crate) mod owned_row_regressions {
             fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
             fn quads_for_pattern_with_plan(
                 &self,
-                _: &(),
+                (): &(),
                 _: Option<TermId>,
                 _: Option<TermId>,
                 _: Option<TermId>,
