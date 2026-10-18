@@ -55,6 +55,52 @@ impl StructuredError for core::num::TryFromIntError {
     }
 }
 
+impl StructuredError for core::num::IntErrorKind {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        let name = match self {
+            Self::Empty => Some("empty"),
+            Self::InvalidDigit => Some("invalid-digit"),
+            Self::PosOverflow => Some("positive-overflow"),
+            Self::NegOverflow => Some("negative-overflow"),
+            Self::Zero => Some("zero"),
+            _ => None,
+        };
+        visitor.variant("std-integer-kind");
+        visitor.value(
+            Some("name"),
+            name.map_or(ErrorValue::Absent, ErrorValue::Code),
+        );
+        // As for ErrorKind, retain unlisted external unit categories without
+        // formatting them or confusing them with a known category.
+        visitor.value(
+            Some("native_discriminant"),
+            ErrorValue::Unsigned(*self as u128),
+        );
+    }
+}
+
+impl StructuredError for core::num::ParseIntError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-integer-parse");
+        visitor.value(Some("kind"), ErrorValue::Cause(self.kind()));
+    }
+}
+
+impl StructuredError for core::str::Utf8Error {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-utf8");
+        visitor.value(
+            Some("valid_up_to"),
+            ErrorValue::ByteCount(self.valid_up_to() as u128),
+        );
+        visitor.value(
+            Some("error_len"),
+            self.error_len()
+                .map_or(ErrorValue::Absent, |len| ErrorValue::ByteCount(len as u128)),
+        );
+    }
+}
+
 impl StructuredError for std::io::ErrorKind {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // Public stable categories have portable names. The standard library

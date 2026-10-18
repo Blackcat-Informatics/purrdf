@@ -35,6 +35,205 @@ impl std::io::Read for HeaderFault {
     }
 }
 
+impl std::io::Write for HeaderFault {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        Err(self
+            .error
+            .take()
+            .expect("the first output failure must stop writing"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn tar_and_files_public_io_retain_unformattable_original_causes() {
+    use purrdf_gts::{files, from_tar, reader, tar};
+    use purrdf_testkit::error_capture::CallerRefusal;
+    let entries = [files::FileEntry {
+        path: "leaf".into(),
+        data: Some(vec![7]),
+        ..files::FileEntry::default()
+    }];
+    let failure = || HeaderFault {
+        prefix: std::io::Cursor::new([0; 4]),
+        error: Some(purrdf_hash::error::io_error(
+            std::io::ErrorKind::Other,
+            CallerRefusal { limit: u128::MAX },
+        )),
+    };
+    let error = files::pack_entries_v2_to_writer(&entries, failure()).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-files-io");
+    assert!(matches!(
+        fields.field("operation"),
+        ErrorValue::Code("write files-profile-v2 metadata")
+    ));
+    assert!(matches!(
+        fields
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_hash::error::IoFailure>()
+    );
+
+    let graph = reader::read(&files::pack_entries_v2(&entries).unwrap(), true, None);
+    let error = tar::to_tar(&graph, failure(), &tar::ToTarOptions::default()).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-tar-io");
+    assert!(matches!(fields.field("path"), ErrorValue::Text("leaf")));
+    assert!(matches!(
+        fields
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+
+    let error = from_tar::from_tar(failure(), &from_tar::FromTarOptions::default()).unwrap_err();
+    let events = Vec::with_capacity(3);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "gts-tar-io");
+    assert!(matches!(
+        fields.field("operation"),
+        ErrorValue::Code("read tar input")
+    ));
+    assert!(matches!(
+        fields
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+}
+
+fn tar_blob_sources_keep_observed_size_and_digest_refusals() {
+    use purrdf_gts::files::{
+        FileBlobBytes, FileBlobRange, FileEntry, pack_entries_v2_with_blob_bytes,
+        pack_entries_v2_with_blob_ranges,
+    };
+    use std::collections::BTreeMap;
+    let digest = purrdf_gts::writer::digest_string(&[7]);
+    let mut entry = FileEntry {
+        path: "leaf".into(),
+        digest: Some(digest.clone()),
+        size: Some(2),
+        ..FileEntry::default()
+    };
+    let ranges = BTreeMap::from([(
+        digest.clone(),
+        FileBlobRange {
+            offset: 0,
+            size: 2,
+            media_type: None,
+            representation: None,
+        },
+    )]);
+    let error = pack_entries_v2_with_blob_ranges(
+        std::slice::from_ref(&entry),
+        &mut std::io::Cursor::new([7]),
+        &ranges,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-files-io");
+    let cause = fields.child("cause").child("cause").child("cause");
+    assert_eq!(cause.code, "gts-files-blob-size");
+    assert!(matches!(cause.field("expected"), ErrorValue::ByteCount(2)));
+    assert!(matches!(cause.field("actual"), ErrorValue::ByteCount(1)));
+    assert_eq!(
+        error.to_string(),
+        "hash inline blob range: blob source changed size: expected 2, read 1"
+    );
+
+    entry.size = Some(1);
+    let blobs = BTreeMap::from([(
+        digest.clone(),
+        FileBlobBytes {
+            data: &[9],
+            media_type: None,
+            representation: None,
+        },
+    )]);
+    let error = pack_entries_v2_with_blob_bytes(&[entry], &blobs, &mut Vec::new()).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-files-blob-digest");
+    assert!(matches!(fields.field("expected"), ErrorValue::Text(value) if value == digest));
+    assert!(
+        matches!(fields.field("actual"), ErrorValue::Text(value) if value == purrdf_gts::writer::digest_string(&[9]))
+    );
+}
+
+fn tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes() {
+    use purrdf_gts::{files, reader, tar};
+    let mut entry = files::FileEntry {
+        path: "leaf".into(),
+        data: Some(vec![7]),
+        ..files::FileEntry::default()
+    };
+    let mut graph = reader::read(
+        &files::pack_entries_v2(&[entry.clone()]).unwrap(),
+        true,
+        None,
+    );
+    graph
+        .terms
+        .iter_mut()
+        .find(|term| term.value.as_deref() == Some("1"))
+        .expect("the file size was written")
+        .value = Some(u128::MAX.to_string());
+    let error = tar::to_tar_vec(&graph, &tar::ToTarOptions::default()).unwrap_err();
+    drop(graph);
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-integer");
+    assert!(matches!(fields.field("field"), ErrorValue::Code("size")));
+    assert!(
+        matches!(fields.field("actual"), ErrorValue::Text(value) if value == u128::MAX.to_string())
+    );
+    let parsed = fields.child("cause");
+    assert_eq!(parsed.code, "std-integer-parse");
+    assert!(matches!(
+        parsed.child("kind").field("name"),
+        ErrorValue::Code("positive-overflow")
+    ));
+    entry.size = Some(u64::MAX);
+    let error = files::pack_entries_v2(&[entry]).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-files-entry-size");
+    assert!(
+        matches!(fields.field("expected"), ErrorValue::ByteCount(value) if value == u128::from(u64::MAX))
+    );
+    assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(1)));
+
+    let error = files::FileEntryKind::parse("unknown-kind").unwrap_err();
+    assert!(matches!(
+        Capture::read(&error).field("actual"),
+        ErrorValue::Text("unknown-kind")
+    ));
+    let error = files::pack_entries_v2(&[files::FileEntry {
+        path: "../outside".into(),
+        kind: files::FileEntryKind::Directory,
+        ..files::FileEntry::default()
+    }])
+    .unwrap_err();
+    assert_eq!(Capture::read(&error).code, "gts-files-traversal-path");
+}
+
 fn transport_retains_native_source_errors_before_foreign_formatting() {
     use purrdf_gts::transport::{TransportEncoding, transport_reader};
     use purrdf_testkit::error_capture::CallerRefusal;
@@ -1150,6 +1349,9 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
 }
 
 purrdf_testkit::harness_main!(
+    tar_blob_sources_keep_observed_size_and_digest_refusals,
+    tar_and_files_public_io_retain_unformattable_original_causes,
+    tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes,
     proof_json_retains_rejected_values_without_formatting_or_number_rounding,
     proof_verification_keeps_native_bounds_and_reconstructed_hashes,
     file_proof_keeps_original_identity_faults_and_valid_proofs,

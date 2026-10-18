@@ -3,6 +3,9 @@
 
 //! Files-profile pack/unpack/diff logic for GTS archives (§13.2, §14.2).
 
+mod error;
+pub use error::FileError;
+
 use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
@@ -87,7 +90,7 @@ impl FileEntryKind {
     /// # Errors
     ///
     /// Returns an error when `value` is not a known files-profile entry kind.
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, FileError> {
         match value {
             "file" => Ok(Self::File),
             "directory" => Ok(Self::Directory),
@@ -97,7 +100,9 @@ impl FileEntryKind {
             "chardev" => Ok(Self::CharDev),
             "blockdev" => Ok(Self::BlockDev),
             "socket" => Ok(Self::Socket),
-            other => Err(format!("unknown files:type value: {other}")),
+            other => Err(FileError::Kind {
+                actual: other.to_owned(),
+            }),
         }
     }
 }
@@ -277,33 +282,35 @@ impl TermBuilder {
     }
 }
 
-fn safe_archive_path(name: &str) -> Result<(), String> {
+fn safe_archive_path(name: &str) -> Result<(), FileError> {
     if name.is_empty() {
-        return Err("empty archive path".to_string());
+        return Err(FileError::EmptyPath);
     }
     let normalized = name.replace('\\', "/");
     let drive_relative =
         name.len() >= 2 && name.as_bytes()[1] == b':' && name.as_bytes()[0].is_ascii_alphabetic();
     if drive_relative || normalized.starts_with('/') {
-        return Err(format!(
-            "absolute or drive-relative path not allowed in archive: {name}"
-        ));
+        return Err(FileError::AbsolutePath {
+            path: name.to_owned(),
+        });
     }
     let parts: Vec<&str> = normalized.split('/').collect();
     for part in &parts {
         if *part == ".." {
-            return Err(format!("path traversal not allowed in archive: {name}"));
+            return Err(FileError::TraversalPath {
+                path: name.to_owned(),
+            });
         }
     }
     if name.contains('\\') {
-        return Err(format!(
-            "backslash path separator not allowed in archive: {name}"
-        ));
+        return Err(FileError::BackslashPath {
+            path: name.to_owned(),
+        });
     }
     if parts.iter().any(|part| part.is_empty() || *part == ".") {
-        return Err(format!(
-            "empty or current-directory path component not allowed in archive: {name}"
-        ));
+        return Err(FileError::ComponentPath {
+            path: name.to_owned(),
+        });
     }
     Ok(())
 }
@@ -360,7 +367,7 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| format!("invalid source name: {src:?}"))?
                 .to_string();
-            safe_archive_path(&name)?;
+            safe_archive_path(&name).map_err(|cause| cause.to_string())?;
             if !seen.insert(name.clone()) {
                 return Err(format!("duplicate archive path: {name}"));
             }
@@ -373,7 +380,7 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
                         .strip_prefix(src)
                         .map_err(|_| format!("path outside source: {fspath:?}"))?,
                 )?;
-                safe_archive_path(&relpath)?;
+                safe_archive_path(&relpath).map_err(|cause| cause.to_string())?;
                 if !seen.insert(relpath.clone()) {
                     return Err(format!("duplicate archive path: {relpath}"));
                 }
@@ -489,9 +496,12 @@ fn copy_counted_and_hash<R: Read, W: Write>(
         written += n as u64;
     }
     if written != expected_size {
-        return Err(std::io::Error::new(
+        return Err(purrdf_hash::error::io_error(
             std::io::ErrorKind::UnexpectedEof,
-            format!("blob source changed size: expected {expected_size}, read {written}"),
+            FileError::BlobSize {
+                expected: expected_size,
+                actual: written,
+            },
         ));
     }
     Ok((digest_label(digest.finalize().as_bytes()), written))
@@ -537,12 +547,12 @@ fn write_blob_frame<R: Read, W: Write>(
     write_head(writer, BYTES, meta.size)?;
     let (observed_digest, _) = copy_counted_and_hash(reader, writer, meta.size)?;
     if observed_digest != meta.digest {
-        return Err(std::io::Error::new(
+        return Err(purrdf_hash::error::io_error(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "blob source changed digest: expected {}, read {observed_digest}",
-                meta.digest
-            ),
+            FileError::BlobChangedDigest {
+                expected: meta.digest.to_owned(),
+                actual: observed_digest,
+            },
         ));
     }
     write_text(writer, "t")?;
@@ -560,11 +570,14 @@ fn append_blob_path<W: Write>(
     prev: &mut Vec<u8>,
     source: &FileBlobSource,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let media_type = source.media_type.as_deref();
     let representation = source.representation.as_deref();
-    let mut file =
-        fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
+    let mut file = fs::File::open(&source.path).map_err(|cause| FileError::Io {
+        operation: "read",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         write_blob_preimage(
@@ -575,17 +588,26 @@ fn append_blob_path<W: Write>(
             representation,
             prev,
         )
-        .map_err(|e| format!("hash blob {:?}: {e}", source.path))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash blob",
+            path: Some(source.path.clone()),
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for {:?}: expected {expected_digest}, read {digest}",
-            source.path
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "file",
+            path: Some(source.path.clone()),
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
-    file.rewind()
-        .map_err(|e| format!("seek {:?}: {e}", source.path))?;
+    file.rewind().map_err(|cause| FileError::Io {
+        operation: "seek",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     let meta = BlobFrameMeta {
         size: source.size,
         id: &id,
@@ -594,8 +616,11 @@ fn append_blob_path<W: Write>(
         representation,
         prev,
     };
-    write_blob_frame(writer, &mut file, &meta)
-        .map_err(|e| format!("write blob {:?}: {e}", source.path))?;
+    write_blob_frame(writer, &mut file, &meta).map_err(|cause| FileError::Io {
+        operation: "write blob",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -605,7 +630,7 @@ fn append_blob_bytes<W: Write>(
     prev: &mut Vec<u8>,
     source: FileBlobBytes<'_>,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         write_blob_preimage(
@@ -616,12 +641,19 @@ fn append_blob_bytes<W: Write>(
             source.representation,
             prev,
         )
-        .map_err(|e| format!("hash inline blob: {e}"))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob",
+            path: None,
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for inline blob: expected {expected_digest}, read {digest}"
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "inline blob",
+            path: None,
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
     let meta = BlobFrameMeta {
@@ -632,7 +664,11 @@ fn append_blob_bytes<W: Write>(
         representation: source.representation,
         prev,
     };
-    write_blob_frame(writer, source.data, &meta).map_err(|e| format!("write inline blob: {e}"))?;
+    write_blob_frame(writer, source.data, &meta).map_err(|cause| FileError::Io {
+        operation: "write inline blob",
+        path: None,
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -643,12 +679,16 @@ fn append_blob_range<R: Read + Seek, W: Write>(
     reader: &mut R,
     source: FileBlobRange<'_>,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         reader
             .seek(SeekFrom::Start(source.offset))
-            .map_err(|e| format!("seek inline blob: {e}"))?;
+            .map_err(|cause| FileError::Io {
+                operation: "seek inline blob",
+                path: None,
+                cause: cause.into(),
+            })?;
         write_blob_preimage(
             &mut hasher,
             reader.take(source.size),
@@ -657,17 +697,28 @@ fn append_blob_range<R: Read + Seek, W: Write>(
             source.representation,
             prev,
         )
-        .map_err(|e| format!("hash inline blob range: {e}"))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob range",
+            path: None,
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for inline blob range: expected {expected_digest}, read {digest}"
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "inline blob range",
+            path: None,
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
     reader
         .seek(SeekFrom::Start(source.offset))
-        .map_err(|e| format!("seek inline blob: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "seek inline blob",
+            path: None,
+            cause: cause.into(),
+        })?;
     let meta = BlobFrameMeta {
         size: source.size,
         id: &id,
@@ -676,8 +727,11 @@ fn append_blob_range<R: Read + Seek, W: Write>(
         representation: source.representation,
         prev,
     };
-    write_blob_frame(writer, reader.take(source.size), &meta)
-        .map_err(|e| format!("write inline blob range: {e}"))?;
+    write_blob_frame(writer, reader.take(source.size), &meta).map_err(|cause| FileError::Io {
+        operation: "write inline blob range",
+        path: None,
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -685,13 +739,21 @@ fn append_blob_range<R: Read + Seek, W: Write>(
 pub(crate) fn digest_blob_range<R: Read + Seek>(
     reader: &mut R,
     source: FileBlobRange<'_>,
-) -> Result<String, String> {
+) -> Result<String, FileError> {
     reader
         .seek(SeekFrom::Start(source.offset))
-        .map_err(|e| format!("seek inline blob: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "seek inline blob",
+            path: None,
+            cause: cause.into(),
+        })?;
     let mut sink = std::io::sink();
     let (digest, _) = copy_counted_and_hash(reader.take(source.size), &mut sink, source.size)
-        .map_err(|e| format!("hash inline blob range: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob range",
+            path: None,
+            cause: cause.into(),
+        })?;
     Ok(digest)
 }
 
@@ -833,7 +895,8 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
             media_type: Some(entry.media_type.clone()),
             representation: None,
         };
-        append_blob_path(&mut output, &mut prev, &source, &entry.digest)?;
+        append_blob_path(&mut output, &mut prev, &source, &entry.digest)
+            .map_err(|cause| cause.to_string())?;
     }
     Ok(())
 }
@@ -842,7 +905,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
 ///
 /// This helper is the Rust foundation for the tar bridge. The default
 /// [`pack`] command continues to emit v1 archives.
-pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, String> {
+pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, FileError> {
     let mut out = Vec::new();
     pack_entries_v2_to_writer(entries, &mut out)?;
     Ok(out)
@@ -852,12 +915,16 @@ pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, String> {
 pub fn pack_entries_v2_to_writer<W: Write>(
     entries: &[FileEntry],
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, (data, media_type)) in blobs {
         append_blob_bytes(
             &mut output,
@@ -878,12 +945,16 @@ pub fn pack_entries_v2_with_blob_bytes<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobBytes<'_>>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_bytes(&mut output, &mut prev, *source, digest)?;
     }
@@ -896,12 +967,16 @@ pub fn pack_entries_v2_with_blob_ranges<R: Read + Seek, W: Write>(
     reader: &mut R,
     blob_sources: &BTreeMap<String, FileBlobRange<'_>>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_range(&mut output, &mut prev, reader, *source, digest)?;
     }
@@ -917,21 +992,27 @@ pub fn pack_entries_v2_with_blob_paths<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobSource>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_path(&mut output, &mut prev, source, digest)?;
     }
     Ok(())
 }
 
-fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobMap<'_>), String> {
+fn build_entries_v2_prefix(
+    entries: &[FileEntry],
+) -> Result<(Writer, InlineBlobMap<'_>), FileError> {
     if entries.is_empty() {
-        return Err("files-profile v2 archive needs at least one entry".to_string());
+        return Err(FileError::EmptyEntries);
     }
 
     let mut entries: Vec<&FileEntry> = entries.iter().collect();
@@ -945,7 +1026,9 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
     for (idx, entry) in entries.iter().enumerate() {
         safe_archive_path(&entry.path)?;
         if !seen_paths.insert(entry.path.clone()) {
-            return Err(format!("duplicate archive path: {}", entry.path));
+            return Err(FileError::DuplicateArchivePath {
+                path: entry.path.clone(),
+            });
         }
         validate_v2_entry(entry)?;
 
@@ -1036,7 +1119,7 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
             ..WriterOptions::default()
         },
     )
-    .map_err(|err| format!("cannot author files v2 header: {err}"))?;
+    .map_err(FileError::Writer)?;
     writer.add_meta(profile_meta);
     if !builder.terms.is_empty() {
         writer.add_terms(&builder.terms);
@@ -1051,29 +1134,38 @@ fn files_v2_profile_meta() -> Value {
     Value::Map(vec![("profileVersion".into(), Value::from(2_u64))])
 }
 
-fn validate_v2_entry(entry: &FileEntry) -> Result<(), String> {
+fn validate_v2_entry(entry: &FileEntry) -> Result<(), FileError> {
     match entry.kind {
         FileEntryKind::File => {
             let _ = file_digest_and_size(entry)?;
         }
         FileEntryKind::Directory => {
             if entry.data.is_some() || entry.digest.is_some() || entry.size.is_some() {
-                return Err(format!(
-                    "directory entry {} must not carry file bytes, digest, or size",
-                    entry.path
-                ));
+                return Err(FileError::EntryPayload {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    data_size: entry.data.as_ref().map(Vec::len),
+                    digest: entry.digest.clone(),
+                    size: entry.size,
+                });
             }
         }
         FileEntryKind::Symlink => {
             if entry.link_target.as_deref().unwrap_or("").is_empty() {
-                return Err(format!("symlink entry {} needs linkTarget", entry.path));
+                return Err(FileError::LinkTarget {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                });
             }
             reject_payload_fields(entry)?;
         }
         FileEntryKind::Hardlink => {
             let target = entry.link_target.as_deref().unwrap_or("");
             if target.is_empty() {
-                return Err(format!("hardlink entry {} needs linkTarget", entry.path));
+                return Err(FileError::LinkTarget {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                });
             }
             safe_archive_path(target)?;
             reject_payload_fields(entry)?;
@@ -1084,49 +1176,58 @@ fn validate_v2_entry(entry: &FileEntry) -> Result<(), String> {
         FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             reject_payload_fields(entry)?;
             if entry.dev_major.is_none() || entry.dev_minor.is_none() {
-                return Err(format!(
-                    "{} entry {} needs devMajor and devMinor",
-                    entry.kind.as_str(),
-                    entry.path
-                ));
+                return Err(FileError::Device {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    major: entry.dev_major,
+                    minor: entry.dev_minor,
+                });
             }
         }
     }
     Ok(())
 }
 
-fn reject_payload_fields(entry: &FileEntry) -> Result<(), String> {
+fn reject_payload_fields(entry: &FileEntry) -> Result<(), FileError> {
     if entry.data.is_some() || entry.digest.is_some() || entry.size.is_some() {
-        return Err(format!(
-            "{} entry {} must not carry file bytes, digest, or size",
-            entry.kind.as_str(),
-            entry.path
-        ));
+        return Err(FileError::EntryPayload {
+            path: entry.path.clone(),
+            kind: entry.kind,
+            data_size: entry.data.as_ref().map(Vec::len),
+            digest: entry.digest.clone(),
+            size: entry.size,
+        });
     }
     Ok(())
 }
 
-fn file_digest_and_size(entry: &FileEntry) -> Result<(String, u64), String> {
+fn file_digest_and_size(entry: &FileEntry) -> Result<(String, u64), FileError> {
     match (&entry.data, &entry.digest, entry.size) {
         (Some(data), digest, size) => {
             let computed_digest = digest_string(data);
-            if digest
-                .as_deref()
-                .is_some_and(|value| value != computed_digest)
-            {
-                return Err(format!("digest mismatch for {}", entry.path));
+            if let Some(expected) = digest.as_ref().filter(|value| **value != computed_digest) {
+                return Err(FileError::EntryDigest {
+                    path: entry.path.clone(),
+                    expected: expected.clone(),
+                    actual: computed_digest,
+                });
             }
             let computed_size = data.len() as u64;
-            if size.is_some_and(|value| value != computed_size) {
-                return Err(format!("size mismatch for {}", entry.path));
+            if let Some(expected) = size.filter(|value| *value != computed_size) {
+                return Err(FileError::EntrySize {
+                    path: entry.path.clone(),
+                    expected,
+                    actual: computed_size,
+                });
             }
             Ok((computed_digest, computed_size))
         }
         (None, Some(digest), Some(size)) => Ok((digest.clone(), size)),
-        (None, _, _) => Err(format!(
-            "regular file entry {} needs data or digest+size",
-            entry.path
-        )),
+        (None, _, _) => Err(FileError::MissingPayload {
+            path: entry.path.clone(),
+            digest: entry.digest.clone(),
+            size: entry.size,
+        }),
     }
 }
 
@@ -1136,8 +1237,8 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
         .map_err(|e| format!("mtime before unix epoch: {e}"))?;
     let secs = duration.as_secs();
     i64::try_from(secs)
-        .map_err(|_| "out of range")
-        .and_then(|secs| crate::rfc3339::format(secs, 0))
+        .map_err(|_| "out of range".to_owned())
+        .and_then(|secs| crate::rfc3339::format(secs, 0).map_err(|cause| cause.to_string()))
         .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))
 }
 
@@ -1147,7 +1248,7 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
 ///
 /// Returns an error when the graph is not a files-profile archive, an entry
 /// carries an invalid field value, or two entries share the same path.
-pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String> {
+pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, FileError> {
     let mut type_ids: FastSet<usize> = FastSet::default();
     let mut file_entry_ids: FastSet<usize> = FastSet::default();
     let mut field_name_by_id: FastMap<usize, String> = FastMap::default();
@@ -1167,10 +1268,10 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
         }
     }
     if type_ids.is_empty() {
-        return Err("not a files-profile archive: missing rdf:type".to_string());
+        return Err(FileError::MissingVocabulary { term: "rdf:type" });
     }
     if file_entry_ids.is_empty() {
-        return Err("not a files-profile archive: missing FileEntry".to_string());
+        return Err(FileError::MissingVocabulary { term: "FileEntry" });
     }
 
     let mut direct: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
@@ -1230,7 +1331,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
             data: None,
         };
         if by_path.contains_key(path) {
-            return Err(format!("duplicate files:path in archive: {path}"));
+            return Err(FileError::DuplicatePath { path: path.clone() });
         }
         by_path.insert(path.clone(), entry);
     }
@@ -1244,7 +1345,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
 /// Propagates the same failures as [`read_entries`].
 pub fn read_file_entries(
     graph: &Graph,
-) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, FileError> {
     read_entries(graph).map(|entries| {
         entries
             .into_iter()
@@ -1257,18 +1358,23 @@ fn read_xattrs(
     subject: usize,
     direct: &BTreeMap<usize, BTreeMap<String, String>>,
     links: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<FileXattr>, String> {
+) -> Result<Vec<FileXattr>, FileError> {
     let mut out = Vec::new();
     for node in links.get(&subject).into_iter().flatten() {
-        let fields = direct
-            .get(node)
-            .ok_or_else(|| format!("files:xattr node {node} has no fields"))?;
-        let name = fields
-            .get("xattrName")
-            .ok_or_else(|| format!("files:xattr node {node} missing xattrName"))?;
-        let value = fields
-            .get("xattrValue")
-            .ok_or_else(|| format!("files:xattr node {node} missing xattrValue"))?;
+        let fields = direct.get(node).ok_or(FileError::MissingFields {
+            role: "xattr",
+            node: *node,
+        })?;
+        let name = fields.get("xattrName").ok_or(FileError::MissingField {
+            role: "xattr",
+            node: *node,
+            field: "xattrName",
+        })?;
+        let value = fields.get("xattrValue").ok_or(FileError::MissingField {
+            role: "xattr",
+            node: *node,
+            field: "xattrValue",
+        })?;
         out.push(FileXattr {
             name: name.clone(),
             value: value.clone(),
@@ -1282,18 +1388,23 @@ fn read_pax_records(
     subject: usize,
     direct: &BTreeMap<usize, BTreeMap<String, String>>,
     links: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<FilePaxRecord>, String> {
+) -> Result<Vec<FilePaxRecord>, FileError> {
     let mut out = Vec::new();
     for node in links.get(&subject).into_iter().flatten() {
-        let fields = direct
-            .get(node)
-            .ok_or_else(|| format!("files:paxRecord node {node} has no fields"))?;
-        let key = fields
-            .get("paxKey")
-            .ok_or_else(|| format!("files:paxRecord node {node} missing paxKey"))?;
-        let value = fields
-            .get("paxValue")
-            .ok_or_else(|| format!("files:paxRecord node {node} missing paxValue"))?;
+        let fields = direct.get(node).ok_or(FileError::MissingFields {
+            role: "paxRecord",
+            node: *node,
+        })?;
+        let key = fields.get("paxKey").ok_or(FileError::MissingField {
+            role: "paxRecord",
+            node: *node,
+            field: "paxKey",
+        })?;
+        let value = fields.get("paxValue").ok_or(FileError::MissingField {
+            role: "paxRecord",
+            node: *node,
+            field: "paxValue",
+        })?;
         out.push(FilePaxRecord {
             key: key.clone(),
             value: value.clone(),
@@ -1308,17 +1419,18 @@ fn read_pax_records(
 fn parse_optional_integer<T>(
     fields: &BTreeMap<String, String>,
     key: &str,
-) -> Result<Option<T>, String>
+) -> Result<Option<T>, FileError>
 where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
+    T: std::str::FromStr<Err = core::num::ParseIntError>,
 {
     fields
         .get(key)
         .map(|value| {
-            value
-                .parse::<T>()
-                .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
+            value.parse::<T>().map_err(|cause| FileError::Integer {
+                field: key.to_owned(),
+                actual: value.clone(),
+                cause,
+            })
         })
         .transpose()
 }
@@ -1367,7 +1479,7 @@ fn entry_to_field_map(entry: &FileEntry) -> BTreeMap<String, String> {
 }
 
 fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
-    safe_archive_path(archive_path)?;
+    safe_archive_path(archive_path).map_err(|cause| cause.to_string())?;
     // Resolve the destination itself (e.g. `/tmp` -> `/private/tmp` on macOS),
     // then resolve the closest existing target ancestor so an existing
     // symlinked directory below the destination cannot redirect writes.
@@ -1447,7 +1559,7 @@ pub fn unpack_with_options(
     dest: &Path,
     options: &UnpackOptions,
 ) -> Result<(), String> {
-    let entries = read_entries(graph)?;
+    let entries = read_entries(graph).map_err(|cause| cause.to_string())?;
     let suppressed = if options.include_suppressed {
         FastSet::default()
     } else {
@@ -1526,7 +1638,7 @@ pub fn unpack_with_options(
                     .link_target
                     .as_deref()
                     .ok_or_else(|| format!("hardlink entry {path} needs linkTarget"))?;
-                safe_archive_path(link_target)?;
+                safe_archive_path(link_target).map_err(|cause| cause.to_string())?;
                 let _ = dest_path(dest, link_target)?;
                 deferred_links.push((target, entry));
             }
@@ -1681,7 +1793,7 @@ fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), 
             "symlink target resolves to destination root for {archive_path}: {link_target}"
         ));
     }
-    safe_archive_path(&parts.join("/"))
+    safe_archive_path(&parts.join("/")).map_err(|cause| cause.to_string())
 }
 
 fn materialize_link(dest: &Path, target: &Path, entry: &FileEntry) -> Result<(), String> {
@@ -1809,7 +1921,7 @@ fn parse_modified(text: &str) -> Result<(i64, u32), String> {
 
 /// Compare an archive to a directory by content digest.
 pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
-    let entries = read_entries(graph)?;
+    let entries = read_entries(graph).map_err(|cause| cause.to_string())?;
     let archive_digests: BTreeMap<String, String> = entries
         .iter()
         .filter(|(_, entry)| entry.kind == FileEntryKind::File)
