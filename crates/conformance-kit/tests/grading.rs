@@ -579,11 +579,14 @@ fn earl_verdicts_require_valid_expectations_and_actual_observations() {
     assert_eq!(outcome::Record::from_json(&json).unwrap(), good);
     let mut records = vec![good];
     let to_earl = |records: &[outcome::Record]| {
-        outcome::to_earl(&outcome::Report::new(
-            example_subject(),
-            example_assertor(),
-            records.iter().cloned().map(Into::into).collect(),
-        ))
+        outcome::to_earl(
+            &outcome::Report::new(
+                example_subject(),
+                example_assertor(),
+                records.iter().cloned().map(Into::into).collect(),
+            )
+            .unwrap(),
+        )
     };
     let earl = to_earl(&records).unwrap();
     // The assertion and its result (8), the subject (4) and the assertor (2).
@@ -690,6 +693,7 @@ fn a_report_renders_both_projections_over_two_iri_styles() {
                 })
                 .collect(),
         )
+        .unwrap()
     };
     let forward = build(
         [
@@ -746,7 +750,11 @@ fn a_report_renders_both_projections_over_two_iri_styles() {
     // Without info no `earl:info` statement is written.
     assert_eq!(
         earl_lines(&build(
-            [(sparql, Compared), (shex, Mismatch), (shex, Compared)],
+            [
+                (sparql, Compared),
+                (shex, Mismatch),
+                ("http://example.org/other", Compared)
+            ],
             false
         ))
         .matches("earl#info")
@@ -769,7 +777,8 @@ fn inapplicable_and_other_unfinished_outcomes_map_to_their_earl_terms() {
             .zip(0..)
             .map(|(kind, n)| record(&case(n), *kind).into())
             .collect(),
-    );
+    )
+    .unwrap();
     let lines = earl_lines(&report);
     for (term, count) in [
         ("passed", 1),
@@ -816,8 +825,115 @@ fn the_earl_rendering_matches_its_golden() {
             )
             .into(),
         ],
-    );
+    )
+    .unwrap();
     purrdf_testkit::assert_golden!("earl-report.nt", &earl_lines(&report));
+}
+
+fn route_subject(route: &str) -> outcome::SubjectDescription {
+    outcome::SubjectDescription::new(
+        format!("{EX_SUBJECT}#route={route}"),
+        vec![earl::TEST_SUBJECT.into()],
+        vec![(
+            EX_NAME.into(),
+            outcome::DescriptionTerm::Text(format!("Engine, route {route}")),
+        )],
+    )
+}
+
+/// One subject cannot be asserted about one test twice, whatever the profile,
+/// surface or verdicts of the two records; the refusal is typed and names both.
+fn a_duplicate_case_is_refused_per_subject() {
+    let case = "http://example.org/t1";
+    let mut second = record(case, outcome::OutcomeKind::Mismatch);
+    second.profile = "other".into();
+    second.surface = "other".into();
+    let refused = outcome::Report::new(
+        example_subject(),
+        example_assertor(),
+        vec![
+            record(case, outcome::OutcomeKind::Compared).into(),
+            second.clone().into(),
+        ],
+    );
+    assert_eq!(
+        refused,
+        Err(purrdf_conformance_kit::GradeError::DuplicateAssertion {
+            subject: EX_SUBJECT.to_owned(),
+            case: case.to_owned(),
+        })
+    );
+    // The same two records are accepted as two subjects, and two subjects with
+    // one IRI are not.
+    let accepted = |second_subject: outcome::SubjectDescription| {
+        outcome::Report::with_subjects(
+            example_assertor(),
+            vec![
+                outcome::SubjectReport {
+                    subject: route_subject("a"),
+                    records: vec![record(case, outcome::OutcomeKind::Compared).into()],
+                },
+                outcome::SubjectReport {
+                    subject: second_subject,
+                    records: vec![second.clone().into()],
+                },
+            ],
+        )
+    };
+    accepted(route_subject("b")).unwrap();
+    assert!(matches!(
+        accepted(route_subject("a")),
+        Err(purrdf_conformance_kit::GradeError::Malformed(_))
+    ));
+    assert!(outcome::Report::with_subjects(example_assertor(), Vec::new()).is_err());
+}
+
+/// Two subjects render in one graph, each with its own description and its own
+/// assertions, whatever order they were given in; the scoreboard counts both.
+fn two_subjects_render_with_their_own_descriptions() {
+    use outcome::OutcomeKind::{Compared, Mismatch};
+    let case = "http://example.org/t1";
+    let build = |order: [&str; 2]| {
+        outcome::Report::with_subjects(
+            example_assertor(),
+            order
+                .into_iter()
+                .map(|route| outcome::SubjectReport {
+                    subject: route_subject(route),
+                    records: vec![
+                        record(case, if route == "a" { Compared } else { Mismatch }).into(),
+                    ],
+                })
+                .collect(),
+        )
+        .unwrap()
+    };
+    let report = build(["b", "a"]);
+    assert_eq!(report, build(["a", "b"]));
+    let lines = earl_lines(&report);
+    assert_eq!(lines, earl_lines(&build(["a", "b"])));
+    for route in ["a", "b"] {
+        assert!(lines.contains(&format!(
+            "<{EX_SUBJECT}#route={route}> <{EX_NAME}> \"Engine, route {route}\" ."
+        )));
+        // The subject carries exactly one assertion about the test.
+        assert_eq!(
+            lines
+                .lines()
+                .filter(
+                    |line| line.ends_with(&format!("earl#subject> <{EX_SUBJECT}#route={route}> ."))
+                )
+                .count(),
+            1,
+            "{route}"
+        );
+    }
+    assert_eq!(lines.matches("earl#Assertion").count(), 2);
+    assert_eq!(
+        report.scoreboard_line("EXAMPLE", "failed"),
+        "EXAMPLE: passed 1, failed 1 of 2"
+    );
+    purrdf_testkit::assert_golden!("earl-two-subjects.nt", &lines);
 }
 
 fn deep_terms_respect_kernel_admission_without_stack_recursion() {
@@ -1125,6 +1241,8 @@ purrdf_testkit::harness_main!(
     a_report_renders_both_projections_over_two_iri_styles,
     inapplicable_and_other_unfinished_outcomes_map_to_their_earl_terms,
     the_earl_rendering_matches_its_golden,
+    a_duplicate_case_is_refused_per_subject,
+    two_subjects_render_with_their_own_descriptions,
     deep_terms_respect_kernel_admission_without_stack_recursion,
     malformed_result_set_bindings_and_partial_indices_are_refused,
     inference_metadata_requires_three_term_rows_and_keeps_source_scope,

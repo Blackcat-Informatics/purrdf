@@ -20,14 +20,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_conformance_kit::graph::Reader;
-use purrdf_conformance_kit::outcome::{self, Observation, OutcomeKind, Record};
+use purrdf_conformance_kit::outcome::{
+    self, AssertorDescription, DescriptionTerm, Observation, OutcomeKind, Record, Report,
+    ReportRecord, SubjectDescription, SubjectReport,
+};
 use purrdf_conformance_kit::report::{
     BlankCorrespondence, BlankIdentity, ReportContext, ReportFormat, ReportPolicy, SourceContext,
     SourceRole,
 };
 use purrdf_conformance_kit::{GradeError, inventory, manifest, report, reviews};
 use purrdf_core::{GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_iri::vocab::{mf, rdf, sh, sht};
+use purrdf_iri::vocab::{earl, mf, rdf, sh, sht};
 use purrdf_lex::json::Value;
 use purrdf_shapes::ShaclProfile;
 use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
@@ -213,6 +216,55 @@ impl Totals {
         );
         lines
     }
+}
+
+/// The EARL report of the executions' records: one `earl:subject` per
+/// (profile, surface) route, so no subject has two assertions for one test.
+///
+/// A route is a distinct thing under test (a dated law reached through one
+/// public door), and one test is graded once per route. The route's IRI is
+/// `base` plus a fragment naming both coordinates,
+/// `{base}#profile={profile}&surface={surface}` (each value percent-encoded
+/// keeping only unreserved characters and `/`, so `&`, `=`, `#` and `%` inside a
+/// value can never fake the other coordinate). It is derived from the two identities the record already
+/// carries, so it is stable across runs, reads back to its route, and cannot
+/// collide for distinct routes. `describe(profile, surface)` supplies the
+/// route's description statements; each subject is typed `earl:TestSubject`.
+///
+/// # Errors
+/// Refuses a record set the report structure refuses.
+pub fn earl_report(
+    records: &[Record],
+    base: &str,
+    assertor: AssertorDescription,
+    describe: impl Fn(&str, &str) -> Vec<(String, DescriptionTerm)>,
+) -> Result<Report, GradeError> {
+    let mut routes: BTreeMap<(&str, &str), Vec<ReportRecord>> = BTreeMap::new();
+    for record in records {
+        routes
+            .entry((&record.profile, &record.surface))
+            .or_default()
+            .push(record.clone().into());
+    }
+    let subjects = routes
+        .into_iter()
+        .map(|((profile, surface), records)| {
+            let iri = format!(
+                "{base}#profile={}&surface={}",
+                purrdf_lex::percent::encode(profile, purrdf_lex::percent::UNRESERVED_SLASH),
+                purrdf_lex::percent::encode(surface, purrdf_lex::percent::UNRESERVED_SLASH),
+            );
+            SubjectReport {
+                subject: SubjectDescription::new(
+                    iri,
+                    vec![earl::TEST_SUBJECT.to_owned()],
+                    describe(profile, surface),
+                ),
+                records,
+            }
+        })
+        .collect();
+    Report::with_subjects(assertor, subjects)
 }
 
 fn malformed(message: impl Into<String>) -> GradeError {
@@ -759,6 +811,11 @@ impl Corpus {
                     reason: None,
                     message,
                 },
+                Err(error @ GradeError::DuplicateAssertion { .. }) => Observation {
+                    kind: OutcomeKind::Malformed,
+                    reason: None,
+                    message: error.to_string(),
+                },
             },
             Err(error) => refusal(law, &error),
         }
@@ -830,6 +887,11 @@ impl Corpus {
                 kind: OutcomeKind::Malformed,
                 reason: None,
                 message,
+            },
+            Err(error @ GradeError::DuplicateAssertion { .. }) => Observation {
+                kind: OutcomeKind::Malformed,
+                reason: None,
+                message: error.to_string(),
             },
         }
     }

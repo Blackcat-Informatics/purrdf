@@ -6,19 +6,21 @@
 //! Usage: `community-conformance CORPUS NEW_OUTPUT_DIRECTORY`
 //!
 //! The output directory must not exist. It receives `records.json` (one graded
-//! record per public route), `earl.nt` (the same verdicts as EARL assertions)
-//! and `scoreboard.txt`. The exit status is nonzero unless every applicable
+//! record per public route), `earl.nt` (the same verdicts as EARL
+//! assertions, one `earl:subject` per profile and surface route) and
+//! `scoreboard.txt`. The exit status is nonzero unless every applicable
 //! execution passed and none was unsupported.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use purrdf_conformance_kit::outcome::{AssertorDescription, Report, SubjectDescription, to_earl};
-use purrdf_iri::vocab::earl;
+use purrdf_conformance_kit::outcome::{AssertorDescription, DescriptionTerm, to_earl};
+use purrdf_iri::vocab::{earl, rdfs};
 use purrdf_lex::json::{self, Value, record::ToJson};
-use purrdf_sparql_conformance::community::Corpus;
+use purrdf_sparql_conformance::community::{Corpus, earl_report};
 
 const ASSERTED_BY: &str = "http://example.org/community/runner/community-conformance";
+/// The project IRI each route subject extends with a `#profile=..&surface=..` fragment.
 const SUBJECT: &str = "http://example.org/community/subject/purrdf-native";
 
 fn run(corpus: &Path, output: &Path) -> Result<bool, String> {
@@ -36,11 +38,20 @@ fn run(corpus: &Path, output: &Path) -> Result<bool, String> {
         "records.json",
         json::write_pretty(&Value::array(records.iter().map(ToJson::to_json))).as_bytes(),
     )?;
-    let report = Report::new(
-        SubjectDescription::new(SUBJECT, vec![earl::TEST_SUBJECT.to_owned()], Vec::new()),
+    let report = earl_report(
+        &records,
+        SUBJECT,
         AssertorDescription::new(ASSERTED_BY, vec![earl::ASSERTOR.to_owned()], Vec::new()),
-        records.iter().cloned().map(Into::into).collect(),
-    );
+        |profile, surface| {
+            vec![(
+                rdfs::LABEL.to_owned(),
+                DescriptionTerm::Text(format!(
+                    "PurRDF native, profile {profile}, surface {surface}"
+                )),
+            )]
+        },
+    )
+    .map_err(|error| error.to_string())?;
     let earl = to_earl(&report).map_err(|error| error.to_string())?;
     write(
         "earl.nt",

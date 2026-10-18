@@ -333,3 +333,128 @@ fn a_suite_kind_without_a_runner_is_refused() {
     let error = Corpus::acquire(&copy).unwrap_err();
     assert!(error.contains("no community SHACL runner"), "{error}");
 }
+
+/// The community EARL names one subject per (profile, surface) route, each
+/// described, and no subject is asserted about one test twice.
+#[test]
+fn the_community_earl_asserts_each_subject_and_test_once() {
+    use purrdf_conformance_kit::outcome::{AssertorDescription, DescriptionTerm, to_earl};
+    use purrdf_iri::vocab::{earl, rdf, rdfs};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let corpus = Corpus::acquire(&corpus_root()).unwrap();
+    let (_, executions) = corpus.run().unwrap();
+    let records: Vec<_> = executions
+        .iter()
+        .flat_map(|execution| execution.records.iter().cloned())
+        .collect();
+    let base = "http://example.org/community/subject/purrdf-native";
+    let report = community::earl_report(
+        &records,
+        base,
+        AssertorDescription::new(
+            "http://example.org/community/runner/community-conformance",
+            vec![earl::ASSERTOR.to_owned()],
+            Vec::new(),
+        ),
+        |profile, surface| {
+            vec![(
+                rdfs::LABEL.to_owned(),
+                DescriptionTerm::Text(format!("{profile} {surface}")),
+            )]
+        },
+    )
+    .unwrap();
+    let routes: BTreeSet<_> = records
+        .iter()
+        .map(|record| (record.profile.as_str(), record.surface.as_str()))
+        .collect();
+    assert!(routes.len() > 1, "the corpus has several routes");
+    assert_eq!(report.subjects().len(), routes.len());
+    assert_eq!(report.records().len(), records.len());
+    let dataset = to_earl(&report).unwrap();
+    let text = String::from_utf8(
+        purrdf::serialize_dataset(
+            dataset.as_ref(),
+            "application/n-triples",
+            purrdf::SerializeGraph::Dataset,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // Each assertion node's `earl:subject` and `earl:test`, read back from the
+    // serialized graph.
+    let object_of = |predicate: &str| -> BTreeMap<String, String> {
+        let infix = format!(" <{predicate}> ");
+        text.lines()
+            .filter_map(|line| {
+                let (node, rest) = line.split_once(&infix)?;
+                Some((node.to_owned(), rest.strip_suffix(" .")?.to_owned()))
+            })
+            .collect()
+    };
+    let (subjects, tests) = (object_of(earl::SUBJECT), object_of(earl::TEST));
+    assert_eq!(subjects.len(), records.len());
+    let mut pairs: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for (node, subject) in &subjects {
+        *pairs.entry((subject, &tests[node])).or_default() += 1;
+    }
+    assert_eq!(pairs.len(), records.len());
+    assert!(pairs.values().all(|&count| count == 1), "{pairs:?}");
+    for subject in report.subjects() {
+        let iri = subject.iri();
+        assert!(iri.starts_with(&format!("{base}#profile=")));
+        assert!(
+            text.lines()
+                .any(|line| line.starts_with(&format!("<{iri}> <{}> ", rdfs::LABEL))),
+            "{iri} is described"
+        );
+        assert!(text.contains(&format!(
+            "<{iri}> <{}> <{}> .",
+            rdf::TYPE,
+            earl::TEST_SUBJECT
+        )));
+    }
+}
+
+/// A profile or surface value holding the field separators cannot make two
+/// different routes share a subject IRI.
+#[test]
+fn route_subject_iris_stay_distinct_when_values_hold_separators() {
+    use purrdf_conformance_kit::outcome::{AssertorDescription, Observation, Record};
+    let observation = Observation {
+        kind: OutcomeKind::Compared,
+        reason: None,
+        message: String::new(),
+    };
+    let record = |profile: &str, surface: &str| Record {
+        case: "http://example.org/t".to_owned(),
+        profile: profile.to_owned(),
+        surface: surface.to_owned(),
+        expected: observation.clone(),
+        observed: observation.clone(),
+        passed: true,
+        artifacts: Vec::new(),
+    };
+    // Unencoded, both routes would read `#profile=a&surface=b&surface=c`.
+    let records = [record("a&surface=b", "c"), record("a", "b&surface=c")];
+    let report = community::earl_report(
+        &records,
+        "http://example.org/s",
+        AssertorDescription::new("http://example.org/a", Vec::new(), Vec::new()),
+        |_, _| Vec::new(),
+    )
+    .unwrap();
+    let iris: Vec<_> = report
+        .subjects()
+        .iter()
+        .map(purrdf_conformance_kit::outcome::Described::iri)
+        .collect();
+    assert_eq!(iris.len(), 2);
+    assert_ne!(iris[0], iris[1]);
+    for iri in iris {
+        let fragment = iri.split_once('#').unwrap().1;
+        assert_eq!(fragment.matches('&').count(), 1, "{iri}");
+        assert_eq!(fragment.matches('=').count(), 2, "{iri}");
+    }
+}

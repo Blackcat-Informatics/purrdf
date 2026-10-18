@@ -342,6 +342,7 @@ pub fn report(suite: &Suite, purrdf_commit: &str, entries: &[Entry<'_>]) -> Repo
         })
         .collect();
     Report::new(subject(purrdf_commit, suite), assertor(), records)
+        .expect("a suite lists each test once")
 }
 
 // ── Serializing and writing ───────────────────────────────────────────────────

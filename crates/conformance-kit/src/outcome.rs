@@ -247,42 +247,111 @@ impl From<Record> for ReportRecord {
     }
 }
 
+/// The records one subject is asserted to have been graded on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectReport {
+    /// The described `earl:subject`.
+    pub subject: SubjectDescription,
+    /// Its records: at most one per case IRI.
+    pub records: Vec<ReportRecord>,
+}
+
 /// One report structure with two projections, [`to_earl`] and
 /// [`Report::scoreboard_line`], over the same sorted records.
+///
+/// A report holds one or more subjects, each with its own description and its
+/// own records. EARL assertions are per subject and test, so a subject carries
+/// at most one record per case IRI; a harness that grades one test through
+/// several routes (profiles, surfaces) describes each route as its own subject.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
-    subject: SubjectDescription,
     assertor: AssertorDescription,
+    /// Sorted by subject IRI.
+    subjects: Vec<SubjectDescription>,
+    /// Sorted by subject, then case, profile and surface.
     records: Vec<ReportRecord>,
+    /// `owners[i]` is the index in `subjects` of the subject of `records[i]`.
+    owners: Vec<usize>,
 }
 
 impl Report {
-    /// A report over `records`, sorted by case, profile and surface so that the
-    /// caller's order never reaches the output.
-    #[must_use]
+    /// A single-subject report over `records`, sorted by case, profile and
+    /// surface so that the caller's order never reaches the output.
+    ///
+    /// # Errors
+    /// [`GradeError::DuplicateAssertion`] when two records share a case IRI.
     pub fn new(
         subject: SubjectDescription,
         assertor: AssertorDescription,
-        mut records: Vec<ReportRecord>,
-    ) -> Self {
-        records.sort_by(|a, b| {
-            (&a.record.case, &a.record.profile, &a.record.surface).cmp(&(
-                &b.record.case,
-                &b.record.profile,
-                &b.record.surface,
-            ))
-        });
-        Self {
-            subject,
-            assertor,
-            records,
-        }
+        records: Vec<ReportRecord>,
+    ) -> Result<Self, GradeError> {
+        Self::with_subjects(assertor, vec![SubjectReport { subject, records }])
     }
 
-    /// The subject description.
+    /// A report over several subjects, each with its own description and
+    /// records. Subjects are ordered by IRI and records by case, profile and
+    /// surface within a subject, so the caller's order never reaches the output.
+    ///
+    /// # Errors
+    /// [`GradeError::DuplicateAssertion`] when one subject has two records for
+    /// one case IRI (whatever their profile and surface); `Malformed` when no
+    /// subject is given or two subjects share an IRI.
+    pub fn with_subjects(
+        assertor: AssertorDescription,
+        mut subjects: Vec<SubjectReport>,
+    ) -> Result<Self, GradeError> {
+        if subjects.is_empty() {
+            return Err(GradeError::Malformed(
+                "a report needs at least one subject".to_owned(),
+            ));
+        }
+        subjects.sort_by(|a, b| a.subject.iri().cmp(b.subject.iri()));
+        if let Some(pair) = subjects
+            .windows(2)
+            .find(|pair| pair[0].subject.iri() == pair[1].subject.iri())
+        {
+            return Err(GradeError::Malformed(format!(
+                "two subjects share the IRI {}",
+                pair[0].subject.iri()
+            )));
+        }
+        let mut described = Vec::with_capacity(subjects.len());
+        let mut records = Vec::new();
+        let mut owners = Vec::new();
+        for (index, mut entry) in subjects.into_iter().enumerate() {
+            entry.records.sort_by(|a, b| {
+                (&a.record.case, &a.record.profile, &a.record.surface).cmp(&(
+                    &b.record.case,
+                    &b.record.profile,
+                    &b.record.surface,
+                ))
+            });
+            if let Some(pair) = entry
+                .records
+                .windows(2)
+                .find(|pair| pair[0].record.case == pair[1].record.case)
+            {
+                return Err(GradeError::DuplicateAssertion {
+                    subject: entry.subject.iri().to_owned(),
+                    case: pair[0].record.case.clone(),
+                });
+            }
+            owners.extend(std::iter::repeat_n(index, entry.records.len()));
+            records.append(&mut entry.records);
+            described.push(entry.subject);
+        }
+        Ok(Self {
+            assertor,
+            subjects: described,
+            records,
+            owners,
+        })
+    }
+
+    /// The subject descriptions, ordered by IRI.
     #[must_use]
-    pub fn subject(&self) -> &SubjectDescription {
-        &self.subject
+    pub fn subjects(&self) -> &[SubjectDescription] {
+        &self.subjects
     }
 
     /// The assertor description.
@@ -291,7 +360,7 @@ impl Report {
         &self.assertor
     }
 
-    /// The sorted records.
+    /// The sorted records of every subject, subject by subject.
     #[must_use]
     pub fn records(&self) -> &[ReportRecord] {
         &self.records
@@ -333,8 +402,8 @@ fn earl_outcome(record: &Record) -> &'static str {
     }
 }
 
-/// Render a [`Report`] as EARL: the described subject and assertor once, then one
-/// `earl:Assertion` per record in the report's order. No clock or generated
+/// Render a [`Report`] as EARL: the described assertor and each described subject
+/// once, then one `earl:Assertion` per record in the report's order. No clock or generated
 /// namespace is consulted, and the assertion nodes are labelled by position in the
 /// sorted records, so equal reports render to equal datasets.
 ///
@@ -354,8 +423,12 @@ pub fn to_earl(report: &Report) -> Result<std::sync::Arc<RdfDataset>, GradeError
     let info_predicate = builder.intern_iri(earl::INFO)?;
     let automatic = builder.intern_iri(earl::AUTOMATIC)?;
     let by = report.assertor.0.emit(&mut builder)?;
-    let subject = report.subject.0.emit(&mut builder)?;
+    let mut subjects = Vec::with_capacity(report.subjects.len());
+    for subject in &report.subjects {
+        subjects.push(subject.0.emit(&mut builder)?);
+    }
     for (index, entry) in report.records.iter().enumerate() {
+        let subject = subjects[report.owners[index]];
         let record = &entry.record;
         let graded = grade(&record.expected, &record.observed);
         if let Err(GradeError::Malformed(message)) = &graded {
