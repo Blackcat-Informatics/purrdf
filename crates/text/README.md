@@ -9,6 +9,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
+
+English | [简体中文](README.zh-Hans.md)
 # `purrdf-text` — Deterministic Full-Text Search over RDF Literals
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-text.svg)](https://crates.io/crates/purrdf-text)
@@ -53,8 +55,8 @@ indexed: the caller names them.
 ## Exact arithmetic, identical answers everywhere
 
 Ranking is done in base-10 fixed-point integer arithmetic with twelve
-fractional digits. No float enters the crate — the crate root carries
-`#![deny(clippy::float_arithmetic)]`, so it cannot.
+fractional digits. Scoring and ranking use no floating-point arithmetic; the crate root carries
+`#![deny(clippy::float_arithmetic)]`.
 
 That is a correctness property, not an aesthetic one. BM25 needs a natural
 logarithm, and a libm `ln` is free to differ by a unit in the last place
@@ -92,8 +94,9 @@ triples and remains unchanged when surface indexing is omitted.
 
 Ranking uses one fielded BM25F path, including the single-field case. The
 immutable `RankingProfile` binds caller-named fields, each field's weight and
-length normalization, total predicate routing and the field-population law into
-a fingerprint. `PreparedQuery` separately carries the query's certified score
+length normalization, total predicate routing, exact arithmetic, query
+aggregation and the field-population law into a fingerprint.
+`PreparedQuery` separately carries the query's certified score
 bound from its corpus statistics.
 `k1 = 1.2` is fixed. `RankingProfile::single_field()` explicitly routes every
 selected predicate to one field with weight one and `b = 0.75`.
@@ -123,15 +126,16 @@ is not sublinear. To preserve an older snapshot, clone before the owned update;
 the explicit clone copies buffers rather than sharing them implicitly.
 
 For sparse fields, select `RankingProfile::with_field_populations()` and supply
-per-field carrier counts to `PreparedCorpus::with_field_populations`. Lengths
+per-field counts of documents carrying that field to `PreparedCorpus::with_field_populations`. Lengths
 then normalize against the mean of the field's carriers; IDF remains
 corpus-wide. `TextIndex` derives these counts per partition when that profile
 is selected. The mode changes ranking identity; existing dense profiles keep
 their fingerprints and scores.
 
-The maximum score is exactly `65_536 * 10^12` raw units and needs 56 bits.
-Scores above that exact maximum are refused even if they fit in 56 bits.
-See [the ranking contract](RANKING.md) for the bound proof, operation order,
+The ranking law has no global score ceiling or reserved host tie bits. Each
+`PreparedQuery` certifies an exact score bound and its bit width from the actual
+corpus and IDFs; hosts choose their own key representation. See
+[the ranking contract](RANKING.md) for the bound proof, operation order,
 independent arithmetic reference and vocabulary-search ownership decision.
 
 Corpus statistics are computed per `(graph, language)` partition, so a score is a
@@ -143,8 +147,8 @@ list binds `?lang` and `?graph` or uses a single-partition index.
 
 The Rust field is named `Scored::partition_rank` for that reason: nothing about
 the *value* records which corpus produced it, so an answer over a three-language
-index carries three rows of rank 1 and `LIMIT 10` over it is the first ten of an
-interleaving rather than the ten best documents.
+index carries three rows of rank 1 and `LIMIT 10` over it is the first ten of the
+partition-major output rather than the ten best documents.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
 assigned only after sorting on `(graph, subject, language)`, so ascending id is
@@ -166,7 +170,7 @@ C (the GTS container itself reaches Python and C, not the wasm package). Most ap
 directly when you want the index and its arithmetic on their own.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
-follows the workspace `rust-version` (currently 1.98, stable toolchain only).
+follows the workspace `rust-version` (currently 1.98 for consumers on stable Rust).
 
 ## License
 

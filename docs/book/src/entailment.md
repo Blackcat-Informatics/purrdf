@@ -24,13 +24,20 @@ no async runtime, and no string round-trip.
 | `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so a consumer can recompute its contract hash. |
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 
-```rust,ignore
+```rust
 use purrdf::entail::{materialize, Completeness, Materialization};
 
+let ds = purrdf::parse_dataset(
+    b"<https://example.org/alice> <https://example.org/name> \"Alice\" .",
+    "application/n-triples",
+    None,
+)?;
 // Close a frozen dataset to its RDFS fixpoint; the result is a new dataset
 // AND a report of what the run did.
 let (closed, report) = materialize(&ds, Materialization::Rdfs).expect("materializes");
 assert_eq!(report.completeness(), Completeness::ExactWithinBoundaries);
+assert!(closed.quad_count() > ds.quad_count());
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## The same engine in five hosts
@@ -341,8 +348,8 @@ Every host materializes `d`, the command-line tool included.
 
 There is **no unsupported-regime error**. `materialize` takes a `Materialization`,
 which carries each regime's own input — a basic graph pattern for `OWL-Direct`, a
-`RuleSet` for `RIF` — so all seven inhabitants of that type are served and a caller
-cannot hand the function a value it accepts and get a refusal instead of an answer.
+`RuleSet` for `RIF` — so each of the seven alternatives dispatches to its engine.
+Invalid input, inconsistency and exhausted resource limits return typed errors.
 `Regime` stays as the reporting and identity type that `ReasoningReport::regime()`,
 `rules()`, `implemented()` and `Regime::from_iri` speak in.
 

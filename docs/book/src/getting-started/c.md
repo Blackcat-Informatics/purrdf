@@ -79,9 +79,11 @@ ownership/free order. Profiles and configuration are described in
 
 ## The ABI contract
 
-- **No unwinding across the boundary.** Every function runs inside
-  `catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC`, never a
-  process abort across FFI.
+- **No unwinding across the boundary.** Fallible entry points use
+  `catch_unwind`; a caught unwinding panic becomes `PURRDF_STATUS_PANIC`.
+  Entry points without an error channel return their guard's default value
+  after a caught panic. Aborting panics and other process aborts cannot be
+  converted into status codes.
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value and write results through out-pointers.
   `PURRDF_STATUS_CURSOR_EXHAUSTED` is the (non-error) end-of-rows signal.

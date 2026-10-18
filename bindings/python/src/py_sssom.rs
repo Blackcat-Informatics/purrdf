@@ -7,8 +7,8 @@
 //!
 //! # Kernel-clean separation
 //!
-//! Like [`crate::py`] and [`crate::py_store`], this module is compiled **only
-//! under the `python` feature**. The SSSOM kernel ([`crate::sssom`]) stays
+//! Like [`crate::py_store`], this module lives in the dedicated Python binding
+//! crate, without a semantic Cargo feature. The SSSOM kernel ([`crate::sssom`]) stays
 //! PyO3-free: the load-bearing parse / validate / serialize / `to_rdf` logic is
 //! unit-tested without a Python interpreter, and these `#[pyfunction]`s are thin
 //! wrappers over it. The Python caller therefore sees the *same* diagnostics the

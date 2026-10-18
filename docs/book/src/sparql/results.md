@@ -12,17 +12,22 @@ four W3C SPARQL Results formats — JSON (SRJ), XML, CSV, and TSV — plus an
 additive, caller-named provenance extension where the format can carry one.
 JSON and XML documents can also be read back (`from_json`, `from_xml`).
 
-```rust,ignore
-use purrdf::sparql::{serialize, ResultProvenance, SparqlResultsFormat};
+```rust
+use purrdf::{RdfDatasetBuilder, TermValue};
+use purrdf::sparql::{from_json, serialize, ResultProvenance, SparqlResult, SparqlResultsFormat};
 
-// `result` is the SparqlResult produced by purrdf-sparql-eval (or any engine
-// implementing the purrdf-core SparqlEngine seam). `None` here means "carry
-// no provenance extension" — see "The provenance extension" below.
+let result = SparqlResult::Solutions {
+    variables: vec!["s".to_owned()],
+    rows: vec![vec![Some(TermValue::Iri("https://example.org/alice".to_owned()))]],
+    aux: RdfDatasetBuilder::new().freeze().expect("empty auxiliary dataset").into(),
+};
 let outcome = serialize(&result, SparqlResultsFormat::Json, &ResultProvenance::default(), None)
     .expect("SELECT serializes to SRJ");
 
 assert!(!outcome.provenance_dropped);
-let json = String::from_utf8(outcome.bytes).unwrap();
+let decoded = from_json(&outcome.bytes).expect("emitted JSON parses back");
+assert_eq!(decoded.variables, ["s"]);
+assert_eq!(decoded.rows, [vec![Some(TermValue::Iri("https://example.org/alice".to_owned()))]]);
 ```
 
 Per-format writers (`to_json`, `to_xml`, `to_csv`, `to_tsv`) and readers
@@ -78,13 +83,23 @@ their third: those two have no `format` parameter to pick).
 directly into XML element/attribute names and cannot be escaped the way text
 content can:
 
-```rust,ignore
-use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, serialize};
+```rust
+use purrdf::sparql::{from_json_boolean, ProvenanceNamespace, ResultProvenance, SparqlResult, SparqlResultsFormat, serialize};
 
+let result = SparqlResult::Boolean(true);
 let namespace = ProvenanceNamespace::new("prov", "https://example.org/provenance#")
     .expect("valid NCName prefix + absolute IRI");
-let provenance = ResultProvenance::default(); // or a populated one
-let outcome = serialize(&result, SparqlResultsFormat::Json, &provenance, Some(&namespace))?;
+let provenance = ResultProvenance {
+    query_hash: Some("example-query".to_owned()),
+    ..ResultProvenance::default()
+};
+let outcome = serialize(&result, SparqlResultsFormat::Json, &provenance, Some(&namespace))
+    .expect("ASK with caller-named provenance serializes");
+assert!(!outcome.provenance_dropped);
+assert!(from_json_boolean(&outcome.bytes).expect("emitted ASK parses back"));
+let without_namespace = serialize(&result, SparqlResultsFormat::Json, &provenance, None)
+    .expect("ASK without a provenance namespace serializes");
+assert!(without_namespace.provenance_dropped);
 ```
 
 With `namespace: None`, JSON/XML emit no provenance element/member at all,
@@ -95,10 +110,11 @@ discipline described in [Slices, Mappings & Provenance](../slices.md).
 
 ## One term-syntax authority
 
-The crate depends only on `purrdf-core` and stays wasm-clean; term and
-N-Triples syntax come exclusively from the kernel's emit primitives, so there
-is exactly one term-syntax authority in the workspace — results, codecs, and
-diagnostics can never disagree about how a term is written.
+The crate depends on `purrdf-core`, `purrdf-lex` and `purrdf-iri`, and stays
+wasm-clean. Shared lexical readers and IRI validation serve the result formats;
+term and N-Triples syntax come from the kernel's emit primitives and the shared
+lexical term writer. Results, codecs and diagnostics therefore use the same
+term-syntax authority.
 
 ## Related
 
