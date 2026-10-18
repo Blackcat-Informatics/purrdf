@@ -43,6 +43,7 @@ use crate::interner::Interner;
 
 mod axiom_source;
 pub(crate) mod input_source;
+pub(crate) mod key_proofs;
 pub(crate) mod key_values;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::Concept;
@@ -127,6 +128,7 @@ pub(crate) struct Kb {
     pub(crate) schema_budget: bounds::SchemaPreparationBudget,
     /// Deferred only by an honest incomplete preparation, never silently omitted.
     keys_applied: bool,
+    pub(crate) key_proofs: key_proofs::Records,
     /// Same-producer uncached control; absent from every shipped build.
     #[cfg(test)]
     pub(crate) schema_reference: bool,
@@ -227,7 +229,7 @@ pub(crate) struct Kb {
     /// absorbed table from the WHOLE inclusion list — is a pure function of [`Kb::tbox`]
     /// alone; the two negation-cache passes around it also cover concepts a caller interned
     /// since the last call (a named class, a query concept, a refutation witness), so they
-    /// stay unconditional. This flag gates only the middle pass: [`Kb::from_dataset`] already
+    /// stay unconditional. This flag gates only the middle pass: [`Kb::from_dataset_until`] already
     /// runs it once inside [`parser::build_until`], and every caller downstream that finalizes
     /// again after interning MORE concepts — [`Reasoner::new`](crate::reasoner::Reasoner::new)
     /// chief among them — would otherwise re-derive an identical absorbed table from an
@@ -249,7 +251,7 @@ pub(crate) struct Kb {
     /// a parameter to a dozen private functions, and it cannot be forgotten at one call
     /// site and honoured at another.
     ///
-    /// `None` — the state [`Kb::from_dataset`] builds — is a run nothing can stop, which is
+    /// `None` — a [`Kb::from_dataset_until`] call without a signal — is a run nothing can stop, which is
     /// exactly the behaviour this lane had before the field existed. The stop-aware
     /// constructor installs this before key inference, so a key-bearing ontology cannot
     /// enter an uninterruptible tableau before the public governed path attaches its signal.
@@ -317,6 +319,7 @@ impl Kb {
             schema: bounds::Preparation::default(),
             schema_budget: bounds::SchemaPreparationBudget::default(),
             keys_applied: false,
+            key_proofs: key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
             #[cfg(test)]
@@ -368,6 +371,7 @@ impl Kb {
     /// cap; [`EntailError::Unsatisfiable`] if a key axiom is present over a knowledge base
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
+    #[cfg(test)]
     pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
         Self::from_dataset_until(ds, None)
     }
@@ -376,8 +380,9 @@ impl Kb {
     ///
     /// # Errors
     ///
-    /// The same failures as [`Self::from_dataset`], plus [`EntailError::Stopped`] when the
-    /// signal fires before or during reverse mapping or key inference.
+    /// Malformed OWL syntax, source/storage refusal and incomplete key membership
+    /// decisions fail. [`EntailError::Stopped`] preserves the original signal
+    /// before or during reverse mapping or key inference.
     pub(crate) fn from_dataset_until<D: DatasetView>(
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
@@ -390,10 +395,20 @@ impl Kb {
         stop: Option<Arc<dyn StopSignal>>,
         budget: bounds::SchemaPreparationBudget,
     ) -> Result<Self, EntailError> {
+        Self::from_dataset_recording(ds, stop, budget, None)
+    }
+
+    pub(crate) fn from_dataset_recording<D: DatasetView>(
+        ds: &D,
+        stop: Option<Arc<dyn StopSignal>>,
+        budget: bounds::SchemaPreparationBudget,
+        input: Option<[u8; 32]>,
+    ) -> Result<Self, EntailError> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
         let mut kb = parser::build_with_preparation(ds, stop.as_deref(), budget)?;
+        kb.key_proofs = input.map_or(key_proofs::Records::Disabled, key_proofs::Records::Pending);
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
@@ -433,6 +448,12 @@ impl Kb {
             return Ok(());
         }
         self.finalize()?;
+        let input = self.key_proofs.input();
+        let context = input.map(|input| proof::DlProofContext::borrowing_prepared_kb(self, input));
+        let mut evidence = context
+            .as_ref()
+            .map(key_proofs::Evidence::for_phase)
+            .transpose()?;
         let mut storage = purrdf_lex::allocation::Resident;
         let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
         let values = key_values::Index::new(
@@ -450,7 +471,14 @@ impl Kb {
             // The individuals this key ranges over, in ascending id order.
             let mut members: Vec<u32> = Vec::new();
             for &individual in &named {
-                if self.entails_instance(individual, *class)? {
+                let belongs = match (&mut evidence, &context) {
+                    (Some(evidence), Some(context)) => {
+                        evidence.entails(key, individual, *class, context)?
+                    }
+                    (None, None) => self.entails_instance(individual, *class)?,
+                    _ => unreachable!("key recording is selected by its original input identity"),
+                };
+                if belongs {
                     members.push(individual);
                 }
             }
@@ -477,6 +505,7 @@ impl Kb {
             }
         }
         values.release(&mut memory)?;
+        drop(context);
         let stop = self.stop.as_deref();
         self.inputs
             .record_key_equalities(self.same_as.len(), &forced, || {
@@ -492,6 +521,9 @@ impl Kb {
         );
         reads.base = self.same_as.len();
         self.inputs.key_values = Some(reads);
+        if let Some(evidence) = evidence {
+            self.key_proofs = key_proofs::Records::Ready(evidence);
+        }
         self.same_as
             .extend(forced.into_iter().map(|(_, left, right)| (left, right)));
         self.keys_applied = true;
@@ -825,18 +857,26 @@ impl Kb {
         individual: u32,
         concept_id: u32,
     ) -> Result<bool, EntailError> {
+        self.with_negative_instance(individual, concept_id, |assumptions| {
+            hyper::consistent(self, assumptions).map(|consistent| !consistent)
+        })
+    }
+
+    /// The original consistency guard and selected negative membership question.
+    pub(crate) fn with_negative_instance<T>(
+        &self,
+        individual: u32,
+        concept_id: u32,
+        decide: impl FnOnce(&Assumptions<'_>) -> Result<T, EntailError>,
+    ) -> Result<T, EntailError> {
         if !self.is_consistent()? {
             return Err(EntailError::Unsatisfiable);
         }
         let neg = self.table.negate(concept_id);
-        let consistent = hyper::consistent(
-            self,
-            &Assumptions {
-                types: &[(individual, neg)],
-                ..Assumptions::of_kb()
-            },
-        )?;
-        Ok(!consistent)
+        decide(&Assumptions {
+            types: &[(individual, neg)],
+            ..Assumptions::of_kb()
+        })
     }
 
     /// Whether `sub_id ⊑ sup_id` is entailed — i.e. a fresh witness in `sub ⊓ ¬sup` has no

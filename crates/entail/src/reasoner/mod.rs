@@ -410,7 +410,7 @@ impl Reasoner {
         preparation: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
     ) -> Result<Self, EntailError> {
-        let mut kb = Kb::from_dataset_with_preparation(ds, stop, preparation)?;
+        let mut kb = Kb::from_dataset_recording(ds, stop, preparation, input)?;
         let signal = kb.stop.clone();
         let mut poll = || {
             if purrdf_core::governor::is_stopped(signal.as_deref()) {

@@ -161,6 +161,7 @@ mod schema;
 #[cfg(test)]
 mod schema_tests;
 
+pub(crate) mod capture;
 pub mod source;
 use schema::{decode_schema_clash, encode_schema_clash};
 
@@ -2726,8 +2727,10 @@ impl CompletionReplay {
 /// [`RdfDataset`] the CONSUMER supplies and from nothing else: it holds no state a producer
 /// shipped, so a proof cannot be verified against the very stores that produced it. It
 /// may own its independently prepared source or borrow it from a consumer reasoner.
-/// Neither form holds a producer's completion graph or search state. Construction
-/// runs no search: it only prepares the source when needed and derives native clauses.
+/// Neither form holds a producer's completion graph or search state. Source
+/// preparation includes the original key-membership decisions when keys are
+/// present; their checked journals are retained without a second search for provenance.
+/// Borrowing a prepared source only derives its native clauses.
 pub struct DlProofContext<'kb> {
     /// The knowledge base the consumer's own dataset reverse-maps to.
     pub(crate) kb: OwnedOrBorrowed<'kb, Kb>,
@@ -2754,7 +2757,8 @@ impl std::fmt::Debug for DlProofContext<'_> {
 
 fn proof_source_error(error: EntailError) -> DlProofError {
     match error {
-        EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
+        EntailError::Storage(error)
+        | EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
             DlProofError::Storage(error)
         }
         EntailError::Stopped => DlProofError::Stopped,
@@ -2777,9 +2781,15 @@ impl DlProofContext<'static> {
     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same input.
     pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
-        let mut kb = Kb::from_dataset(ontology).map_err(proof_source_error)?;
-        kb.finalize().map_err(proof_source_error)?;
         let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
+        let mut kb = Kb::from_dataset_recording(
+            ontology,
+            None,
+            super::bounds::SchemaPreparationBudget::default(),
+            Some(input),
+        )
+        .map_err(proof_source_error)?;
+        kb.finalize().map_err(proof_source_error)?;
         Ok(Self::of_prepared_kb(kb, input))
     }
 
@@ -3729,6 +3739,25 @@ impl DlProof {
         ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<RefutationReplay, DlProofError> {
+        self.replay_refutation_inner(ctx, assumptions, None)
+    }
+
+    pub(crate) fn replay_refutation_recording(
+        &self,
+        ctx: &DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+    ) -> Result<(RefutationReplay, capture::Capture), DlProofError> {
+        let mut capture = capture::Capture::default();
+        let report = self.replay_refutation_inner(ctx, assumptions, Some(&mut capture))?;
+        Ok((report, capture))
+    }
+
+    fn replay_refutation_inner(
+        &self,
+        ctx: &DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+        mut capture: Option<&mut capture::Capture>,
+    ) -> Result<RefutationReplay, DlProofError> {
         self.bound_to(ctx)?;
         if self.answer != ProofAnswer::Inconsistent {
             return Err(DlProofError::WrongAnswer {
@@ -3753,7 +3782,7 @@ impl DlProof {
             self.root,
             None,
             &mut seen,
-            &mut report,
+            (&mut report, &mut capture),
             &mut Vec::new(),
         )?;
         for (index, reached) in seen.iter().enumerate() {
@@ -3776,7 +3805,7 @@ impl DlProof {
         outcome: BranchOutcome,
         at: Option<(usize, usize)>,
         seen: &mut [bool],
-        report: &mut RefutationReplay,
+        (report, capture): (&mut RefutationReplay, &mut Option<&mut capture::Capture>),
         path: &mut Vec<(usize, usize)>,
     ) -> Result<(), DlProofError> {
         let (branch, ordinal) = at.unwrap_or((usize::MAX, usize::MAX));
@@ -3805,7 +3834,20 @@ impl DlProof {
                         ));
                     }
                 }
-                let replay = self.replay_clash_assuming(index, ctx, assumptions)?;
+                let journal = capture
+                    .as_ref()
+                    .map(|_| super::graph::changes::Journal::default());
+                let (replay, journal, schema) =
+                    self.replay_clash_inner(index, ctx, assumptions, journal)?;
+                if let Some(capture) = capture.as_deref_mut() {
+                    capture
+                        .push(
+                            index,
+                            journal.expect("requested checked replay owns its journal"),
+                            schema,
+                        )
+                        .map_err(DlProofError::Storage)?;
+                }
                 report.clashes += 1;
                 report.checks.absorb(&replay.checks);
                 Ok(())
@@ -3874,7 +3916,7 @@ impl DlProof {
                         outcome,
                         Some((index, ordinal)),
                         seen,
-                        report,
+                        (&mut *report, &mut *capture),
                         path,
                     )?;
                     path.pop();
@@ -4393,7 +4435,12 @@ impl DlProof {
 /// [`purrdf_core::canonicalize`] would raise for the same input.
 pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
     let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
-    let mut kb = Kb::from_dataset(ontology)?;
+    let mut kb = Kb::from_dataset_recording(
+        ontology,
+        None,
+        super::bounds::SchemaPreparationBudget::default(),
+        Some(input),
+    )?;
     kb.finalize()?;
     let contract = contract_of(&kb);
     let (decision, recorder) =

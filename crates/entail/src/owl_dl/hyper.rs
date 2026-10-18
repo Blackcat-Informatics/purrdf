@@ -658,7 +658,10 @@ impl Hyper<'_> {
 /// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the
 /// round cap, and the honest ceiling on per-round work for the other).
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    let decision = decide(kb, assumptions, Budget::for_kb(kb));
+    decision_result(decide(kb, assumptions, Budget::for_kb(kb)))
+}
+
+pub(crate) fn decision_result(decision: Decision) -> Result<bool, EntailError> {
     if let Some(original) = decision.storage_refusal {
         return Err(super::roles::RoleHierarchyError::Storage(original).into());
     }

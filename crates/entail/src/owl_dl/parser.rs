@@ -1452,6 +1452,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             schema: super::bounds::Preparation::default(),
             schema_budget: budget,
             keys_applied: false,
+            key_proofs: super::key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
             #[cfg(test)]
