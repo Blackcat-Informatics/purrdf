@@ -312,6 +312,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 
 ```sh
 make conformance                                      # the single matrix (all of the below + the rdflib gate)
+make w3c-earl                                         # clean tree only: writes target/w3c-earl/purrdf-shacl-earl.ttl and purrdf-shacl12-earl.ttl (W3C_EARL_DIR overrides the directory)
 
 cargo test -p purrdf-iri                               # IRI + RFC 3986 resolution
 cargo test -p purrdf-shex                              # all four ShEx suites

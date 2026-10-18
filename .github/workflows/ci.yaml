@@ -503,6 +503,13 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: "1.98"
 
+      # The release lane builds the W3C SHACL EARL reports on a stable compiler,
+      # so the two harnesses that write them must build and pass at the floor.
+      - name: Run the W3C SHACL report harnesses on MSRV
+        run: cargo test --locked -p purrdf-shapes --test w3c12_conformance --test w3c_conformance
+        env:
+          RUSTUP_TOOLCHAIN: "1.98"
+
       # Prove the guard is live: if the toolchain selection above ever regresses
       # to the repo pin, this fails loudly instead of the job quietly passing on
       # a compiler that is not the MSRV.
