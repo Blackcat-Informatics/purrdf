@@ -7,6 +7,9 @@
 //! sequence and hash primitives as the reader, without adding runtime JSON
 //! dependencies.
 
+mod error;
+pub use error::{InventoryProblem, ReplicationError};
+
 use purrdf_hash::Domain;
 use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
@@ -108,8 +111,8 @@ pub struct MissingResult {
     pub ranges: Vec<ByteRange>,
     /// Whether the peer must scan or re-request broader state.
     pub scan_required: bool,
-    /// Human-readable explanation for `Unknown` or `Error`.
-    pub detail: Option<String>,
+    /// Original native reason for `Unknown` or `Error`.
+    pub detail: Option<ReplicationError>,
 }
 
 impl Inventory {
@@ -123,18 +126,23 @@ impl Inventory {
                 .any(|segment| !segment.diagnostics.is_empty())
     }
 
-    pub(crate) fn problem_detail(&self) -> Option<String> {
+    /// Retain the first original file, torn-item or segment finding.
+    pub fn problem(&self) -> Option<InventoryProblem> {
         if let Some(fatal) = &self.fatal {
-            return Some(format!("{}: {}", fatal.code, fatal.detail));
+            return Some(InventoryProblem::Fatal(fatal.clone()));
         }
         if let Some(offset) = self.torn {
-            return Some(format!("torn at offset {offset}"));
+            return Some(InventoryProblem::Torn { offset });
         }
-        self.segments
-            .iter()
-            .flat_map(|segment| segment.diagnostics.iter())
-            .next()
-            .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.detail))
+        self.segments.iter().find_map(|segment| {
+            segment
+                .diagnostics
+                .first()
+                .map(|diagnostic| InventoryProblem::Segment {
+                    segment: segment.index,
+                    diagnostic: diagnostic.clone(),
+                })
+        })
     }
 }
 
@@ -488,7 +496,9 @@ pub fn missing(inventory: &Inventory, from_head: &[u8]) -> MissingResult {
             from_head: from_head.to_vec(),
             ranges: Vec::new(),
             scan_required: false,
-            detail: inventory.problem_detail(),
+            detail: inventory
+                .problem()
+                .map(|problem| ReplicationError::Inventory(Box::new(problem))),
         };
     }
     for segment in &inventory.segments {
@@ -545,7 +555,9 @@ pub fn missing(inventory: &Inventory, from_head: &[u8]) -> MissingResult {
         from_head: from_head.to_vec(),
         ranges: Vec::new(),
         scan_required: true,
-        detail: Some("unknown peer head; scan required".to_string()),
+        detail: Some(ReplicationError::UnknownHead {
+            head: from_head.to_vec(),
+        }),
     }
 }
 
@@ -570,10 +582,10 @@ pub fn missing_json(result: &MissingResult) -> String {
         json_hex(&result.from_head),
         ranges,
         result.scan_required,
-        result
-            .detail
-            .as_deref()
-            .map_or_else(|| "null".to_string(), json_string)
+        result.detail.as_ref().map_or_else(
+            || "null".to_string(),
+            |error| json_string(&error.to_string())
+        )
     )
 }
 
@@ -583,27 +595,39 @@ pub fn missing_json(result: &MissingResult) -> String {
 ///
 /// Returns an error when the file is torn or otherwise not clean, or when no
 /// valid frame carries `frame_id`.
-pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], String> {
+pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], ReplicationError> {
     let inventory = inventory(data);
     if inventory.has_problems() {
-        return Err(inventory
-            .problem_detail()
-            .unwrap_or_else(|| "input is not clean".to_string()));
+        return Err(ReplicationError::Inventory(Box::new(
+            inventory
+                .problem()
+                .expect("a problematic inventory has a finding"),
+        )));
     }
     for segment in &inventory.segments {
         for frame in &segment.frames {
             if frame.valid && frame.id.as_slice() == frame_id {
-                let start = usize::try_from(frame.end)
-                    .map_err(|_| "frame end exceeds local address space".to_owned())?;
-                let end = usize::try_from(inventory.clean_end)
-                    .map_err(|_| "file end exceeds local address space".to_owned())?;
-                return data
-                    .get(start..end)
-                    .ok_or_else(|| "frame range is outside buffered source".to_owned());
+                let start = usize::try_from(frame.end).map_err(|_| ReplicationError::Address {
+                    field: "frame end",
+                    actual: frame.end,
+                })?;
+                let end = usize::try_from(inventory.clean_end).map_err(|_| {
+                    ReplicationError::Address {
+                        field: "file end",
+                        actual: inventory.clean_end,
+                    }
+                })?;
+                return data.get(start..end).ok_or(ReplicationError::BufferRange {
+                    start,
+                    end,
+                    length: data.len(),
+                });
             }
         }
     }
-    Err(format!("frame {} not found", Lower(frame_id)))
+    Err(ReplicationError::MissingFrame {
+        frame: frame_id.to_vec(),
+    })
 }
 
 /// Outcome category for a two-file replication [`diff`].
@@ -617,6 +641,15 @@ pub enum DiffStatus {
     Diverged,
     /// One or both inventories are not trustworthy enough to diff.
     Error,
+}
+
+impl purrdf_hash::error::StructuredError for DiffStatus {
+    purrdf_hash::error_visit! {
+        Current => "gts-diff-current" {},
+        Fetch => "gts-diff-fetch" {},
+        Diverged => "gts-diff-diverged" {},
+        Error => "gts-diff-error" {},
+    }
 }
 
 /// One remote byte range to retrieve in order to extend local toward remote.
@@ -643,8 +676,8 @@ pub struct DiffResult {
     pub splice_offset: Option<u64>,
     /// True when the fetch (if any) forms an unbroken extension of local.
     pub continuous: bool,
-    /// Human-readable explanation, set for `Diverged` and `Error`.
-    pub detail: Option<String>,
+    /// Original native reason, set for `Diverged` and `Error`.
+    pub detail: Option<ReplicationError>,
 }
 
 /// Index of the first frame at which `local_frames` stops being a prefix of
@@ -684,29 +717,27 @@ pub fn diff(local: &Inventory, remote: &Inventory) -> DiffResult {
     let local_problem = is_diff_problem(local);
     let remote_problem = is_diff_problem(remote);
     if local_problem || remote_problem {
-        let mut details = Vec::new();
-        if local_problem {
-            details.push(format!(
-                "local: {}",
-                local
-                    .problem_detail()
-                    .unwrap_or_else(|| "unknown problem".to_string())
-            ));
-        }
-        if remote_problem {
-            details.push(format!(
-                "remote: {}",
-                remote
-                    .problem_detail()
-                    .unwrap_or_else(|| "unknown problem".to_string())
-            ));
-        }
         return DiffResult {
             status: DiffStatus::Error,
             fetch: Vec::new(),
             splice_offset: None,
             continuous: false,
-            detail: Some(details.join("; ")),
+            detail: Some(ReplicationError::Inventories {
+                local: local_problem.then(|| {
+                    Box::new(
+                        local
+                            .problem()
+                            .expect("a problematic local inventory has a finding"),
+                    )
+                }),
+                remote: remote_problem.then(|| {
+                    Box::new(
+                        remote
+                            .problem()
+                            .expect("a problematic remote inventory has a finding"),
+                    )
+                }),
+            }),
         };
     }
 
@@ -730,14 +761,17 @@ pub fn diff(local: &Inventory, remote: &Inventory) -> DiffResult {
                         fetch: Vec::new(),
                         splice_offset: None,
                         continuous: false,
-                        detail: Some(format!(
-                            "segment {i} heads match but byte ranges diverge (local \
-                             {ls}..{le}, remote {rs}..{re}); likely a re-encoded mirror",
-                            ls = local_segment.start,
-                            le = local_segment.end,
-                            rs = remote_segment.start,
-                            re = remote_segment.end,
-                        )),
+                        detail: Some(ReplicationError::Alignment {
+                            segment: i,
+                            local: ByteRange {
+                                start: local_segment.start,
+                                end: local_segment.end,
+                            },
+                            remote: ByteRange {
+                                start: remote_segment.start,
+                                end: remote_segment.end,
+                            },
+                        }),
                     };
                 }
             }
@@ -797,11 +831,10 @@ pub fn diff(local: &Inventory, remote: &Inventory) -> DiffResult {
             fetch: Vec::new(),
             splice_offset: None,
             continuous: false,
-            detail: Some(format!(
-                "local has {extra} segment(s) beyond the common prefix at segment {k}; \
-                 only local's own last segment may be a partial extension",
-                extra = local.segments.len() - (k + 1),
-            )),
+            detail: Some(ReplicationError::ExtraSegments {
+                common: k,
+                extra: local.segments.len() - (k + 1),
+            }),
         };
     }
 
@@ -824,9 +857,12 @@ pub fn diff(local: &Inventory, remote: &Inventory) -> DiffResult {
             fetch: Vec::new(),
             splice_offset: None,
             continuous: false,
-            detail: Some(format!(
-                "segment {k} frame {mismatch} id diverges from remote's frame at the same index"
-            )),
+            detail: Some(ReplicationError::FrameMismatch {
+                segment: k,
+                frame: mismatch,
+                local: local_frames[mismatch].id.clone(),
+                remote: remote_frames[mismatch].id.clone(),
+            }),
         };
     }
 
@@ -872,9 +908,15 @@ pub fn diff(local: &Inventory, remote: &Inventory) -> DiffResult {
             fetch: Vec::new(),
             splice_offset: None,
             continuous: false,
-            detail: Some(format!(
-                "segment {k}'s first new remote frame does not chain onto local's head; possible fork"
-            )),
+            detail: Some(ReplicationError::Extension {
+                segment: k,
+                valid: first_new.valid,
+                previous: first_new.prev.clone(),
+                expected: local_frames
+                    .last()
+                    .map(|frame| frame.id.clone())
+                    .or_else(|| local_segment.head.clone()),
+            }),
         }
     }
 }
@@ -891,58 +933,71 @@ pub fn splice(
     local_bytes: &[u8],
     remote_bytes: &[u8],
     result: &DiffResult,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ReplicationError> {
     if matches!(result.status, DiffStatus::Diverged | DiffStatus::Error) {
         return Err(result
             .detail
             .clone()
-            .unwrap_or_else(|| "diff result cannot be spliced".to_string()));
+            .unwrap_or_else(|| ReplicationError::Unspliceable {
+                status: result.status.clone(),
+            }));
     }
 
     if result.fetch.is_empty() {
         let rebuilt = inventory(local_bytes);
         if rebuilt.has_problems() {
-            return Err(rebuilt
-                .problem_detail()
-                .unwrap_or_else(|| "local bytes are not a clean inventory".to_string()));
+            return Err(ReplicationError::Inventory(Box::new(
+                rebuilt
+                    .problem()
+                    .expect("a problematic inventory has a finding"),
+            )));
         }
         return Ok(local_bytes.to_vec());
     }
 
     let offset = result
         .splice_offset
-        .ok_or_else(|| "diff result has no splice offset".to_string())?;
+        .ok_or(ReplicationError::MissingSpliceOffset)?;
     if offset > local_bytes.len() as u64 {
-        return Err(format!(
-            "splice offset {offset} exceeds local length {}",
-            local_bytes.len()
-        ));
+        return Err(ReplicationError::SpliceOffset {
+            offset,
+            length: local_bytes.len(),
+        });
     }
 
-    let offset = usize::try_from(offset)
-        .map_err(|_| "splice offset exceeds local address space".to_owned())?;
+    let offset = usize::try_from(offset).map_err(|_| ReplicationError::Address {
+        field: "splice offset",
+        actual: offset,
+    })?;
     let mut out = local_bytes[..offset].to_vec();
     for fetch in &result.fetch {
         let start = fetch.range.start;
         let end = fetch.range.end;
         if start > end || end > remote_bytes.len() as u64 {
-            return Err(format!(
-                "fetch range {start}..{end} exceeds remote length {}",
-                remote_bytes.len()
-            ));
+            return Err(ReplicationError::FetchRange {
+                start,
+                end,
+                length: remote_bytes.len(),
+            });
         }
-        let start = usize::try_from(start)
-            .map_err(|_| "fetch start exceeds local address space".to_owned())?;
-        let end =
-            usize::try_from(end).map_err(|_| "fetch end exceeds local address space".to_owned())?;
+        let start = usize::try_from(start).map_err(|_| ReplicationError::Address {
+            field: "fetch start",
+            actual: start,
+        })?;
+        let end = usize::try_from(end).map_err(|_| ReplicationError::Address {
+            field: "fetch end",
+            actual: end,
+        })?;
         out.extend_from_slice(&remote_bytes[start..end]);
     }
 
     let rebuilt = inventory(&out);
     if rebuilt.has_problems() {
-        return Err(rebuilt
-            .problem_detail()
-            .unwrap_or_else(|| "spliced bytes are not a clean inventory".to_string()));
+        return Err(ReplicationError::Inventory(Box::new(
+            rebuilt
+                .problem()
+                .expect("a problematic inventory has a finding"),
+        )));
     }
     Ok(out)
 }
@@ -977,10 +1032,10 @@ pub fn diff_json(result: &DiffResult) -> String {
             .splice_offset
             .map_or_else(|| "null".to_string(), |offset| offset.to_string()),
         result.continuous,
-        result
-            .detail
-            .as_deref()
-            .map_or_else(|| "null".to_string(), json_string)
+        result.detail.as_ref().map_or_else(
+            || "null".to_string(),
+            |error| json_string(&error.to_string())
+        )
     )
 }
 

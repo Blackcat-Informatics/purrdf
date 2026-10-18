@@ -488,6 +488,182 @@ fn reader_causes_survive_input_graph_and_streaming_owners() {
     assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
 }
 
+fn replication_callers_keep_native_findings_heads_and_full_width_ranges() {
+    use purrdf_gts::{
+        replication::{self, ByteRange, DiffResult, DiffStatus, SegmentFetch},
+        writer::Writer,
+    };
+    let mut first = Writer::new("generic");
+    let head = first.add_blob(b"first", None, None);
+    let prefix = first.to_bytes();
+    first.add_blob(b"tail", None, None);
+    let bytes = first.into_bytes();
+    assert_eq!(
+        replication::resume_after(&bytes, &head).unwrap(),
+        &bytes[prefix.len()..]
+    );
+    let unknown = vec![0xff; 32];
+    let absent = replication::missing(&replication::inventory(&bytes), &unknown);
+    assert_eq!(
+        Capture::read(absent.detail.as_ref().unwrap()).code,
+        "gts-replication-unknown-head"
+    );
+    assert!(replication::missing_json(&absent).contains("unknown peer head; scan required"));
+    let torn = [bytes.as_slice(), &[0x5a]].concat();
+    let empty_fetch = DiffResult {
+        status: DiffStatus::Current,
+        fetch: vec![],
+        splice_offset: Some(0),
+        continuous: true,
+        detail: None,
+    };
+    // Caller-owned fetch descriptors carry u64::MAX with small byte buffers.
+    let mut fetching = DiffResult {
+        status: DiffStatus::Fetch,
+        fetch: vec![SegmentFetch {
+            remote_index: 0,
+            range: ByteRange { start: 0, end: 0 },
+            head: None,
+        }],
+        splice_offset: Some(u64::MAX),
+        continuous: true,
+        detail: None,
+    };
+    let offset = replication::splice(&bytes, &bytes, &fetching).unwrap_err();
+    fetching.splice_offset = None;
+    let no_offset = replication::splice(&bytes, &bytes, &fetching).unwrap_err();
+    fetching.splice_offset = Some(0);
+    fetching.fetch[0].range = ByteRange {
+        start: u64::MAX,
+        end: 0,
+    };
+    let range = replication::splice(&bytes, &bytes, &fetching).unwrap_err();
+    let refused = DiffResult {
+        status: DiffStatus::Diverged,
+        ..empty_fetch.clone()
+    };
+    let bad = replication::inventory(&[0xf6]);
+    let both = replication::diff(&bad, &bad);
+    let mut other = Writer::new("generic");
+    other.add_blob(b"fork", None, None);
+    let other = other.into_bytes();
+    let fork = replication::diff(
+        &replication::inventory(&prefix),
+        &replication::inventory(&other),
+    );
+    let fork_error = replication::splice(&prefix, &other, &fork).unwrap_err();
+    assert_eq!(
+        fork_error.to_string(),
+        fork.detail.as_ref().unwrap().to_string()
+    );
+    let cases = [
+        (absent.detail.unwrap(), "gts-replication-unknown-head"),
+        (
+            replication::resume_after(&bytes, &unknown).unwrap_err(),
+            "gts-replication-missing-frame",
+        ),
+        (
+            replication::resume_after(&torn, &head).unwrap_err(),
+            "gts-replication-inventory",
+        ),
+        (
+            replication::splice(&torn, &bytes, &empty_fetch).unwrap_err(),
+            "gts-replication-inventory",
+        ),
+        (
+            replication::resume_after(&[], &head).unwrap_err(),
+            "gts-replication-inventory",
+        ),
+        (both.detail.unwrap(), "gts-replication-inventories"),
+        (offset, "gts-replication-splice-offset"),
+        (no_offset, "gts-replication-missing-splice-offset"),
+        (range, "gts-replication-fetch-range"),
+        (
+            replication::splice(&bytes, &bytes, &refused).unwrap_err(),
+            "gts-replication-unspliceable",
+        ),
+        (fork_error, "gts-replication-frame-mismatch"),
+    ];
+    let length = bytes.len();
+    drop((bytes, prefix, other, torn, bad, fork));
+    for (error, code) in cases {
+        let retained = error.clone();
+        drop(error);
+        let fields = Capture::read(&retained);
+        assert_eq!(fields.code, code);
+        match code {
+            "gts-replication-unknown-head" => assert!(
+                matches!(fields.field("head"), ErrorValue::Bytes(value) if value == unknown)
+            ),
+            "gts-replication-missing-frame" => assert!(
+                matches!(fields.field("frame"), ErrorValue::Bytes(value) if value == unknown)
+            ),
+            "gts-replication-inventory" => {
+                let cause = fields.child("cause");
+                if cause.code == "gts-replication-torn" {
+                    assert!(
+                        matches!(cause.field("offset"), ErrorValue::Unsigned(value) if value == length as u128)
+                    );
+                } else {
+                    assert_eq!(cause.code, "gts-replication-fatal");
+                    assert_eq!(
+                        cause.child("diagnostic").child("cause").code,
+                        "gts-empty-file"
+                    );
+                }
+            }
+            "gts-replication-inventories" => {
+                for side in ["local", "remote"] {
+                    assert_eq!(
+                        fields.child(side).child("diagnostic").child("cause").code,
+                        "gts-first-item-not-header"
+                    );
+                }
+            }
+            "gts-replication-splice-offset" => {
+                assert!(
+                    matches!(fields.field("offset"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+                );
+                assert!(
+                    matches!(fields.field("length"), ErrorValue::Unsigned(value) if value == length as u128)
+                );
+            }
+            "gts-replication-fetch-range" => assert!(
+                matches!(fields.field("start"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+            ),
+            "gts-replication-unspliceable" => {
+                assert_eq!(fields.child("status").code, "gts-diff-diverged");
+            }
+            "gts-replication-frame-mismatch" => {
+                assert!(matches!(fields.field("segment"), ErrorValue::Unsigned(0)));
+                assert!(matches!(fields.field("frame"), ErrorValue::Unsigned(0)));
+                assert!(
+                    matches!((fields.field("local"), fields.field("remote")), (ErrorValue::Bytes(local), ErrorValue::Bytes(remote)) if local != remote)
+                );
+            }
+            "gts-replication-missing-splice-offset" => assert_eq!(fields.events.len(), 0),
+            _ => unreachable!("every actual refusal is checked"),
+        }
+        let events = Vec::with_capacity(12);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&retained, events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(captured.code, code);
+    }
+    let mut unknown_frame = Writer::new("generic");
+    unknown_frame.add_frame("caller-frame", None, None, None, None);
+    let problem = replication::inventory(&unknown_frame.into_bytes())
+        .problem()
+        .unwrap();
+    let fields = Capture::read(&problem);
+    assert_eq!(fields.code, "gts-replication-segment");
+    assert!(matches!(fields.field("segment"), ErrorValue::Unsigned(0)));
+    assert_eq!(
+        fields.child("diagnostic").child("cause").code,
+        "gts-unknown-frame-type"
+    );
+}
+
 fn verification_errors_keep_original_key_integrity_and_signature_counts() {
     use purrdf_gts::{
         model::Term,
@@ -1974,6 +2150,7 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
 }
 
 purrdf_testkit::harness_main!(
+    replication_callers_keep_native_findings_heads_and_full_width_ranges,
     verification_errors_keep_original_key_integrity_and_signature_counts,
     reader_layout_findings_keep_counts_heads_and_roots,
     reader_file_and_chain_diagnostics_retain_native_inputs,
