@@ -34,6 +34,10 @@ pub(crate) enum ReadOwner {
         application: usize,
         atom: usize,
     },
+    Identification {
+        application: usize,
+        atom: usize,
+    },
     Merge {
         application: usize,
         atom: usize,
@@ -43,9 +47,13 @@ pub(crate) enum ReadOwner {
     },
 }
 
-/// The native fact selected by a successful body predicate.
+/// The native fact selected by a successful body predicate or head lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadFact {
+    Alias {
+        original: usize,
+        node: usize,
+    },
     Tbox(usize),
     SchemaGuard(usize),
     RoleClause(crate::owl_dl::roles::RoleClause),

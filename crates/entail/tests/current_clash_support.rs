@@ -490,6 +490,7 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
     use purrdf_core::RdfLiteral;
     use purrdf_core::collections::{ListVocab, build_rdf_list};
     use purrdf_entail::proof_source::causal::{CausalFact, CausalMutation, CausalObservation};
+    check_singleton_nominal_target_support();
     let mut f = Fixture::default();
     let class = f.name("A");
     let filler = f.name("F");
@@ -571,6 +572,93 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
                 ..
             }
         )));
+    }
+}
+
+/// Resolving the closing nominal must retain the earlier identification of its target.
+fn check_singleton_nominal_target_support() {
+    use purrdf_entail::proof_source::causal::CausalInputSource;
+    use purrdf_entail::proof_source::causal::{CausalFact, CausalObservation};
+    use purrdf_entail::proof_source::{ResolvedAxiomSource, ResolvedTerm};
+    for distinct in [true, false] {
+        let mut f = Fixture::default();
+        let class = f.name("U");
+        let cell = f.name("cell");
+        let member = f.name("member");
+        let x = f.name("x");
+        let y = f.name("y");
+        let unrelated = f.name("unrelated");
+        let other = f.name("Other");
+        let nil = f.builder.intern_iri(rdf::NIL).unwrap();
+        f.edge(class, owl::ONE_OF, cell);
+        f.edge(cell, rdf::FIRST, member);
+        f.edge(cell, rdf::REST, nil);
+        f.edge(x, rdf::TYPE, class);
+        f.edge(y, rdf::TYPE, class);
+        if distinct {
+            f.edge(x, owl::DIFFERENT_FROM, y);
+        } else {
+            let positive = f.name("Positive");
+            let negative = f.name("Negative");
+            f.edge(negative, owl::COMPLEMENT_OF, positive);
+            f.edge(x, rdf::TYPE, negative);
+            f.edge(y, rdf::TYPE, positive);
+        }
+        f.edge(unrelated, rdf::TYPE, other);
+        let source = f.freeze();
+        let producer = Reasoner::with_proofs(&source).unwrap();
+        let answer = producer.consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let context = consumer.borrowed_proof_context().unwrap();
+        let checked = proof
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
+            .unwrap();
+        let (_, refutation) = checked.refutations().next().unwrap();
+        let leaf = refutation.clashes().next().unwrap();
+        let inputs: std::collections::BTreeSet<_> = leaf
+            .inputs()
+            .filter_map(|input| match input.source() {
+                CausalInputSource::Axiom(ResolvedAxiomSource::Triple {
+                    subject: ResolvedTerm::Source(TermValue::Iri(s)),
+                    predicate: ResolvedTerm::Source(TermValue::Iri(p)),
+                    object: ResolvedTerm::Source(TermValue::Iri(o)),
+                }) => Some((s.as_str(), p.as_str(), o.as_str())),
+                _ => None,
+            })
+            .collect();
+        for subject in ["https://example.org/x", "https://example.org/y"] {
+            assert!(
+                inputs.contains(&(subject, rdf::TYPE, "https://example.org/U")),
+                "the checked nominal target must retain both source memberships: {inputs:?}"
+            );
+        }
+        if distinct {
+            assert!(inputs.contains(&(
+                "https://example.org/x",
+                owl::DIFFERENT_FROM,
+                "https://example.org/y"
+            )));
+        } else {
+            assert!(leaf.steps().any(|step| matches!(
+                step.observation(),
+                CausalObservation::Identification { .. }
+            )));
+        }
+        assert!(
+            inputs
+                .iter()
+                .all(|(s, _, _)| *s != "https://example.org/unrelated")
+        );
+        assert!(
+            leaf.steps()
+                .flat_map(|step| step.reads())
+                .any(|read| matches!(
+                    read,
+                    CausalFact::Alias { original, node } if !original.same_node(&node)
+                ))
+        );
     }
 }
 

@@ -2223,7 +2223,7 @@ impl<'a> Graph<'a> {
     /// `owl:Thing` and a literal value is not in it.
     pub(crate) fn root(&self, st: &mut State, a: u32) -> usize {
         if let Some(&n) = st.root_of.get(&a) {
-            return find(st, n);
+            return self.resolve_alias(st, n);
         }
         let idx = st.nodes.len();
         let concrete = self.kb.interner.is_literal(a);
@@ -2257,6 +2257,16 @@ impl<'a> Graph<'a> {
         idx
     }
 
+    /// Retain the actual identity path used by a selected native lookup.
+    /// An unchanged root is already justified by its original birth.
+    fn resolve_alias(&self, st: &State, original: usize) -> usize {
+        let node = find(st, original);
+        if node != original {
+            self.observe_read(ReadFact::Alias { original, node });
+        }
+        node
+    }
+
     /// Get or create the **generated root** node for the typed identity `key`.
     ///
     /// This is the nominal-introduction primitive both cores share: Horrocks & Sattler's
@@ -2273,7 +2283,7 @@ impl<'a> Graph<'a> {
     /// [`Graph::merge_nodes`] like any other merge.
     pub(crate) fn generated_root(&self, st: &mut State, key: GeneratedRoot) -> usize {
         if let Some(&n) = st.generated_root_of.get(&key) {
-            return find(st, n);
+            return self.resolve_alias(st, n);
         }
         let idx = st.nodes.len();
         // Same charge a named root costs: minting copies the internalized TBox into the label.
@@ -2472,8 +2482,8 @@ impl<'a> Graph<'a> {
     /// literal value is in it. Dropping them needs [`Graph::unconditional`] in scope, which is
     /// what makes this a method rather than a free function over the state.
     pub(crate) fn merge_nodes(&self, st: &mut State, keep: usize, discard: usize) {
-        let mut keep = find(st, keep);
-        let mut discard = find(st, discard);
+        let mut keep = self.resolve_alias(st, keep);
+        let mut discard = self.resolve_alias(st, discard);
         if keep == discard {
             return;
         }

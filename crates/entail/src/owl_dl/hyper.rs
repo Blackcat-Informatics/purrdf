@@ -2323,6 +2323,18 @@ impl<'a> Hyper<'a> {
                         application: *application,
                         atom: at,
                     }));
+            } else if let ApplySite::Observed { application }
+            | ApplySite::Closing { application, .. } = site
+                && matches!(
+                    atom,
+                    Ground::Equal(..) | Ground::EqualIndividual(..) | Ground::EqualReserved(..)
+                )
+            {
+                self.g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Identification {
+                        application: *application,
+                        atom: at,
+                    }));
             }
             match atom {
                 Ground::Concept(node, concept) => {
@@ -2344,9 +2356,6 @@ impl<'a> Hyper<'a> {
                             .observe_read(super::graph::changes::ReadFact::Node(find(st, *node)));
                     }
                     self.g.ensure_at_least(st, *node, *n, *role, *filler);
-                    if observing {
-                        self.g.select_reads(None);
-                    }
                 }
                 Ground::Equal(left, right) => {
                     // The two identities are read BEFORE the merge, because a merge is exactly
@@ -2410,6 +2419,9 @@ impl<'a> Hyper<'a> {
                         at,
                     );
                 }
+            }
+            if observing {
+                self.g.select_reads(None);
             }
             if st.clash || (observing && self.g.changes_refused()) {
                 return false;

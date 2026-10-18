@@ -496,6 +496,13 @@ pub enum CausalObservation<'a> {
         /// Original at-least head-atom ordinal.
         atom: usize,
     },
+    /// Native identification head's selected target and original identity path.
+    Identification {
+        /// Original checked application, also retained as this vertex's parent.
+        application: usize,
+        /// Original identifying head atom.
+        atom: usize,
+    },
     /// Reachable native identification closed by an existing checked inequality.
     Merge {
         /// Original checked final application.
@@ -553,6 +560,9 @@ impl<'a> CausalStep<'a> {
                 ReadOwner::Counting { application, atom } => {
                     CausalObservation::Counting { application, atom }
                 }
+                ReadOwner::Identification { application, atom } => {
+                    CausalObservation::Identification { application, atom }
+                }
                 ReadOwner::Merge { application, atom } => {
                     CausalObservation::Merge { application, atom }
                 }
@@ -560,7 +570,7 @@ impl<'a> CausalStep<'a> {
         }
     }
 
-    /// Original successful body reads, in their recorded order before this vertex's writes.
+    /// Original successful native reads, in recorded order before this vertex's writes.
     pub fn reads(&self) -> impl ExactSizeIterator<Item = CausalFact<'a>> + 'a + use<'a> {
         let scope = self.scope;
         scope.support.derivation.reads[self.vertex.reads.clone()]
@@ -729,6 +739,13 @@ pub enum CausalRoleWitness<'a> {
 /// One successful native body read, expressed in the sealed consumer vocabulary.
 #[derive(Debug)]
 pub enum CausalFact<'a> {
+    /// Actual identity lookup, including every checked merge from the original node.
+    Alias {
+        /// Original named, anonymous or reserved identity before forwarding.
+        original: CausalNode<'a>,
+        /// Representative actually selected by the native lookup.
+        node: CausalNode<'a>,
+    },
     /// Original generative birth and alias paths licensing nominal introduction.
     Predecessor {
         /// Tree child whose generating predecessor pressed the nominal bound.
@@ -807,6 +824,10 @@ fn fact(scope: CausalClash<'_>, fact: ReadFact) -> CausalFact<'_> {
     let node = |node| CausalNode { scope, node };
     let concept = |id| ResolvedConcept::of(scope.kb, id);
     match fact {
+        ReadFact::Alias { original, node: id } => CausalFact::Alias {
+            original: node(original),
+            node: node(id),
+        },
         ReadFact::Node(id) => CausalFact::Node(node(id)),
         ReadFact::ObjectDomain(id) => CausalFact::ObjectDomain(node(id)),
         ReadFact::Top(id) => CausalFact::Top(node(id)),

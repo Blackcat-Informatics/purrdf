@@ -480,7 +480,7 @@ impl Slice<'_> {
 struct Builder {
     facts: OrderedTable<Fact, usize>,
     applications: OrderedTable<usize, usize>,
-    counting: OrderedTable<(usize, usize), usize>,
+    heads: OrderedTable<(usize, usize), usize>,
     aliases: OrderedTable<usize, (usize, usize)>,
     edges: OrderedTable<usize, (usize, usize, u32)>,
     nodes: Vec<Dependency>,
@@ -581,6 +581,11 @@ impl Builder {
             ReadFact::SchemaGuard(index) => {
                 memory.push(&mut self.guards, index)?;
                 Ok(())
+            }
+            ReadFact::Alias { original, node } => {
+                self.parent(Fact::Node(original), memory)?;
+                self.parent(Fact::Node(node), memory)?;
+                self.alias(original, node, memory)
             }
             ReadFact::Node(node) | ReadFact::Top(node) => self.parent(Fact::Node(node), memory),
             ReadFact::ObjectDomain(node) => self.parent(Fact::Domain(node), memory),
@@ -738,7 +743,7 @@ impl Builder {
         let cause = event.cause;
         if cause.origin == Origin::Application {
             let &application = self
-                .counting
+                .heads
                 .get(&(cause.index, cause.atom))
                 .or_else(|| self.applications.get(&cause.index))
                 .ok_or(Error::MissingFact)?;
@@ -840,7 +845,7 @@ impl Builder {
             }
             Mutation::Distinct { left, right } => {
                 incomplete = cause.origin == Origin::Application
-                    && self.counting.get(&(cause.index, cause.atom)).is_none();
+                    && self.heads.get(&(cause.index, cause.atom)).is_none();
                 self.parent(Fact::Node(left), memory)?;
                 self.parent(Fact::Node(right), memory)?;
                 self.facts.insert(distinct(left, right), id, memory)?;
@@ -956,8 +961,9 @@ impl Journal {
                 event += 1;
             }
             let start = graph.parents.len();
-            if let ReadOwner::Counting { application, .. } | ReadOwner::Merge { application, .. } =
-                selected.owner
+            if let ReadOwner::Counting { application, .. }
+            | ReadOwner::Identification { application, .. }
+            | ReadOwner::Merge { application, .. } = selected.owner
             {
                 let &body = graph
                     .applications
@@ -1014,10 +1020,9 @@ impl Journal {
                 ReadOwner::Application { index, .. } => {
                     graph.applications.insert(index, id, &mut memory)?;
                 }
-                ReadOwner::Counting { application, atom } => {
-                    graph
-                        .counting
-                        .insert((application, atom), id, &mut memory)?;
+                ReadOwner::Counting { application, atom }
+                | ReadOwner::Identification { application, atom } => {
+                    graph.heads.insert((application, atom), id, &mut memory)?;
                 }
                 ReadOwner::Clash { .. } => root = Some(id),
                 ReadOwner::Merge { .. } => root = Some(id),
