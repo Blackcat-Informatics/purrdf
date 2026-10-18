@@ -185,6 +185,16 @@ pub struct ProfileFinding {
     pub segment_index: Option<u64>,
 }
 
+impl purrdf_hash::error::StructuredError for ProfileFinding {
+    purrdf_hash::error_visit! {
+        @record self { code, severity, detail, profile, segment_index } => "gts-profile-finding" {
+            "code" => Code(&self.code), "severity" => Code(self.severity.as_str()), "detail" => Text(&self.detail),
+            "profile" => Value(self.profile.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "segment_index" => Value(self.segment_index.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value))))
+        }
+    }
+}
+
 impl ProfileFinding {
     fn new(
         code: &str,

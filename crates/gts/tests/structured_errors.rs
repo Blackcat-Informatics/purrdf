@@ -488,6 +488,135 @@ fn reader_causes_survive_input_graph_and_streaming_owners() {
     assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
 }
 
+fn verification_errors_keep_original_key_integrity_and_signature_counts() {
+    use purrdf_gts::{
+        model::Term,
+        verify::{
+            Keyring, VerifyOptions, verify_file, verify_file_with_keyring, verify_file_with_options,
+        },
+        writer::Writer,
+    };
+    use purrdf_lex::cbor::Value;
+    let unsigned = Writer::new("purrdf.gts").into_bytes();
+    let trusted = verify_file_with_options(
+        &unsigned,
+        &VerifyOptions::new().with_armored_key("not armor"),
+    );
+    // Fixed v4 EdDSA packet: its 0x40-prefixed MPI holds a noncanonical point.
+    let invalid_public = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n\
+        xjMEAAAAABYJKwYBBAHaRw8BAQdA//////////////////////////////////////////8=\n\
+        -----END PGP PUBLIC KEY BLOCK-----";
+    let refused = verify_file_with_options(
+        &unsigned,
+        &VerifyOptions::new().with_armored_key(invalid_public),
+    )
+    .errors
+    .into_iter()
+    .next()
+    .unwrap();
+    let fields = Capture::read(&refused).child("cause");
+    assert_eq!(fields.code, "gts-transport-key-public");
+    assert!(matches!(fields.field("key"), ErrorValue::Bytes(value) if value == [255; 32]));
+    assert_eq!(fields.child("cause").code, "ed25519-invalid-public-key");
+    let mut embedded = Writer::new("purrdf.gts");
+    embedded.add_meta(Value::Map(vec![(
+        Value::from("gts:transportKey"),
+        Value::Map(vec![
+            (Value::from("kid"), Value::from("chosen")),
+            (Value::from("gpg"), Value::from("not armor")),
+        ]),
+    )]));
+    let embedded = verify_file(&embedded.into_bytes());
+    let mut signed = Writer::new("purrdf.gts");
+    let key = purrdf_ed25519::SigningKey::from_bytes(&[7; 32]);
+    let public = key.verifying_key();
+    signed.sign_with(key, "kid");
+    signed.add_terms(&[Term::iri("http://example.org/s")]);
+    let signed = signed.into_bytes();
+    let mut correct = Keyring::default();
+    correct.insert(b"kid", public);
+    let valid = verify_file_with_keyring(&signed, &correct);
+    assert!(valid.ok, "{:?}", valid.errors);
+    assert_eq!(valid.valid, 1);
+    let mut wrong = Keyring::default();
+    wrong.insert(
+        b"kid",
+        purrdf_ed25519::SigningKey::from_bytes(&[8; 32]).verifying_key(),
+    );
+    let damaged = [unsigned.as_slice(), &[0x5a]].concat();
+    let cases = [
+        (trusted, "gts-verify-trusted-key"),
+        (embedded, "gts-verify-embedded-key"),
+        (verify_file(&unsigned), "gts-verify-missing-transport-key"),
+        (
+            verify_file_with_keyring(&unsigned, &Keyring::default()),
+            "gts-verify-unsigned",
+        ),
+        (
+            verify_file_with_keyring(&signed, &Keyring::default()),
+            "gts-verify-unresolved-signatures",
+        ),
+        (
+            verify_file_with_keyring(&signed, &wrong),
+            "gts-verify-invalid-signatures",
+        ),
+        (
+            verify_file_with_keyring(&damaged, &Keyring::default()),
+            "gts-verify-integrity",
+        ),
+    ];
+    drop((unsigned, signed, damaged));
+    for (result, code) in cases {
+        assert!(!result.ok);
+        let error = result
+            .errors
+            .into_iter()
+            .find(|error| Capture::read(error).code == code)
+            .unwrap();
+        let retained = error.clone();
+        drop(error);
+        let fields = Capture::read(&retained);
+        match code {
+            "gts-verify-trusted-key" | "gts-verify-embedded-key" => {
+                if code == "gts-verify-embedded-key" {
+                    assert!(matches!(fields.field("kid"), ErrorValue::Text("chosen")));
+                }
+                let cause = fields.child("cause");
+                assert_eq!(cause.code, "gts-transport-key-openpgp");
+                assert_eq!(
+                    cause.child("cause").child("rule").code,
+                    "gts-openpgp-missing-begin"
+                );
+                assert!(
+                    std::error::Error::source(&retained)
+                        .unwrap()
+                        .is::<purrdf_gts::verify::TransportKeyError>()
+                );
+            }
+            "gts-verify-unresolved-signatures" | "gts-verify-invalid-signatures" => {
+                assert!(matches!(fields.field("count"), ErrorValue::Unsigned(1)));
+            }
+            "gts-verify-integrity" => {
+                let diagnostic = fields.child("diagnostic");
+                assert!(matches!(
+                    diagnostic.field("code"),
+                    ErrorValue::Code("TornAppendError")
+                ));
+                assert_eq!(diagnostic.child("cause").code, "gts-torn-append");
+            }
+            "gts-verify-missing-transport-key" | "gts-verify-unsigned" => {
+                assert_eq!(fields.events.len(), 0);
+            }
+            _ => unreachable!("all verification controls are checked"),
+        }
+        let events = Vec::with_capacity(12);
+        let window = CurrentThreadWindow::open();
+        let captured = Capture::read_with_buffer(&retained, events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(captured.code, code);
+    }
+}
+
 fn reader_layout_findings_keep_counts_heads_and_roots() {
     use purrdf_gts::{
         model::Term,
@@ -1845,6 +1974,7 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
 }
 
 purrdf_testkit::harness_main!(
+    verification_errors_keep_original_key_integrity_and_signature_counts,
     reader_layout_findings_keep_counts_heads_and_roots,
     reader_file_and_chain_diagnostics_retain_native_inputs,
     reader_row_diagnostics_keep_native_widths_ids_and_term_kinds,

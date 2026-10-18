@@ -487,7 +487,14 @@ impl Diagnostic {
     }
 }
 
-fn retain_native_cause(
+/// Retain an original native failure through the reader's shared cause owner.
+///
+/// Import and verification consumers use the same allocation and ownership path
+/// as reader diagnostics. Copies retain this owner without copying its payload.
+///
+/// # Errors
+/// Returns the original allocation refusal before publishing a partial owner.
+pub fn retain_native_cause(
     cause: impl purrdf_hash::error::NativeError + 'static,
 ) -> Result<
     purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>,

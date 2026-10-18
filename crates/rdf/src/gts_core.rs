@@ -13,6 +13,9 @@ use crate::{
     RdfSegmentRecord, RdfSignatureRecord, RdfSuppressionRecord,
 };
 
+mod error;
+use error::FoldFailure;
+
 /// Build the [`RdfLookaside`] sidecar from a folded GTS [`Graph`]: file- and
 /// segment-level metadata entries, segment records, content-addressed blob
 /// records (digest + origin reference, never payload bytes), lookaside
@@ -299,25 +302,30 @@ pub fn read_all_segments(bytes: &[u8]) -> Result<Graph, RdfDiagnostic> {
 }
 
 pub(crate) fn diagnostics_to_error(graph: &Graph) -> RdfDiagnostic {
+    let failure = FoldFailure {
+        diagnostics: graph.diagnostics.clone(),
+    };
     let joined = graph
         .diagnostics
         .iter()
         .map(|d| format!("{}: {}", d.code, d.detail))
         .collect::<Vec<_>>()
         .join("; ");
-    let mut diagnostic = RdfDiagnostic::error(
-        "gts-fold-diagnostic",
-        format!(
-            "GTS fold reported {} diagnostic(s)",
-            graph.diagnostics.len()
-        ),
-    )
-    .with_detail(joined);
+    let mut diagnostic =
+        RdfDiagnostic::error("gts-fold-diagnostic", failure.to_string()).with_detail(joined);
     if let Some(frame_index) = graph.diagnostics.iter().find_map(|d| d.frame_index) {
         diagnostic = diagnostic
             .with_location(RdfLocation::logical("gts:reader").with_gts_frame(frame_index));
     }
+    let cause = match purrdf_gts::model::retain_native_cause(failure) {
+        Ok(cause) => cause,
+        Err(error) => return RdfDiagnostic::from(error),
+    };
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
     diagnostic
+        .with_native_cause(cause, &mut memory)
+        .unwrap_or_else(RdfDiagnostic::from)
 }
 
 #[cfg(test)]
@@ -434,7 +442,19 @@ mod tests {
     fn read_graph_rejects_malformed_bytes() {
         let result = read_all_segments(b"not a valid gts file");
         assert!(result.is_err(), "bad GTS bytes must fail");
-        assert_eq!(result.unwrap_err().code, "gts-fold-diagnostic");
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "gts-fold-diagnostic");
+        let retained = error.clone();
+        drop(error);
+        let fields = purrdf_testkit::error_capture::Capture::read(retained.native_cause().unwrap());
+        assert_eq!(fields.code, "rdf-gts-fold");
+        let diagnostics = fields.records("diagnostics");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "gts-diagnostic");
+        assert_eq!(
+            diagnostics[0].child("cause").code,
+            "gts-first-item-not-header"
+        );
     }
 
     #[test]

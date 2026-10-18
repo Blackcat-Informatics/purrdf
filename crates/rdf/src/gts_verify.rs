@@ -32,6 +32,9 @@ use purrdf_gts::wire::digest_label;
 use crate::gts_core::diagnostics_to_error;
 use crate::{RdfDataset, RdfDiagnostic};
 
+mod error;
+use error::{DigestInclusionFailure, MissingDigest, SignatureVerificationFailure};
+
 /// The result of a successful [`verify_content_chain`] pass.
 ///
 /// Every field reflects a check that PASSED; the function only returns `Ok`
@@ -98,13 +101,25 @@ pub fn verify_content_chain(
         let detail = if verification.errors.is_empty() {
             "signature verification did not succeed".to_owned()
         } else {
-            verification.errors.join("; ")
+            verification
+                .errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
         };
-        return Err(RdfDiagnostic::error(
-            "gts-verify-signature",
-            "GTS COSE signature verification failed",
-        )
-        .with_detail(detail));
+        let failure = SignatureVerificationFailure {
+            errors: verification.errors,
+            profile_findings: verification.profile_findings,
+        };
+        let message = failure.to_string();
+        let cause = purrdf_gts::model::retain_native_cause(failure).map_err(RdfDiagnostic::from)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        return Err(RdfDiagnostic::error("gts-verify-signature", message)
+            .with_detail(detail)
+            .with_native_cause(cause, &mut memory)
+            .map_err(RdfDiagnostic::from)?);
     }
 
     // 2. Expected-head chain replay: fold every segment and enforce the head.
@@ -132,28 +147,37 @@ pub fn verify_content_chain(
     // `content_ids()` yields sorted-by-`TermId` pairs, so both the match count
     // and the missing list are deterministic without an extra sort.
     let mut digests_included = 0usize;
-    let mut missing: Vec<String> = Vec::new();
+    let mut missing = Vec::new();
     for (term_id, digest) in dataset.content_ids() {
         let content_id = digest_label(digest.as_bytes());
-        let is_included = included.contains(&content_id)
-            || prove_file(gts_bytes, digest.as_bytes())
-                .and_then(|proof| verify_proof(&proof))
-                .is_ok();
-        if is_included {
+        if included.contains(&content_id) {
             digests_included += 1;
-        } else {
-            missing.push(format!("term#{} {content_id}", term_id.index()));
+            continue;
+        }
+        match prove_file(gts_bytes, digest.as_bytes()).and_then(|proof| verify_proof(&proof)) {
+            Ok(()) => digests_included += 1,
+            Err(cause) => missing.push(MissingDigest {
+                term: term_id,
+                digest,
+                cause,
+            }),
         }
     }
     if !missing.is_empty() {
-        return Err(RdfDiagnostic::error(
-            "gts-verify-digest-inclusion",
-            format!(
-                "{} content-addressed term(s) are not included in the verified chain",
-                missing.len()
-            ),
-        )
-        .with_detail(missing.join("; ")));
+        let detail = missing
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        let failure = DigestInclusionFailure { missing };
+        let message = failure.to_string();
+        let cause = purrdf_gts::model::retain_native_cause(failure).map_err(RdfDiagnostic::from)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        return Err(RdfDiagnostic::error("gts-verify-digest-inclusion", message)
+            .with_detail(detail)
+            .with_native_cause(cause, &mut memory)
+            .map_err(RdfDiagnostic::from)?);
     }
 
     Ok(ContentChainVerification {
@@ -341,6 +365,24 @@ mod tests {
         let err = verify_content_chain(&dataset, &bytes, &head)
             .expect_err("a digest absent from the file must fail");
         assert_eq!(err.code, "gts-verify-digest-inclusion");
+        {
+            let fields = purrdf_testkit::error_capture::Capture::read(err.native_cause().unwrap());
+            assert_eq!(fields.code, "rdf-gts-digest-inclusion");
+            let missing = fields.records("missing");
+            assert_eq!(missing.len(), 1);
+            assert!(matches!(
+                missing[0].field("term_id"),
+                purrdf_hash::error::ErrorValue::Unsigned(0)
+            ));
+            assert!(
+                matches!(missing[0].field("digest"), purrdf_hash::error::ErrorValue::Bytes(value) if value == [0xab; 32])
+            );
+            let proof = missing[0].child("cause");
+            assert_eq!(proof.code, "gts-proof-not-covered");
+            assert!(
+                matches!(proof.field("target"), purrdf_hash::error::ErrorValue::Bytes(value) if value == [0xab; 32])
+            );
+        }
         let detail = err.detail.unwrap_or_default();
         assert!(
             detail.contains("term#0") && detail.contains(&absent),
@@ -356,6 +398,17 @@ mod tests {
         let err = verify_content_chain(&dataset, &bytes, &head)
             .expect_err("an unsigned file must fail the signature gate");
         assert_eq!(err.code, "gts-verify-signature");
+        let retained = err.clone();
+        assert!(core::ptr::eq(
+            err.native_cause().unwrap(),
+            retained.native_cause().unwrap()
+        ));
+        drop((err, bytes, dataset));
+        let fields = purrdf_testkit::error_capture::Capture::read(retained.native_cause().unwrap());
+        assert_eq!(fields.code, "rdf-gts-signature-verification");
+        let errors = fields.records("errors");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code, "gts-verify-missing-transport-key");
     }
 
     #[test]
