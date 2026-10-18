@@ -166,6 +166,70 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     // and all remaining path/effect families still block the public operation.
 }
 
+/// Real RDF property chains retain checked native paths through independent replay.
+#[test]
+fn checked_clash_retains_selected_compiled_role_path() {
+    use crate::owl_dl::graph::changes::{Journal, PathKind};
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("F");
+    let counted = f.name("counted");
+    f.bounds(class, counted, filler, 2, true, false);
+    f.bounds(class, counted, filler, 1, false, false);
+    let first = f.name("first");
+    let second = f.name("second");
+    let chained = f.name("chained");
+    let list = f.list(&[first, second]);
+    f.edge(chained, owl::PROPERTY_CHAIN_AXIOM, list);
+    f.edge(chained, rdfs::RANGE, class);
+    let from = f.name("from");
+    let middle = f.name("middle");
+    let target = f.name("target");
+    f.builder.push_quad(from, first, middle, None).unwrap();
+    f.builder.push_quad(middle, second, target, None).unwrap();
+    let (proof, ctx) = checked_fixture(&f.freeze());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.schema.is_some())
+        .unwrap();
+    let checked = proof.resolve_clash(index, &ctx).unwrap();
+    assert!(checked.replay().current_supported());
+    let step = &proof.clashes[index];
+    let current = step.current.as_ref().unwrap();
+    let prefix = crate::owl_dl::support::prefix(&proof.support, current.latest, None).unwrap();
+    let observed = crate::owl_dl::hyper::replay_observing_support(
+        &ctx.kb,
+        &crate::owl_dl::graph::Assumptions::of_kb(),
+        &prefix,
+        step.clause,
+        &current.frame,
+        &proof.branches,
+        Journal::default(),
+    )
+    .unwrap();
+    assert_eq!(observed.frame, step.frame);
+    assert_eq!(observed.facts, step.witness);
+    let slice = observed.mutations.unwrap().normalized_slice().unwrap();
+    assert!(
+        slice
+            .paths
+            .iter()
+            .any(|step| matches!(step.kind, PathKind::Edge { .. }))
+    );
+    for path in &slice.paths {
+        let machine = ctx
+            .kb
+            .role_program
+            .as_ref()
+            .unwrap()
+            .machine(path.role)
+            .unwrap();
+        let transition = &machine.transitions[path.transition];
+        assert_eq!((transition.from, transition.to), (path.from.1, path.to.1));
+    }
+}
+
 /// A failed native recording keeps its original refusal and cannot publish an empty trace.
 #[test]
 fn native_mutations_preserve_original_storage_refusal_before_malformed_reporting() {

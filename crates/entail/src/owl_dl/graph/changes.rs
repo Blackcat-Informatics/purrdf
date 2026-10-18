@@ -46,8 +46,27 @@ pub(crate) enum ReadFact {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoleWitness {
     Edge(usize),
+    Language { start: usize, end: usize },
     Universal,
     PendingPath,
+}
+
+/// An actual transition selected in the native product traversal. State numbers
+/// are local to the requested role's compiled machine, not authored RDF terms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PathStep {
+    pub(crate) role: Role,
+    pub(crate) from: (usize, usize),
+    pub(crate) to: (usize, usize),
+    pub(crate) transition: usize,
+    pub(crate) kind: PathKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PathKind {
+    Edge { index: usize, letter: Role },
+    Epsilon,
+    Universal(Role),
 }
 
 /// Reads precede the write at `checkpoint`. Later identification cannot change
@@ -255,6 +274,7 @@ pub(crate) struct Journal {
     pub(super) stopped: bool,
     events: Vec<Event>,
     reads: Vec<Read>,
+    paths: Vec<PathStep>,
     pub(super) read_owner: Option<ReadOwner>,
     storage: Resident,
     live: usize,
@@ -263,11 +283,27 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    pub(super) fn path_len(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Publish only a selected predecessor, retaining its original native identity.
+    pub(super) fn path_step(&mut self, step: PathStep) -> Result<(), StorageError> {
+        #[cfg(test)]
+        self.publication_refusal()?;
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = memory.push(&mut self.paths, step);
+        self.live = memory.admitted_bytes();
+        result
+    }
+
     /// Admit selected reads into the same resident account as their write history.
     pub(crate) fn read(&mut self, fact: ReadFact) -> Result<(), StorageError> {
         let Some(owner) = self.read_owner else {
             return Ok(());
         };
+        #[cfg(test)]
+        self.publication_refusal()?;
         let mut memory = Memory::resume(&mut self.storage, self.live);
         let result = memory.push(
             &mut self.reads,
@@ -295,6 +331,17 @@ impl Journal {
         }
     }
 
+    /// A deterministic fault at publication, not a claim of physical exhaustion.
+    #[cfg(test)]
+    pub(crate) fn refuse_next_publication(&mut self, original: StorageError) {
+        self.injected_refusal = Some(original);
+    }
+
+    #[cfg(test)]
+    fn publication_refusal(&mut self) -> Result<(), StorageError> {
+        self.injected_refusal.take().map_or(Ok(()), Err)
+    }
+
     /// Reserve under the same original owner before publishing an observation.
     pub(crate) fn push(
         &mut self,
@@ -308,9 +355,7 @@ impl Journal {
             "a native mutation requires a source or checked application owner"
         );
         #[cfg(test)]
-        if let Some(error) = self.injected_refusal.take() {
-            return Err(error);
-        }
+        self.publication_refusal()?;
         let mut memory = Memory::resume(&mut self.storage, self.live);
         let result = memory.push(&mut self.events, Event { cause, mutation });
         self.live = memory.admitted_bytes();

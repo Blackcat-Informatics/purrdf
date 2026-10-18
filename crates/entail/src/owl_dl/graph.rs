@@ -43,7 +43,9 @@ use crate::owl_dl::clause::{BodyAtom, TransitivePatterns};
 use crate::owl_dl::concept::{Decomp, Role};
 
 pub(super) mod changes;
-use changes::{Cause, Journal, Mutation, Origin, ReadFact, ReadOwner, RoleWitness};
+use changes::{
+    Cause, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
+};
 
 /// A single completion-graph node.
 #[derive(Clone)]
@@ -2717,6 +2719,47 @@ impl<'a> Graph<'a> {
         }
     }
 
+    /// Retain the accepted predecessor chain in reverse path order. The traversal
+    /// established these products; this step performs no further graph search.
+    fn observe_language_path(
+        &self,
+        role: Role,
+        initial: (usize, usize),
+        target: (usize, usize),
+        predecessors: &purrdf_lex::allocation::OrderedTable<(usize, usize), Option<PathStep>>,
+    ) -> bool {
+        let start = self
+            .changes
+            .borrow()
+            .as_ref()
+            .expect("selected journal")
+            .path_len();
+        let mut at = target;
+        while let Some(step) = predecessors
+            .get(&at)
+            .expect("native discovered predecessor")
+        {
+            self.publish_observation(|journal| journal.path_step(*step));
+            if self.changes_refused() {
+                return false;
+            }
+            at = step.from;
+        }
+        let end = self
+            .changes
+            .borrow()
+            .as_ref()
+            .expect("selected journal")
+            .path_len();
+        self.observe_read(ReadFact::Role {
+            from: initial.0,
+            to: target.0,
+            role,
+            witness: RoleWitness::Language { start, end },
+        });
+        !self.changes_refused()
+    }
+
     /// Evaluate the compiled language over the original completion edges and
     /// equality representatives. Product identities are discovered before they
     /// are queued; epsilon cycles and graph cycles therefore terminate without
@@ -2725,17 +2768,23 @@ impl<'a> Graph<'a> {
         &self,
         st: &State,
         x: usize,
+        role: Role,
         machine: &super::roles::Automaton,
         visit: &mut dyn FnMut(usize) -> bool,
     ) -> Result<bool, purrdf_lex::allocation::StorageError> {
-        use purrdf_lex::allocation::{Memory, Resident};
+        use purrdf_lex::allocation::{Memory, OrderedTable, Resident};
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         memory.scope(|memory| {
             let mut pending = Vec::new();
             let mut reached = Vec::new();
             let mut emitted = Vec::new();
+            let mut predecessors = self.selecting_reads().then(OrderedTable::default);
             let initial = (find(st, x), machine.initial);
+            if let Some(predecessors) = predecessors.as_mut() {
+                self.work.charge(1);
+                predecessors.insert(initial, None::<PathStep>, memory)?;
+            }
             memory.push(&mut reached, initial)?;
             memory.push(&mut pending, initial)?;
             let mut answer = false;
@@ -2750,11 +2799,16 @@ impl<'a> Graph<'a> {
                     memory.reserve_for_push(&mut emitted)?;
                     emitted.insert(position, node);
                     if visit(node) {
+                        if let Some(predecessors) = predecessors.as_ref()
+                            && !self.observe_language_path(role, initial, (node, state), predecessors)
+                        {
+                            break;
+                        }
                         answer = true;
                         break;
                     }
                 }
-                for transition in &machine.transitions {
+                for (transition_index, transition) in machine.transitions.iter().enumerate() {
                     self.work.charge(1);
                     if self.work.exhausted() || self.kb.stopped() {
                         break;
@@ -2763,9 +2817,13 @@ impl<'a> Graph<'a> {
                         continue;
                     }
                     let mut enqueue =
-                        |target: usize| -> Result<(), purrdf_lex::allocation::StorageError> {
+                        |target: usize, kind: PathKind| -> Result<(), purrdf_lex::allocation::StorageError> {
                             let next = (target, transition.to);
                             if let Err(position) = reached.binary_search(&next) {
+                                if let Some(predecessors) = predecessors.as_mut() {
+                                    self.work.charge(1);
+                                    predecessors.insert(next, Some(PathStep { role, from: (node, state), to: next, transition: transition_index, kind }), memory)?;
+                                }
                                 memory.reserve_for_push(&mut reached)?;
                                 reached.insert(position, next);
                                 memory.push(&mut pending, next)?;
@@ -2784,7 +2842,7 @@ impl<'a> Graph<'a> {
                                 }
                                 self.work.charge(1);
                                 if find(st, target) == target && !st.nodes[target].concrete {
-                                    enqueue(target)?;
+                                    enqueue(target, PathKind::Universal(letter))?;
                                 }
                             }
                             continue;
@@ -2798,22 +2856,23 @@ impl<'a> Graph<'a> {
                             let to = find(st, to);
                             match letter {
                                 Role::Named(wanted) if wanted == property && from == node => {
-                                    enqueue(to)?;
+                                    enqueue(to, PathKind::Edge { index: edge, letter })?;
                                 }
                                 Role::Inv(wanted) if wanted == property && to == node => {
-                                    enqueue(from)?;
+                                    enqueue(from, PathKind::Edge { index: edge, letter })?;
                                 }
                                 _ => {}
                             }
                         }
                     } else {
-                        enqueue(node)?;
+                        enqueue(node, PathKind::Epsilon)?;
                     }
                 }
             }
             memory.release_vec(emitted)?;
             memory.release_vec(reached)?;
             memory.release_vec(pending)?;
+            if let Some(predecessors) = predecessors { predecessors.release(memory)?; }
             Ok(answer)
         })
     }
@@ -2896,22 +2955,7 @@ impl<'a> Graph<'a> {
         if let Some(program) = &self.kb.role_program
             && let Some(machine) = program.machine(role)
         {
-            let mut selected = None;
-            let result = self.read_role_language(st, x, machine, &mut |node| {
-                let accepted = visit(node);
-                if accepted {
-                    selected = Some(node);
-                }
-                accepted
-            });
-            if let Some(to) = selected {
-                self.observe_read(ReadFact::Role {
-                    from: find(st, x),
-                    to,
-                    role,
-                    witness: RoleWitness::PendingPath,
-                });
-            }
+            let result = self.read_role_language(st, x, role, machine, visit);
             return match result {
                 Ok(found) => found,
                 Err(original) => {

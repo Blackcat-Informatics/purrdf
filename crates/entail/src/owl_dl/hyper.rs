@@ -3494,6 +3494,185 @@ mod tests {
         }));
     }
 
+    /// One real recursive compiler input, with a different accepted target first.
+    fn selected_language_fixture() -> Kb {
+        use crate::owl_dl::roles::{Chain, Hierarchy};
+        use purrdf_lex::allocation::{Memory, Resident};
+        let mut kb = Kb::empty();
+        let source = Hierarchy {
+            chains: vec![
+                Chain {
+                    head: Role::Named(R + 2),
+                    body: vec![Role::Named(R), Role::Named(R + 1)],
+                },
+                Chain {
+                    head: Role::Named(R + 2),
+                    body: vec![Role::Named(R + 2), Role::Named(R + 1)],
+                },
+            ],
+            ..Hierarchy::default()
+        };
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        kb.role_program = Some(source.compile(None, None, &mut memory).unwrap());
+        kb.abox_roles.extend([
+            (IND, R, IND + 4),
+            (IND + 4, R + 1, IND + 5),
+            (IND, R, IND + 1),
+            (IND + 1, R + 1, IND + 2),
+            (IND + 2, R + 1, IND + 3),
+        ]);
+        kb.finalize().unwrap();
+        kb
+    }
+
+    /// Compiled-language provenance is the accepted native path, not search history.
+    #[test]
+    fn selected_language_path_retains_native_transitions_and_excludes_other_targets() {
+        use crate::owl_dl::graph::changes::{Journal, Origin, PathKind, ReadOwner};
+        let kb = selected_language_fixture();
+        for inverse in [false, true] {
+            let role = if inverse {
+                Role::Inv(R + 2)
+            } else {
+                Role::Named(R + 2)
+            };
+            let run = |observing| {
+                let driver = Hyper::new(
+                    &kb,
+                    Budget {
+                        steps: u64::MAX,
+                        work: u64::MAX,
+                    },
+                );
+                if observing {
+                    driver.g.begin_changes(Journal::default());
+                }
+                let state = driver.g.init_state(&Assumptions::of_kb());
+                let ends = (state.root_of[&IND], state.root_of[&(IND + 3)]);
+                let (from, to) = if inverse { (ends.1, ends.0) } else { ends };
+                if observing {
+                    driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+                }
+                let answer = driver.g.is_neighbour(&state, from, role, to);
+                driver.g.select_reads(None);
+                assert!(driver.g.storage_refusal().is_none());
+                (answer, driver.g.finish_changes(), from, to)
+            };
+            let plain = run(false);
+            let (answer, journal, from, to) = run(true);
+            assert!(answer);
+            assert_eq!(answer, plain.0);
+            assert!(plain.1.is_none());
+            let slice = journal.unwrap().normalized_slice().unwrap();
+            let machine = kb.role_program.as_ref().unwrap().machine(role).unwrap();
+            assert_eq!(slice.paths.first().unwrap().to, (to, machine.accepting));
+            assert_eq!(slice.paths.last().unwrap().from, (from, machine.initial));
+            assert!(
+                slice
+                    .paths
+                    .windows(2)
+                    .all(|pair| pair[0].from == pair[1].to)
+            );
+            let mut edge_count = 0;
+            for step in &slice.paths {
+                assert_eq!(step.role, role);
+                let transition = &machine.transitions[step.transition];
+                assert_eq!((transition.from, transition.to), (step.from.1, step.to.1));
+                match step.kind {
+                    PathKind::Edge { index, letter } => {
+                        edge_count += 1;
+                        assert!(index >= 2, "a visited different target is not selected");
+                        assert_eq!(transition.letter, Some(letter));
+                    }
+                    PathKind::Epsilon => {
+                        assert_eq!(transition.letter, None);
+                        assert_eq!(step.from.0, step.to.0);
+                    }
+                    PathKind::Universal(_) => panic!("fixture has no universal role"),
+                }
+            }
+            assert_eq!(edge_count, 3);
+            for index in 0..5 {
+                assert_eq!(
+                    slice
+                        .causes
+                        .iter()
+                        .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index),
+                    index >= 2
+                );
+            }
+        }
+    }
+
+    /// An accepted native path cannot escape after metadata refusal or cancellation.
+    #[test]
+    fn selected_language_path_preserves_refusal_and_stop_during_publication() {
+        use crate::owl_dl::graph::changes::{Journal, ReadOwner, slice::Error};
+        use purrdf_lex::allocation::StorageError;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        #[derive(Debug, Default)]
+        struct Stop(AtomicBool);
+        impl purrdf_datalog::StopSignal for Stop {
+            fn stopped(&self) -> bool {
+                self.0.load(Ordering::Relaxed)
+            }
+        }
+        for storage_refusal in [true, false] {
+            let signal = Arc::new(Stop::default());
+            let mut kb = selected_language_fixture();
+            kb.stop = Some(signal.clone());
+            let driver = Hyper::new(
+                &kb,
+                Budget {
+                    steps: u64::MAX,
+                    work: u64::MAX,
+                },
+            );
+            driver.g.begin_changes(Journal::default());
+            let state = driver.g.init_state(&Assumptions::of_kb());
+            driver.g.select_reads(Some(ReadOwner::Clash { clause: 0 }));
+            let target = state.root_of[&(IND + 3)];
+            let mut accepted = false;
+            let answer = driver.g.any_neighbour(
+                &state,
+                state.root_of[&IND],
+                Role::Named(R + 2),
+                &mut |node| {
+                    if node != target {
+                        return false;
+                    }
+                    accepted = true;
+                    if storage_refusal {
+                        let mut journal = driver.g.finish_changes().unwrap();
+                        journal.refuse_next_publication(StorageError::AllocationFailed);
+                        driver.g.begin_changes(journal);
+                    } else {
+                        signal.0.store(true, Ordering::Relaxed);
+                    }
+                    true
+                },
+            );
+            assert!(
+                accepted,
+                "refusal is armed only after the native reader accepts"
+            );
+            assert!(!answer);
+            assert_eq!(
+                driver.g.storage_refusal(),
+                storage_refusal.then_some(StorageError::AllocationFailed)
+            );
+            assert_eq!(driver.g.changes_stopped(), !storage_refusal);
+            assert!(matches!(
+                driver.g.finish_changes().unwrap().normalized_slice(),
+                Err(Error::MissingClash)
+            ));
+        }
+    }
+
     /// An unresolved native path is never an empty successful justification.
     #[test]
     fn selected_reads_refuse_pending_transitive_path() {

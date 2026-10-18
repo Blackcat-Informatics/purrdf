@@ -4,7 +4,9 @@
 //! Proof-local dependency construction over one native replay's ordered observations.
 //! This private qualification seam does not resolve original RDF/schema licenses.
 
-use super::{Cause, Event, Journal, Mutation, Origin, ReadFact, ReadOwner, RoleWitness};
+use super::{
+    Cause, Event, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
+};
 use crate::owl_dl::concept::Role;
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
@@ -24,6 +26,7 @@ struct Dependency {
     cause: Option<Cause>,
     owner: Option<ReadOwner>,
     parents: Range<usize>,
+    paths: Range<usize>,
     incomplete: bool,
 }
 
@@ -48,6 +51,7 @@ impl From<StorageError> for Error {
 pub(crate) struct Slice {
     pub(crate) causes: Vec<Cause>,
     pub(crate) owners: Vec<ReadOwner>,
+    pub(crate) paths: Vec<PathStep>,
 }
 
 #[derive(Default)]
@@ -58,6 +62,7 @@ struct Builder {
     edges: OrderedTable<usize, (usize, usize, u32)>,
     nodes: Vec<Dependency>,
     parents: Vec<usize>,
+    paths: Vec<PathStep>,
 }
 
 impl Builder {
@@ -85,7 +90,31 @@ impl Builder {
         Ok(())
     }
 
-    fn read(&mut self, fact: ReadFact, memory: &mut Memory<'_, Resident>) -> Result<(), Error> {
+    fn edge(
+        &mut self,
+        index: usize,
+        role: Role,
+        from: usize,
+        to: usize,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<(), Error> {
+        let &(raw_from, raw_to, property) = self.edges.get(&index).ok_or(Error::MissingFact)?;
+        let (left, right) = match role {
+            Role::Named(wanted) if wanted == property => (raw_from, raw_to),
+            Role::Inv(wanted) if wanted == property => (raw_to, raw_from),
+            _ => return Err(Error::MissingPath),
+        };
+        self.parent(Fact::Edge(index), memory)?;
+        self.alias(left, from, memory)?;
+        self.alias(right, to, memory)
+    }
+
+    fn read(
+        &mut self,
+        fact: ReadFact,
+        paths: &[PathStep],
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<(), Error> {
         match fact {
             ReadFact::Node(node) | ReadFact::Top(node) => self.parent(Fact::Node(node), memory),
             ReadFact::ObjectDomain(node) => self.parent(Fact::Domain(node), memory),
@@ -98,17 +127,22 @@ impl Builder {
                 to,
                 role,
                 witness: RoleWitness::Edge(index),
+            } => self.edge(index, role, from, to, memory),
+            ReadFact::Role {
+                witness: RoleWitness::Language { start, end },
+                ..
             } => {
-                let &(raw_from, raw_to, property) =
-                    self.edges.get(&index).ok_or(Error::MissingFact)?;
-                let (left, right) = match role {
-                    Role::Named(wanted) if wanted == property => (raw_from, raw_to),
-                    Role::Inv(wanted) if wanted == property => (raw_to, raw_from),
-                    _ => return Err(Error::MissingPath),
-                };
-                self.parent(Fact::Edge(index), memory)?;
-                self.alias(left, from, memory)?;
-                self.alias(right, to, memory)
+                for step in paths.get(start..end).ok_or(Error::MissingPath)? {
+                    match step.kind {
+                        PathKind::Edge { index, letter } => {
+                            self.edge(index, letter, step.from.0, step.to.0, memory)?;
+                        }
+                        PathKind::Epsilon => self.parent(Fact::Node(step.from.0), memory)?,
+                        PathKind::Universal(_) => return Err(Error::MissingPath),
+                    }
+                    memory.push(&mut self.paths, *step)?;
+                }
+                Ok(())
             }
             ReadFact::Role { .. } => Err(Error::MissingPath),
         }
@@ -239,6 +273,7 @@ impl Builder {
                 cause: Some(cause),
                 owner: None,
                 parents: start..self.parents.len(),
+                paths: 0..0,
                 incomplete,
             },
         )?;
@@ -286,12 +321,13 @@ impl Journal {
                 event += 1;
             }
             let start = graph.parents.len();
+            let path_start = graph.paths.len();
             let mut incomplete = false;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
                 && next.checkpoint == selected.checkpoint
             {
-                match graph.read(next.fact, &mut memory) {
+                match graph.read(next.fact, &self.paths, &mut memory) {
                     Ok(()) => {}
                     Err(Error::MissingPath) => incomplete = true,
                     Err(error) => return Err(error),
@@ -305,6 +341,7 @@ impl Journal {
                     cause: None,
                     owner: Some(selected.owner),
                     parents: start..graph.parents.len(),
+                    paths: path_start..graph.paths.len(),
                     incomplete,
                 },
             )?;
@@ -323,6 +360,7 @@ impl Journal {
         let mut result = Slice {
             causes: Vec::new(),
             owners: Vec::new(),
+            paths: Vec::new(),
         };
         while let Some(id) = pending.pop() {
             if visited[id] {
@@ -343,6 +381,10 @@ impl Journal {
             if let Some(owner) = node.owner {
                 memory.push(&mut result.owners, owner)?;
             }
+            memory.extend(
+                &mut result.paths,
+                graph.paths[node.paths.clone()].iter().copied(),
+            )?;
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;
             }
