@@ -11,6 +11,8 @@ use std::path::PathBuf;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FileError {
+    /// A filesystem input or extraction policy refused the original request.
+    Filesystem(super::FsRefusal),
     /// The native GTS writer refused the files-profile header.
     Writer(crate::writer::WriterError),
     /// No entry was supplied to the v2 writer.
@@ -179,6 +181,7 @@ pub enum FileError {
 impl fmt::Display for FileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Filesystem(cause) => cause.fmt(f),
             Self::Writer(cause) => write!(f, "cannot author files v2 header: {cause}"),
             Self::EmptyEntries => f.write_str("files-profile v2 archive needs at least one entry"),
             Self::EmptyPath => f.write_str("empty archive path"),
@@ -201,7 +204,12 @@ impl fmt::Display for FileError {
                 operation,
                 path: Some(path),
                 cause,
-            } => write!(f, "{operation} {path:?}: {cause}"),
+            } => {
+                if !operation.is_empty() {
+                    write!(f, "{operation} ")?;
+                }
+                write!(f, "{path:?}: {cause}")
+            }
             Self::Io {
                 operation,
                 path: None,
@@ -272,6 +280,7 @@ impl fmt::Display for FileError {
 }
 
 purrdf_lex::error_source!(FileError => {
+    Self::Filesystem(cause) => cause,
     Self::Writer(cause) => cause,
     Self::Integer { cause, .. } => cause,
     Self::Io { cause, .. } => cause,
@@ -279,6 +288,7 @@ purrdf_lex::error_source!(FileError => {
 
 impl purrdf_hash::error::StructuredError for FileError {
     purrdf_hash::error_visit! {
+        Filesystem(cause) => "gts-files-filesystem" { "cause" => Cause(cause) },
         Writer(cause) => "gts-files-writer" { "cause" => Cause(cause) },
         EmptyEntries => "gts-files-empty-entries" {},
         EmptyPath => "gts-files-empty-path" {},
@@ -327,3 +337,5 @@ impl purrdf_hash::error::StructuredError for FileError {
         Integer { field, actual, cause } => "gts-files-integer" { "field" => Code(field), "actual" => Text(actual), "cause" => Cause(cause) },
     }
 }
+
+purrdf_lex::variant_from!(FileError { Filesystem(super::FsRefusal) });

@@ -101,6 +101,21 @@ impl StructuredError for core::str::Utf8Error {
     }
 }
 
+impl StructuredError for std::time::SystemTimeError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-system-time");
+        let duration = self.duration();
+        visitor.value(
+            Some("seconds"),
+            ErrorValue::Unsigned(u128::from(duration.as_secs())),
+        );
+        visitor.value(
+            Some("nanoseconds"),
+            ErrorValue::Unsigned(u128::from(duration.subsec_nanos())),
+        );
+    }
+}
+
 impl StructuredError for std::io::ErrorKind {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // Public stable categories have portable names. The standard library
