@@ -143,6 +143,8 @@ pub mod cbor;
 pub mod constructors;
 pub mod crockford;
 pub mod diagnostic;
+/// Borrowed typed error inspection shared by all native producers.
+pub use purrdf_hash::error;
 pub mod html;
 pub mod iri_escape;
 pub mod json;

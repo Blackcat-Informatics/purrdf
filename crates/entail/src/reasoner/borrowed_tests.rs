@@ -9,6 +9,88 @@ use crate::{DlProofError, EntailError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Caller-owned cancellation shared across preparation and independent replay.
+#[derive(Debug)]
+struct Stop(AtomicBool);
+
+impl purrdf_datalog::StopSignal for Stop {
+    fn stopped(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// Direct shared and packed sources preserve decisions and independent proof replay.
+#[test]
+fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
+    for contradictory in [false, true] {
+        let dataset = shared_schema(2, 3, contradictory);
+        let bytes = purrdf_core::PackBuilder::build_bytes(&dataset).unwrap();
+        let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
+        let shared = Reasoner::with_proofs(&dataset).unwrap();
+        let packed = Reasoner::with_proofs(&view).unwrap();
+        let plain = Reasoner::new(&view).unwrap();
+        let answer = packed.consistency();
+        let expected = if contradictory {
+            Verdict::False
+        } else {
+            Verdict::True
+        };
+        assert_eq!(*answer.answer(), expected);
+        assert_eq!(answer.answer(), shared.consistency().answer());
+        assert_eq!(answer.certificate(), plain.consistency().certificate());
+        assert_eq!(plain.consistency().answer(), answer.answer());
+        assert!(plain.consistency().proof().is_none());
+        assert_eq!(packed.input, shared.input);
+        assert_eq!(Arc::strong_count(&dataset), 1);
+
+        // An independent consumer parses the same shared carrier directly; it
+        // does not borrow any prepared state from the proof producer.
+        let consumer = Reasoner::with_proofs(&view).unwrap();
+        let context = consumer.borrowed_proof_context().unwrap();
+        let replay = answer
+            .proof()
+            .unwrap()
+            .verify_prepared(&Question::Consistency, Some(answer.certificate()), &context)
+            .unwrap();
+        assert_eq!(
+            replay,
+            answer
+                .proof()
+                .unwrap()
+                .verify(
+                    &view,
+                    &Question::Consistency,
+                    Some(answer.certificate()),
+                    &context,
+                )
+                .unwrap()
+        );
+        assert_eq!(replay.checks().unattested(), 0);
+        answer
+            .proof()
+            .unwrap()
+            .covers_verdict(&super::proof::ClaimSubject::Consistent, *answer.answer())
+            .unwrap();
+    }
+}
+
+/// Shared sources retain the original caller stop signal in both recording modes.
+#[test]
+fn dataset_views_preserve_constructor_cancellation() {
+    let dataset = shared_schema(1, 1, false);
+    let bytes = purrdf_core::PackBuilder::build_bytes(&dataset).unwrap();
+    let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
+    let stopped = Arc::new(Stop(AtomicBool::new(true)));
+    assert!(matches!(
+        Reasoner::with_stop(&view, stopped.clone()),
+        Err(EntailError::Stopped)
+    ));
+    assert!(matches!(
+        Reasoner::with_proofs_and_stop(&view, SchemaPreparationBudget::default(), stopped),
+        Err(EntailError::Stopped)
+    ));
+}
+
 /// A borrowed context retains the actual prepared allocation, not a reconstructed copy.
 #[test]
 fn borrowed_context_shares_prepared_source_and_releases_the_reasoner() {
@@ -149,13 +231,6 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
 /// Borrowing cannot invent recording or detach the original caller's stop signal.
 #[test]
 fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
-    #[derive(Debug)]
-    struct Stop(AtomicBool);
-    impl purrdf_datalog::StopSignal for Stop {
-        fn stopped(&self) -> bool {
-            self.0.load(Ordering::Relaxed)
-        }
-    }
     let dataset = shared_schema(1, 1, true);
     let plain = Reasoner::new(&dataset).unwrap();
     assert!(matches!(

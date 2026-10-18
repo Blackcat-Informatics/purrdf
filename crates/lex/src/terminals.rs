@@ -1383,6 +1383,14 @@ pub enum UcharError {
     NotAScalar,
 }
 
+impl purrdf_hash::error::StructuredError for UcharError {
+    purrdf_hash::error_visit! {
+        NotAnEscape => "uchar-not-an-escape" {},
+        BadHex => "uchar-bad-hex" {},
+        NotAScalar => "uchar-not-a-scalar" {},
+    }
+}
+
 /// Decode the `UCHAR` at the start of `bytes` (whose first byte is the
 /// backslash): the scalar and the bytes the escape spans (`6` or `10`).
 ///

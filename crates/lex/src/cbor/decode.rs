@@ -99,6 +99,28 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
+impl purrdf_hash::error::StructuredError for DecodeErrorKind {
+    purrdf_hash::error_visit! {
+        Truncated => "cbor-truncated" {},
+        Malformed(rule) => "cbor-malformed" { "rule" => Text(rule) },
+        InvalidUtf8 => "cbor-invalid-utf8" {},
+        Depth { limit } => "cbor-depth-limit" { "limit" => Unsigned(*limit as u128) },
+        TooLong => "cbor-length-overflow" {},
+        NotDeterministic(rule) => "cbor-not-deterministic" { "rule" => Text(rule) },
+        Trailing => "cbor-trailing-data" {},
+        Io(kind) => "cbor-io" { "kind" => Record(kind) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DecodeError {
+    purrdf_hash::error_visit! {
+        @record self { kind, offset } => "cbor-document" {
+            "kind" => Cause(&self.kind),
+            "offset" => ByteCount(self.offset as u128),
+        }
+    }
+}
+
 /// Where the decoder's bytes come from.
 trait Source {
     /// The offset of the next byte.

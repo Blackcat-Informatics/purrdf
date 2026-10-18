@@ -111,3 +111,28 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl purrdf_hash::error::StructuredError for ErrorKind {
+    purrdf_hash::error_visit! {
+        Interrupted => "json-interrupted" {},
+        Expected(what) => "json-expected" { "expected" => Text(what) },
+        RawControl => "json-raw-control" {},
+        Escape(kind) => "json-invalid-escape" { "cause" => Cause(kind) },
+        InvalidUtf8 => "json-invalid-utf8" {},
+        Trailing => "json-trailing-data" {},
+        Depth { limit } => "json-depth-limit" { "limit" => Unsigned(*limit as u128) },
+        Values { limit } => "json-value-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        StringBytes { limit } => "json-string-byte-limit" { "limit" => ByteCount(*limit as u128) },
+        DuplicateMember => "json-duplicate-member" {},
+        Storage(error) => "json-storage" { "cause" => Cause(error) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        @record self { kind, offset } => "json-document" {
+            "kind" => Cause(&self.kind),
+            "offset" => ByteCount(self.offset as u128),
+        }
+    }
+}

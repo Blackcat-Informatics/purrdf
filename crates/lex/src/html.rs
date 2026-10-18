@@ -114,6 +114,20 @@ impl ErrorKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for ErrorKind {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let (Self::UnknownNamedCharacterReference
+        | Self::AbsenceOfDigitsInNumericCharacterReference
+        | Self::MissingSemicolonAfterCharacterReference
+        | Self::NullCharacterReference
+        | Self::CharacterReferenceOutsideUnicodeRange
+        | Self::SurrogateCharacterReference
+        | Self::NoncharacterCharacterReference
+        | Self::ControlCharacterReference) = self;
+        visitor.variant(self.code());
+    }
+}
+
 /// A reference error and the complete consumed reference spelling's range.
 ///
 /// The range includes a consumed semicolon; a missing-digit error covers only
@@ -124,6 +138,16 @@ pub struct Diagnostic {
     pub kind: ErrorKind,
     /// Original input bytes responsible for the diagnostic.
     pub source: Range<usize>,
+}
+
+impl purrdf_hash::error::StructuredError for Diagnostic {
+    purrdf_hash::error_visit! {
+        @record self { kind, source } => "html-character-reference" {
+            "kind" => Cause(&self.kind),
+            "source_start" => ByteCount(self.source.start as u128),
+            "source_end" => ByteCount(self.source.end as u128),
+        }
+    }
 }
 
 impl fmt::Display for Diagnostic {
@@ -239,6 +263,13 @@ pub enum ResolveIntoError {
     Capacity,
     /// The exact destination layout exceeds addressable allocation size.
     LayoutOverflow,
+}
+
+impl purrdf_hash::error::StructuredError for ResolveIntoError {
+    purrdf_hash::error_visit! {
+        Capacity => "html-destination-capacity" {},
+        LayoutOverflow => "html-layout-overflow" {},
+    }
 }
 
 fn visit_resolution(

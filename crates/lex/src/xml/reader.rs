@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 mod dtd;
 
-use super::error::{XmlError, XmlErrorKind};
+use super::error::{XmlError, XmlErrorKind, XmlNamespaceError};
 use crate::terminals::{
     ByteClass, byte_run_count, decode_char_ref, is_ncname, is_xml_char, is_xml_name_char,
     is_xml_name_start_char,
@@ -1214,22 +1214,20 @@ impl<'a> Reader<'a> {
                 }
             };
             let uri = attribute.value.as_ref();
-            let reserved = |what: &str| {
-                XmlError::new(XmlErrorKind::ReservedNamespace(what.to_owned()), offset)
-            };
+            let reserved = |cause| XmlError::new(XmlErrorKind::ReservedNamespace(cause), offset);
             match prefix {
-                Some("xmlns") => return Err(reserved("the `xmlns` prefix cannot be declared")),
+                Some("xmlns") => return Err(reserved(XmlNamespaceError::XmlnsPrefixDeclaration)),
                 Some("xml") if uri != XML_NAMESPACE => {
-                    return Err(reserved("the `xml` prefix is bound to the XML namespace"));
+                    return Err(reserved(XmlNamespaceError::XmlPrefixBinding));
                 }
                 Some(p) if p != "xml" && uri == XML_NAMESPACE => {
-                    return Err(reserved("only `xml` may be bound to the XML namespace"));
+                    return Err(reserved(XmlNamespaceError::XmlNamespaceBinding));
                 }
                 None if uri == XML_NAMESPACE => {
-                    return Err(reserved("only `xml` may be bound to the XML namespace"));
+                    return Err(reserved(XmlNamespaceError::XmlNamespaceBinding));
                 }
                 _ if uri == XMLNS_NAMESPACE => {
-                    return Err(reserved("the xmlns namespace cannot be declared"));
+                    return Err(reserved(XmlNamespaceError::XmlnsNamespaceDeclaration));
                 }
                 Some(p) if uri.is_empty() => {
                     return Err(XmlError::new(
@@ -1257,9 +1255,7 @@ impl<'a> Reader<'a> {
         let namespace = match name.prefix() {
             Some("xmlns") => {
                 return Err(XmlError::new(
-                    XmlErrorKind::ReservedNamespace(
-                        "an element cannot have the `xmlns` prefix".to_owned(),
-                    ),
+                    XmlErrorKind::ReservedNamespace(XmlNamespaceError::XmlnsElementPrefix),
                     offset,
                 ));
             }
