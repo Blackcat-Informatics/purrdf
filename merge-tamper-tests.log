@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0308]: mismatched types
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:111:131
+    |
+111 | ...)).unwrap().joined = crate::owl_dl::proof::NodeRef::Anonymous(usize::MAX);
+    |                         ---------------------------------------- ^^^^^^^^^^ expected `u32`, found `usize`
+    |                         |
+    |                         arguments to this enum variant are incorrect
+    |
+note: tuple variant defined here
+   --> crates/entail/src/owl_dl/proof.rs:521:5
+    |
+521 |     Anonymous(u32),
+    |     ^^^^^^^^^
+help: you can convert a `usize` to a `u32` and panic if the converted value doesn't fit
+    |
+111 |         native.merges.iter_mut().find(|merge| merge.current.is_some()).unwrap().joined = crate::owl_dl::proof::NodeRef::Anonymous(usize::MAX.try_into().unwrap());
+    |                                                                                                                                             ++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

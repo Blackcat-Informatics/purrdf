@@ -1,0 +1,42 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0277]: `Pulse` doesn't implement `Debug`
+    --> crates/entail/src/owl_dl/hyper.rs:3553:45
+     |
+3553 |         impl purrdf_datalog::StopSignal for Pulse {
+     |                                             ^^^^^ the trait `Debug` is not implemented for `Pulse`
+     |
+note: required by a bound in `purrdf_core::StopSignal`
+    --> crates/rdf-core/src/governor.rs:34:37
+     |
+  34 | pub trait StopSignal: Send + Sync + core::fmt::Debug {
+     |                                     ^^^^^^^^^^^^^^^^ required by this bound in `StopSignal`
+help: consider annotating `Pulse` with `#[derive(Debug)]`
+     |
+3552 +         #[derive(Debug)]
+3553 |         struct Pulse(AtomicUsize);
+     |
+
+error[E0277]: `Pulse` doesn't implement `Debug`
+    --> crates/entail/src/owl_dl/hyper.rs:3581:54
+     |
+3581 |         assert!(!purrdf_datalog::StopSignal::stopped(&*stop));
+     |                  ----------------------------------- ^^^^^^ the trait `Debug` is not implemented for `Pulse`
+     |                  |
+     |                  required by a bound introduced by this call
+     |
+note: required by a bound in `stopped`
+    --> crates/rdf-core/src/governor.rs:34:37
+     |
+  34 | pub trait StopSignal: Send + Sync + core::fmt::Debug {
+     |                                     ^^^^^^^^^^^^^^^^ required by this bound in `StopSignal::stopped`
+  35 |     /// Whether the caller has requested cancellation. The request must latch.
+  36 |     fn stopped(&self) -> bool;
+     |
+help: consider annotating `Pulse` with `#[derive(Debug)]`
+     |
+3552 +         #[derive(Debug)]
+3553 |         struct Pulse(AtomicUsize);
+     |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

@@ -1,0 +1,25 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: field `observation` is never read
+  --> crates/entail/src/owl_dl/graph/changes/slice.rs:81:16
+   |
+79 | pub(crate) struct Vertex {
+   |                   ------ field in this struct
+80 |     pub(crate) id: usize,
+81 |     pub(crate) observation: Observation,
+   |                ^^^^^^^^^^^
+   |
+   = note: `Vertex` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: field `root` is never read
+  --> crates/entail/src/owl_dl/graph/changes/slice.rs:96:16
+   |
+95 | pub(crate) struct Derivation {
+   |                   ---------- field in this struct
+96 |     pub(crate) root: usize,
+   |                ^^^^
+   |
+   = note: `Derivation` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

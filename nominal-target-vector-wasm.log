@@ -1,0 +1,11 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/validate)
+    Finished `test` profile [optimized] target(s) in 32.86s
+     Running tests/dl_proof_vectors.rs (/opt/.cargo/45/03ed2870ac2b64/wasm32-unknown-unknown/debug/build/purrdf-validate/ab5b828b0fd41701/out/dl_proof_vectors-ab5b828b0fd41701.wasm)
+
+running 2 tests
+test all_shared_dl_proof_vectors_match_the_current_native_boundary ... ok
+test imported_closure_proofs_check_against_the_consumers_native_snapshot ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+

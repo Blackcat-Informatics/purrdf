@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0277]: `Stop` doesn't implement `std::fmt::Debug`
+   --> crates/entail/src/owl_dl/proof/source/tests.rs:928:49
+    |
+928 |             impl purrdf_datalog::StopSignal for Stop {
+    |                                                 ^^^^ the trait `std::fmt::Debug` is not implemented for `Stop`
+    |
+note: required by a bound in `purrdf_core::StopSignal`
+   --> crates/rdf-core/src/governor.rs:34:37
+    |
+ 34 | pub trait StopSignal: Send + Sync + core::fmt::Debug {
+    |                                     ^^^^^^^^^^^^^^^^ required by this bound in `StopSignal`
+    = note: the full name for the type has been written to '/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/b7f388e5a91b99b0/out/purrdf_entail-b7f388e5a91b99b0.long-type-14068202801075587212.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+help: consider annotating `owl_dl::proof::source::tests::checked_input_sources_distinguish_authored_and_key_derived_equality::Stop` with `#[derive(Debug)]`
+    |
+927 +             #[derive(Debug)]
+928 |             struct Stop;
+    |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

@@ -1,0 +1,3 @@
+The shared ownership repair from #597 / PR #598 is now integrated into this causal-support branch through a normal merge with verified hooks. The combined code passed all 188 proof-family cases, four borrowed-context controls, six public current-clash cases and strict affected all-target Clippy.
+
+This verifies that the source-view, normalization and recorded-frame work still consumes the actual independently prepared source through the shared carrier. It does not establish causal dependency slicing. The real disconnected-prefix control still demonstrates why the ordered application prefix is insufficient; actual dependency recording remains the next implementation. No narrow PR or full issue-completion claim is being made.

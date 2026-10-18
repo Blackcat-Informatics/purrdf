@@ -1,0 +1,5 @@
+## Full-issue PR readiness update
+
+The original public behavior contract is implemented and demonstrated on native, scalar WASM, optimized packaged WASM, the actual Python host and C ABI. The focused Python case passed; all 109 C ABI library tests and strict affected C ABI Clippy passed. The two CI assembly failures are stale generated cells, regenerated through the original writer from matching source/compiler/manifest evidence and complete 112-site measurement shards. Original failed reports remain unchanged.
+
+Proceed with the full-issue PR and independent/CodeRabbit review after the normal correction commit/push. Fresh PR CI remains an explicit merge gate for the generated projection and test-inventory delta. This advances the original complete implementation into review and preserves the no-component-PR boundary; no behavior or acceptance criterion is removed or moved to follow-up. Final full CI, review dispositions and ghprsq integration still determine completion. This is self-review, not independent approval.

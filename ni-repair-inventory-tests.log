@@ -1,0 +1,26 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 11s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 5 tests
+test owl_dl::proof::source::causal::tests::public_causal_reserved_rejects_unsaturated_blocked_completion ... FAILED
+test owl_dl::proof::source::causal::tests::public_causal_reserved_rejects_malformed_introduction_inventory ... ok
+test owl_dl::proof::source::causal::tests::public_causal_reserved_introduction_rejects_forged_nonblockable_target ... ok
+test owl_dl::proof::source::causal::tests::public_causal_reserved_nested_origin_retains_original_parent_descriptor ... ok
+test owl_dl::proof::source::causal::tests::public_causal_reserved_birth_retains_native_predecessor_and_original_descriptor ... ok
+
+failures:
+
+---- owl_dl::proof::source::causal::tests::public_causal_reserved_rejects_unsaturated_blocked_completion stdout ----
+
+thread 'owl_dl::proof::source::causal::tests::public_causal_reserved_rejects_unsaturated_blocked_completion' (1776261) panicked at crates/entail/src/owl_dl/proof/source/causal/tests.rs:405:5:
+Err(ClauseNotSatisfied { clause: 27, node: Individual(91) })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    owl_dl::proof::source::causal::tests::public_causal_reserved_rejects_unsaturated_blocked_completion
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 806 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --lib`

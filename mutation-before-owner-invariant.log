@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 33.84s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 6 tests
+test owl_dl::hyper::tests::native_mutations_preserve_cancellation_during_publication ... ok
+test owl_dl::hyper::tests::native_mutations_record_witnesses_inverse_edges_and_head_positions ... ok
+test owl_dl::hyper::tests::native_mutations_keep_original_facts_across_merge_and_idempotent_writes ... ok
+test owl_dl::hyper::tests::native_mutations_keep_prepared_query_and_domain_origins_separate ... ok
+test owl_dl::hyper::tests::native_mutations_record_literal_withdrawal_under_both_encodings ... ok
+test owl_dl::proof::source::tests::native_mutations_preserve_original_storage_refusal_before_malformed_reporting ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 750 filtered out; finished in 0.00s
+

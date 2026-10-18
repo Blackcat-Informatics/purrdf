@@ -1,0 +1,9 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 24.11s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+test owl_dl::proof::schema_tests::newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 811 filtered out; finished in 0.00s
+

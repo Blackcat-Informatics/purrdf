@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0425]: cannot find value `INTEGER` in module `purrdf_xsd::datatype`
+  --> crates/entail/src/owl_dl/input_source/tests.rs:45:45
+   |
+45 |             datatype: purrdf_xsd::datatype::INTEGER.to_owned(),
+   |                                             ^^^^^^^ not found in `purrdf_xsd::datatype`
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

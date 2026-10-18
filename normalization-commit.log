@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 5a279b272bc9 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/596-owl-dl-expose-checked-source-bound 2cd5574fe] Preserve original DL inclusion sources through normalization
+ 6 files changed, 334 insertions(+), 34 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/proof/source/normalization_tests.rs

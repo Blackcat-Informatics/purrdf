@@ -1,0 +1,74 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: this sequence of operators looks suspiciously like a bug
+    --> crates/entail/src/owl_dl/hyper.rs:2163:16
+     |
+2163 |             || key.index >= site.bound
+     |                ^^^^^^^^^^^^^^^^^^^^^^^ help: did you mean: `key.index >= site.index`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#suspicious_operation_groupings
+     = note: `-D clippy::suspicious-operation-groupings` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::suspicious_operation_groupings)]`
+
+error: this `let...else` may be rewritten with the `?` operator
+    --> crates/entail/src/owl_dl/hyper.rs:2123:9
+     |
+2123 | /         let Some((role, filler, count)) = clause.body.iter().find_map(|atom| match *atom {
+2124 | |             BodyAtom::Successors {
+2125 | |                 role,
+2126 | |                 filler,
+...    |
+2132 | |             return None;
+2133 | |         };
+     | |__________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#question_mark
+     = note: `-D clippy::question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::question_mark)]`
+help: replace it with
+     |
+2123 ~         let (role, filler, count) = clause.body.iter().find_map(|atom| match *atom {
+2124 +             BodyAtom::Successors {
+2125 +                 role,
+2126 +                 filler,
+2127 +                 count,
+2128 +                 ..
+2129 +             } => Some((role, filler, count)),
+2130 +             _ => None,
+2131 +         })?;
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/hyper.rs:2169:17
+     |
+2169 | /                 self.g
+2170 | |                     .observe_read(super::graph::changes::ReadFact::Denotes {
+2171 | |                         node: find(st, x),
+2172 | |                         individual,
+2173 | |                     })
+     | |______________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+     |
+2169 |                 self.g
+ ...
+2172 |                         individual,
+2173 ~                     });
+     |
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/entail/src/owl_dl/hyper.rs:2503:25
+     |
+2503 |                         &clause,
+     |                         ^^^^^^^ help: change this to: `clause`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: could not compile `purrdf-entail` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-entail` (lib test) due to 4 previous errors

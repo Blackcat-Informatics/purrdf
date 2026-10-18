@@ -1,0 +1,9 @@
+# CI gate remediation
+
+The first branch CI is still live. Current failures reduce to two verified causes, both owned by this change. Python conformance repeats the same binding test failure as pytest; the aggregate conformance failure follows that failed shard. Primary logs are raw/ni-repair-ci-pytest.log, raw/ni-repair-ci-python-conformance.log and raw/ni-repair-ci-workspace.log.
+
+The Python test expected the previous 16-vector inventory and stopped before comparing the actual cases. Its expected inventory now requires all 17; original prefix, service-set and byte-exact per-case comparisons remain intact. That correction passed normal hooks and was pushed. The focused actual Python check remains live in session 43118 while uv builds the extension. Do not report it passed or restart it because output is quiet.
+
+The workspace failure was check-issue-refs.py rejecting a process-reference phrase in a proof-replay comment. The comment now states the actual constraint on the selected proof path. The exact failed gate passed on current source; public-matrix-prose-gate.log records that result. No checker or allowlist was weakened. The comment-only correction is in normal signed-commit hooks, session 86316; consult public-matrix-prose-commit.log and Git state before acting.
+
+The updated public acceptance and golden-entry source is pushed and qualified on native/scalar WASM: 13 public cases and both shared-vector cases over 17 vectors, with strict affected Clippy and helper hygiene passed. Normal hooks succeeded for the native repair, public qualification and Python inventory correction. The old CI predates the added packaged causal inspection and latest gate corrections. Current-source optimized package acceptance, final full-issue audit, independent/CodeRabbit review and ghprsq remain required. No PR or issue closure is claimed.

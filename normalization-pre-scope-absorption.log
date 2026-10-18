@@ -1,0 +1,21 @@
+    Finished `test` profile [optimized] target(s) in 0.43s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 14 tests
+test owl_dl::absorb::tests::an_existential_antecedent_is_rerooted_at_its_filler ... ok
+test owl_dl::absorb::tests::a_negative_antecedent_is_internalized ... ok
+test owl_dl::absorb::tests::a_nested_existential_antecedent_inverts_the_whole_path ... ok
+test owl_dl::absorb::tests::normalization_origins_survive_nominal_member_splits_and_internalization ... ok
+test owl_dl::absorb::tests::a_range_axiom_becomes_an_edge_clause_and_seeds_no_label ... ok
+test owl_dl::absorb::tests::the_absence_shaped_antecedents_are_internalized ... ok
+test owl_dl::absorb::tests::a_domain_axiom_stays_rooted_at_the_node_it_constrains ... ok
+test owl_dl::absorb::tests::a_conjunctive_consequent_splits ... ok
+test owl_dl::absorb::tests::the_internalizing_encoding_absorbs_nothing ... ok
+test owl_dl::absorb::tests::an_enumerated_antecedent_splits_into_one_clause_per_member ... ok
+test owl_dl::absorb::tests::a_valid_inclusion_produces_nothing ... ok
+test owl_dl::absorb::tests::a_mixed_conjunction_absorbs_partially ... ok
+test owl_dl::absorb::tests::a_named_antecedent_becomes_a_one_atom_guard ... ok
+test owl_dl::absorb::tests::a_disjunctive_antecedent_splits ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 733 filtered out; finished in 0.01s
+

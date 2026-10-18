@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/validate)
+    Finished `test` profile [optimized] target(s) in 1m 03s
+     Running tests/dl_proof_vectors.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-validate/779d46875f5d5092/out/dl_proof_vectors-779d46875f5d5092)
+
+running 2 tests
+test imported_closure_proofs_check_against_the_consumers_native_snapshot ... ok
+test all_shared_dl_proof_vectors_match_the_current_native_boundary ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

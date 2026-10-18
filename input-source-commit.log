@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against c75cbf947d78 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/596-owl-dl-expose-checked-source-bound 85f99a088] Bind native replay inputs to their original source owners
+ 10 files changed, 825 insertions(+), 53 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/input_source.rs
+ create mode 100644 crates/entail/src/owl_dl/input_source/tests.rs

@@ -1,0 +1,16 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:244:40
+    |
+244 |             .all(|atom| matches!(atom, super::CausalGround::Concept(..)))
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+244 -             .all(|atom| matches!(atom, super::CausalGround::Concept(..)))
+244 +             .all(|atom| matches!(atom, CausalGround::Concept(..)))
+    |
+
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

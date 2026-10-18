@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 00s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 8 tests
+test owl_dl::key_values::tests::key_value_index_refusals_and_stopping_preserve_the_original_account ... ok
+test owl_dl::input_source::tests::key_value_evidence_is_published_only_with_the_complete_equality_batch ... ok
+test owl_dl::tests::governed_construction_installs_stop_before_key_inference ... ok
+test owl_dl::proof::source::tests::checked_input_sources_distinguish_authored_and_key_derived_equality ... ok
+test owl_dl::input_source::tests::input_source_key_batches_rollback_refusal_and_stop_without_losing_prior_inputs ... ok
+test owl_dl::key_values::tests::indexed_common_values_match_set_semantics_and_retain_original_rows_without_lookup_allocations ... ok
+test owl_dl::key_proofs::tests::recorded_key_memberships_are_checked_in_the_original_world_with_all_branches ... ok
+test owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 785 filtered out; finished in 0.01s
+

@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "c75cbf947d78ee97e2d450ce9680c03d030a4bfa",
+  "headRefName": "paudley/596-owl-dl-expose-checked-source-bound",
+  "headRefOid": "86d651aceb8d75147fb13b3cae62ef88f7cef8ff",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 602,
+  "state": "OPEN",
+  "title": "Expose checked source-bound OWL DL causal dependencies",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/602"
+}

@@ -1,0 +1,46 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: unnested or-patterns
+  --> crates/entail/src/owl_dl/proof/capture.rs:57:13
+   |
+57 | /             Err(slice::Error::Storage(original))
+58 | |             | Err(slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Storage(original))) => {
+   | |___________________________________________________________________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+   = note: `-D clippy::unnested-or-patterns` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::unnested_or_patterns)]`
+help: nest the patterns
+   |
+57 ~             Err(slice::Error::Storage(original) |
+58 ~ slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Storage(original))) => {
+   |
+
+error: unnested or-patterns
+  --> crates/entail/src/owl_dl/proof/capture.rs:61:13
+   |
+61 | /             Err(slice::Error::Stopped)
+62 | |             | Err(slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Stopped)) => {
+   | |_________________________________________________________________________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+help: nest the patterns
+   |
+61 ~             Err(slice::Error::Stopped |
+62 ~ slice::Error::RoleLicence(crate::owl_dl::roles::LicenceError::Stopped)) => {
+   |
+
+error: method `get` is never used
+   --> crates/entail/src/owl_dl/key_values.rs:157:19
+    |
+142 | impl Reads {
+    | ---------- method in this implementation
+...
+157 |     pub(crate) fn get(&self, equality: usize) -> Option<&[Common]> {
+    |                   ^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-entail` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

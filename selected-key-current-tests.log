@@ -1,0 +1,9 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 2m 28s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+test owl_dl::proof::source::tests::checked_input_sources_distinguish_authored_and_key_derived_equality ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 792 filtered out; finished in 0.01s
+

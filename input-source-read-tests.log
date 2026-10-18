@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized] target(s) in 57.99s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 4 tests
+test owl_dl::hyper::tests::selected_reads_refuse_unlicensed_generated_effect ... ok
+test owl_dl::hyper::tests::selected_reads_slice_inverse_edges_and_aliases_without_visited_edges ... ok
+test owl_dl::hyper::tests::selected_reads_slice_transitive_path_from_native_cache ... ok
+test owl_dl::hyper::tests::selected_reads_slice_original_label_and_selected_identity_after_merge ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 768 filtered out; finished in 0.00s
+

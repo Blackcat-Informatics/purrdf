@@ -1,0 +1,7 @@
+The NI correctness repair has been committed through normal hooks and pushed. Native qualification passed all 810 library cases, including the oracle families under unchanged verdict expectations and work ceilings.
+
+The full acceptance audit then repaired two public coverage gaps. All 13 native and scalar-WASM integration cases now pass, including typed, language-tagged and directional literal key provenance and the original inverse/transitive path licenses after wire decoding. Both shared-vector consumer cases also pass on native and scalar WASM, covering all 17 canonical vectors.
+
+The existing packaged golden entry now requires the recursive nominal vector and actually invokes public causal capture, checking closed refutations and the original nested reserved descriptor. This adds no binding API and repeats no producer search. An initial consumer without proof identity correctly refused; the corrected independently prepared consumer passes. Strict affected Clippy and full helper hygiene passed, and the qualification update passed normal signed-commit hooks.
+
+The existing branch CI remains live and predates the added packaged causal inspection. Its package result cannot qualify that new inspection. Current-source optimized packaged execution, the complete final audit, independent/CodeRabbit review and ghprsq integration remain required before issue completion. The original scope and downstream GMEOW logic queue are unchanged. Principles 4, 7, 17 and 18.

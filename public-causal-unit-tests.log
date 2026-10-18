@@ -1,0 +1,10 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 2m 47s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 2 tests
+test owl_dl::proof::source::causal::tests::public_causal_refuses_missing_and_unclosed_support_with_original_native_errors ... ok
+test owl_dl::proof::source::causal::tests::public_causal_key_memberships_retain_original_branch_graphs_and_source_scope ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 797 filtered out; finished in 0.00s
+

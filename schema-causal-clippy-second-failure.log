@@ -1,0 +1,82 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: the following explicit lifetimes could be elided: 'a
+   --> crates/entail/src/owl_dl/graph/changes/slice.rs:191:26
+    |
+191 |     pub(crate) fn inputs<'a>(&'a self) -> impl Iterator<Item = Result<SelectedInput, Error>> + 'a {
+    |                          ^^   ^^                                                               ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+191 -     pub(crate) fn inputs<'a>(&'a self) -> impl Iterator<Item = Result<SelectedInput, Error>> + 'a {
+191 +     pub(crate) fn inputs(&self) -> impl Iterator<Item = Result<SelectedInput, Error>> + '_ {
+    |
+
+error: used `assert!` to check that a value is not empty
+  --> crates/entail/src/owl_dl/proof/source/tests.rs:87:5
+   |
+87 |     assert!(!schema.bounds().qualifier_derivation().is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+   |
+87 -     assert!(!schema.bounds().qualifier_derivation().is_empty());
+87 +     assert_ne!(schema.bounds().qualifier_derivation(), []);
+   |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/entail/src/owl_dl/proof/source/tests.rs:100:5
+    |
+100 |     assert!(!selected.syntax_roots().unwrap().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+100 -     assert!(!selected.syntax_roots().unwrap().is_empty());
+100 +     assert_ne!(selected.syntax_roots().unwrap(), [] as [(owl_dl::syntax::Space, usize); 0]);
+    |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/entail/src/owl_dl/proof/source/tests.rs:313:5
+    |
+313 |     assert!(!roots.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+313 -     assert!(!roots.is_empty());
+313 +     assert_ne!(roots, [] as [(owl_dl::syntax::Space, usize); 0]);
+    |
+
+error: implicit borrow as raw pointer
+   --> crates/entail/src/owl_dl/proof/source/tests.rs:315:34
+    |
+315 |     assert!(std::ptr::eq(bounds, &step.schema.as_ref().unwrap().bounds));
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+315 |     assert!(std::ptr::eq(bounds, &raw const step.schema.as_ref().unwrap().bounds));
+    |                                   +++++++++
+
+error: redundant closure
+   --> crates/entail/src/owl_dl/proof/source/tests.rs:320:25
+    |
+320 |             .filter_map(|step| step.inclusion())
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `crate::owl_dl::bounds::SchemaStep::inclusion`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: could not compile `purrdf-entail` (lib test) due to 6 previous errors

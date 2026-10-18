@@ -1,0 +1,18 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 01s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 10 tests
+test owl_dl::clause::tests::an_at_most_restriction_derives_a_choose_clause_and_a_counting_clause ... ok
+test owl_dl::graph::changes::slice::tests::selected_counting_retains_reused_clique_and_excludes_other_neighbours ... ok
+test owl_dl::oracle::counting_a_super_role_does_not_count_its_sub_role ... ok
+test owl_dl::oracle::counting_more_values_than_a_data_range_holds_is_unsatisfiable ... ok
+test owl_dl::oracle::counting_literal_values_counts_values_rather_than_terms ... ok
+test owl_dl::oracle::a_range_axiom_narrows_a_counting_question_over_a_data_property ... ok
+test owl_dl::proof::source::causal::tests::public_causal_counting_refuses_unchecked_merge_closure ... ok
+test owl_dl::proof::source::causal::tests::public_causal_counting_retains_original_head_and_generated_births ... ok
+test owl_dl::oracle::counting_a_sub_role_does_count_towards_its_super_role ... ok
+test owl_dl::tableau::tests::nn_cyclic_counting_on_inverse_terminates ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 795 filtered out; finished in 0.11s
+

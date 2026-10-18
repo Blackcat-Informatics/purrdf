@@ -1,0 +1,25 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0599]: no method named `width` found for reference `&owl_dl::clause::DlClause` in the current scope
+    --> crates/entail/src/owl_dl/hyper.rs:2125:36
+     |
+2125 |                     .charge(clause.width() as u64 + u64::from(site.bound));
+     |                                    ^^^^^ method not found in `&owl_dl::clause::DlClause`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `width`, perhaps you need to implement one of them:
+             candidate #1: `CertifiedInterval`
+             candidate #2: `distance::sealed::Stored`
+
+error[E0599]: no method named `width` found for reference `&owl_dl::clause::DlClause` in the current scope
+    --> crates/entail/src/owl_dl/hyper.rs:2130:37
+     |
+2130 |                 frame.resize(clause.width(), y);
+     |                                     ^^^^^ method not found in `&owl_dl::clause::DlClause`
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `width`, perhaps you need to implement one of them:
+             candidate #1: `CertifiedInterval`
+             candidate #2: `distance::sealed::Stored`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

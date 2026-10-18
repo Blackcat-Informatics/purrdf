@@ -1,0 +1,9 @@
+Reserved birth and generative licensing are implemented but remain uncommitted because the required recursive-origin control exposed a native correctness defect. No PR or completion claim.
+
+The direct source controls pass signed inverse, named inverse-partner and scoped-blank origins. A forged named-root target passes the older structural branch check but is rejected by the actual generative predecessor predicate. Ten public cases passed on native and scalar WASM/Node; the WASM gate now explicitly registers all ten.
+
+The recursive source has these five laws: Spy subclass max 1 inverse(p).Thing; Middle subclass some r.Leaf; Leaf subclass some p.{spy}; Leaf subclass max 1 inverse(r).Thing; Demand subclass min 2 s.Middle. With spy instance Spy and subject instance Demand, it is inconsistent: the minimum forces two distinct Middle elements, their Leaf successors must coincide through spy's inverse-p bound, and that Leaf's inverse-r bound then forces the Middle elements equal.
+
+Observed: the producer returns consistency True and its normal verifier accepts the completion with zero unattested obligations. Inspection confirms the parsed axioms and both assertions are correct. The clean failing regression remains in the source and blocks qualification. Earlier passing controls do not cover this failure.
+
+The investigation targets NI saturation, successor-subset matching and blocking/unravelling. The [primary calculus paper](https://www.cs.ox.ac.uk/boris.motik/pubs/msh09hypertableau.pdf), section 3.2.6 and Table 5, preserves NI annotations even on self-identifications; discarding those as tautologies loses relevant information. That is an investigation direction, not a proven repair. This defect remains required work inside this issue before full native/packaged WASM qualification, independent review and ghprsq integration. Principles 4, 7, 17 and 18.

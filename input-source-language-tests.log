@@ -1,0 +1,10 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized] target(s) in 55.37s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 2 tests
+test owl_dl::hyper::tests::selected_language_path_preserves_refusal_and_stop_during_publication ... ok
+test owl_dl::hyper::tests::selected_language_path_retains_native_transitions_and_excludes_other_targets ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 770 filtered out; finished in 0.00s
+

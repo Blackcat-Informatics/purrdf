@@ -1,0 +1,11 @@
+# Original normalization-anchor self-review
+
+This is a component of Task 2, not completion of Task 2 or independent approval. Reviewed original parser GCI ingress, every later production TBox mutation, checked schema-step views and the native query definition caller.
+
+Each parsed GCI retains its actual top-level source operation in the same insertion order as the native TBox. N-ary/node-authored forms retain their exact typing trigger, with an explicit untyped negative-assertion case. Recursive source equations, query equations and standard empty-role laws are distinct. Query ingress no longer uses an unrecorded source marker. Programmatically synthetic test schemas remain explicitly unrecorded. The public checked schema view borrows those consumer-owned anchors and never relabels the normalized expression ID as the original source blank node.
+
+The standard bottom-role helper now uses the shared interned ingress, preserving origin order and the same encoded/schema invalidation rule. Its prior direct append invalidated encoding but left prepared bounds retained. The focused control verifies actual invalidation, recomputation and duplicate-law fixed-point behavior. The only decision-path change is that required invalidation; no source filtering, solver, compiler flag, dependency, proof encoding or budget policy changed.
+
+Current evidence: five new original-parser/ingress controls passed; ten checked source-view controls passed; 184 native proof-family regressions passed, including those source-view controls; all six public current-clash cases passed; strict affected all-target Clippy passed. The initial new-test private-field errors were repaired by testing through the owning native parser rather than widening Reasoner visibility. The failed log is retained.
+
+The remaining causal design must preserve source ordinals through absorption, original nested syntax reads, source ABox and RBox licenses, key-derived equality, selected role paths, witness distinctness and actual run assumptions. Original anchors alone are not the full source-premise graph. Native/public and packaged WASM qualification of the eventual complete feature, external review and ghprsq integration remain required. No resolver-only PR is being opened.

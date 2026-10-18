@@ -1,0 +1,3 @@
+# Prior-art assessment (self-review)
+
+Read the generated brief and coverage. It captured the full new issue with no comments, four linked items and fourteen related forge items; its recurrence scan covers only two hundred commits. No absence beyond that coverage is claimed. Native current-support replay already validates original applications, branch licenses and final frames through Graph. The support arena stores ordered prefixes, not causal dependencies. The concept table and XSD range owner supply structural views; parser expression memo is not retained on Kb. General reusable explanation sessions remain separate. Reuse these native homes rather than creating a consumer-side checker or solver search per dependency. No independent assessment is claimed.

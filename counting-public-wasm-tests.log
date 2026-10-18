@@ -1,0 +1,60 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling typenum v1.20.1
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/hash)
+   Compiling unicode-ident v1.0.24
+   Compiling crossbeam-utils v0.8.21
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling rayon-core v1.13.0
+   Compiling bumpalo v3.20.3
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling once_cell v1.21.4
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/alloc-probe)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/stack)
+   Compiling wasm-bindgen v0.2.125
+   Compiling syn v2.0.118
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/deflate)
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-deque v0.8.6
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling rayon v1.12.0
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/iri)
+   Compiling regex v1.12.4
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/cdt)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/testkit)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 19s
+     Running tests/current_clash_support.rs (/opt/.cargo/45/03ed2870ac2b64/wasm32-unknown-unknown/debug/build/purrdf-entail/eb4a53a9f181f9c8/out/current_clash_support-eb4a53a9f181f9c8.wasm)
+
+running 8 tests
+test current_clash_preserves_named_and_scoped_blank_source_identity ... ok
+test current_clash_preserves_public_service_certificate_and_verification ... ok
+test current_clash_replays_generated_existential_witnesses ... ok
+test current_clash_checks_fresh_refutation_assumptions_without_a_source_name ... ok
+test current_clash_replays_equality_before_observing_role_premises ... ok
+test current_clash_borrows_the_independent_prepared_consumer ... ok
+test public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs ... ok
+test public_causal_service_binds_the_requested_question_and_query_assumptions ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

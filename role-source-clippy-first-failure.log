@@ -1,0 +1,20 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/entail/src/owl_dl/roles/licence.rs:86:21
+   |
+86 |                     self.select_inclusion(sub, sup, &mut inputs, &mut selected, memory)?
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.select_inclusion(sub, sup, &mut inputs, &mut selected, memory)?;`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+   = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/entail/src/owl_dl/roles/licence.rs:89:21
+   |
+89 |                     self.select_input(input, &mut inputs, &mut selected, memory)?
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.select_input(input, &mut inputs, &mut selected, memory)?;`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

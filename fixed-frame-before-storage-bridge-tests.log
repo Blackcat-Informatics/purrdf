@@ -1,0 +1,10 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 49.47s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 2 tests
+test owl_dl::hyper::tests::fixed_frame_replay_preserves_a_stop_that_fires_during_native_reads ... ok
+test owl_dl::hyper::tests::fixed_frame_replay_matches_enumeration_and_skips_unselected_subsets ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 748 filtered out; finished in 0.00s
+

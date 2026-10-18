@@ -1,0 +1,23 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 54.48s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+test owl_dl::oracle::a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain ... FAILED
+
+failures:
+
+---- owl_dl::oracle::a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain stdout ----
+deep: 300 knowledge bases over Signature { concepts: 2, roles: 1, individuals: 2, max_domain: 3 } → Tally { modelled: 199, refuted: 98, unbounded: 2, exhausted: 1, concrete: 0, consistent: 201, inconsistent: 98, bound_asserted: 28, differential: 297, encodings: 298, blocking: 299, delta: 299, work: 363714, max_case_work: 121160, max_decided_work: 121160, steps: 1694, max_case_steps: 350, peak_nodes: 87, disjunctions: 720, peak_depth: 210 }
+
+thread 'owl_dl::oracle::a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain' (4940) panicked at crates/entail/src/owl_dl/oracle.rs:1830:5:
+deep spent 363714 work units over its 300 cases, above its ceiling of 351000. The search's per-round cost has changed materially, which the round total above cannot show: Tally { modelled: 199, refuted: 98, unbounded: 2, exhausted: 1, concrete: 0, consistent: 201, inconsistent: 98, bound_asserted: 28, differential: 297, encodings: 298, blocking: 299, delta: 299, work: 363714, max_case_work: 121160, max_decided_work: 121160, steps: 1694, max_case_steps: 350, peak_nodes: 87, disjunctions: 720, peak_depth: 210 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    owl_dl::oracle::a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 808 filtered out; finished in 0.77s
+
+error: test failed, to rerun pass `-p purrdf-entail --lib`

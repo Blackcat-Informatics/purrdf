@@ -1,0 +1,13 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 52.74s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 5 tests
+test owl_dl::absorb::tests::normalization_origins_survive_nominal_member_splits_and_internalization ... ok
+test owl_dl::proof::source::normalization_tests::both_sides_split_without_renumbering_or_replacing_the_original_source ... ok
+test owl_dl::concept::tests::normalization_is_idempotent_and_order_insensitive ... ok
+test owl_dl::proof::source::normalization_tests::equivalent_and_subclass_axioms_do_not_lose_their_distinct_original_spellings ... ok
+test owl_dl::proof::source::normalization_tests::internalization_partial_absorption_and_range_keep_separate_source_licenses ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 742 filtered out; finished in 0.01s
+

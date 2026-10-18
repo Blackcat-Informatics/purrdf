@@ -1,0 +1,31 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: used `assert!` to check that a value is empty
+   --> crates/entail/src/owl_dl/absorb.rs:946:9
+    |
+946 |         assert!(internalized.clauses.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+946 -         assert!(internalized.clauses.is_empty());
+946 +         assert_eq!(internalized.clauses, [] as [owl_dl::absorb::GuardedClause; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/entail/src/owl_dl/absorb.rs:947:9
+    |
+947 |         assert!(internalized.clause_sources.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+947 -         assert!(internalized.clause_sources.is_empty());
+947 +         assert_eq!(internalized.clause_sources, [] as [usize; 0]);
+    |
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

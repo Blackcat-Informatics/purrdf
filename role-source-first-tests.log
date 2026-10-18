@@ -1,0 +1,23 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: method `role` is never used
+    --> crates/entail/src/owl_dl/roles.rs:1279:19
+     |
+1263 | impl RoleReader<'_> {
+     | ------------------- method in this implementation
+...
+1279 |     pub(crate) fn role(&self, node: u32) -> Result<Role, RoleHierarchyError> {
+     |                   ^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `get` is never used
+  --> crates/entail/src/owl_dl/roles/source.rs:83:19
+   |
+52 | impl Sources {
+   | ------------ method in this implementation
+...
+83 |     pub(crate) fn get(&self, input: Input) -> Option<&Origin> {
+   |                   ^^^
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

@@ -1,0 +1,9 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against c75cbf947d78 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/596-owl-dl-expose-checked-source-bound 7669ba33b] feat(entail): expose question-bound checked causal proof views
+ 17 files changed, 2631 insertions(+), 41 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/proof/source/causal.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/source/causal/branch.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/source/causal/schema.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/source/causal/syntax.rs
+ create mode 100644 crates/entail/src/owl_dl/proof/source/causal/tests.rs
+ create mode 100644 crates/entail/src/reasoner/proof/causal.rs

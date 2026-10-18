@@ -1,0 +1,62 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: manual `Debug` impl does not include all fields
+  --> crates/entail/src/owl_dl/proof/capture.rs:17:1
+   |
+17 | / impl std::fmt::Debug for Clash {
+18 | |     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+19 | |         f.debug_struct("Clash")
+20 | |             .field("index", &self.index)
+...  |
+25 | | }
+   | |_^
+   |
+note: this field is unused
+  --> crates/entail/src/owl_dl/proof/capture.rs:11:5
+   |
+11 |     pub(crate) merge: bool,
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   = help: consider including all fields in this `Debug` impl
+   = help: consider calling `.finish_non_exhaustive()` if you intend to ignore fields
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#missing_fields_in_debug
+   = note: `-D clippy::missing-fields-in-debug` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::missing_fields_in_debug)]`
+
+error: large size difference between variants
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:473:1
+    |
+473 | /   pub enum CausalObservation<'a> {
+474 | |       /// Exact native write, with its original cause owner and head position.
+475 | | /     Effect {
+476 | | |         /// Original native source or checked-application owner.
+477 | | |         cause: CausalCause<'a>,
+478 | | |         /// Actual primitive recorded by the native graph.
+479 | | |         mutation: CausalMutation<'a>,
+480 | | |     },
+    | | |_____- the largest variant contains at least 256 bytes
+481 | |       /// Original checked application; the ordinal addresses this clash's checked prefix.
+482 | | /     Application {
+483 | | |         /// Application ordinal within this clash's checked prefix.
+484 | | |         application: usize,
+485 | | |         /// Clause ordinal in the independently prepared calculus.
+...   | |
+488 | | |         branch: Option<(usize, usize)>,
+489 | | |     },
+    | | |_____- the second-largest variant contains at least 40 bytes
+...   |
+508 | |       },
+509 | |   }
+    | |___^ the entire enum is at least 256 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+479 -         mutation: CausalMutation<'a>,
+479 +         mutation: Box<CausalMutation<'a>>,
+    |
+
+error: could not compile `purrdf-entail` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

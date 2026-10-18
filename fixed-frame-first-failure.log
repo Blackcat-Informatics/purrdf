@@ -1,0 +1,58 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0433]: cannot find type `BodyAtom` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:3248:48
+     |
+3248 |                     .any(|atom| matches!(atom, BodyAtom::Successors { count: 6, .. }))
+     |                                                ^^^^^^^^ use of undeclared type `BodyAtom`
+     |
+help: consider importing this enum through its public re-export
+     |
+3189 +     use crate::owl_dl::hyper::BodyAtom;
+     |
+
+error[E0433]: cannot find type `BodyAtom` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:3287:29
+     |
+3287 | ...                   BodyAtom::Concept { .. } => 0,
+     |                       ^^^^^^^^ use of undeclared type `BodyAtom`
+     |
+help: consider importing this enum through its public re-export
+     |
+3189 +     use crate::owl_dl::hyper::BodyAtom;
+     |
+
+error[E0433]: cannot find type `BodyAtom` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:3288:29
+     |
+3288 | ...                   BodyAtom::Denotes { .. } => 1,
+     |                       ^^^^^^^^ use of undeclared type `BodyAtom`
+     |
+help: consider importing this enum through its public re-export
+     |
+3189 +     use crate::owl_dl::hyper::BodyAtom;
+     |
+
+error[E0433]: cannot find type `BodyAtom` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:3289:29
+     |
+3289 | ...                   BodyAtom::Role { .. } => 2,
+     |                       ^^^^^^^^ use of undeclared type `BodyAtom`
+     |
+help: consider importing this enum through its public re-export
+     |
+3189 +     use crate::owl_dl::hyper::BodyAtom;
+     |
+
+error[E0433]: cannot find type `BodyAtom` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:3290:29
+     |
+3290 | ...                   BodyAtom::Successors { .. } => 3,
+     |                       ^^^^^^^^ use of undeclared type `BodyAtom`
+     |
+help: consider importing this enum through its public re-export
+     |
+3189 +     use crate::owl_dl::hyper::BodyAtom;
+     |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-entail` (lib test) due to 5 previous errors

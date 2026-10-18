@@ -1,0 +1,18 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 29.06s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 10 tests
+test owl_dl::proof::source::tests::exact_literal_metadata_is_borrowed_without_reinterpretation ... ok
+test owl_dl::proof::source::tests::query_symbols_and_recursive_reserved_roots_never_gain_source_identity ... ok
+test owl_dl::proof::source::tests::every_native_constructor_has_a_borrowed_structural_view ... ok
+test owl_dl::proof::source::tests::actual_nominal_clash_resolves_denotation_without_renaming ... ok
+test owl_dl::proof::source::tests::actual_role_clash_resolves_both_endpoints_and_property ... ok
+test owl_dl::proof::source::tests::checked_clash_resolves_actual_derived_source_membership_without_copying ... ok
+test owl_dl::proof::source::tests::legacy_structural_success_is_not_checked_source_support ... ok
+test owl_dl::proof::source::tests::source_resolution_refuses_wrong_source_and_absent_current_support ... ok
+test owl_dl::proof::source::tests::resolution_preserves_the_consumers_typed_stop ... ok
+test owl_dl::proof::source::tests::checked_source_blank_scope_and_schema_bounds_survive_resolution ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 728 filtered out; finished in 0.00s
+

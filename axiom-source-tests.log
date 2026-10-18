@@ -1,0 +1,13 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 31.99s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 5 tests
+test owl_dl::axiom_source::tests::bottom_role_law_keeps_its_native_origin_and_invalidates_prepared_products ... ok
+test owl_dl::axiom_source::tests::nary_axioms_keep_their_actual_node_and_typing_trigger ... ok
+test owl_dl::axiom_source::tests::query_equations_and_synthetic_ingress_never_claim_source_assertions ... ok
+test owl_dl::axiom_source::tests::recursive_source_equations_are_distinct_from_the_authored_axiom ... ok
+test owl_dl::axiom_source::tests::source_triple_origins_preserve_order_and_original_expression_nodes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 738 filtered out; finished in 0.00s
+

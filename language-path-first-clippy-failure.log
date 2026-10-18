@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: method `refuse_next_publication` is never used
+   --> crates/entail/src/owl_dl/graph/changes.rs:336:19
+    |
+285 | impl Journal {
+    | ------------ method in this implementation
+...
+336 |     pub(crate) fn refuse_next_publication(&mut self, original: StorageError) {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/owl_dl/graph/changes/slice.rs:138:29
+    |
+138 | ...                   self.edge(index, letter, step.from.0, step.to.0, memory)?
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.edge(index, letter, step.from.0, step.to.0, memory)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

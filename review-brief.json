@@ -1,0 +1,201 @@
+{
+  "issue": 596,
+  "branch": "paudley/596-owl-dl-expose-checked-source-bound",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "86d651aceb8d75147fb13b3cae62ef88f7cef8ff",
+      "subject": "test: align proof consumers and measured assembly projection",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "1f6617be22b69998a599c1d8f98c0cf804290361",
+      "subject": "docs(entail): state the merge proof-path requirement",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "00dc4bae2b5de8780220afde6e9757818db03979",
+      "subject": "test(python): include the recursive nominal proof vector",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "62b0e4f1182aba71a8c657e70097858e223a1497",
+      "subject": "test(entail): qualify public causal proof consumers",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "0a6f8eea5d002334a5d001853848858cb3e51086",
+      "subject": "fix(entail): saturate and verify nominal introduction",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "6825a7248ba71e07fd17c933e2a95fd64405f730",
+      "subject": "feat(entail): check reachable native merge closures",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "13a4a6885e3d638a4daae994e61237e90dd78a18",
+      "subject": "feat(entail): retain native selected counting dependencies",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "7669ba33bf0bdb7685841b64722a9eb0cb7a5bab",
+      "subject": "feat(entail): expose question-bound checked causal proof views",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "94698a9a00508091a2671da9768866d8ba195ad8",
+      "subject": "fix(entail): retain causal edges and universal role licenses",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "719883987342cbe54629aa282fa613ac4fd4f227",
+      "subject": "fix(entail): retain selected native effects and generated births",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "87fd296abfc33dfe8376f417b98554fa7c09a9a3",
+      "subject": "fix(entail): link key equalities to checked membership support",
+      "date": "2026-10-18"
+    },
+    {
+      "oid": "e0f5e51600733a0c6774ead9126f80c5a189326b",
+      "subject": "Retain checked key membership proofs in their original source phase",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "66e664a5ff3f75df75bae26452ca526d1e483b0a",
+      "subject": "Retain role constraints and indexed native key value evidence",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "60799582b51c5c7080831a9f2fa399b8b35717cb",
+      "subject": "Retain native role closure and generated clause derivations",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "2ee4fed4c9872f6a9b7dbf8f949262e3e1f71765",
+      "subject": "Retain original role inputs through native compiler transitions",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "97147753fdacbcfb55ddb0175d7ddab9579d77ca",
+      "subject": "Retain checked schema dependencies in native causal replay",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "9c695a88f548c0511dd3fea5f57895975c04767a",
+      "subject": "Retain original native syntax reads for checked causal support",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "85f99a08883e81fb7640e6a40626a21617787a5b",
+      "subject": "Bind native replay inputs to their original source owners",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "651887268da417e870f04829b20dfa3fa8c3502c",
+      "subject": "Retain native transitive cache witnesses through updates and merges",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "afd9662037e13cd4246967d51064c298a3fe1f76",
+      "subject": "Retain accepted native role-language paths during replay",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "19cb3ef2e23ec143917fa9d71769138873b4954f",
+      "subject": "Trace selected replay reads through immutable fact dependencies",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "4575d4cac2f717e5e93e908fed9010e46da64866",
+      "subject": "Record native replay mutations with their original owners",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "bb867363bf9af33eff3fd5c9d03e7549a5f88259",
+      "subject": "Check recorded DL bindings without enumerating alternative frames",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "2cd5574fe77a43845b212107f8dacec70c644047",
+      "subject": "Preserve original DL inclusion sources through normalization",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "af1b1e9ab8c1de44ee55125aa731eb5721d91caf",
+      "subject": "Retain original source anchors for normalized DL inclusions",
+      "date": "2026-10-17"
+    },
+    {
+      "oid": "d00d9bd8c86daedb16938c9f3a172e76e6a1716a",
+      "subject": "Expose borrowed views of checked DL clash evidence",
+      "date": "2026-10-17"
+    }
+  ],
+  "files": [
+    "Makefile",
+    "bindings/python/tests/test_entail_reasoning.py",
+    "crates/entail/README.md",
+    "crates/entail/src/lib.rs",
+    "crates/entail/src/owl_dl/absorb.rs",
+    "crates/entail/src/owl_dl/axiom_source.rs",
+    "crates/entail/src/owl_dl/axiom_source/tests.rs",
+    "crates/entail/src/owl_dl/bounds.rs",
+    "crates/entail/src/owl_dl/clause.rs",
+    "crates/entail/src/owl_dl/concept.rs",
+    "crates/entail/src/owl_dl/data.rs",
+    "crates/entail/src/owl_dl/graph.rs",
+    "crates/entail/src/owl_dl/graph/changes.rs",
+    "crates/entail/src/owl_dl/graph/changes/reach.rs",
+    "crates/entail/src/owl_dl/graph/changes/reach/tests.rs",
+    "crates/entail/src/owl_dl/graph/changes/slice.rs",
+    "crates/entail/src/owl_dl/graph/changes/slice/key.rs",
+    "crates/entail/src/owl_dl/graph/changes/slice/schema.rs",
+    "crates/entail/src/owl_dl/graph/changes/slice/tests.rs",
+    "crates/entail/src/owl_dl/hyper.rs",
+    "crates/entail/src/owl_dl/input_source.rs",
+    "crates/entail/src/owl_dl/input_source/tests.rs",
+    "crates/entail/src/owl_dl/key_proofs.rs",
+    "crates/entail/src/owl_dl/key_proofs/tests.rs",
+    "crates/entail/src/owl_dl/key_values.rs",
+    "crates/entail/src/owl_dl/key_values/tests.rs",
+    "crates/entail/src/owl_dl/mod.rs",
+    "crates/entail/src/owl_dl/parser.rs",
+    "crates/entail/src/owl_dl/proof.rs",
+    "crates/entail/src/owl_dl/proof/capture.rs",
+    "crates/entail/src/owl_dl/proof/source.rs",
+    "crates/entail/src/owl_dl/proof/source/causal.rs",
+    "crates/entail/src/owl_dl/proof/source/causal/branch.rs",
+    "crates/entail/src/owl_dl/proof/source/causal/schema.rs",
+    "crates/entail/src/owl_dl/proof/source/causal/syntax.rs",
+    "crates/entail/src/owl_dl/proof/source/causal/tests.rs",
+    "crates/entail/src/owl_dl/proof/source/normalization_tests.rs",
+    "crates/entail/src/owl_dl/proof/source/origin.rs",
+    "crates/entail/src/owl_dl/proof/source/schema.rs",
+    "crates/entail/src/owl_dl/proof/source/tests.rs",
+    "crates/entail/src/owl_dl/query.rs",
+    "crates/entail/src/owl_dl/roles.rs",
+    "crates/entail/src/owl_dl/roles/licence.rs",
+    "crates/entail/src/owl_dl/roles/licence/tests.rs",
+    "crates/entail/src/owl_dl/roles/order.rs",
+    "crates/entail/src/owl_dl/roles/source.rs",
+    "crates/entail/src/owl_dl/roles/source/tests.rs",
+    "crates/entail/src/owl_dl/syntax.rs",
+    "crates/entail/src/owl_dl/syntax/tests.rs",
+    "crates/entail/src/owl_dl/tableau.rs",
+    "crates/entail/src/reasoner/mod.rs",
+    "crates/entail/src/reasoner/proof.rs",
+    "crates/entail/src/reasoner/proof/causal.rs",
+    "crates/entail/tests/current_clash_support.rs",
+    "crates/hash/README.md",
+    "crates/rdf-capi/src/entail.rs",
+    "crates/validate/src/regime.rs",
+    "crates/validate/tests/dl_proof_vectors.rs",
+    "crates/validate/tests/fixtures/dl-proof.vectors",
+    "docs/WASM_TESTING.md",
+    "docs/design/purrdf-simd.md"
+  ],
+  "adrs_touched": []
+}

@@ -1,0 +1,15 @@
+# Normalization source-link self-review
+
+This reviews a component of Task 2, not Task 2 completion or independent approval. Reviewed the native absorption FIFO, every disposition/internalization path, Kb encoding refresh, ClauseSet recording/domain scope and prepared-context source reflection.
+
+Original inclusion ordinals accompany the same native rewrite work items through consequent, antecedent and nominal-member splits. Partial absorption, range re-rooting and internalization preserve that ordinal. Tautology deletion drops output without compacting original source ordinals. Original equivalent/subclass spellings remain separate even when their normalized implications overlap. Clause translation reads the native absorption mapping rather than reconstructing source links with a second semantic matcher.
+
+The per-clause optional source occupies one native word through NonZeroUsize. Its positive tag also supplies the original object-domain TBox scope, so the old bool array and duplicate scope assignment were removed. A synthetic/unrecorded RDF anchor still has its actual native TBox ordinal and remains object-domain scoped. Structural and RBox clauses retain their prior non-TBox scope. Logical prepared schema guards remain object-domain scoped and have multiple checked inclusion licenses rather than a false single source. Native index width is preserved without a new capacity cap.
+
+Prepared-context reflection lends the original source anchor of an absorbed clause and the normalized internalized formulas with their original anchors. Documentation explicitly says this is normalization metadata, not current membership, proof, or a selected clash's causal support. No downstream local contradiction is authorized by these reflection methods.
+
+Four new provenance controls passed in the five-case normalization selection (the fifth is an existing normalization algebra control). Current settled-source Clippy, 187 proof-family cases, 11 clause cases, 14 absorption cases and all six public integration cases passed. The first new test build failed on unnecessary size_of qualification; the first Clippy run required value-reporting empty assertions. Both were fixed in source without suppression; original failure logs are retained. No byte-format, contract-digest algorithm, decision algorithm, dependency or compiler-policy change was made.
+
+Full causal slicing, original nested syntax reads, actual ABox/RBox/key/equality/path/witness provenance, native resource ownership and complete question-bound replay remain required. Native and packaged WASM acceptance and external review remain required for the eventual full feature. No PR is open for these source-link components alone.
+
+The additional actual domain-scope control passed after scope unification: both native decision cores accept its literal-object input and refute the corresponding IRI-object input. This demonstrates that the class inclusion remains active on its intended domain, rather than being dropped to obtain a passing verdict. See normalization-domain-scope.log.

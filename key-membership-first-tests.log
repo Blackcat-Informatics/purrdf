@@ -1,0 +1,22 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0277]: `?` couldn't convert the error to `owl_dl::proof::DlProofError`
+    --> crates/entail/src/owl_dl/proof.rs:3843:22
+     |
+3840 |                       capture.push(
+     |  _____________________________-
+3841 | |                         index,
+3842 | |                         journal.expect("requested checked replay owns its journal"),
+3843 | |                     )?;
+     | |                     -^ the trait `From<purrdf_lex::allocation::StorageError>` is not implemented for `owl_dl::proof::DlProofError`
+     | |_____________________|
+     |                       this can't be annotated with `?` because it has type `Result<_, purrdf_lex::allocation::StorageError>`
+     |
+note: `owl_dl::proof::DlProofError` needs to implement `From<purrdf_lex::allocation::StorageError>`
+    --> crates/entail/src/owl_dl/proof.rs:1709:1
+     |
+1709 | pub enum DlProofError {
+     | ^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

@@ -1,0 +1,39 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against c75cbf947d78 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: rustfmt --check failed on staged sources:
+  Diff in /tmp/tmp.1hNhpnLepo/crates/entail/src/owl_dl/proof/schema_tests.rs:173:
+           let mut forged = bytes.clone();
+           forged[tag_end - 1] = version;
+           assert!(
+  -            matches!(DlProof::decode(&forged), Err(DlProofError::Malformed { .. })),
+  +            matches!(
+  +                DlProof::decode(&forged),
+  +                Err(DlProofError::Malformed { .. })
+  +            ),
+               "v{} must require its own native evidence",
+               char::from(version)
+           );
+  Diff in /tmp/tmp.1hNhpnLepo/crates/entail/src/owl_dl/proof.rs:4544:
+                   "the introduction layout requires an NI-only branch",
+               ));
+           }
+  -        if merge_support
+  -            && !introduction
+  -            && !merges.iter().any(|step| step.current.is_some())
+  -        {
+  +        if merge_support && !introduction && !merges.iter().any(|step| step.current.is_some()) {
+               return Err(malformed(
+                   "the merge-support layout requires native merge evidence",
+               ));
+  Diff in /tmp/tmp.1hNhpnLepo/crates/entail/src/owl_dl/proof/schema_tests.rs:173:
+           let mut forged = bytes.clone();
+           forged[tag_end - 1] = version;
+           assert!(
+  -            matches!(DlProof::decode(&forged), Err(DlProofError::Malformed { .. })),
+  +            matches!(
+  +                DlProof::decode(&forged),
+  +                Err(DlProofError::Malformed { .. })
+  +            ),
+               "v{} must require its own native evidence",
+               char::from(version)
+           );
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

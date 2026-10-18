@@ -1,0 +1,65 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: use of `Option<Option<T>>`
+   --> crates/entail/src/owl_dl/input_source.rs:155:50
+    |
+155 |     pub(crate) fn syntax(&self, input: Input) -> Option<Option<usize>> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `Option<usize>`, or a custom enum if you need to distinguish all 3 cases
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#option_option
+    = note: `-D clippy::option-option` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::option_option)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/parser.rs:1167:13
+     |
+1167 | /             self.syntax
+1168 | |                 .borrow_mut()
+1169 | |                 .list_read(cell, p, o, self.v.rest, self.v.nil)
+     | |_______________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+     |
+1167 |             self.syntax
+1168 |                 .borrow_mut()
+1169 ~                 .list_read(cell, p, o, self.v.rest, self.v.nil);
+     |
+
+error: use of `Option<Option<T>>`
+  --> crates/entail/src/owl_dl/syntax.rs:68:15
+   |
+68 |     tbox: Vec<Option<Option<usize>>>,
+   |               ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using `Option<usize>`, or a custom enum if you need to distinguish all 3 cases
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#option_option
+
+error: use of `Option<Option<T>>`
+   --> crates/entail/src/owl_dl/syntax.rs:346:53
+    |
+346 |     pub(crate) fn tbox_root(&self, index: usize) -> Option<Option<usize>> {
+    |                                                     ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `Option<usize>`, or a custom enum if you need to distinguish all 3 cases
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#option_option
+
+error: could not compile `purrdf-entail` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+   --> crates/entail/src/owl_dl/graph/changes/slice.rs:117:13
+    |
+117 | /             match kb.inputs.syntax(input?.input).ok_or(Error::MissingSyntax)? {
+118 | |                 Some(root) => memory.push(&mut roots, (Space::Source, root))?,
+119 | |                 None => {}
+120 | |             }
+    | |_____________^ help: try: `if let Some(root) = kb.inputs.syntax(input?.input).ok_or(Error::MissingSyntax)? { memory.push(&mut roots, (Space::Source, root))? }`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#single_match
+    = note: `-D clippy::single-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_match)]`
+
+error: could not compile `purrdf-entail` (lib test) due to 5 previous errors

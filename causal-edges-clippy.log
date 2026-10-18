@@ -1,0 +1,29 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/entail/src/owl_dl/graph/changes/slice/tests.rs:51:29
+   |
+51 | ...                   assert!(slice.tbox[vertex.tbox.clone()].contains(&index))
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert!(slice.tbox[vertex.tbox.clone()].contains(&index));`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+   = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/entail/src/owl_dl/graph/changes/slice/tests.rs:54:29
+   |
+54 | ...                   assert!(slice.guards[vertex.guards.clone()].contains(&index))
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert!(slice.guards[vertex.guards.clone()].contains(&index));`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/entail/src/owl_dl/graph/changes/slice/tests.rs:57:29
+   |
+57 | ...                   assert!(slice.rules[vertex.rules.clone()].contains(&input))
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert!(slice.rules[vertex.rules.clone()].contains(&input));`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-entail` (lib test) due to 3 previous errors

@@ -1,0 +1,22 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 29.70s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+test owl_dl::proof::schema_tests::newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof ... FAILED
+
+failures:
+
+---- owl_dl::proof::schema_tests::newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof stdout ----
+
+thread 'owl_dl::proof::schema_tests::newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof' (1547852) panicked at crates/entail/src/owl_dl/proof/schema_tests.rs:175:9:
+v6 must require its own native evidence
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    owl_dl::proof::schema_tests::newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 811 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --lib`

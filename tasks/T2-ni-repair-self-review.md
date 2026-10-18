@@ -1,0 +1,13 @@
+# Local review of reserved support and NI saturation
+
+This is self-review, not independent approval or a full-issue completion audit.
+
+Reviewed native branch construction, current-support application replay, merge licensing, branch codec, completion acceptance, generative birth selection and the borrowed public descriptor. The NI-only discriminator is interpreted by both branch replay and merge licensing. Structural checking requires every original reserved index exactly once and binds the choices to the original root, role, filler and repeated predecessor. Current replay separately checks generative eligibility against actual graph births and role licenses. Selected birth effects retain their original journal ordinals and alias paths. The public recursive descriptor borrows the original checked proof alternative rather than creating another identity or copying the knowledge base.
+
+The new search order only substitutes an actual source branch already identifying the selected predecessor. The existing identifying classification excludes counted equality clauses, preventing recursion into NI. The returned branch has its own recorded original site. Normal NI remains required after that branch settles; no pending obligation is marked satisfied. All oracle families pass under unchanged verdict expectations, termination guards and work ceilings.
+
+The completion checker now refuses the concrete unsaturated blocked graph control. Source restrictions are explicitly present in that finite graph; rejection is the typed NI obligation, not an unrelated missing ordinary clause. Native and actual scalar-WASM public replay both accept the genuine recursive refutation after wire decoding. Seven malformed inventories and the forged nonblockable target are rejected.
+
+Current evidence: 810 native library cases passed, one existing report-only fixture ignored; all 11 public cases passed on native and scalar WASM; strict affected all-target Clippy passed; both shared-vector native consumer tests passed. The explicit vector producer preserved every original expected answer while generating 17 proof/check bodies. Source formatting and diff whitespace checks passed. Generated hash-domain documentation came from its owner.
+
+Remaining qualification: complete the running shared-vector scalar-WASM and helper-hygiene checks, normal signed commit/hook and push, actual optimized packaged-WASM acceptance, then complete the original full issue matrix and obtain independent/CodeRabbit review through a full-issue PR before ghprsq. No gate, feature, dependency, profile, resource workaround, alternate solver or source vocabulary was added or weakened.

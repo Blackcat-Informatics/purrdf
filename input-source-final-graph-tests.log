@@ -1,0 +1,22 @@
+    Finished `test` profile [optimized] target(s) in 0.13s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 15 tests
+test owl_dl::graph::changes::reach::tests::transitive_cache_preserves_original_refusal_in_capture_and_cached_publication ... ok
+test owl_dl::graph::changes::reach::tests::transitive_cache_slice_preserves_shared_join_graph ... ok
+test owl_dl::graph::changes::reach::tests::transitive_cache_composes_appended_edges_with_owner_and_destination_paths ... ok
+test owl_dl::graph::changes::reach::tests::transitive_cache_keeps_hierarchy_inverse_paths_and_rebuilds_after_equality ... ok
+test owl_dl::graph::tests::neighbourhood_reads_allocate_nothing_in_steady_state ... ok
+test owl_dl::graph::tests::max_clique_exhaustion_is_deterministic_run_to_run ... ok
+test owl_dl::graph::tests::max_clique_runs_the_whole_wide_scan_when_the_meter_is_ample ... ok
+test owl_dl::graph::tests::max_clique_stops_a_wide_incompatible_scan_when_the_meter_is_narrow ... ok
+test owl_dl::graph::tests::a_persistent_vector_behaves_as_a_vector_and_its_clones_stay_put ... ok
+test owl_dl::graph::tests::an_early_stopping_read_never_charges_more_than_the_full_read ... ok
+test owl_dl::graph::tests::the_adjacency_index_equals_the_full_edge_scan_under_random_pushes_and_merges ... ok
+test owl_dl::graph::tests::achievers_polls_the_role_closure_walk_and_never_caches_a_truncated_one ... ok
+test owl_dl::graph::tests::neighbors_stops_the_edge_scan_when_the_bulk_charge_exhausts_the_meter ... ok
+test owl_dl::graph::tests::cached_closures_follow_appended_edges_and_merges ... ok
+test owl_dl::graph::tests::the_stamped_neighbourhood_read_matches_the_reference_read ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 758 filtered out; finished in 0.39s
+

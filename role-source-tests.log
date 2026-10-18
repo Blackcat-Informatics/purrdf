@@ -1,0 +1,42 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 07s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 33 tests
+test owl_dl::axiom_source::tests::bottom_role_law_keeps_its_native_origin_and_invalidates_prepared_products ... ok
+test combined::tests::a_builtin_role_in_a_restriction_disqualifies ... ok
+test owl_dl::absorption_tests::domain_bottom_roles_and_finite_class_cycles_agree_with_the_reference_core ... ok
+test owl_dl::boundary_tests::the_role_characteristics_reach_the_knowledge_base ... ok
+test owl_dl::boundary_tests::a_number_restriction_over_a_transitive_role_is_bounded ... ok
+test owl_dl::oracle::an_inverse_partner_edge_is_a_step_of_its_transitive_role ... ok
+test owl_dl::oracle::a_sub_role_edge_is_a_step_of_its_transitive_super_role ... ok
+test owl_dl::clause::tests::only_the_class_free_guards_are_untriggered_and_role_first_clauses_are_edge_indexed ... ok
+test owl_dl::boundary_tests::a_regular_property_chain_is_compiled_without_inventing_a_role_assertion ... ok
+test owl_dl::proof::source::tests::actual_role_clash_resolves_both_endpoints_and_property ... ok
+test owl_dl::proof::source::tests::checked_clash_retains_selected_transitive_role_path ... ok
+test owl_dl::oracle::disjoint_roles_reject_a_shared_pair ... ok
+test owl_dl::proof::source::tests::checked_clash_retains_selected_compiled_role_path ... ok
+test owl_dl::tableau::tests::instance_check_via_role_and_some ... ok
+test owl_dl::proof::source::tests::checked_schema_causal_support_retains_role_and_qualifier_licenses ... ok
+test owl_dl::roles::source::tests::hierarchy_sources_retain_signed_inputs_lists_and_inverse_syntax ... ok
+test owl_dl::roles::tests::every_compiler_growth_refusal_releases_the_original_scratch ... ok
+test reasoner::schema_tests::exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges ... ok
+test reasoner::schema_tests::asserted_subsumed_equivalent_role_derived_and_existential_membership_are_checked ... ok
+test owl_dl::oracle::counting_a_super_role_does_not_count_its_sub_role ... ok
+test owl_dl::oracle::an_irreflexive_role_forbids_an_asserted_self_loop ... ok
+test owl_dl::oracle::counting_a_sub_role_does_count_towards_its_super_role ... ok
+test owl_dl::roles::tests::state_overflow_and_original_cancellation_are_distinct_from_regularity ... ok
+test owl_dl::roles::tests::compiled_signed_languages_match_independent_exhaustive_finite_closure ... ok
+test owl_dl::oracle::an_inverse_role_into_a_nominal_is_an_edge_out_of_it ... ok
+test owl_dl::roles::tests::source_order_matches_an_independent_partial_order_enumerator ... ok
+test owl_dl::tests::both_drivers_refuse_a_stop_during_a_regular_role_round ... ok
+test owl_dl::hyper::tests::delta_saturation_agrees_with_a_full_rematch_over_long_role_chains ... ok
+test owl_dl::graph::tests::achievers_polls_the_role_closure_walk_and_never_caches_a_truncated_one ... ok
+test owl_dl::roles::tests::long_regular_words_use_iterative_admitted_construction_without_a_chain_limit ... ok
+test owl_dl::oracle::transitive_roles_under_a_role_hierarchy_agree_with_the_oracle ... ok
+test owl_dl::oracle::qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle ... ok
+test owl_dl::oracle::nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 751 filtered out; finished in 1.24s
+

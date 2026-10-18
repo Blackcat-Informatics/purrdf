@@ -1,0 +1,86 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error[E0433]: cannot find type `ReplayGoal` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:4390:17
+     |
+4390 |                 ReplayGoal::Clash {
+     |                 ^^^^^^^^^^ use of undeclared type `ReplayGoal`
+     |
+help: consider importing this enum
+     |
+3456 +     use crate::owl_dl::hyper::ReplayGoal;
+     |
+
+error[E0433]: cannot find type `ReplayGoal` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:4566:17
+     |
+4566 |                 ReplayGoal::Clash {
+     |                 ^^^^^^^^^^ use of undeclared type `ReplayGoal`
+     |
+help: consider importing this enum
+     |
+3456 +     use crate::owl_dl::hyper::ReplayGoal;
+     |
+
+error[E0433]: cannot find type `ReplayGoal` in this scope
+    --> crates/entail/src/owl_dl/hyper.rs:4581:17
+     |
+4581 |                 ReplayGoal::Clash {
+     |                 ^^^^^^^^^^ use of undeclared type `ReplayGoal`
+     |
+help: consider importing this enum
+     |
+3456 +     use crate::owl_dl::hyper::ReplayGoal;
+     |
+
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/hyper.rs:474:12
+    |
+474 |     defer: std::cell::Cell<bool>,
+    |            ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+474 -     defer: std::cell::Cell<bool>,
+474 +     defer: Cell<bool>,
+    |
+
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/hyper.rs:528:16
+    |
+528 |     footprint: std::cell::Cell<u64>,
+    |                ^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+528 -     footprint: std::cell::Cell<u64>,
+528 +     footprint: Cell<u64>,
+    |
+
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/hyper.rs:729:20
+    |
+729 |             defer: std::cell::Cell::new(false),
+    |                    ^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+729 -             defer: std::cell::Cell::new(false),
+729 +             defer: Cell::new(false),
+    |
+
+error: unnecessary qualification
+   --> crates/entail/src/owl_dl/hyper.rs:763:24
+    |
+763 |             footprint: std::cell::Cell::new(0),
+    |                        ^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+763 -             footprint: std::cell::Cell::new(0),
+763 +             footprint: Cell::new(0),
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-entail` (lib test) due to 7 previous errors

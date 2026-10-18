@@ -1,0 +1,5 @@
+All implementation and qualification changes are committed through normal hooks and pushed. The earlier CI passed its optimized package job for the NI repair. Its failures were the stale Python expectation of 16 vectors and a process-reference phrase in a comment. Both are corrected; the exact prose gate passed. Python conformance repeated the same inventory failure.
+
+[Current-source CI](https://github.com/Blackcat-Informatics/purrdf/actions/runs/39120878874) now includes the packaged causal inspection and those corrections. The local focused Python host test is still building the extension, so it is not reported passed. Current native/scalar-WASM evidence remains 810 native library cases, 13 public cases on each target, and both shared-vector consumer cases over 17 vectors, with strict affected Clippy and helper hygiene passed.
+
+Current-source optimized package/full CI, final acceptance audit, independent/CodeRabbit review and ghprsq integration remain required. No PR, issue closure or downstream GMEOW completion is claimed. Principles 4, 7, 17 and 18.

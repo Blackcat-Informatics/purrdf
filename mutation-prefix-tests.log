@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.12s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+test owl_dl::proof::source::tests::checked_prefix_contains_an_unrelated_application_before_the_clash ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 0.00s
+

@@ -1,0 +1,332 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 3,
+      "rules": [
+        "modal"
+      ],
+      "text": "Checked OWL DL clash replay currently establishes reachability by replaying the complete recorded application prefix. It resolves the terminal source individual, but that identity does not describe the actual causal source support. A consumer cannot safely attribute a global contradiction to local individuals from that identity. Unrelated earlier applications must not be reported as premises.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "Deliver checked source-bound causal dependencies through the existing native replay and graph implementation. This is required by Blackcat-Informatics/gmeow-ontology#1803 before local class conclusions can delegate to the native owner. It is distinct from reusable general explanation sessions in #501 and from monotone source updates.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 9,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Expose typed source-aware concept, role and node views from the sealed consumer context. Preserve named terms, scoped blanks, literal datatype/language/direction, query assumptions, native normalization and proof-local generated identities. Numeric private identifiers are not source terms.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 10,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Build the dependency graph during independent current-support replay using existing native graph operations. Slice the actual checked derivation backward from its terminal clash. Include asserted premises, normalized schema licenses, selected query/branch assumptions, equality causes and aliases, role paths and existential/inequality effects. Do not include unrelated prefix applications. Causal support need not be a globally minimal semantic justification.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B5",
+      "line": 11,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "- Schema-bound conflicts expose their actual checked bound derivations with the same source-aware views. Legacy missing current support must remain explicitly unsupported for this operation. Missing support cannot become an empty successful graph.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B6",
+      "line": 12,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- Retain exact source/question/calculus binding, branch licenses, typed stopping/admission errors, and shared prepared-context ownership. No repeated solver search, second datatype/role/equality checker, source filtering or invented source vocabulary.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B7",
+      "line": 13,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "- Tests exercise disconnected inputs, derived memberships, normalized min/max bounds, inverse/transitive role paths, equality, generated witnesses, branching, scoped blanks and literals, wrong source/proof, missing support and stopping. Test actual public replay, not only conversion helpers. Native and packaged WASM acceptance are required.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B8",
+      "line": 14,
+      "rules": [
+        "modal",
+        "list-under-requirement-heading"
+      ],
+      "text": "- No semantic Cargo feature, shipping dependency, consumer namespace, compiler-profile change or host resource workaround. Normal hooks and ghprsq integration are required.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "C1.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Add borrowed typed views for every native concept constructor, roles, source/query terms, named/anonymous/reserved nodes and actual replayed witness facts. Expose them only after source-bound current-support replay succeeds. Preserve original term values and distinguish normalized native class structure from asserted RDF expression syntax. Reuse the existing XSD range AST. Tests must exercise actual public replay with independently prepared consumer source, source mismatch and legacy unsupported steps, plus complete structural variants. These views are an implementation component, not causal support or permission for local contradiction.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-17T22:22:02Z"
+    },
+    {
+      "id": "C1.2",
+      "line": 11,
+      "rules": [
+        "modal"
+      ],
+      "text": "Instrument the existing native replay/graph operations with causal links for source assertions, query assumptions, normalized TBox/meta licenses, branch selections, equality aliases, role reachability and generated witness/distinctness effects. Reuse original semantic operations and match licenses; no duplicate role/datatype/equality solver. Slice backward from the checked clash and expose its schema derivations. Unrelated earlier prefix applications must be absent. No narrow PR or completion claim before this requirement is met. Resolve actual source expression provenance where parser normalization currently loses it.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-17T22:22:02Z"
+    },
+    {
+      "id": "C1.3",
+      "line": 19,
+      "rules": [
+        "modal"
+      ],
+      "text": "Inspect complete review surfaces, incorporate actionable CodeRabbit feedback and merge only through ghprsq with selected Stage evidence. No independent local dispatcher is available: local plan/task audits are explicitly self-reviews. No fabricated independent verdict. All issue requirements must be implemented before PR creation or issue closure. Preserve unrelated root REWORK_LIST.md and sibling worktrees.",
+      "source": "comment 1",
+      "author": "paudley",
+      "date": "2026-10-17T22:22:02Z"
+    },
+    {
+      "id": "C3.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "This is a component of the full causal-support implementation. Original ordinals still need to survive absorption into clause/meta licenses, and complete source syntax, ABox/RBox support, key/equality derivations, selected role paths, witness distinctness and actual question-bound dependency slicing remain required. No causal-graph completion, packaged WASM qualification, downstream local-head integration or merge readiness is claimed. The full issue stays open; no narrow PR is being opened.",
+      "source": "comment 3",
+      "author": "paudley",
+      "date": "2026-10-17T22:49:03Z"
+    },
+    {
+      "id": "C4.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "The full issue remains in progress. The next implementation is native replay dependency tracking using these preserved licenses, with irrelevant-prefix exclusion, selected body/path dependencies, equality and witness effects, original nested syntax and source ABox/RBox/key provenance. Native resource ownership, full question-bound controls, packaged WASM acceptance, external review and integration remain required. No narrower PR or downstream local-head completion is claimed.",
+      "source": "comment 4",
+      "author": "paudley",
+      "date": "2026-10-17T23:06:45Z"
+    },
+    {
+      "id": "C5.1",
+      "line": 1,
+      "rules": [
+        "modal"
+      ],
+      "text": "The actual unrelated-prefix control for [native issue #596](https://github.com/Blackcat-Informatics/purrdf/issues/596) now demonstrates a fully checked proof prefix containing an unrelated earlier class derivation. Its terminal witness mentions only the actual inhabitant. This confirms that reachability of a prefix is not precise causal attribution; the future dependency graph must exclude the unrelated application without filtering the input.",
+      "source": "comment 5",
+      "author": "paudley",
+      "date": "2026-10-17T23:27:23Z"
+    },
+    {
+      "id": "C5.2",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "The next work is the actual native replay dependency recorder, using the completed normalization links and selected-body boundary. Full source syntax, ABox/RBox/key/equality/path/witness support, native resource ownership, complete question-bound controls, packaged WASM acceptance and external review remain required. No causal-graph completion, downstream local-head integration or narrow PR is claimed.",
+      "source": "comment 5",
+      "author": "paudley",
+      "date": "2026-10-17T23:27:23Z"
+    },
+    {
+      "id": "C7.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "This is a mutation history, not a completed causal graph. It is requested through a private replay hook until selected body/path read licenses, immutable fact-parent links and backward slicing are implemented. Original syntax/ABox/RBox/key provenance, service-question graph binding and full native/packaged WASM acceptance remain required. The unrelated application is still in the raw history; no causal-exclusion pass, public graph, narrow PR, issue completion or downstream local-class delegation is claimed.",
+      "source": "comment 7",
+      "author": "paudley",
+      "date": "2026-10-18T01:12:32Z"
+    },
+    {
+      "id": "C8.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "This is not the complete public source-bound causal graph. Original RDF/schema/ABox/RBox/key licenses, full native path/effect support, public result ownership/stopping, question/branch binding and native/packaged WASM acceptance remain required. No narrow PR or issue completion is claimed. Next retain actual selected native path witnesses and their source licenses, then complete effects and the public checked operation. Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 8",
+      "author": "paudley",
+      "date": "2026-10-18T01:33:09Z"
+    },
+    {
+      "id": "C9.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "This still does not complete the public source-bound causal graph. Chain-free transitive-cache/hierarchy witnesses, original RDF/schema/RBox/key licenses, generated/counting/nominal effects, complete question/branch binding, public result ownership/stopping and native/packaged WASM acceptance remain required. The next implementation must carry edge witnesses through the existing transitive closure/cache owner and its appended-edge updates. No narrow PR, issue completion, downstream local-class delegation or GMEOW dependency-pin update is claimed. Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 9",
+      "author": "paudley",
+      "date": "2026-10-18T01:43:02Z"
+    },
+    {
+      "id": "C10.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "Current qualification passes 191 proof cases, 15 graph cases, four selected-read cases, seven mutation controls, six public current-clash cases, strict all-target Clippy and the full helper-hygiene target. Review remains self-review. Original RDF/ABox/RBox/normalization/schema/key licenses, complete generated/counting/nominal effects, universal-role licenses, question/branch binding, public result ownership/stopping and native/packaged WASM acceptance remain required. Next preserve original source anchors and native derivations at their actual parser/key owners. No public causal-operation completion, narrow PR, downstream local-class delegation or GMEOW dependency-pin update is claimed. Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 10",
+      "author": "paudley",
+      "date": "2026-10-18T01:57:18Z"
+    },
+    {
+      "id": "C11.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Complete expression/list/normalization read dependencies, original compiled-RBox/clause/schema licenses, actual native key membership/value derivations, generated/counting/nominal/universal effects, public result ownership/stopping, question/branch binding and native/packaged WASM acceptance remain required. No public causal-graph completion, narrow PR, downstream local-class delegation or GMEOW pin change is claimed. Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 11",
+      "author": "paudley",
+      "date": "2026-10-18T02:27:31Z"
+    },
+    {
+      "id": "C12.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "The issue remains incomplete. Next are actual checked schema-bound dependencies, original compiled-RBox licenses and native key membership/value derivations. Remaining generated/counting/nominal/universal effects, public graph ownership/stopping, source/question/branch binding, native and packaged WASM qualification, external review and ghprsq integration remain required. No PR or issue-completion claim is made. GMEOW Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 12",
+      "author": "paudley",
+      "date": "2026-10-18T03:05:06Z"
+    },
+    {
+      "id": "C13.1",
+      "line": 3,
+      "rules": [
+        "modal"
+      ],
+      "text": "The causal slice borrows its original consumer and resolves through that owner. A schema capability must match the selected guard and consumer. Backward projection follows only the lower-bound, upper-bound and qualifier derivation dependencies; a valid but unused implication is excluded. Original subproperty and inverse-role licenses bind to their parser-owned sources. Missing legacy support, wrong source, tampered bounds, cross-owner capability, typed storage refusal and cancellation remain explicit failures.",
+      "source": "comment 13",
+      "author": "paudley",
+      "date": "2026-10-18T03:20:49Z"
+    },
+    {
+      "id": "C13.2",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Issue 596 remains incomplete. The next seam is original compiled-RBox licensing: retain the original chain/list/inverse/inclusion inputs in the native hierarchy reader, carry their licenses through transition construction, and resolve selected transition ordinals without rewalking RDF or attributing the entire RBox. Native key derivations, remaining generated/counting/nominal/universal effects, public source/question/branch binding and graph ownership/admission/stopping, native/packaged WASM, external review and ghprsq integration remain required. No narrow PR, GMEOW dependency-pin change or all-local delegation is claimed. Principles 4, 7, 17 and 18 continue to govern the downstream boundary.",
+      "source": "comment 13",
+      "author": "paudley",
+      "date": "2026-10-18T03:20:49Z"
+    },
+    {
+      "id": "C15.1",
+      "line": 1,
+      "rules": [
+        "modal"
+      ],
+      "text": "Native role closure now retains its original source derivations. Original component arcs and sparse closure compositions remain in a shared witness graph that moves into the compiled program. Source resolution follows that graph without another reachability search or reconstructing a path from the source. The checked-chain control retains the required composite inclusion and component certificate while excluding a separate unused chain and component. Missing retained witness metadata remains an explicit refusal.",
+      "source": "comment 15",
+      "author": "paudley",
+      "date": "2026-10-18T04:01:46Z"
+    },
+    {
+      "id": "C15.2",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Issue 596 remains incomplete. Next bind asymmetric/disjoint-role constraint clauses and retain actual native key membership/value derivations. Remaining effects, full public causal ownership/admission/stopping and source/question/branch binding, native/packaged WASM, external review and ghprsq integration remain required. No narrow PR, GMEOW dependency pin, producer run or all-local delegation is claimed. Principles 4, 7, 17 and 18 govern the downstream boundary.",
+      "source": "comment 15",
+      "author": "paudley",
+      "date": "2026-10-18T04:01:46Z"
+    },
+    {
+      "id": "C16.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Issue 596 remains incomplete. Value rows are not a complete key proof: key-derived causal output still refuses until the original membership warrants, pre-key source owner and complete branch support are retained and checked. No extra membership search or circular proof using the derived equality is acceptable. Remaining effects, full public causal ownership/admission/stopping and source/question/branch binding, native/packaged WASM, external review and ghprsq remain required. No narrow PR, GMEOW dependency pin, producer run or all-local delegation is claimed. Principles 4, 7, 17 and 18 govern the downstream boundary.",
+      "source": "comment 16",
+      "author": "paudley",
+      "date": "2026-10-18T04:19:27Z"
+    },
+    {
+      "id": "C17.1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Issue 596 remains open. Next connect the retained original membership captures and value rows to selected key-equality dependencies using their original phase owners. Selected key effects still refuse until that integration is complete. Remaining effect families, the public causal boundary, native/packaged WASM, external review and ghprsq integration remain required. No component PR, GMEOW pin or producer run is claimed. Principles 4, 7, 17 and 18 govern the downstream boundary.",
+      "source": "comment 17",
+      "author": "paudley",
+      "date": "2026-10-18T04:46:14Z"
+    },
+    {
+      "id": "C18.1",
+      "line": 5,
+      "rules": [
+        "modal"
+      ],
+      "text": "The change is committed and pushed on the existing full-issue branch. Issue 596 remains incomplete: generated effects, the full public causal boundary and packaged WASM acceptance remain required. No component PR, GMEOW dependency pin, corpus producer or pipeline speedup is claimed. Downstream Principles 4, 7, 17 and 18 apply.",
+      "source": "comment 18",
+      "author": "paudley",
+      "date": "2026-10-18T06:15:42Z"
+    }
+  ],
+  "silent_comments": [
+    {
+      "comment": 2,
+      "author": "paudley",
+      "date": "2026-10-17T22:34:09Z"
+    },
+    {
+      "comment": 6,
+      "author": "paudley",
+      "date": "2026-10-18T00:20:20Z"
+    },
+    {
+      "comment": 14,
+      "author": "paudley",
+      "date": "2026-10-18T03:37:13Z"
+    }
+  ]
+}

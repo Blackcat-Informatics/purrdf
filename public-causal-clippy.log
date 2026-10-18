@@ -1,0 +1,57 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: used `assert!` to check that a value is empty
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:104:9
+    |
+104 |         assert!(native.branches.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+104 -         assert!(native.branches.is_empty());
+104 +         assert_eq!(native.branches, [] as [owl_dl::proof::BranchStep; 0]);
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:120:9
+    |
+120 | /         native.schema_recording_obstruction =
+121 | |             Some(crate::owl_dl::bounds::SchemaObstruction::Allocation)
+    | |______________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+    |
+120 |         native.schema_recording_obstruction =
+121 ~             Some(crate::owl_dl::bounds::SchemaObstruction::Allocation);
+    |
+
+error: calling `Inputs::default()` is more clear than this expression
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:132:17
+    |
+132 |     kb.inputs = Default::default();
+    |                 ^^^^^^^^^^^^^^^^^^ help: try: `Inputs::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+    = note: `-D clippy::default-trait-access` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::default_trait_access)]`
+
+error: calling `SchemaPreparationBudget::default()` is more clear than this expression
+   --> crates/entail/src/owl_dl/proof/source/causal/tests.rs:158:49
+    |
+158 |         Reasoner::with_proofs_and_stop(&source, Default::default(), stop.clone()).unwrap();
+    |                                                 ^^^^^^^^^^^^^^^^^^ help: try: `SchemaPreparationBudget::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+
+error: could not compile `purrdf-entail` (lib test) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

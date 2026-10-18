@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on build directory
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: unnecessary structure name repetition
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:321:44
+    |
+321 |     pub fn key_definition(&self) -> Option<CausalInput<'a>> {
+    |                                            ^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+    = note: `-D clippy::use-self` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: could not compile `purrdf-entail` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

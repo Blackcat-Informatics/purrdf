@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against c75cbf947d78 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/596-owl-dl-expose-checked-source-bound 9c695a88f] Retain original native syntax reads for checked causal support
+ 12 files changed, 1073 insertions(+), 73 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/syntax.rs
+ create mode 100644 crates/entail/src/owl_dl/syntax/tests.rs

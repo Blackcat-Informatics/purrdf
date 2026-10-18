@@ -1,0 +1,20 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 25.20s
+     Running tests/current_clash_support.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/13227ed2f4d5466e/out/current_clash_support-13227ed2f4d5466e)
+
+running 1 test
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... FAILED
+
+failures:
+
+---- public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip stdout ----
+thread 'public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip' panicked at crates/entail/tests/current_clash_support.rs:622:9:
+the checked nominal target must retain both source memberships: {("https://example.org/x", "http://www.w3.org/2002/07/owl#differentFrom", "https://example.org/y"), ("https://example.org/y", "http://www.w3.org/1999/02/22-rdf-syntax-ns#type", "https://example.org/U")}
+
+
+failures:
+    public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --test current_clash_support`

@@ -1,0 +1,134 @@
+{
+  "issue": 596,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "OWL DL: expose checked source-bound causal clash dependencies",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "501": "Entailment: reusable snapshot-bound proof and justification query sessions",
+    "596": "OWL DL: expose checked source-bound causal clash dependencies",
+    "597": "Share owned-or-borrowed storage to repair native helper hygiene",
+    "598": "Share inline immutable owned-or-borrowed storage",
+    "493": "datalog: incremental maintenance of a materialized model under insertions and retractions (Z-set weights already compile)",
+    "488": "Datalog, chase and entailment: certified partial models and resumable evaluation instead of total refusal",
+    "476": "OWL 2 DL: close the four ledgered W3C OWL 2 consistency divergences"
+  },
+  "link_relations": {
+    "501": "mentions",
+    "596": "mentions",
+    "597": "mentions",
+    "598": "mentions",
+    "493": "2-hop",
+    "488": "2-hop",
+    "476": "2-hop"
+  },
+  "related": [
+    {
+      "number": 558,
+      "title": "Structured access to error variants and fields, so consumers never render errors to text",
+      "state": "OPEN"
+    },
+    {
+      "number": 586,
+      "title": "Replay ordinary DL clash reachability from recorded current support",
+      "state": "CLOSED"
+    },
+    {
+      "number": 563,
+      "title": "Segmented scans fetch their block through the cache once per row",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 404,
+      "title": "Additive complete-state dataset digest",
+      "state": "CLOSED"
+    },
+    {
+      "number": 495,
+      "title": "Layered stack over segmented snapshots: open and snapshot without a whole-dictionary rebuild, per-segment dictionaries that purge with their segment",
+      "state": "CLOSED"
+    },
+    {
+      "number": 408,
+      "title": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 457,
+      "title": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 482,
+      "title": "text: rank inputs past QUERY_TERMS_MAX, DOCUMENTS_MAX and FIELD_LENGTH_MAX exactly instead of refusing them",
+      "state": "CLOSED"
+    },
+    {
+      "number": 499,
+      "title": "Entailment: prepare schema-invariant cardinality contradictions once per class",
+      "state": "CLOSED"
+    },
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "duplicate-implementation": 1,
+    "performance": 3,
+    "source-identity": 1,
+    "missing-intrinsic-runtime": 1,
+    "proof-artifact-drift": 1,
+    "proof-premise-reachability": 1,
+    "correctness": 3,
+    "none": 19,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [
+      {
+        "number": 598,
+        "title": "Share inline immutable owned-or-borrowed storage",
+        "state": "MERGED",
+        "url": "https://github.com/Blackcat-Informatics/purrdf/pull/598",
+        "this_stage": false
+      }
+    ],
+    "own_branch": "paudley/596-owl-dl-expose-checked-source-bound"
+  },
+  "coverage": [
+    "issue #596 + 18 comment(s) via github",
+    "link crawl: 7 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['expose', 'checked', 'source-bound']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 10 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #596 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #596: 1",
+    "requirement candidates: 28 line(s); 3 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 1 URL(s)"
+  ]
+}

@@ -1,0 +1,25 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: used `assert!` with an equality comparison
+    --> crates/entail/src/owl_dl/proof/source/tests.rs:1031:9
+     |
+1031 | /         assert!(
+1032 | |             matches!(
+1033 | |                 rules[0].source,
+1034 | |                 Source::Anchor(crate::owl_dl::AxiomSource::Node { .. })
+1035 | |             ) == nary
+1036 | |         );
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_assert_eq
+     = note: `-D clippy::manual-assert-eq` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_assert_eq)]`
+help: replace it with `assert_eq!(..)`
+     |
+1031 ~         assert_eq!(
+1032 |             matches!(
+1033 |                 rules[0].source,
+1034 |                 Source::Anchor(crate::owl_dl::AxiomSource::Node { .. })
+1035 ~             ), nary
+     |
+
+error: could not compile `purrdf-entail` (lib test) due to 1 previous error

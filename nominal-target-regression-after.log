@@ -1,0 +1,9 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 22.80s
+     Running tests/current_clash_support.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/13227ed2f4d5466e/out/current_clash_support-13227ed2f4d5466e)
+
+running 1 test
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+

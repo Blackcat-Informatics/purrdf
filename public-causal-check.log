@@ -1,0 +1,369 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/rdf-events)
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/rdf-core)
+    Checking cfg-if v1.0.4
+    Checking hashbrown v0.17.1
+    Checking either v1.16.0
+    Checking crossbeam-utils v0.8.21
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/deflate)
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/xsd)
+    Checking crossbeam-deque v0.8.6
+    Checking rayon-core v1.13.0
+    Checking rayon v1.12.0
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:236:9
+    |
+236 |         key: usize,
+    |         ^^^^^^^^^^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:237:9
+    |
+237 |         left: ResolvedTerm<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:238:9
+    |
+238 |         right: ResolvedTerm<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:276:9
+    |
+276 |         cause: CausalCause<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:277:9
+    |
+277 |         mutation: CausalMutation<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:280:19
+    |
+280 |     Application { application: usize, clause: usize },
+    |                   ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:280:39
+    |
+280 |     Application { application: usize, clause: usize },
+    |                                       ^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:282:13
+    |
+282 |     Clash { clause: usize },
+    |             ^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:405:9
+    |
+405 |         ordinal: usize,
+    |         ^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:406:9
+    |
+406 |         role: ResolvedRole<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:411:18
+    |
+411 |     Transitive { root: usize, via: ResolvedRole<'a> },
+    |                  ^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:411:31
+    |
+411 |     Transitive { root: usize, via: ResolvedRole<'a> },
+    |                               ^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:431:9
+    |
+431 |         from: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:432:9
+    |
+432 |         to: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:433:9
+    |
+433 |         role: ResolvedRole<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:434:9
+    |
+434 |         witness: CausalRoleWitness<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:438:9
+    |
+438 |         antecedent: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:439:9
+    |
+439 |         consequent: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:440:9
+    |
+440 |         source: ResolvedAxiomSource<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:443:19
+    |
+443 |     SchemaGuard { clause: usize },
+    |                   ^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:448:9
+    |
+448 |         source: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:449:9
+    |
+449 |         kind: CausalRoleStateKind,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:566:9
+    |
+566 |         ordinal: usize,
+    |         ^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:567:9
+    |
+567 |         role: ResolvedRole<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:721:9
+    |
+721 |         node: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:722:9
+    |
+722 |         named: Option<ResolvedTerm<'a>>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:723:9
+    |
+723 |         parent: Option<CausalNode<'a>>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:724:9
+    |
+724 |         reserved: bool,
+    |         ^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:725:9
+    |
+725 |         concrete: bool,
+    |         ^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:729:9
+    |
+729 |         node: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:730:9
+    |
+730 |         concept: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:734:9
+    |
+734 |         ordinal: usize,
+    |         ^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:735:9
+    |
+735 |         from: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:736:9
+    |
+736 |         to: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:737:9
+    |
+737 |         role: ResolvedRole<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:741:9
+    |
+741 |         left: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:742:9
+    |
+742 |         right: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:746:9
+    |
+746 |         keep: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:747:9
+    |
+747 |         discard: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:751:9
+    |
+751 |         keep: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:752:9
+    |
+752 |         discard: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:753:9
+    |
+753 |         concept: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:757:9
+    |
+757 |         keep: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:758:9
+    |
+758 |         discard: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:759:9
+    |
+759 |         individual: ResolvedTerm<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:763:9
+    |
+763 |         keep: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:764:9
+    |
+764 |         discard: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:765:9
+    |
+765 |         previous_other: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:766:9
+    |
+766 |         other: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:770:9
+    |
+770 |         keep: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:771:9
+    |
+771 |         discard: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:775:9
+    |
+775 |         node: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:776:9
+    |
+776 |         class: u32,
+    |         ^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:777:9
+    |
+777 |         inherited_from: Option<CausalNode<'a>>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:781:9
+    |
+781 |         node: CausalNode<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:782:9
+    |
+782 |         concept: ResolvedConcept<'a>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-entail` (lib) due to 56 previous errors

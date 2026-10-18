@@ -1,0 +1,18 @@
+    Finished `test` profile [optimized] target(s) in 0.15s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 11 tests
+test owl_dl::clause::tests::a_conjunction_derives_one_conjunctive_head ... ok
+test owl_dl::clause::tests::a_disjunction_derives_a_disjunctive_head ... ok
+test owl_dl::clause::tests::a_min_restriction_derives_an_existential_head ... ok
+test owl_dl::clause::tests::a_nominal_derives_an_identification_per_member ... ok
+test owl_dl::clause::tests::an_at_most_restriction_derives_a_choose_clause_and_a_counting_clause ... ok
+test owl_dl::clause::tests::the_absorbed_tbox_becomes_triggered_atomic_clauses ... ok
+test owl_dl::clause::tests::an_absorbed_existential_antecedent_is_triggered_by_its_filler ... ok
+test owl_dl::clause::tests::the_clash_clauses_have_empty_heads ... ok
+test owl_dl::clause::tests::only_the_class_free_guards_are_untriggered_and_role_first_clauses_are_edge_indexed ... ok
+test owl_dl::clause::tests::every_derived_clause_is_matchable ... ok
+test owl_dl::clause::tests::a_large_cardinality_derives_one_schematic_clause ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 736 filtered out; finished in 0.00s
+

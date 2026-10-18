@@ -1,0 +1,28 @@
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/alloc-probe)
+    Checking libc v0.2.186
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/testkit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/stack)
+error[E0515]: cannot return value referencing local variable `refutation`
+   --> crates/entail/tests/current_clash_support.rs:366:45
+    |
+366 |                 .flat_map(|(_, refutation)| refutation.clashes())
+    |                                             ----------^^^^^^^^^^
+    |                                             |
+    |                                             returns a value referencing data owned by the current function
+    |                                             `refutation` is borrowed here
+    |
+note: this call may capture more lifetimes than intended, because Rust 2024 has adjusted the `impl Trait` lifetime capture rules
+   --> crates/entail/tests/current_clash_support.rs:366:45
+    |
+366 |                 .flat_map(|(_, refutation)| refutation.clashes())
+    |                                             ^^^^^^^^^^^^^^^^^^^^
+help: if you can modify this crate, add a precise capturing bound to avoid overcapturing: `+ use<'a>`
+   --> crates/entail/src/owl_dl/proof/source/causal.rs:139:30
+    |
+139 |     pub fn clashes(&self) -> impl ExactSizeIterator<Item = CausalClash<'a>> + 'a {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: use `.collect()` to allocate the iterator
+
+For more information about this error, try `rustc --explain E0515`.
+error: could not compile `purrdf-entail` (test "current_clash_support") due to 1 previous error

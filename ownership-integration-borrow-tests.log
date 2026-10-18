@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized] target(s) in 0.16s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 4 tests
+test reasoner::borrowed_tests::borrowed_context_shares_prepared_source_and_releases_the_reasoner ... ok
+test reasoner::borrowed_tests::borrowed_context_preserves_recording_refusal_and_caller_stop ... ok
+test reasoner::borrowed_tests::borrowed_context_preserves_prepared_question_and_source_refusals ... ok
+test reasoner::borrowed_tests::borrowed_context_matches_owned_replay_without_producer_state ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 746 filtered out; finished in 0.00s
+

@@ -1,0 +1,11 @@
+Auto-merging crates/entail/src/owl_dl/proof.rs
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 5a279b272bc9 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Merge made by the 'ort' strategy.
+ crates/entail/src/owl_dl/proof.rs              | 31 ++-------
+ crates/entail/src/owl_dl/proof/schema_tests.rs |  4 +-
+ crates/rdf-core/src/lib.rs                     |  2 +
+ crates/rdf-core/src/ownership.rs               | 81 ++++++++++++++++++++++
+ crates/retrieval/src/fusion_stream.rs          | 31 +++------
+ helpers-ledger.toml                            | 96 +++++++++++++++-----------
+ 6 files changed, 158 insertions(+), 87 deletions(-)
+ create mode 100644 crates/rdf-core/src/ownership.rs

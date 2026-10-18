@@ -1,0 +1,21 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 26.87s
+     Running unittests src/lib.rs (/opt/.cargo/45/03ed2870ac2b64/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+
+thread 'owl_dl::proof::source::causal::tests::public_causal_reserved_nested_origin_retains_original_parent_descriptor' (2278649) panicked at crates/entail/src/owl_dl/proof/source/causal/tests.rs:327:5:
+assertion `left == right` failed: verification=Ok(ServiceReplay { runs: 1, replayed: 1, claims: 1, checks: CheckReport { attested: 6, trusted: 33, unattested: 0, rests_on: [ReverseMapping, Clausification, Grounding, Unravelling, RefutationEncoding] } }); axioms=[(Named(Source(Iri("https://example.org/Spy"))), Max(1, ResolvedRole { property: Source(Iri("https://example.org/p")), inverse: true }, Top)), (Named(Source(Iri("https://example.org/Middle"))), Some(ResolvedRole { property: Source(Iri("https://example.org/r")), inverse: false }, Named(Source(Iri("https://example.org/Leaf"))))), (Named(Source(Iri("https://example.org/Leaf"))), Some(ResolvedRole { property: Source(Iri("https://example.org/p")), inverse: false }, Nominal([Source(Iri("https://example.org/spy"))]))), (Named(Source(Iri("https://example.org/Leaf"))), Max(1, ResolvedRole { property: Source(Iri("https://example.org/r")), inverse: true }, Top)), (Named(Source(Iri("https://example.org/Demand"))), Min(2, ResolvedRole { property: Source(Iri("https://example.org/s")), inverse: false }, Named(Source(Iri("https://example.org/Middle")))))]; types=[(Iri("https://example.org/spy"), Named(Source(Iri("https://example.org/Spy")))), (Iri("https://example.org/subject"), Named(Source(Iri("https://example.org/Demand"))))]
+  left: True
+ right: False
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test owl_dl::proof::source::causal::tests::public_causal_reserved_nested_origin_retains_original_parent_descriptor ... FAILED
+
+failures:
+
+failures:
+    owl_dl::proof::source::causal::tests::public_causal_reserved_nested_origin_retains_original_parent_descriptor
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 808 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --lib`

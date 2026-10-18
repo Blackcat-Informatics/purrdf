@@ -1,0 +1,19 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/596-owl-dl-expose-checked-source-bound/crates/entail)
+    Finished `test` profile [optimized] target(s) in 41.23s
+     Running tests/current_clash_support.rs (/opt/.cargo/45/03ed2870ac2b64/wasm32-unknown-unknown/debug/build/purrdf-entail/eb4a53a9f181f9c8/out/current_clash_support-eb4a53a9f181f9c8.wasm)
+
+running 10 tests
+test current_clash_preserves_named_and_scoped_blank_source_identity ... ok
+test current_clash_preserves_public_service_certificate_and_verification ... ok
+test current_clash_replays_generated_existential_witnesses ... ok
+test current_clash_checks_fresh_refutation_assumptions_without_a_source_name ... ok
+test current_clash_replays_equality_before_observing_role_premises ... ok
+test current_clash_borrows_the_independent_prepared_consumer ... ok
+test public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs ... ok
+test public_causal_service_binds_the_requested_question_and_query_assumptions ... ok
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... ok
+test public_causal_service_checks_reserved_birth_and_generative_trigger ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
