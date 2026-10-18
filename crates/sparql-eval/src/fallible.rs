@@ -184,8 +184,11 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
 }
 
 impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence> {
-    /// Attach an outer operation receipt without changing the outcome or root cause.
-    pub(crate) fn map_evidence<V>(
+    /// Transform the operation receipt without changing the outcome or root cause.
+    /// Diagnostics, partial payloads and their original allocation owners move
+    /// unchanged. The closure consumes only the receipt, so callers can compose
+    /// or project governed evidence without mirroring the error variants.
+    pub fn map_evidence<V>(
         self,
         map: impl FnOnce(Evidence) -> V,
     ) -> FallibleSparqlError<OperationalError, V> {
