@@ -1,0 +1,250 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native mutation observations for independent replay, not a completed causal slice.
+//!
+//! Source ordinals refer to the consumer's prepared arrays. They are not asserted
+//! RDF premises until their original parser/normalization licenses are resolved.
+
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use std::fmt;
+
+/// The native owner of a write. No producer label supplies a source fact.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Origin {
+    #[default]
+    Unattributed,
+    ObjectDomain,
+    TermDenotation,
+    PreparedType,
+    PreparedRole,
+    PreparedEquality,
+    PreparedDistinct,
+    AssumedType,
+    AssumedRole,
+    RefutationRoot,
+    AssumedAnonymousType,
+    Internalized,
+    Application,
+}
+
+/// An original prepared-array ordinal, or the checked application and head atom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Cause {
+    pub(crate) origin: Origin,
+    pub(crate) index: usize,
+    pub(crate) atom: usize,
+}
+
+/// An observed primitive, before it is linked to selected body/path dependencies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mutation {
+    Node {
+        node: usize,
+        named: Option<u32>,
+        parent: Option<usize>,
+        reserved: bool,
+        concrete: bool,
+    },
+    Label {
+        node: usize,
+        concept: u32,
+    },
+    Edge {
+        index: usize,
+        from: usize,
+        to: usize,
+        property: u32,
+    },
+    Distinct {
+        left: usize,
+        right: usize,
+    },
+    Merge {
+        keep: usize,
+        discard: usize,
+    },
+    LabelTransfer {
+        keep: usize,
+        discard: usize,
+        concept: u32,
+    },
+    NameTransfer {
+        keep: usize,
+        discard: usize,
+        individual: u32,
+    },
+    DistinctTransfer {
+        keep: usize,
+        discard: usize,
+        previous_other: usize,
+        other: usize,
+    },
+    DomainTransfer {
+        keep: usize,
+        discard: usize,
+    },
+    ValueClass {
+        node: usize,
+        class: u32,
+        inherited_from: Option<usize>,
+    },
+    WithdrawLabel {
+        node: usize,
+        concept: u32,
+    },
+}
+
+impl fmt::Debug for Mutation {
+    /// Keep diagnostics structural: these are native identities, not RDF names.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Node {
+                node,
+                named,
+                parent,
+                reserved,
+                concrete,
+            } => f
+                .debug_struct("Node")
+                .field("node", node)
+                .field("named", named)
+                .field("parent", parent)
+                .field("reserved", reserved)
+                .field("concrete", concrete)
+                .finish(),
+            Self::Label { node, concept } => {
+                f.debug_tuple("Label").field(&(node, concept)).finish()
+            }
+            Self::Edge {
+                index,
+                from,
+                to,
+                property,
+            } => f
+                .debug_tuple("Edge")
+                .field(&(index, from, to, property))
+                .finish(),
+            Self::Distinct { left, right } => {
+                f.debug_tuple("Distinct").field(&(left, right)).finish()
+            }
+            Self::Merge { keep, discard } => {
+                f.debug_tuple("Merge").field(&(keep, discard)).finish()
+            }
+            Self::LabelTransfer {
+                keep,
+                discard,
+                concept,
+            } => f
+                .debug_tuple("LabelTransfer")
+                .field(&(keep, discard, concept))
+                .finish(),
+            Self::NameTransfer {
+                keep,
+                discard,
+                individual,
+            } => f
+                .debug_tuple("NameTransfer")
+                .field(&(keep, discard, individual))
+                .finish(),
+            Self::DistinctTransfer {
+                keep,
+                discard,
+                previous_other,
+                other,
+            } => f
+                .debug_tuple("DistinctTransfer")
+                .field(&(keep, discard, previous_other, other))
+                .finish(),
+            Self::WithdrawLabel { node, concept } => f
+                .debug_tuple("WithdrawLabel")
+                .field(&(node, concept))
+                .finish(),
+            Self::DomainTransfer { keep, discard } => f
+                .debug_tuple("DomainTransfer")
+                .field(&(keep, discard))
+                .finish(),
+            Self::ValueClass {
+                node,
+                class,
+                inherited_from,
+            } => f
+                .debug_tuple("ValueClass")
+                .field(&(node, class, inherited_from))
+                .finish(),
+        }
+    }
+}
+
+/// The owner and operation stay together through aliases and withdrawals.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Event {
+    pub(crate) cause: Cause,
+    pub(crate) mutation: Mutation,
+}
+
+impl fmt::Debug for Event {
+    /// Show all cause components alongside the exact native mutation.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Cause {
+            origin,
+            index,
+            atom,
+        } = self.cause;
+        f.debug_struct("Event")
+            .field("cause", &(origin, index, atom))
+            .field("mutation", &self.mutation)
+            .finish()
+    }
+}
+
+/// One replay owns one fallible native buffer and its original resident account.
+#[derive(Debug, Default)]
+pub(crate) struct Journal {
+    pub(crate) cause: Cause,
+    pub(super) stopped: bool,
+    events: Vec<Event>,
+    storage: Resident,
+    live: usize,
+    #[cfg(test)]
+    injected_refusal: Option<StorageError>,
+}
+
+impl Journal {
+    /// Inject one typed refusal at the same publication boundary as allocation.
+    #[cfg(test)]
+    pub(crate) fn with_injected_refusal(original: StorageError) -> Self {
+        Self {
+            injected_refusal: Some(original),
+            ..Self::default()
+        }
+    }
+
+    /// Reserve under the same original owner before publishing an observation.
+    pub(crate) fn push(
+        &mut self,
+        mutation: Mutation,
+        cause: Option<Cause>,
+    ) -> Result<(), StorageError> {
+        let cause = cause.unwrap_or(self.cause);
+        assert_ne!(
+            cause.origin,
+            Origin::Unattributed,
+            "a native mutation requires a source or checked application owner"
+        );
+        #[cfg(test)]
+        if let Some(error) = self.injected_refusal.take() {
+            return Err(error);
+        }
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = memory.push(&mut self.events, Event { cause, mutation });
+        self.live = memory.admitted_bytes();
+        result
+    }
+
+    /// Inspect the actual recorder in synthetic native replay controls.
+    #[cfg(test)]
+    pub(crate) fn events(&self) -> &[Event] {
+        &self.events
+    }
+}

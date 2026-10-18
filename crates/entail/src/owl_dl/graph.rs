@@ -42,6 +42,9 @@ use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, TransitivePatterns};
 use crate::owl_dl::concept::{Decomp, Role};
 
+pub(super) mod changes;
+use changes::{Cause, Journal, Mutation, Origin};
+
 /// A single completion-graph node.
 #[derive(Clone)]
 pub(crate) struct Node {
@@ -1710,6 +1713,8 @@ pub(crate) struct Graph<'a> {
     /// The run's work meter — charged by every scan and enumeration below, and by the two
     /// drivers for the work they do outside these methods.
     work: Work,
+    /// Enabled only by independent replay that requests native mutation evidence.
+    changes: RefCell<Option<Journal>>,
     /// The internalized TBox: meta-concept ids placed in every abstract node's label.
     meta: BTreeSet<u32>,
     /// Every concept the TBox asserts UNCONDITIONALLY of an element of the object domain: the
@@ -1791,6 +1796,7 @@ impl<'a> Graph<'a> {
                 .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY),
             kb,
             work: Work::new(work_cap),
+            changes: RefCell::new(None),
             meta,
             unconditional,
             achiever_cache: RefCell::new(AchieverCache::default()),
@@ -1820,6 +1826,154 @@ impl<'a> Graph<'a> {
 
     pub(crate) fn storage_refusal(&self) -> Option<purrdf_lex::allocation::StorageError> {
         self.work.storage_refusal.get()
+    }
+
+    /// Lend an owned native journal to this one independent replay.
+    pub(super) fn begin_changes(&self, journal: Journal) {
+        let previous = self.changes.replace(Some(journal));
+        assert!(previous.is_none(), "one replay owns one mutation journal");
+    }
+
+    /// Return the original owner with its buffer; no payload escapes its account.
+    pub(super) fn finish_changes(&self) -> Option<Journal> {
+        self.changes.take()
+    }
+
+    fn observing_changes(&self) -> bool {
+        self.work.storage_refusal.get().is_none()
+            && self
+                .changes
+                .borrow()
+                .as_ref()
+                .is_some_and(|journal| !journal.stopped)
+    }
+
+    /// A stop observed while publishing metadata stays latched for this replay.
+    pub(super) fn changes_stopped(&self) -> bool {
+        self.changes
+            .borrow()
+            .as_ref()
+            .is_some_and(|journal| journal.stopped)
+    }
+
+    /// A refused observation prevents another head from publishing partial evidence.
+    pub(super) fn changes_refused(&self) -> bool {
+        self.work.storage_refusal.get().is_some() || self.changes_stopped()
+    }
+
+    /// Original native ordinals and application positions never become RDF terms.
+    pub(super) fn change_cause(&self, origin: Origin, index: usize) {
+        if let Some(journal) = self.changes.borrow_mut().as_mut() {
+            journal.cause = Cause {
+                origin,
+                index,
+                atom: 0,
+            };
+        }
+    }
+
+    /// Refine the checked application to the actual head atom being applied.
+    pub(super) fn change_atom(&self, atom: usize) {
+        if let Some(journal) = self.changes.borrow_mut().as_mut()
+            && journal.cause.origin == Origin::Application
+        {
+            journal.cause.atom = atom;
+        }
+    }
+
+    fn observe_change(&self, mutation: Mutation, cause: Option<Cause>) {
+        if self.work.storage_refusal.get().is_some() {
+            return;
+        }
+        if let Some(journal) = self.changes.borrow_mut().as_mut() {
+            if journal.stopped {
+                return;
+            }
+            if self.kb.stopped() {
+                journal.stopped = true;
+                return;
+            }
+            self.work.charge(1);
+            if let Err(original) = journal.push(mutation, cause) {
+                self.work.storage_refusal.set(Some(original));
+            }
+        }
+    }
+
+    /// Record the actual node and its own schema seeds, without cloning labels.
+    fn observe_node(&self, st: &State, node: usize, named: Option<u32>, reserved: bool) {
+        if !self.observing_changes() {
+            return;
+        }
+        let value = &st.nodes[node];
+        let term_cause = named.map(|term| Cause {
+            origin: Origin::TermDenotation,
+            index: term as usize,
+            atom: 0,
+        });
+        self.observe_change(
+            Mutation::Node {
+                node,
+                named,
+                parent: value.parent,
+                reserved,
+                concrete: value.concrete,
+            },
+            term_cause,
+        );
+        if !self.observing_changes() {
+            return;
+        }
+        if let Some(class) = value.value_class {
+            self.observe_change(
+                Mutation::ValueClass {
+                    node,
+                    class,
+                    inherited_from: None,
+                },
+                term_cause,
+            );
+        }
+        if !value.concrete {
+            for &concept in &self.meta {
+                self.observe_change(
+                    Mutation::Label { node, concept },
+                    Some(Cause {
+                        origin: Origin::Internalized,
+                        index: concept as usize,
+                        atom: 0,
+                    }),
+                );
+            }
+        }
+    }
+
+    fn push_edge(&self, st: &mut State, from: usize, to: usize, property: u32) {
+        let index = st.edges.len();
+        st.push_edge(from, to, property);
+        self.observe_change(
+            Mutation::Edge {
+                index,
+                from,
+                to,
+                property,
+            },
+            None,
+        );
+    }
+
+    fn assert_distinct(&self, st: &mut State, left: usize, right: usize) {
+        if !self.observing_changes() {
+            set_distinct(st, left, right);
+            return;
+        }
+        let left = find(st, left);
+        let right = find(st, right);
+        let present = st.nodes[left].neq.contains(&right);
+        set_distinct(st, left, right);
+        if !st.clash && !present {
+            self.observe_change(Mutation::Distinct { left, right }, None);
+        }
     }
 
     /// Latch the original caller stop and inspect the shared read-work refusal.
@@ -1863,16 +2017,27 @@ impl<'a> Graph<'a> {
             for &ind in &self.kb.individuals {
                 self.root(&mut st, ind);
             }
-            for &(a, c) in &self.kb.abox_types {
+            for (index, &(a, c)) in self.kb.abox_types.iter().enumerate() {
+                self.change_cause(Origin::PreparedType, index);
                 let ra = self.root(&mut st, a);
-                st.nodes[ra].label.insert(c);
+                if st.nodes[ra].label.insert(c) {
+                    self.observe_change(
+                        Mutation::Label {
+                            node: ra,
+                            concept: c,
+                        },
+                        None,
+                    );
+                }
             }
-            for &(a, p, b) in &self.kb.abox_roles {
+            for (index, &(a, p, b)) in self.kb.abox_roles.iter().enumerate() {
+                self.change_cause(Origin::PreparedRole, index);
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
-                st.push_edge(ra, rb, p);
+                self.push_edge(&mut st, ra, rb, p);
             }
-            for &(a, b) in &self.kb.same_as {
+            for (index, &(a, b)) in self.kb.same_as.iter().enumerate() {
+                self.change_cause(Origin::PreparedEquality, index);
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
                 self.merge_nodes(&mut st, ra, rb);
@@ -1880,10 +2045,11 @@ impl<'a> Graph<'a> {
             // `owl:differentFrom` / `owl:AllDifferent`, as recorded `≠` pairs. Without
             // them no `≤n r.C` restriction can be violated, because a violation counts
             // PAIRWISE-DISTINCT neighbours and OWL 2 makes no unique name assumption.
-            for &(a, b) in &self.kb.different_from {
+            for (index, &(a, b)) in self.kb.different_from.iter().enumerate() {
+                self.change_cause(Origin::PreparedDistinct, index);
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
-                set_distinct(&mut st, ra, rb);
+                self.assert_distinct(&mut st, ra, rb);
             }
         }
         if self.top_role.is_some() {
@@ -1902,17 +2068,27 @@ impl<'a> Graph<'a> {
                 }
             }
         }
-        for &(a, c) in extra {
+        for (index, &(a, c)) in extra.iter().enumerate() {
+            self.change_cause(Origin::AssumedType, index);
             let ra = self.root(&mut st, a);
-            st.nodes[ra].label.insert(c);
+            if st.nodes[ra].label.insert(c) {
+                self.observe_change(
+                    Mutation::Label {
+                        node: ra,
+                        concept: c,
+                    },
+                    None,
+                );
+            }
         }
         // An assumed role edge, whose endpoints may be individuals the ontology never
         // mentions: `root` mints a node for one on demand, which is what lets a role-axiom
         // refutation run over a pair of fresh symbols.
-        for &(a, p, b) in extra_roles {
+        for (index, &(a, p, b)) in extra_roles.iter().enumerate() {
+            self.change_cause(Origin::AssumedRole, index);
             let ra = self.root(&mut st, a);
             let rb = self.root(&mut st, b);
-            st.push_edge(ra, rb, p);
+            self.push_edge(&mut st, ra, rb, p);
         }
         // OWL interpretations have a non-empty object domain even with no ABox.
         // A data-only ABox does not supply an object-domain witness either.
@@ -1920,9 +2096,18 @@ impl<'a> Graph<'a> {
             || !(0..st.nodes.len())
                 .any(|index| st.nodes[index].merged.is_none() && !st.nodes[index].concrete)
         {
+            self.change_cause(
+                if fresh_types.is_empty() {
+                    Origin::ObjectDomain
+                } else {
+                    Origin::RefutationRoot
+                },
+                0,
+            );
             self.work.charge(self.meta.len() as u64 + 1);
             let mut label = self.seed_label();
             label.extend(fresh_types.iter().copied());
+            let node = st.nodes.len();
             st.nodes.push(Node {
                 label,
                 parent: None,
@@ -1937,7 +2122,21 @@ impl<'a> Graph<'a> {
                 concrete: false,
                 value_class: None,
             });
+            self.observe_node(&st, node, None, false);
+            if self.observing_changes() {
+                for (index, &concept) in fresh_types.iter().enumerate() {
+                    self.observe_change(
+                        Mutation::Label { node, concept },
+                        Some(Cause {
+                            origin: Origin::AssumedAnonymousType,
+                            index,
+                            atom: 0,
+                        }),
+                    );
+                }
+            }
         }
+        self.change_cause(Origin::Unattributed, 0);
         st
     }
 
@@ -1980,6 +2179,7 @@ impl<'a> Graph<'a> {
             value_class: self.kb.literal_class.get(&a).copied(),
         });
         std::rc::Rc::make_mut(&mut st.root_of).insert(a, idx);
+        self.observe_node(st, idx, Some(a), false);
         idx
     }
 
@@ -2017,6 +2217,7 @@ impl<'a> Graph<'a> {
             value_class: None,
         });
         std::rc::Rc::make_mut(&mut st.generated_root_of).insert(key, idx);
+        self.observe_node(st, idx, None, true);
         idx
     }
 
@@ -2160,6 +2361,7 @@ impl<'a> Graph<'a> {
             st.clash = true;
             return;
         }
+        self.observe_change(Mutation::Merge { keep, discard }, None);
         // Folding one node into another copies its label, its inequalities and its names, so
         // the cost is the size of what is folded. Charged here because identification is how
         // a nominal-heavy ontology spends a round without adding a node to count.
@@ -2171,14 +2373,38 @@ impl<'a> Graph<'a> {
         );
         // Fold the discarded node's label and distinctness into the keeper.
         let disc_label = st.nodes[discard].label.clone();
+        if self.observing_changes() {
+            for &concept in &disc_label {
+                if !st.nodes[keep].label.contains(&concept) {
+                    self.observe_change(
+                        Mutation::LabelTransfer {
+                            keep,
+                            discard,
+                            concept,
+                        },
+                        None,
+                    );
+                }
+            }
+        }
         st.nodes[keep].label.extend(disc_label);
         let disc_neq: Vec<usize> = st.nodes[discard].neq.iter().copied().collect();
-        for w in disc_neq {
-            let w = find(st, w);
+        for previous_other in disc_neq {
+            let w = find(st, previous_other);
             if w == keep {
                 st.clash = true;
             }
-            st.nodes[keep].neq.insert(w);
+            if st.nodes[keep].neq.insert(w) {
+                self.observe_change(
+                    Mutation::DistinctTransfer {
+                        keep,
+                        discard,
+                        previous_other,
+                        other: w,
+                    },
+                    None,
+                );
+            }
             st.nodes[w].neq.insert(keep);
         }
         // Carry every nominal identity onto the keeper. The keeper now denotes *both* names,
@@ -2187,6 +2413,20 @@ impl<'a> Graph<'a> {
         // lands on the keeper, and repointing would copy the whole map on the first merge of
         // every branch that shares it.
         let disc_nominals = st.nodes[discard].nominals.clone();
+        if self.observing_changes() {
+            for &individual in &disc_nominals {
+                if !st.nodes[keep].nominals.contains(&individual) {
+                    self.observe_change(
+                        Mutation::NameTransfer {
+                            keep,
+                            discard,
+                            individual,
+                        },
+                        None,
+                    );
+                }
+            }
+        }
         st.nodes[keep].nominals.extend(disc_nominals);
         if st.nodes[discard].root {
             st.nodes[keep].root = true;
@@ -2211,10 +2451,24 @@ impl<'a> Graph<'a> {
         // `are_distinct` above already refused the merge when the two classes disagree, so
         // this cannot silently overwrite one value with another.
         if st.nodes[discard].concrete {
+            let was_concrete = st.nodes[keep].concrete;
             st.nodes[keep].concrete = true;
+            if !was_concrete {
+                self.observe_change(Mutation::DomainTransfer { keep, discard }, None);
+            }
         }
         if st.nodes[keep].value_class.is_none() {
             st.nodes[keep].value_class = st.nodes[discard].value_class;
+            if let Some(class) = st.nodes[keep].value_class {
+                self.observe_change(
+                    Mutation::ValueClass {
+                        node: keep,
+                        class,
+                        inherited_from: Some(discard),
+                    },
+                    None,
+                );
+            }
         }
         // The keeper is now known to inhabit the DATA domain, so the TBox's unconditional
         // assertions never constrained it — whichever encoding they arrived in. Withdrawing
@@ -2222,7 +2476,15 @@ impl<'a> Graph<'a> {
         // identification is allowed to move the answer in.
         if st.nodes[keep].concrete {
             for concept in &self.unconditional {
-                st.nodes[keep].label.remove(concept);
+                if st.nodes[keep].label.remove(concept) {
+                    self.observe_change(
+                        Mutation::WithdrawLabel {
+                            node: keep,
+                            concept: *concept,
+                        },
+                        None,
+                    );
+                }
             }
         }
         st.forward(keep, discard);
@@ -2251,7 +2513,17 @@ impl<'a> Graph<'a> {
             return false;
         }
         let y = find(st, y);
-        st.nodes[y].label.insert(c)
+        let inserted = st.nodes[y].label.insert(c);
+        if inserted {
+            self.observe_change(
+                Mutation::Label {
+                    node: y,
+                    concept: c,
+                },
+                None,
+            );
+        }
+        inserted
     }
 
     /// Whether node `y` satisfies concept `c` (with `⊤` always satisfied).
@@ -2302,6 +2574,16 @@ impl<'a> Graph<'a> {
             concrete,
             value_class: None,
         });
+        self.observe_node(st, idx, None, false);
+        if self.observing_changes() {
+            for &concept in fillers {
+                if !matches!(self.kb.table.decomp(concept), Decomp::Top)
+                    && (concrete || !self.meta.contains(&concept))
+                {
+                    self.observe_change(Mutation::Label { node: idx, concept }, None);
+                }
+            }
+        }
         let parent = find(st, x);
         if st.children.len() <= parent {
             st.children.resize_with(parent + 1, std::rc::Rc::default);
@@ -2309,9 +2591,9 @@ impl<'a> Graph<'a> {
         std::rc::Rc::make_mut(&mut st.children[parent]).push(idx);
         // A forward role stores `x → y`; an inverse role stores `y → x`.
         if inverted {
-            st.push_edge(idx, x, prop);
+            self.push_edge(st, idx, x, prop);
         } else {
-            st.push_edge(x, idx, prop);
+            self.push_edge(st, x, idx, prop);
         }
         idx
     }
@@ -2889,7 +3171,7 @@ impl<'a> Graph<'a> {
         // A loop is its own inverse, so the direction the edge is stored in does not matter;
         // the named property is what the role hierarchy is closed over.
         let (Role::Named(property) | Role::Inv(property)) = role;
-        st.push_edge(x, x, property);
+        self.push_edge(st, x, x, property);
         true
     }
 
@@ -3044,7 +3326,11 @@ impl<'a> Graph<'a> {
             st.clique_exhausted.set(true);
             return false;
         }
+        let observing = self.changes.borrow().is_some();
         while clique.len() < n {
+            if observing && self.changes_refused() {
+                return false;
+            }
             let y = self.new_successor(st, x, role, &[filler]);
             clique.push(y);
         }
@@ -3055,7 +3341,10 @@ impl<'a> Graph<'a> {
             .charge((clique.len() as u64).saturating_mul(clique.len() as u64));
         for a in 0..clique.len() {
             for b in (a + 1)..clique.len() {
-                set_distinct(st, clique[a], clique[b]);
+                if observing && self.changes_refused() {
+                    return false;
+                }
+                self.assert_distinct(st, clique[a], clique[b]);
             }
         }
         true

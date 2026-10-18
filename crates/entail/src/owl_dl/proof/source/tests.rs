@@ -58,6 +58,7 @@ fn derived_for(individual: Option<TermValue>) -> (DlProof, DlProofContext<'stati
 /// A checked application prefix is not a causal slice: retain this counterexample.
 #[test]
 fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
+    use crate::owl_dl::graph::changes::{Journal, Mutation, Origin};
     let mut f = Fixture::default();
     let unrelated = f.name("Unrelated");
     let derived = f.name("UnrelatedDerived");
@@ -83,14 +84,96 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     let prefix =
         crate::owl_dl::support::prefix(&proof.support, step.current.as_ref().unwrap().latest, None)
             .unwrap();
-    assert!(prefix.iter().any(|application| matches!(ctx.clause_tbox_origin(application.clause).unwrap(),
+    let unrelated_step = prefix.iter().position(|application| matches!(ctx.clause_tbox_origin(application.clause).unwrap(),
         Some(ResolvedAxiomSource::Triple { subject: ResolvedTerm::Source(TermValue::Iri(subject)), .. })
-        if subject == "https://example.org/Unrelated")));
+        if subject == "https://example.org/Unrelated")).unwrap();
     let checked = proof.resolve_clash(index, &ctx).unwrap();
     assert!(checked.replay().current_supported());
     assert!(checked.witness().all(|fact| matches!(fact,
         ResolvedFact::Concept(ResolvedNode::Individual(ResolvedTerm::Source(TermValue::Iri(individual))), _)
         if individual == "https://example.org/inhabitant")));
+    let observed = crate::owl_dl::hyper::replay_observing_support(
+        &ctx.kb,
+        &crate::owl_dl::graph::Assumptions::of_kb(),
+        &prefix,
+        step.clause,
+        &step.current.as_ref().unwrap().frame,
+        &proof.branches,
+        Journal::default(),
+    )
+    .unwrap();
+    assert_eq!(observed.frame, step.frame);
+    assert_eq!(observed.facts, step.witness);
+    let journal = observed.mutations.unwrap();
+    let earlier = ctx
+        .kb
+        .interner
+        .id_of_iri("https://example.org/earlier")
+        .unwrap();
+    let earlier_node = journal
+        .events()
+        .iter()
+        .find_map(|event| match event.mutation {
+            Mutation::Node {
+                node,
+                named: Some(name),
+                ..
+            } if name == earlier => Some(node),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        journal
+            .events()
+            .iter()
+            .any(|event| event.cause.origin == Origin::Application
+                && event.cause.index == unrelated_step
+                && matches!(event.mutation, Mutation::Label { node, .. } if node == earlier_node))
+    );
+    assert!(
+        journal
+            .events()
+            .iter()
+            .any(|event| event.cause.origin == Origin::PreparedRole)
+    );
+    // This is the actual mutation history, not yet the required backward causal slice.
+}
+
+/// A failed native recording keeps its original refusal and cannot publish an empty trace.
+#[test]
+fn native_mutations_preserve_original_storage_refusal_before_malformed_reporting() {
+    use crate::owl_dl::graph::changes::Journal;
+    use purrdf_lex::allocation::StorageError;
+    let (proof, ctx) = derived();
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.current.is_some())
+        .unwrap();
+    let step = &proof.clashes[index];
+    let prefix =
+        crate::owl_dl::support::prefix(&proof.support, step.current.as_ref().unwrap().latest, None)
+            .unwrap();
+    let journal = Journal::with_injected_refusal(StorageError::AllocationFailed);
+    assert!(matches!(
+        crate::owl_dl::hyper::replay_observing_support(
+            &ctx.kb,
+            &crate::owl_dl::graph::Assumptions::of_kb(),
+            &prefix,
+            step.clause,
+            &[usize::MAX],
+            &proof.branches,
+            journal,
+        ),
+        Err(DlProofError::Storage(StorageError::AllocationFailed))
+    ));
+    assert!(
+        proof
+            .resolve_clash(index, &ctx)
+            .unwrap()
+            .replay()
+            .current_supported()
+    );
 }
 
 #[test]
