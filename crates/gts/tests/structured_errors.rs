@@ -488,6 +488,128 @@ fn reader_causes_survive_input_graph_and_streaming_owners() {
     assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
 }
 
+fn reader_layout_findings_keep_counts_heads_and_roots() {
+    use purrdf_gts::{
+        model::Term,
+        reader::{read, read_to_sink},
+        writer::Writer,
+    };
+    use purrdf_lex::cbor::Value;
+    let mut valid = Writer::with_layout("generic", Some("streamable"));
+    valid.add_terms(&[Term::iri("http://example.org/s")]);
+    valid.add_index_with_mmr();
+    let valid = valid.into_bytes();
+    assert_eq!(read(&valid, true, None).diagnostics.len(), 0);
+    assert_eq!(
+        read_to_sink(&valid, true, None, &mut DiagnosticSink::default())
+            .diagnostics
+            .len(),
+        0
+    );
+    let cases = [
+        "gts-layout-missing-footer",
+        "gts-layout-footer",
+        "gts-index-mmr-width",
+        "gts-index-mmr-preceding",
+        "gts-index-mmr-head",
+        "gts-index-mmr-root",
+        "gts-layout-blob-order",
+    ];
+    for code in cases {
+        let mut writer = Writer::with_layout("generic", Some("streamable"));
+        let head = writer.add_terms(&[Term::iri("http://example.org/s")]);
+        if code == "gts-layout-blob-order" {
+            writer.add_blob(b"undescribed", None, None);
+            writer.add_index();
+        } else if code != "gts-layout-missing-footer" {
+            let count = if matches!(code, "gts-layout-footer" | "gts-index-mmr-preceding") {
+                u64::MAX
+            } else {
+                1
+            };
+            let mut payload = vec![
+                (Value::from("count"), Value::from(count)),
+                (
+                    Value::from("head"),
+                    Value::Bytes(if code == "gts-index-mmr-head" {
+                        vec![53; 32]
+                    } else {
+                        head.clone()
+                    }),
+                ),
+            ];
+            if code != "gts-layout-footer" {
+                payload.push((
+                    Value::from("mmr"),
+                    Value::Bytes(if code == "gts-index-mmr-width" {
+                        vec![54; 3]
+                    } else {
+                        vec![54; 32]
+                    }),
+                ));
+            }
+            writer.add_frame("index", Some(Value::Map(payload)), None, None, None);
+        }
+        let bytes = writer.into_bytes();
+        let graph = read(&bytes, true, None);
+        let mut sink = DiagnosticSink::default();
+        let returned = read_to_sink(&bytes, true, None, &mut sink);
+        for diagnostics in [&graph.diagnostics, &returned.diagnostics, &sink.diagnostics] {
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic
+                        .native_cause()
+                        .is_some_and(|cause| Capture::read(cause).code == code)
+                })
+                .unwrap_or_else(|| panic!("missing {code}: {diagnostics:?}"));
+            let native = diagnostic.native_cause().unwrap();
+            let fields = Capture::read(native);
+            match code {
+                "gts-layout-missing-footer" => assert_eq!(fields.events.len(), 0),
+                "gts-layout-footer" | "gts-index-mmr-preceding" => {
+                    assert!(
+                        matches!(fields.field("count"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+                    );
+                    assert!(matches!(fields.field("preceding"), ErrorValue::Unsigned(1)));
+                }
+                "gts-index-mmr-width" => assert!(
+                    matches!(fields.field("root"), ErrorValue::Bytes(value) if value == [54; 3])
+                ),
+                "gts-index-mmr-head" => {
+                    assert!(
+                        matches!(fields.field("head"), ErrorValue::Bytes(value) if value == [53; 32])
+                    );
+                    assert!(
+                        matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == head)
+                    );
+                }
+                "gts-index-mmr-root" => {
+                    assert!(
+                        matches!(fields.field("root"), ErrorValue::Bytes(value) if value == [54; 32])
+                    );
+                    assert!(
+                        matches!(fields.field("computed"), ErrorValue::Bytes(value) if value == purrdf_gts::mmr::root(std::slice::from_ref(&head)))
+                    );
+                }
+                "gts-layout-blob-order" => {
+                    assert!(matches!(fields.field("frame"), ErrorValue::Unsigned(2)));
+                    assert!(matches!(fields.field("covered"), ErrorValue::Unsigned(2)));
+                    assert!(
+                        matches!(fields.field("digest"), ErrorValue::Text(value) if value == purrdf_gts::wire::digest_label(&purrdf_gts::wire::blake3_256(b"undescribed")))
+                    );
+                }
+                _ => unreachable!("all layout controls are checked"),
+            }
+            let events = Vec::with_capacity(12);
+            let window = CurrentThreadWindow::open();
+            let captured = Capture::read_with_buffer(native, events);
+            assert_eq!(window.close().allocations, 0);
+            assert_eq!(captured.code, code);
+        }
+    }
+}
+
 fn reader_file_and_chain_diagnostics_retain_native_inputs() {
     use purrdf_gts::{
         reader::{read, read_to_sink},
@@ -1723,6 +1845,7 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
 }
 
 purrdf_testkit::harness_main!(
+    reader_layout_findings_keep_counts_heads_and_roots,
     reader_file_and_chain_diagnostics_retain_native_inputs,
     reader_row_diagnostics_keep_native_widths_ids_and_term_kinds,
     tar_blob_sources_keep_observed_size_and_digest_refusals,
