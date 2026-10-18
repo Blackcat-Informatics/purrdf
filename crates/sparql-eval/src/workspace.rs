@@ -608,7 +608,8 @@ trait GrowthAdmission: std::fmt::Debug + Send + Sync {
 
 trait AllocationOwner: std::fmt::Debug + Send + Sync {
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError>;
-    fn retain(&mut self, bytes: u64) -> Result<(), EvalError>;
+    /// Transfer an existing child grant; this admits no new payload bytes.
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError>;
 }
 
 /// Immutable report records retain the actual arrays and each record's native
@@ -1257,8 +1258,8 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
         self[0].resize(bytes)
     }
-    fn retain(&mut self, bytes: u64) -> Result<(), EvalError> {
-        self[0].retain(bytes)
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self[0].transfer_to_publication(bytes)
     }
 }
 
@@ -1478,7 +1479,7 @@ impl WorkspaceTerm {
         workspace: &WorkspaceCapability,
     ) -> Result<purrdf_core::TermValue, EvalError> {
         let bytes = self.layout(workspace)?.bytes;
-        self.allocation.retain(bytes)?;
+        self.allocation.transfer_to_publication(bytes)?;
         Ok(self.value)
     }
     /// Move a resident term out while refusing to detach any native admission.
@@ -1566,10 +1567,10 @@ impl WorkspaceTerm {
 }
 
 impl WorkspaceAllocation {
-    fn retain(&mut self, bytes: u64) -> Result<(), EvalError> {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
         self.owner
             .as_mut()
-            .map_or(Ok(()), |owner| owner.retain(bytes))
+            .map_or(Ok(()), |owner| owner.transfer_to_publication(bytes))
     }
     /// Whether a live operational account owns this allocation grant.
     #[must_use]
@@ -2271,7 +2272,7 @@ impl<E: Clone> std::fmt::Debug for WorkspaceCharge<E> {
 }
 
 impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for WorkspaceCharge<E> {
-    fn retain(&mut self, bytes: u64) -> Result<(), EvalError> {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
         let remaining = self
             .bytes
             .checked_sub(bytes)
@@ -2294,7 +2295,7 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for W
             account.base = base;
             account.children = children;
         } else if let Some(native) = &mut self.native {
-            native.retain(bytes)?;
+            native.transfer_to_publication(bytes)?;
         }
         self.bytes = remaining;
         Ok(())
