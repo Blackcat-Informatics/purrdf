@@ -264,10 +264,10 @@ def _suite_shacl_w3c() -> SuiteResult:
     own `TOTAL` line. Ledgered xfails are counted in the XFail/Skip column."""
     return _scrape(
         "SHACL Core + SHACL-SPARQL", "W3C data-shapes", "purrdf-shapes", "w3c_conformance",
-        "`TOTAL: passed N, xfailed N, ledger N`",
-        r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)",
-        lambda passed, xfailed, _ledger: (
-            passed, xfailed, 0, f"{passed} pass as approved · {xfailed} ledgered", True,
+        "`TOTAL: passed N, spec-contradicted N, xfailed N, ledger N`",
+        r"(?<!W3C12 )TOTAL: passed (\d+), spec-contradicted (\d+), xfailed (\d+), ledger (\d+)",
+        lambda passed, spec, xfailed, _ledger: (
+            passed, xfailed + spec, 0, f"{passed} pass as approved" + (f" · spec-contradicted {spec}" if spec else "") + f" · {xfailed} ledgered", True,
         ),
     )
 
@@ -286,16 +286,16 @@ def _suite_shacl12_w3c() -> SuiteResult:
 
     Only the APPROVED suite — the entries an upstream manifest lists — is this
     row. Pass is the entries that agree with their approved expectation exactly;
-    the ledgered ones are the XFail/Skip column. The entries of vendored files no
-    manifest includes are
+    the ledgered and the spec-contradicted ones (reported failed, never Pass) are
+    the XFail/Skip column. The entries of vendored files no manifest includes are
     their own row, `_suite_shacl12_unlisted`."""
     return _scrape(
         _SHACL12_NAME, _SHACL12_SOURCE, "purrdf-shapes", "w3c12_conformance",
-        "`W3C12 TOTAL: passed N, xfailed N, ledger N`",
-        r"W3C12 TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)",
-        lambda passed, xfailed, _ledger: (
-            passed, xfailed, 0,
-            f"{passed} pass as approved · {xfailed} ledgered",
+        "`W3C12 TOTAL: passed N, spec-contradicted N, xfailed N, ledger N`",
+        r"W3C12 TOTAL: passed (\d+), spec-contradicted (\d+), xfailed (\d+), ledger (\d+)",
+        lambda passed, spec, xfailed, _ledger: (
+            passed, xfailed + spec, 0,
+            f"{passed} pass as approved" + (f" · spec-contradicted {spec}" if spec else "") + f" · {xfailed} ledgered",
             True,
         ),
     )
@@ -1713,7 +1713,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("W3C SHACL conformance scoreboard (9 tests):"),
             _noise("  core/node                     passed   4  xfailed   1"),
-            _board("  TOTAL: passed 6, xfailed 2, ledger 2"),
+            _board("  TOTAL: passed 6, spec-contradicted 1, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),
@@ -1726,7 +1726,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
                 "unlisted vendored files reported apart):"
             ),
             _noise("  core/node                            passed   4  xfailed   1"),
-            _board("  W3C12 TOTAL: passed 5, xfailed 2, ledger 2"),
+            _board("  W3C12 TOTAL: passed 5, spec-contradicted 1, xfailed 2, ledger 2"),
             _noise(_CARGO_OK),
         ),
     ),

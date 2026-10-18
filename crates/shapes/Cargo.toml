@@ -126,6 +126,11 @@ purrdf-jsonschema = { workspace = true }
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
+# The one EARL report structure (`outcome::Report`, `outcome::to_earl`) the two W3C
+# SHACL harnesses render their implementation reports through. Path-only and
+# unpublished, so it is stripped from the packaged manifest; the EARL code stays in
+# `tests/`, so the library gains no edge to it.
+purrdf-conformance-kit = { workspace = true }
 
 # The two JSON Schema oracle fixtures carry a test of their `validates` entry
 # point (the draft 2020-12 meta-schemas registered, and not), so `cargo test`

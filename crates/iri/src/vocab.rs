@@ -1676,6 +1676,14 @@ pub mod earl {
     pub const UNTESTED: &str = "http://www.w3.org/ns/earl#untested";
     /// `earl:cantTell`.
     pub const CANT_TELL: &str = "http://www.w3.org/ns/earl#cantTell";
+    /// `earl:TestSubject`.
+    pub const TEST_SUBJECT: &str = "http://www.w3.org/ns/earl#TestSubject";
+    /// `earl:Software`.
+    pub const SOFTWARE: &str = "http://www.w3.org/ns/earl#Software";
+    /// `earl:Assertor`.
+    pub const ASSERTOR: &str = "http://www.w3.org/ns/earl#Assertor";
+    /// `earl:info`.
+    pub const INFO: &str = "http://www.w3.org/ns/earl#info";
 }
 
 #[cfg(test)]

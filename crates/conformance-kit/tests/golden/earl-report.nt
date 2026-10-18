@@ -1,0 +1,31 @@
+<http://example.org/assertor> <http://example.org/ns#name> "An Assertor" .
+<http://example.org/assertor> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#Assertor> .
+<http://example.org/engine> <http://example.org/ns#maker> <http://example.org/assertor> .
+<http://example.org/engine> <http://example.org/ns#name> "Engine 1.0" .
+<http://example.org/engine> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#Software> .
+<http://example.org/engine> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#TestSubject> .
+_:assertion0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#Assertion> .
+_:assertion0 <http://www.w3.org/ns/earl#assertedBy> <http://example.org/assertor> .
+_:assertion0 <http://www.w3.org/ns/earl#mode> <http://www.w3.org/ns/earl#automatic> .
+_:assertion0 <http://www.w3.org/ns/earl#result> _:result0 .
+_:assertion0 <http://www.w3.org/ns/earl#subject> <http://example.org/engine> .
+_:assertion0 <http://www.w3.org/ns/earl#test> <http://example.org/suite/manifest#a> .
+_:assertion1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#Assertion> .
+_:assertion1 <http://www.w3.org/ns/earl#assertedBy> <http://example.org/assertor> .
+_:assertion1 <http://www.w3.org/ns/earl#mode> <http://www.w3.org/ns/earl#automatic> .
+_:assertion1 <http://www.w3.org/ns/earl#result> _:result1 .
+_:assertion1 <http://www.w3.org/ns/earl#subject> <http://example.org/engine> .
+_:assertion1 <http://www.w3.org/ns/earl#test> <http://example.org/suite/manifest#b> .
+_:assertion2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#Assertion> .
+_:assertion2 <http://www.w3.org/ns/earl#assertedBy> <http://example.org/assertor> .
+_:assertion2 <http://www.w3.org/ns/earl#mode> <http://www.w3.org/ns/earl#automatic> .
+_:assertion2 <http://www.w3.org/ns/earl#result> _:result2 .
+_:assertion2 <http://www.w3.org/ns/earl#subject> <http://example.org/engine> .
+_:assertion2 <http://www.w3.org/ns/earl#test> <http://example.org/suite/manifest#c> .
+_:result0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#TestResult> .
+_:result0 <http://www.w3.org/ns/earl#outcome> <http://www.w3.org/ns/earl#passed> .
+_:result1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#TestResult> .
+_:result1 <http://www.w3.org/ns/earl#info> "a stated reason" .
+_:result1 <http://www.w3.org/ns/earl#outcome> <http://www.w3.org/ns/earl#failed> .
+_:result2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/earl#TestResult> .
+_:result2 <http://www.w3.org/ns/earl#outcome> <http://www.w3.org/ns/earl#inapplicable> .

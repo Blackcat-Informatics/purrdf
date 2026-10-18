@@ -594,7 +594,7 @@ cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
 The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 591, xfailed 0, ledger 0`,
+`W3C12 TOTAL: passed 591, spec-contradicted 0, xfailed 0, ledger 0`,
 and the unlisted files' own line is
 `W3C12 UNLISTED: passed 1, exact 1, with-delta 0, total 1`.
 

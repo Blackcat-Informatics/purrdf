@@ -3270,7 +3270,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     if xskip != 0:
         raise SystemExit(
             f"check-doc-claims: the matrix row {_SHACL12_ROW!r} has {xskip} in XFail/Skip "
-            "but the XFAIL ledger is empty"
+            "but the XFAIL ledger and SPEC_CONTRADICTED are empty"
         )
     if unlisted_passed != cats["unlisted"]:
         raise SystemExit(
@@ -3311,9 +3311,9 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
         Claim(
             "the SHACL 1.2 scoreboard line quoted in the book's SHACL chapter",
             _BOOK_SHACL,
-            r"W3C12 TOTAL: passed (?P<passed>\d+), "
+            r"W3C12 TOTAL: passed (?P<passed>\d+), spec-contradicted (?P<spec>\d+), "
             r"xfailed (?P<xfailed>\d+), ledger (?P<ledger>\d+)",
-            {"passed": passed, "xfailed": 0, "ledger": 0},
+            {"passed": passed, "spec": 0, "xfailed": 0, "ledger": 0},
             f"{mat}; {catsrc}",
         ),
         Claim(

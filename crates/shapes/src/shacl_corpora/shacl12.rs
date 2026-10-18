@@ -313,6 +313,13 @@ pub enum Body {
     Srl(SrlCase),
 }
 
+/// Whether an entry found under `root` with `status` is in the scope of a SHACL 1.2
+/// EARL report: approved, and reachable from the SHACL root.
+#[must_use]
+pub fn in_earl_scope(root: Root12, status: Option<Status12>) -> bool {
+    root == Root12::Shacl && status == Some(Status12::Approved)
+}
+
 /// One discovered SHACL 1.2 test entry.
 #[derive(Debug)]
 pub struct Case12 {
@@ -340,7 +347,7 @@ impl Case12 {
     /// entries a SHACL 1.2 EARL report covers.
     #[must_use]
     pub fn is_approved_shacl_root(&self) -> bool {
-        self.root == Root12::Shacl && self.status == Some(Status12::Approved)
+        in_earl_scope(self.root, self.status)
     }
 
     /// The conformance classes the entry is reported under, by the Working

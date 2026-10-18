@@ -60,6 +60,8 @@
 
 #[path = "support/report.rs"]
 mod report;
+#[path = "support/w3c_earl.rs"]
+mod w3c_earl;
 
 use purrdf_shapes::shacl_corpora;
 use report::merge;
@@ -82,7 +84,7 @@ use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SrlCase, SrlKind, Status12,
     W3C12_CLAIMED_CLASSES, W3C12_SHACL_ROOT_APPROVED, W3C12_SUITE_COMMIT, W3C12_TOTAL_CASES,
-    default_conformance_class, shacl12_cases,
+    default_conformance_class, in_earl_scope, shacl12_cases,
 };
 use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_file};
 
@@ -566,28 +568,128 @@ fn run(case: &Case12) -> Result<(), String> {
     }
 }
 
+// ── Grading, once ─────────────────────────────────────────────────────────────
+
+/// Entries the engine fails against their UNAMENDED expectation because the
+/// specification text contradicts that expectation: `(test id, the clause and the
+/// observable difference)`. The Working Group is asked about each; until it
+/// answers, the entry is graded, reported `earl:failed` with this rationale as its
+/// `earl:info`, and counted under its own scoreboard label. An entry that starts to
+/// pass is refused (`XPASS`), as is an id no discovered entry has. Empty today:
+/// every approved entry passes.
+const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
+
+/// [`SPEC_CONTRADICTED`] pinned by count, so an entry cannot be added or dropped
+/// without this number moving with it.
+const SPEC_CONTRADICTED_COUNT: usize = 0;
+
+/// This suite's report: its file, the full commit of the vendored suite, and the
+/// profile each record carries.
+const SUITE: w3c_earl::Suite = w3c_earl::Suite {
+    file_name: "purrdf-shacl12-earl.ttl",
+    commit: W3C12_SUITE_COMMIT,
+    profile: "shacl-1.2",
+};
+
+/// The EARL-scope scoreboard line's label and the name its failed count carries.
+const SCOPE_LABEL: &str = "W3C12 SHACL root";
+const SCOPE_FAILED_LABEL: &str = "spec-contradicted";
+
+/// One discovered entry and its grade against the unamended expectation.
+struct Graded {
+    id: String,
+    section: String,
+    type_label: String,
+    root: Root12,
+    status: Option<Status12>,
+    /// The conformance classes the entry is reported under; empty outside the
+    /// SHACL root.
+    classes: Vec<String>,
+    result: Result<(), String>,
+}
+
+/// Every discovered entry, graded exactly once per harness binary.
+fn graded() -> &'static [Graded] {
+    static GRADED: std::sync::OnceLock<Vec<Graded>> = std::sync::OnceLock::new();
+    GRADED.get_or_init(|| {
+        let cases = shacl12_cases();
+        // Engine panics are caught by `no_panic` and graded as failures; the default
+        // hook's backtraces would only drown the scoreboard.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let graded = cases
+            .iter()
+            .map(|case| Graded {
+                id: case.id.clone(),
+                section: case.section.clone(),
+                type_label: case.type_label(),
+                root: case.root,
+                status: case.status,
+                classes: case.conformance_classes(),
+                result: run(case),
+            })
+            .collect();
+        std::panic::set_hook(default_hook);
+        graded
+    })
+}
+
+/// The entries a SHACL 1.2 EARL report covers: approved, reached from the SHACL
+/// root.
+fn scope_entries(graded: &[Graded]) -> Vec<w3c_earl::Entry<'_>> {
+    let spec: BTreeMap<&str, &str> = SPEC_CONTRADICTED.iter().copied().collect();
+    graded
+        .iter()
+        .filter(|g| in_earl_scope(g.root, g.status))
+        .map(|g| w3c_earl::Entry {
+            id: &g.id,
+            result: &g.result,
+            rationale: spec.get(g.id.as_str()).copied(),
+        })
+        .collect()
+}
+
+/// The report for `graded`, naming `commit` as the PurRDF build.
+fn earl_report_of(graded: &[Graded], commit: &str) -> purrdf_conformance_kit::outcome::Report {
+    w3c_earl::report(&SUITE, commit, &scope_entries(graded))
+}
+
+fn earl_report(commit: &str) -> purrdf_conformance_kit::outcome::Report {
+    earl_report_of(graded(), commit)
+}
+
 /// Per-section and per-type counts.
 #[derive(Clone, Copy, Debug, Default)]
 struct Tally {
     passed: usize,
+    spec_contradicted: usize,
     xfailed: usize,
 }
 
 impl Tally {
     fn line(self) -> String {
-        format!("passed {:>3}  xfailed {:>3}", self.passed, self.xfailed)
+        format!(
+            "passed {:>3}  spec-contradicted {:>3}  xfailed {:>3}",
+            self.passed, self.spec_contradicted, self.xfailed
+        )
     }
 }
 
-#[test]
-fn w3c_shacl12_conformance() {
-    let cases = shacl12_cases();
-    assert_eq!(
-        cases.len(),
-        W3C12_TOTAL_CASES,
-        "discovered SHACL 1.2 test count"
-    );
+/// The scoreboard's own tally, computed from the ledger match arms alone.
+#[derive(Default)]
+struct Scoreboard {
+    errors: Vec<String>,
+    sections: BTreeMap<String, Tally>,
+    types: BTreeMap<String, Tally>,
+    total: Tally,
+    unlisted: usize,
+    /// Each in-scope entry id, and whether it passed.
+    scope: BTreeMap<String, bool>,
+    /// Each claimed class: entries passed, entries in the class.
+    classes: BTreeMap<String, (usize, usize)>,
+}
 
+fn scoreboard_of(graded: &[Graded]) -> Scoreboard {
     let xfail: BTreeMap<&str, &str> = XFAIL.iter().copied().collect();
     assert_eq!(
         xfail.len(),
@@ -596,79 +698,125 @@ fn w3c_shacl12_conformance() {
     );
     for (id, _) in XFAIL {
         assert!(
-            cases.iter().any(|c| c.id == *id),
+            graded.iter().any(|g| g.id == *id),
             "XFAIL ledger names unknown test {id} — stale entry?"
         );
     }
+    w3c_earl::check_spec_table(SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, |id| {
+        graded.iter().any(|g| g.id == id)
+    })
+    .unwrap_or_else(|error| panic!("{error}"));
+    let spec: BTreeMap<&str, &str> = SPEC_CONTRADICTED.iter().copied().collect();
 
-    let mut errors: Vec<String> = Vec::new();
-    let mut sections: BTreeMap<&str, Tally> = BTreeMap::new();
-    let mut types: BTreeMap<String, Tally> = BTreeMap::new();
-    let mut total = Tally::default();
-
-    // Engine panics are caught by `no_panic` and graded as failures; the default
-    // hook's backtraces would only drown the scoreboard.
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-
-    let mut unlisted = 0usize;
-    for case in &cases {
-        if !case.root.is_listed() {
+    let mut board = Scoreboard::default();
+    for g in graded {
+        if !g.root.is_listed() {
             // Graded and reported by `w3c_shacl12_unlisted_vendored_files`.
-            unlisted += 1;
+            board.unlisted += 1;
             continue;
         }
-        let bump = |tally: &mut Tally, f: fn(&mut Tally) -> &mut usize| *f(tally) += 1;
-        let slot: Option<fn(&mut Tally) -> &mut usize> =
-            match (run(case), xfail.get(case.id.as_str())) {
-                (Ok(()), None) => Some(|t| &mut t.passed),
-                (Err(_), Some(_)) => Some(|t| &mut t.xfailed),
-                (Ok(()), Some(reason)) => {
-                    errors.push(format!(
-                        "XPASS [{id}]: now passes — remove it from the XFAIL ledger (reason \
-                         was: {reason})",
-                        id = case.id
-                    ));
-                    None
-                }
-                (Err(e), None) => {
-                    errors.push(format!("FAIL [{id}]: {e}", id = case.id));
-                    None
-                }
-            };
-        if let Some(slot) = slot {
-            bump(sections.entry(case.section.as_str()).or_default(), slot);
-            bump(types.entry(case.type_label()).or_default(), slot);
-            bump(&mut total, slot);
+        let class = w3c_earl::classify(
+            &g.id,
+            &g.result,
+            xfail.get(g.id.as_str()).copied(),
+            spec.get(g.id.as_str()).copied(),
+        );
+        let class = match class {
+            Ok(class) => class,
+            Err(error) => {
+                board.errors.push(error);
+                continue;
+            }
+        };
+        let bump = |tally: &mut Tally| match class {
+            w3c_earl::Class::Passed => tally.passed += 1,
+            w3c_earl::Class::SpecContradicted => tally.spec_contradicted += 1,
+            w3c_earl::Class::Xfailed => tally.xfailed += 1,
+        };
+        bump(board.sections.entry(g.section.clone()).or_default());
+        bump(board.types.entry(g.type_label.clone()).or_default());
+        bump(&mut board.total);
+        if in_earl_scope(g.root, g.status) {
+            if class == w3c_earl::Class::Xfailed {
+                // The EARL-scope line labels every failure spec-contradicted.
+                board.errors.push(format!(
+                    "{}: an XFAIL entry is in the EARL scope; the report would label it \
+                     spec-contradicted",
+                    g.id
+                ));
+            }
+            let passed = class == w3c_earl::Class::Passed;
+            board.scope.insert(g.id.clone(), passed);
+            for class in &g.classes {
+                let slot = board.classes.entry(class.clone()).or_default();
+                slot.0 += usize::from(passed);
+                slot.1 += 1;
+            }
         }
     }
+    board
+}
 
-    std::panic::set_hook(default_hook);
+fn scoreboard() -> Scoreboard {
+    scoreboard_of(graded())
+}
+
+/// The EARL-scope lines, as printed: the SHACL-root line (a projection of the
+/// report) and one line per claimed class.
+fn scope_lines() -> Vec<String> {
+    let board = scoreboard();
+    let mut lines =
+        vec![earl_report(w3c_earl::SAMPLE_COMMIT).scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL)];
+    for class in W3C12_CLAIMED_CLASSES {
+        let (passed, total) = board.classes.get(class).copied().unwrap_or_default();
+        let name = class
+            .strip_prefix(purrdf_iri::vocab::sht::NS)
+            .expect("a claimed class is in the SHACL test namespace");
+        lines.push(format!("W3C12 class {name}: passed {passed} of {total}"));
+    }
+    lines
+}
+
+#[test]
+fn w3c_shacl12_conformance() {
+    let graded = graded();
+    assert_eq!(
+        graded.len(),
+        W3C12_TOTAL_CASES,
+        "discovered SHACL 1.2 test count"
+    );
+    let board = scoreboard();
+    let total = board.total;
 
     println!(
-        "W3C SHACL 1.2 conformance scoreboard ({} approved tests; {unlisted} entries of \
+        "W3C SHACL 1.2 conformance scoreboard ({} approved tests; {} entries of \
          unlisted vendored files reported apart):",
-        cases.len() - unlisted
+        graded.len() - board.unlisted,
+        board.unlisted
     );
-    for (section, tally) in &sections {
+    for (section, tally) in &board.sections {
         println!("  {section:<36} {}", tally.line());
     }
     println!("  by test type:");
-    for (ty, tally) in &types {
+    for (ty, tally) in &board.types {
         println!("  {ty:<36} {}", tally.line());
     }
     println!(
-        "  W3C12 TOTAL: passed {}, xfailed {}, ledger {}",
+        "  W3C12 TOTAL: passed {}, spec-contradicted {}, xfailed {}, ledger {}",
         total.passed,
+        total.spec_contradicted,
         total.xfailed,
         XFAIL.len()
     );
+    for line in scope_lines() {
+        println!("  {line}");
+    }
 
     assert!(
-        errors.is_empty(),
+        board.errors.is_empty(),
         "w3c_shacl12_conformance: {} error(s):\n{}",
-        errors.len(),
-        errors.join("\n\n")
+        board.errors.len(),
+        board.errors.join("\n\n")
     );
     assert_eq!(
         total.xfailed,
@@ -676,13 +824,17 @@ fn w3c_shacl12_conformance() {
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        unlisted, W3C12_UNLISTED_ENTRIES,
+        total.spec_contradicted, SPEC_CONTRADICTED_COUNT,
+        "spec-contradicted count must match the table exactly"
+    );
+    assert_eq!(
+        board.unlisted, W3C12_UNLISTED_ENTRIES,
         "entries of unlisted vendored files"
     );
     assert_eq!(
-        total.passed + total.xfailed,
+        total.passed + total.spec_contradicted + total.xfailed,
         W3C12_TOTAL_CASES - W3C12_UNLISTED_ENTRIES,
-        "every approved test must be a pass or a ledgered xfail"
+        "every approved test must be a pass, a spec-contradicted entry or a ledgered xfail"
     );
 }
 
@@ -1816,4 +1968,317 @@ fn validator_001_passes_in_both_suites_with_no_import_supplied() {
             "{suite}: the control is refused for exactly DASH"
         );
     }
+}
+
+// ── EARL ──────────────────────────────────────────────────────────────────────
+
+/// The in-memory report for the sample commit, serialized.
+fn earl_bytes_for_sample() -> Vec<u8> {
+    w3c_earl::earl_bytes(&earl_report(w3c_earl::SAMPLE_COMMIT)).expect("the report renders")
+}
+
+/// The entries of `SPEC_CONTRADICTED` are graded against the unamended expectation
+/// and fail it: the count is pinned, each id is a discovered approved SHACL-root
+/// entry, and each is reported failed. An entry that passes, and an unknown id, are
+/// refused beside the accepted neighbours.
+#[test]
+fn spec_contradicted_entries_fail_unamended() {
+    let graded = graded();
+    w3c_earl::check_spec_table(SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, |id| {
+        graded.iter().any(|g| g.id == id)
+    })
+    .expect("the table is well formed");
+    for (id, _) in SPEC_CONTRADICTED {
+        let g = graded.iter().find(|g| g.id == *id).expect("discovered");
+        assert!(
+            in_earl_scope(g.root, g.status),
+            "{id} is outside the EARL scope"
+        );
+        assert!(
+            g.result.is_err(),
+            "{id} passes: remove it from SPEC_CONTRADICTED"
+        );
+    }
+    w3c_earl::check_classification();
+}
+
+/// A table row turns an entry's EARL outcome into `earl:failed` carrying the
+/// rationale text only; a synthetic graded set exercises the path the empty table
+/// does not.
+#[test]
+fn a_spec_contradicted_entry_is_reported_failed_with_its_rationale() {
+    let failing = Err("engine said no, at /home/someone/tests/x.ttl".to_owned());
+    let passing = Ok(());
+    let rationale = "SHACL 1.2 Core, clause X: the approved result differs";
+    let entries = [
+        w3c_earl::Entry {
+            id: "core/node/a-001",
+            result: &passing,
+            rationale: None,
+        },
+        w3c_earl::Entry {
+            id: "core/node/b-001",
+            result: &failing,
+            rationale: Some(rationale),
+        },
+    ];
+    let bytes = w3c_earl::earl_bytes(&w3c_earl::report(&SUITE, w3c_earl::SAMPLE_COMMIT, &entries))
+        .expect("renders");
+    let written = w3c_earl::assertions_by_key(&bytes).expect("parses");
+    assert_eq!(
+        written["core/node/a-001"].outcome,
+        purrdf_iri::vocab::earl::PASSED
+    );
+    let failed = &written["core/node/b-001"];
+    assert_eq!(failed.outcome, purrdf_iri::vocab::earl::FAILED);
+    assert_eq!(
+        failed.info.as_deref(),
+        Some(w3c_earl::literal(rationale).as_str())
+    );
+    let text = String::from_utf8(bytes).expect("UTF-8");
+    assert!(
+        !text.contains("/home/someone"),
+        "no machine path reaches the report"
+    );
+    assert_eq!(
+        text.matches("earl#info").count(),
+        1,
+        "only the failed entry has info"
+    );
+}
+
+/// The mapping, the environment parsing, the key port and the write path.
+#[test]
+fn w3c12_earl_support_behaviour() {
+    w3c_earl::check_record_mapping(&SUITE);
+    w3c_earl::check_config_parsing();
+    w3c_earl::check_test_key();
+    w3c_earl::check_write_errors();
+}
+
+/// Exactly the approved SHACL-root entries are assertions, once each, every one
+/// `earl:automatic`, and their keys are the keys the Working Group's reports page
+/// derives for the same entries: the page's `testKey` ported, applied to each entry
+/// IRI, and the page's class rule giving every entry a claimed class.
+#[test]
+fn w3c12_earl_keys_equal_wg_page_keys() {
+    let bytes = earl_bytes_for_sample();
+    let written = w3c_earl::assertions_by_key(&bytes).expect("the report parses");
+    assert_eq!(
+        written.len(),
+        W3C12_SHACL_ROOT_APPROVED,
+        "one assertion per entry"
+    );
+    assert!(
+        written
+            .values()
+            .all(|a| a.mode == purrdf_iri::vocab::earl::AUTOMATIC),
+        "every assertion is earl:automatic"
+    );
+    let tests = format!("{}/", file_iri(&shacl_corpora::shacl12::shacl12_root()));
+    let page_keys: std::collections::BTreeSet<String> = graded()
+        .iter()
+        .filter(|g| in_earl_scope(g.root, g.status))
+        .map(|g| w3c_earl::test_key(&format!("{tests}{}", g.id), &tests))
+        .collect();
+    assert_eq!(
+        page_keys.len(),
+        W3C12_SHACL_ROOT_APPROVED,
+        "keys are distinct"
+    );
+    let earl_keys: std::collections::BTreeSet<String> = written.keys().cloned().collect();
+    assert_eq!(earl_keys, page_keys, "EARL keys vs the page's keys");
+    // The page's class rule: every entry in scope has a claimed class.
+    for g in graded().iter().filter(|g| in_earl_scope(g.root, g.status)) {
+        assert!(
+            !g.classes.is_empty()
+                && g.classes
+                    .iter()
+                    .all(|c| W3C12_CLAIMED_CLASSES.contains(&c.as_str())),
+            "{}: classes {:?} are not all claimed",
+            g.id,
+            g.classes
+        );
+    }
+}
+
+/// Each entry's EARL outcome is its unamended grade, read directly from the grade
+/// and not from the scoreboard: passed exactly when the harness passed it, failed
+/// otherwise, and nothing but those two outcomes.
+#[test]
+fn w3c12_earl_outcomes_equal_the_unamended_grades() {
+    let written = w3c_earl::assertions_by_key(&earl_bytes_for_sample()).expect("parses");
+    for g in graded().iter().filter(|g| in_earl_scope(g.root, g.status)) {
+        let outcome = &written[&g.id].outcome;
+        assert_eq!(
+            outcome,
+            if g.result.is_ok() {
+                purrdf_iri::vocab::earl::PASSED
+            } else {
+                purrdf_iri::vocab::earl::FAILED
+            },
+            "{}",
+            g.id
+        );
+        assert_eq!(
+            written[&g.id].info.is_some(),
+            SPEC_CONTRADICTED.iter().any(|(id, _)| *id == g.id),
+            "{}: earl:info exactly for SPEC_CONTRADICTED entries",
+            g.id
+        );
+    }
+    assert!(written.values().all(|a| {
+        a.outcome == purrdf_iri::vocab::earl::PASSED || a.outcome == purrdf_iri::vocab::earl::FAILED
+    }));
+}
+
+/// The subject and the assertor, by exact value, with the sample commit and this
+/// suite's full commit.
+#[test]
+fn w3c12_earl_subject_and_assertor_are_exact() {
+    w3c_earl::check_descriptions(
+        &earl_bytes_for_sample(),
+        w3c_earl::SAMPLE_COMMIT,
+        "4cd469867a1cc6d2fff80e8a40723b26c695d67a",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// Two in-memory generations are byte-identical, and no date or time predicate (or
+/// datatype) appears anywhere in the report.
+#[test]
+fn w3c12_earl_is_deterministic_and_carries_no_date() {
+    let first = earl_bytes_for_sample();
+    assert_eq!(first, earl_bytes_for_sample());
+    let text = String::from_utf8(first.clone()).expect("UTF-8");
+    assert!(!text.contains("dateTime") && !text.contains("XMLSchema#date"));
+    for predicate in w3c_earl::predicates(&first).expect("parses") {
+        assert!(
+            !predicate.to_ascii_lowercase().contains("date")
+                && !predicate.to_ascii_lowercase().contains("time"),
+            "{predicate} is a date or time predicate"
+        );
+    }
+    let mut sorted: Vec<&str> = text.lines().collect();
+    let written = sorted.clone();
+    sorted.sort_unstable();
+    assert_eq!(written, sorted, "the file is sorted");
+}
+
+/// A proposed entry is never an assertion: a synthetic graded set holding a
+/// proposed SHACL-root entry, an approved one, and an entry of another root.
+#[test]
+fn w3c12_proposed_entries_are_excluded_from_earl() {
+    let synthetic = |id: &str, root, status| Graded {
+        id: id.to_owned(),
+        section: "core/node".to_owned(),
+        type_label: "sht:Validate".to_owned(),
+        root,
+        status,
+        classes: Vec::new(),
+        result: Ok(()),
+    };
+    let set = [
+        synthetic(
+            "core/node/approved-001",
+            Root12::Shacl,
+            Some(Status12::Approved),
+        ),
+        synthetic(
+            "core/node/proposed-001",
+            Root12::Shacl,
+            Some(Status12::Proposed),
+        ),
+        synthetic("sparql-rl/eval/other-001", Root12::SparqlRl, None),
+        synthetic(
+            "core/node/unlisted-001",
+            Root12::Unlisted,
+            Some(Status12::Approved),
+        ),
+    ];
+    let bytes =
+        w3c_earl::earl_bytes(&earl_report_of(&set, w3c_earl::SAMPLE_COMMIT)).expect("renders");
+    let written = w3c_earl::assertions_by_key(&bytes).expect("parses");
+    assert_eq!(
+        written.keys().collect::<Vec<_>>(),
+        ["core/node/approved-001"]
+    );
+}
+
+/// The EARL and the scoreboard agree, checked independently of the shared report:
+/// the printed SHACL-root line and the serialized report are compared, per entry
+/// and in total, with the tally the match arms computed before any report existed;
+/// and each of three mutations of the serialized report alone breaks the agreement.
+#[test]
+fn earl_agrees_with_scoreboard() {
+    let printed = scope_lines().remove(0);
+    let board = scoreboard();
+    assert_eq!(board.scope.len(), W3C12_SHACL_ROOT_APPROVED);
+    w3c_earl::check_agreement_and_mutations(
+        &earl_bytes_for_sample(),
+        &printed,
+        SCOPE_LABEL,
+        SCOPE_FAILED_LABEL,
+        &board.scope,
+    );
+}
+
+/// The per-class lines add up: every in-scope entry is counted under each of its
+/// classes, and the claimed classes are all the classes there are.
+#[test]
+fn w3c12_class_lines_cover_the_scope() {
+    let board = scoreboard();
+    let lines = scope_lines();
+    assert_eq!(lines.len(), 1 + W3C12_CLAIMED_CLASSES.len());
+    assert_eq!(board.classes.keys().cloned().collect::<Vec<_>>(), {
+        let mut claimed: Vec<String> = W3C12_CLAIMED_CLASSES
+            .iter()
+            .map(|c| (*c).to_owned())
+            .collect();
+        claimed.sort();
+        claimed
+    });
+    let memberships: usize = graded()
+        .iter()
+        .filter(|g| in_earl_scope(g.root, g.status))
+        .map(|g| g.classes.len())
+        .sum();
+    assert_eq!(
+        board
+            .classes
+            .values()
+            .map(|(_, total)| total)
+            .sum::<usize>(),
+        memberships
+    );
+    for line in &lines[1..] {
+        assert!(
+            line.starts_with("W3C12 class ") && line.contains(": passed "),
+            "{line}"
+        );
+    }
+}
+
+/// With both settings the report is written under the directory; with neither,
+/// nothing is; with either alone or a malformed commit, the run fails.
+#[test]
+fn w3c12_earl_report_is_written_when_configured() {
+    let config = match w3c_earl::config() {
+        Err(error) => panic!("{error}"),
+        Ok(None) => {
+            println!("W3C12 EARL: no {} set; nothing written", w3c_earl::DIR_VAR);
+            return;
+        }
+        Ok(Some(config)) => config,
+    };
+    let bytes = w3c_earl::earl_bytes(&earl_report(&config.commit)).expect("the report renders");
+    w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
+        .unwrap_or_else(|error| panic!("{error}"));
+    println!(
+        "W3C12 EARL: wrote {} ({} bytes)",
+        path.display(),
+        bytes.len()
+    );
 }

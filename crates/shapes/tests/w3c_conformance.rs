@@ -61,12 +61,18 @@
 //! Run with `--nocapture` for the per-manifest-section scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture`
 
+#[path = "support/w3c_earl.rs"]
+mod w3c_earl;
+
 use purrdf_shapes::shacl_corpora;
 
 use std::collections::BTreeMap;
 
 use shacl_corpora::report_grading::run_validate_case;
-use shacl_corpora::{W3C_PROPOSED_UNINCLUDED, W3C_TOTAL_CASES, w3c_cases, w3c_proposed_cases};
+use shacl_corpora::{
+    W3C_PROPOSED_UNINCLUDED, W3C_SUBSET_CASES, W3C_SUITE_COMMIT, W3C_TOTAL_CASES, w3c_cases,
+    w3c_proposed_cases,
+};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -86,12 +92,99 @@ const XFAIL: &[(&str, &str)] = &[
 // Grading lives in `shacl_corpora::report_grading`, shared with the SHACL 1.2
 // harness so both suites mean the same thing by "agrees with the manifest".
 
-// ── The harness ───────────────────────────────────────────────────────────────
+// ── Spec-contradicted entries ─────────────────────────────────────────────────
 
-#[test]
-fn w3c_shacl_conformance() {
-    let tests = w3c_cases();
+/// Entries the engine fails against their UNAMENDED expectation because the
+/// specification text contradicts that expectation: `(test id, the clause and the
+/// observable difference)`. Graded, reported `earl:failed` with the rationale as
+/// `earl:info`, and counted under their own label; an entry that passes (`XPASS`)
+/// or an id no discovered case has is refused. Empty today.
+const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
 
+/// [`SPEC_CONTRADICTED`] pinned by count.
+const SPEC_CONTRADICTED_COUNT: usize = 0;
+
+/// This suite's report: its file, the full commit of the vendored suite, and the
+/// profile each record carries.
+const SUITE: w3c_earl::Suite = w3c_earl::Suite {
+    file_name: "purrdf-shacl-earl.ttl",
+    commit: W3C_SUITE_COMMIT,
+    profile: "shacl-20170720",
+};
+
+/// The EARL-scope scoreboard line's label and the name its failed count carries.
+const SCOPE_LABEL: &str = "W3C 2017 subset";
+const SCOPE_FAILED_LABEL: &str = "spec-contradicted";
+
+/// One discovered case and its grade against the unamended expectation.
+struct Graded {
+    id: String,
+    section: String,
+    first_party: bool,
+    result: Result<(), String>,
+}
+
+/// Every discovered case, graded exactly once per harness binary.
+fn graded() -> &'static [Graded] {
+    static GRADED: std::sync::OnceLock<Vec<Graded>> = std::sync::OnceLock::new();
+    GRADED.get_or_init(|| {
+        let tests = w3c_cases();
+        // Engine panics are caught by `report_grading::no_panic` and reported as
+        // ledgered failures, so their backtraces would only drown the scoreboard.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let graded = tests
+            .iter()
+            .map(|tc| Graded {
+                id: tc.id.clone(),
+                section: tc.section.clone(),
+                first_party: tc.first_party,
+                result: run_validate_case(tc),
+            })
+            .collect();
+        std::panic::set_hook(default_hook);
+        graded
+    })
+}
+
+/// The entries a SHACL 2017 EARL report covers: the vendored W3C entries, not the
+/// first-party `af/` seam.
+fn scope_entries(graded: &[Graded]) -> Vec<w3c_earl::Entry<'_>> {
+    let spec: BTreeMap<&str, &str> = SPEC_CONTRADICTED.iter().copied().collect();
+    graded
+        .iter()
+        .filter(|g| !g.first_party)
+        .map(|g| w3c_earl::Entry {
+            id: &g.id,
+            result: &g.result,
+            rationale: spec.get(g.id.as_str()).copied(),
+        })
+        .collect()
+}
+
+fn earl_report_of(graded: &[Graded], commit: &str) -> purrdf_conformance_kit::outcome::Report {
+    w3c_earl::report(&SUITE, commit, &scope_entries(graded))
+}
+
+fn earl_report(commit: &str) -> purrdf_conformance_kit::outcome::Report {
+    earl_report_of(graded(), commit)
+}
+
+/// The scoreboard's own tally, computed from the ledger match arms alone.
+#[derive(Default)]
+struct Scoreboard {
+    errors: Vec<String>,
+    /// (section, passed, xfailed) in discovery order.
+    sections: Vec<(String, usize, usize)>,
+    passed: usize,
+    spec_contradicted: usize,
+    xfailed: usize,
+    /// Each in-scope case id, and whether it passed.
+    scope: BTreeMap<String, bool>,
+}
+
+fn scoreboard() -> Scoreboard {
+    let graded = graded();
     let xfail: BTreeMap<&str, &str> = XFAIL.iter().copied().collect();
     assert_eq!(
         xfail.len(),
@@ -100,76 +193,110 @@ fn w3c_shacl_conformance() {
     );
     for (id, _) in XFAIL {
         assert!(
-            tests.iter().any(|t| t.id == *id),
+            graded.iter().any(|g| g.id == *id),
             "XFAIL ledger names unknown test {id} — stale entry?"
         );
     }
+    w3c_earl::check_spec_table(SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, |id| {
+        graded.iter().any(|g| g.id == id && !g.first_party)
+    })
+    .unwrap_or_else(|error| panic!("{error}"));
+    let spec: BTreeMap<&str, &str> = SPEC_CONTRADICTED.iter().copied().collect();
 
-    let mut errors: Vec<String> = Vec::new();
-    // (section, passed, xfailed) in discovery order.
-    let mut sections: Vec<(String, usize, usize)> = Vec::new();
-    let mut total_passed = 0usize;
-    let mut total_xfailed = 0usize;
-
-    // Silence the default panic hook while running cases: engine panics are
-    // caught by `report_grading::no_panic` and reported as ledgered failures, so
-    // their backtraces would only drown the scoreboard.
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-
-    for tc in &tests {
-        if sections.last().is_none_or(|(s, ..)| s != &tc.section) {
-            sections.push((tc.section.clone(), 0, 0));
+    let mut board = Scoreboard::default();
+    for g in graded {
+        if board.sections.last().is_none_or(|(s, ..)| s != &g.section) {
+            board.sections.push((g.section.clone(), 0, 0));
         }
-        let slot = sections.last_mut().expect("section pushed above");
-
-        let verdict = run_validate_case(tc);
-        match (verdict, xfail.get(tc.id.as_str())) {
-            (Ok(()), None) => {
+        let class = match w3c_earl::classify(
+            &g.id,
+            &g.result,
+            xfail.get(g.id.as_str()).copied(),
+            spec.get(g.id.as_str()).copied(),
+        ) {
+            Ok(class) => class,
+            Err(error) => {
+                board.errors.push(error);
+                continue;
+            }
+        };
+        let slot = board.sections.last_mut().expect("section pushed above");
+        match class {
+            w3c_earl::Class::Passed => {
                 slot.1 += 1;
-                total_passed += 1;
+                board.passed += 1;
             }
-            (Err(_), Some(_)) => {
+            w3c_earl::Class::Xfailed => {
                 slot.2 += 1;
-                total_xfailed += 1;
+                board.xfailed += 1;
             }
-            (Ok(()), Some(reason)) => errors.push(format!(
-                "XPASS [{id}]: now passes — remove it from the XFAIL ledger (reason was: {reason})",
-                id = tc.id
-            )),
-            (Err(e), None) => errors.push(format!("FAIL [{id}]: {e}", id = tc.id)),
+            w3c_earl::Class::SpecContradicted => board.spec_contradicted += 1,
+        }
+        if !g.first_party {
+            if class == w3c_earl::Class::Xfailed {
+                // The EARL-scope line labels every failure spec-contradicted.
+                board.errors.push(format!(
+                    "{}: an XFAIL entry is in the EARL scope; the report would label it \
+                     spec-contradicted",
+                    g.id
+                ));
+            }
+            board
+                .scope
+                .insert(g.id.clone(), class == w3c_earl::Class::Passed);
         }
     }
+    board
+}
 
-    std::panic::set_hook(default_hook);
+/// The EARL-scope line, as printed: a projection of the report.
+fn scope_line() -> String {
+    earl_report(w3c_earl::SAMPLE_COMMIT).scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL)
+}
+
+// ── The harness ───────────────────────────────────────────────────────────────
+
+#[test]
+fn w3c_shacl_conformance() {
+    let tests = graded();
+    let board = scoreboard();
 
     // Scoreboard: one line per manifest section.
     println!("W3C SHACL conformance scoreboard ({} tests):", tests.len());
-    for (section, passed, xfailed) in &sections {
+    for (section, passed, xfailed) in &board.sections {
         println!("  {section:<28} passed {passed:>3}  xfailed {xfailed:>3}");
     }
     println!(
-        "  TOTAL: passed {total_passed}, xfailed {total_xfailed}, ledger {}",
+        "  TOTAL: passed {}, spec-contradicted {}, xfailed {}, ledger {}",
+        board.passed,
+        board.spec_contradicted,
+        board.xfailed,
         XFAIL.len()
     );
+    println!("  {}", scope_line());
 
     assert!(
-        errors.is_empty(),
+        board.errors.is_empty(),
         "w3c_shacl_conformance: {} error(s):\n{}",
-        errors.len(),
-        errors.join("\n\n")
+        board.errors.len(),
+        board.errors.join("\n\n")
     );
 
-    // Exact-count gates: every test is either a pass or a ledgered xfail.
+    // Exact-count gates: every test is a pass, a spec-contradicted entry or a
+    // ledgered xfail.
     assert_eq!(
-        total_xfailed,
+        board.xfailed,
         XFAIL.len(),
         "xfail count must match the ledger exactly"
     );
     assert_eq!(
-        total_passed + total_xfailed,
+        board.spec_contradicted, SPEC_CONTRADICTED_COUNT,
+        "spec-contradicted count must match the table exactly"
+    );
+    assert_eq!(
+        board.passed + board.spec_contradicted + board.xfailed,
         W3C_TOTAL_CASES,
-        "every discovered test must be a pass or a ledgered xfail"
+        "every discovered test must be a pass, a spec-contradicted entry or a ledgered xfail"
     );
 }
 
@@ -195,4 +322,207 @@ fn w3c_shacl_proposed_unincluded_files() {
         cases.len()
     );
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+// ── EARL ──────────────────────────────────────────────────────────────────────
+
+/// The in-memory report for the sample commit, serialized.
+fn earl_bytes_for_sample() -> Vec<u8> {
+    w3c_earl::earl_bytes(&earl_report(w3c_earl::SAMPLE_COMMIT)).expect("the report renders")
+}
+
+/// The vendored commit is the one the suite's README pins, in full.
+#[test]
+fn the_2017_suite_commit_is_the_vendored_one() {
+    assert!(w3c_earl::is_full_commit(W3C_SUITE_COMMIT));
+    let readme = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vectors/shacl/README.md"
+    ))
+    .expect("vectors/shacl/README.md is vendored");
+    assert!(
+        readme.contains(&format!("Commit: `{W3C_SUITE_COMMIT}`")),
+        "README.md does not pin {W3C_SUITE_COMMIT}"
+    );
+}
+
+/// `SPEC_CONTRADICTED` is pinned, well formed and graded unamended; the ledger
+/// classification refuses an `XPASS` and an unknown id beside the accepted cases.
+#[test]
+fn spec_contradicted_entries_fail_unamended() {
+    let graded = graded();
+    w3c_earl::check_spec_table(SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, |id| {
+        graded.iter().any(|g| g.id == id && !g.first_party)
+    })
+    .expect("the table is well formed");
+    for (id, _) in SPEC_CONTRADICTED {
+        let g = graded.iter().find(|g| g.id == *id).expect("discovered");
+        assert!(
+            g.result.is_err(),
+            "{id} passes: remove it from SPEC_CONTRADICTED"
+        );
+    }
+    w3c_earl::check_classification();
+}
+
+/// The mapping, the environment parsing, the key port and the write path.
+#[test]
+fn w3c_2017_earl_support_behaviour() {
+    w3c_earl::check_record_mapping(&SUITE);
+    w3c_earl::check_config_parsing();
+    w3c_earl::check_test_key();
+    w3c_earl::check_write_errors();
+}
+
+/// The 2017 subset is the 120 vendored `core/` and `sparql/` entries, found by the
+/// discovery field and not by a path: the first-party `af/` seam is the rest.
+#[test]
+fn w3c_2017_subset_is_the_vendored_entries() {
+    let graded = graded();
+    let subset: Vec<&Graded> = graded.iter().filter(|g| !g.first_party).collect();
+    assert_eq!(subset.len(), W3C_SUBSET_CASES);
+    assert_eq!(
+        graded.len() - subset.len(),
+        W3C_TOTAL_CASES - W3C_SUBSET_CASES
+    );
+    assert!(
+        subset
+            .iter()
+            .all(|g| g.id.starts_with("core/") || g.id.starts_with("sparql/")),
+        "the subset is core/ and sparql/"
+    );
+    assert!(
+        graded
+            .iter()
+            .filter(|g| g.first_party)
+            .all(|g| g.id.starts_with("af/")),
+        "the first-party entries are af/"
+    );
+}
+
+/// Exactly the 120 vendored entries are assertions, once each, every one
+/// `earl:automatic`; the first-party entries and the proposed entry no manifest
+/// includes are absent; each outcome is the unamended grade.
+#[test]
+fn w3c_2017_earl_covers_the_subset_and_nothing_else() {
+    let written = w3c_earl::assertions_by_key(&earl_bytes_for_sample()).expect("parses");
+    assert_eq!(written.len(), W3C_SUBSET_CASES);
+    assert!(
+        written
+            .values()
+            .all(|a| a.mode == purrdf_iri::vocab::earl::AUTOMATIC),
+        "every assertion is earl:automatic"
+    );
+    let subset: std::collections::BTreeSet<&str> = graded()
+        .iter()
+        .filter(|g| !g.first_party)
+        .map(|g| g.id.as_str())
+        .collect();
+    assert_eq!(
+        written
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        subset
+    );
+    for g in graded().iter().filter(|g| !g.first_party) {
+        assert_eq!(
+            written[&g.id].outcome,
+            if g.result.is_ok() {
+                purrdf_iri::vocab::earl::PASSED
+            } else {
+                purrdf_iri::vocab::earl::FAILED
+            },
+            "{}",
+            g.id
+        );
+        assert_eq!(
+            written[&g.id].info.is_some(),
+            SPEC_CONTRADICTED.iter().any(|(id, _)| *id == g.id),
+            "{}: earl:info exactly for SPEC_CONTRADICTED entries",
+            g.id
+        );
+    }
+    // The proposed entry (`mf:status sht:proposed`) is not an assertion.
+    let proposed = w3c_proposed_cases();
+    assert_eq!(proposed.len(), W3C_PROPOSED_UNINCLUDED.len());
+    for tc in &proposed {
+        assert!(!written.contains_key(&tc.id), "{} is proposed", tc.id);
+    }
+    assert!(written.keys().all(|k| !k.starts_with("af/")));
+}
+
+/// The subject and the assertor, by exact value.
+#[test]
+fn w3c_2017_earl_subject_and_assertor_are_exact() {
+    w3c_earl::check_descriptions(
+        &earl_bytes_for_sample(),
+        w3c_earl::SAMPLE_COMMIT,
+        "08adb3776709a014bc3062ede793c36275b22446",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// Two in-memory generations are byte-identical, sorted, and carry no date or time.
+#[test]
+fn w3c_2017_earl_is_deterministic_and_carries_no_date() {
+    let first = earl_bytes_for_sample();
+    assert_eq!(first, earl_bytes_for_sample());
+    let text = String::from_utf8(first.clone()).expect("UTF-8");
+    assert!(!text.contains("dateTime") && !text.contains("XMLSchema#date"));
+    for predicate in w3c_earl::predicates(&first).expect("parses") {
+        assert!(
+            !predicate.to_ascii_lowercase().contains("date")
+                && !predicate.to_ascii_lowercase().contains("time"),
+            "{predicate} is a date or time predicate"
+        );
+    }
+    let written: Vec<&str> = text.lines().collect();
+    let mut sorted = written.clone();
+    sorted.sort_unstable();
+    assert_eq!(written, sorted, "the file is sorted");
+}
+
+/// The EARL and the scoreboard agree, checked independently of the shared report:
+/// the printed subset line and the serialized report are compared, per entry and in
+/// total, with the tally the match arms computed before any report existed; and
+/// each of three mutations of the serialized report alone breaks the agreement.
+#[test]
+fn earl_agrees_with_scoreboard() {
+    let board = scoreboard();
+    assert_eq!(board.scope.len(), W3C_SUBSET_CASES);
+    w3c_earl::check_agreement_and_mutations(
+        &earl_bytes_for_sample(),
+        &scope_line(),
+        SCOPE_LABEL,
+        SCOPE_FAILED_LABEL,
+        &board.scope,
+    );
+}
+
+/// With both settings the report is written under the directory; with neither,
+/// nothing is; with either alone or a malformed commit, the run fails.
+#[test]
+fn w3c_2017_earl_report_is_written_when_configured() {
+    let config = match w3c_earl::config() {
+        Err(error) => panic!("{error}"),
+        Ok(None) => {
+            println!(
+                "W3C 2017 EARL: no {} set; nothing written",
+                w3c_earl::DIR_VAR
+            );
+            return;
+        }
+        Ok(Some(config)) => config,
+    };
+    let bytes = w3c_earl::earl_bytes(&earl_report(&config.commit)).expect("the report renders");
+    w3c_earl::check_descriptions(&bytes, &config.commit, W3C_SUITE_COMMIT)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
+        .unwrap_or_else(|error| panic!("{error}"));
+    println!(
+        "W3C 2017 EARL: wrote {} ({} bytes)",
+        path.display(),
+        bytes.len()
+    );
 }
