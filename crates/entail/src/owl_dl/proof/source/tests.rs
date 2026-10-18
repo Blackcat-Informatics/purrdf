@@ -55,6 +55,172 @@ fn derived_for(individual: Option<TermValue>) -> (DlProof, DlProofContext<'stati
     checked_fixture(&input)
 }
 
+#[test]
+fn checked_schema_causal_support_retains_role_and_qualifier_licenses() {
+    use crate::owl_dl::graph::changes::Journal;
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let lower = f.name("F");
+    let upper = f.name("G");
+    let p = f.name("p");
+    let q = f.name("q");
+    let r = f.name("r");
+    let inverse = f.blank();
+    f.edge(p, rdfs::SUB_PROPERTY_OF, q);
+    f.edge(q, owl::INVERSE_OF, r);
+    f.edge(inverse, owl::INVERSE_OF, r);
+    f.edge(lower, rdfs::SUB_CLASS_OF, upper);
+    f.bounds(class, p, lower, 2, true, false);
+    f.bounds(class, inverse, upper, 1, false, false);
+    f.instance("i", class);
+    let (proof, ctx) = checked_fixture(&f.freeze());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.schema.is_some())
+        .unwrap();
+    let (report, journal, schema) = proof
+        .replay_clash_recording(index, &ctx, Journal::default())
+        .unwrap();
+    assert!(report.current_supported());
+    let schema = schema.unwrap();
+    assert_ne!(schema.bounds().qualifier_derivation(), []);
+    assert_eq!(schema.bounds().roles.len(), 2);
+    let selected = journal
+        .as_ref()
+        .unwrap()
+        .normalized_slice_with_schema(&ctx.kb, Some(schema))
+        .unwrap();
+    let inputs = selected.inputs().collect::<Result<Vec<_>, _>>().unwrap();
+    for predicate in [rdfs::SUB_PROPERTY_OF, owl::INVERSE_OF] {
+        assert!(inputs.iter().any(|input| matches!(input.source,
+            crate::owl_dl::input_source::Source::Anchor(crate::owl_dl::AxiomSource::Triple(_, p, _))
+            if matches!(ctx.kb.interner.value(p), TermValue::Iri(iri) if iri == predicate))));
+    }
+    assert_ne!(selected.syntax_roots().unwrap(), []);
+}
+
+#[test]
+fn checked_schema_recording_refuses_other_owner_tampering_legacy_and_storage_failure() {
+    use crate::owl_dl::graph::changes::{Journal, slice::Error};
+    use purrdf_lex::allocation::StorageError;
+    let (proof, ctx) = derived();
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.schema.is_some())
+        .unwrap();
+    let (_, journal, schema) = proof
+        .replay_clash_recording(index, &ctx, Journal::default())
+        .unwrap();
+    let (_, other) = derived();
+    assert!(matches!(
+        journal
+            .unwrap()
+            .normalized_slice_with_schema(&other.kb, schema),
+        Err(Error::UnexpectedSchema)
+    ));
+    assert!(
+        proof
+            .replay_clash_recording(index, &other, Journal::default())
+            .is_ok(),
+        "the producer proof is checked against an independently prepared consumer"
+    );
+    let wrong = Reasoner::with_proofs(&Fixture::default().freeze())
+        .unwrap()
+        .proof_context()
+        .unwrap();
+    assert!(
+        proof
+            .replay_clash_recording(index, &wrong, Journal::default())
+            .is_err()
+    );
+    let mut tampered = proof.clone();
+    tampered.clashes[index]
+        .schema
+        .as_mut()
+        .unwrap()
+        .bounds
+        .lower = u32::MAX;
+    assert!(
+        tampered
+            .replay_clash_recording(index, &ctx, Journal::default())
+            .is_err()
+    );
+    let mut legacy = proof.clone();
+    legacy.clashes[index].current = None;
+    assert!(
+        legacy
+            .replay_clash_recording(index, &ctx, Journal::default())
+            .is_err()
+    );
+    assert!(matches!(
+        proof.replay_clash_recording(
+            index,
+            &ctx,
+            Journal::with_injected_refusal(StorageError::AllocationFailed)
+        ),
+        Err(DlProofError::Storage(StorageError::AllocationFailed))
+    ));
+}
+
+#[test]
+fn checked_schema_slices_unused_but_valid_implication_steps() {
+    use crate::owl_dl::{
+        bounds::{SchemaRule, SchemaStep},
+        graph::changes::Journal,
+    };
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("F");
+    let property = f.name("p");
+    let extra = f.name("Unused");
+    f.edge(class, rdfs::SUB_CLASS_OF, extra);
+    f.bounds(class, property, filler, 2, true, false);
+    f.bounds(class, property, filler, 1, false, false);
+    f.instance("i", class);
+    let (mut proof, ctx) = checked_fixture(&f.freeze());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.schema.is_some())
+        .unwrap();
+    let inclusion = ctx.kb.tbox.iter().position(|&(_, sup)| matches!(ctx.kb.table.concept(sup),
+        Concept::Named(term)
+        if matches!(ctx.kb.interner.value(*term), TermValue::Iri(iri) if iri == "https://example.org/Unused"))).unwrap();
+    let bounds = &mut proof.clashes[index].schema.as_mut().unwrap().bounds;
+    let after_assumption = bounds
+        .class_steps
+        .iter()
+        .position(|step| step.rule == SchemaRule::Assume)
+        .unwrap()
+        + 1;
+    bounds.class_steps.insert(
+        after_assumption,
+        SchemaStep {
+            concept: ctx.kb.tbox[inclusion].1,
+            rule: SchemaRule::Inclusion(inclusion),
+        },
+    );
+    let (_, journal, schema) = proof
+        .replay_clash_recording(index, &ctx, Journal::default())
+        .unwrap();
+    let selected = journal
+        .unwrap()
+        .normalized_slice_with_schema(&ctx.kb, schema)
+        .unwrap();
+    let extra_root = ctx.kb.syntax.tbox_root(inclusion).unwrap().root().unwrap();
+    assert!(
+        !selected
+            .syntax_roots()
+            .unwrap()
+            .contains(&(crate::owl_dl::syntax::Space::Source, extra_root))
+    );
+    assert!(
+        selected.schema_reads.len() < selected.schema.unwrap().bounds().class_derivation().len()
+    );
+}
+
 /// A checked application prefix is not a causal slice: retain this counterexample.
 #[test]
 fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
@@ -92,19 +258,11 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     assert!(checked.witness().all(|fact| matches!(fact,
         ResolvedFact::Concept(ResolvedNode::Individual(ResolvedTerm::Source(TermValue::Iri(individual))), _)
         if individual == "https://example.org/inhabitant")));
-    let observed = crate::owl_dl::hyper::replay_observing_support(
-        &ctx.kb,
-        &crate::owl_dl::graph::Assumptions::of_kb(),
-        &prefix,
-        step.clause,
-        &step.current.as_ref().unwrap().frame,
-        &proof.branches,
-        Journal::default(),
-    )
-    .unwrap();
-    assert_eq!(observed.frame, step.frame);
-    assert_eq!(observed.facts, step.witness);
-    let journal = observed.mutations.unwrap();
+    let (report, mutations, schema) = proof
+        .replay_clash_recording(index, &ctx, Journal::default())
+        .unwrap();
+    assert!(report.current_supported());
+    let journal = mutations.unwrap();
     let earlier = ctx
         .kb
         .interner
@@ -141,17 +299,45 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     let selected = journal.normalized_slice(&ctx.kb).unwrap();
     assert!(
         matches!(
-            selected.syntax_roots(&ctx.kb),
+            selected.syntax_roots(),
             Err(crate::owl_dl::graph::changes::slice::Error::MissingSchema(
                 _
             ))
         ),
         "a multi-license bound guard is not an empty syntax success"
     );
-    let input_sources = selected
-        .inputs(&ctx.kb)
-        .collect::<Result<Vec<_>, _>>()
+    let selected = journal
+        .normalized_slice_with_schema(&ctx.kb, schema)
         .unwrap();
+    let roots = selected.syntax_roots().unwrap();
+    assert_ne!(roots, []);
+    let bounds = selected.schema.as_ref().unwrap().bounds();
+    assert!(std::ptr::eq(
+        bounds,
+        &raw const step.schema.as_ref().unwrap().bounds
+    ));
+    assert_eq!(
+        bounds
+            .class_derivation()
+            .iter()
+            .filter_map(crate::owl_dl::bounds::SchemaStep::inclusion)
+            .count(),
+        2
+    );
+    for wanted in [
+        owl::MIN_QUALIFIED_CARDINALITY,
+        owl::MAX_QUALIFIED_CARDINALITY,
+    ] {
+        assert!(roots.iter().any(|&(space, root)| {
+            assert_eq!(space, crate::owl_dl::syntax::Space::Source);
+            ctx.kb.syntax.selected(&[root], None).unwrap().iter().any(|&node| {
+                ctx.kb.syntax.nodes[node].reads.iter().any(|read| matches!(read,
+                    crate::owl_dl::syntax::Read::Triple(_, predicate, _)
+                    if matches!(ctx.kb.interner.value(*predicate), TermValue::Iri(iri) if iri == wanted)))
+            })
+        }));
+    }
+    let input_sources = selected.inputs().collect::<Result<Vec<_>, _>>().unwrap();
     assert!(
         input_sources
             .iter()
@@ -330,15 +516,12 @@ fn checked_clash_retains_selected_transitive_role_path() {
             .count()
             >= 2
     );
-    let selected_inputs = slice
-        .inputs(&ctx.kb)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let selected_inputs = slice.inputs().collect::<Result<Vec<_>, _>>().unwrap();
     assert!(selected_inputs.iter().any(|record| matches!(
         record.input,
         crate::owl_dl::input_source::Input::Transitive(_)
     )));
-    let roots = slice.syntax_roots(&ctx.kb).unwrap();
+    let roots = slice.syntax_roots().unwrap();
     let source_roots: Vec<_> = roots
         .iter()
         .filter_map(|&(space, root)| {
@@ -436,10 +619,7 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
             ));
         } else {
             let slice = slice.unwrap();
-            let inputs = slice
-                .inputs(&ctx.kb)
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+            let inputs = slice.inputs().collect::<Result<Vec<_>, _>>().unwrap();
             assert!(inputs.iter().any(|record| match (record.input, record.source) {
                 (Input::Equality(_), Source::Anchor(crate::owl_dl::AxiomSource::Triple(_, predicate, _))) => matches!(ctx.kb.interner.value(predicate), TermValue::Iri(iri) if iri == owl::SAME_AS),
                 _ => false,
@@ -598,7 +778,28 @@ fn resolution_preserves_the_consumers_typed_stop() {
     )
     .unwrap();
     let context = consumer.borrowed_proof_context().unwrap();
+    let (_, journal, schema) = proof
+        .replay_clash_recording(
+            0,
+            &context,
+            crate::owl_dl::graph::changes::Journal::default(),
+        )
+        .unwrap();
     stop.0.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        proof.replay_clash_recording(
+            0,
+            &context,
+            crate::owl_dl::graph::changes::Journal::default()
+        ),
+        Err(DlProofError::Stopped)
+    ));
+    assert!(matches!(
+        journal
+            .unwrap()
+            .normalized_slice_with_schema(&context.kb, schema),
+        Err(crate::owl_dl::graph::changes::slice::Error::Stopped)
+    ));
     assert!(matches!(
         proof.resolve_clash(0, &context),
         Err(DlProofError::Stopped)

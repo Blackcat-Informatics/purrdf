@@ -2289,6 +2289,42 @@ pub struct ClashReplay {
     checks: CheckReport,
 }
 
+/// Borrowed capability created only after this exact bound derivation is checked.
+/// The consumer owner and terminal guard stay attached; the producer cache is not evidence.
+#[derive(Clone, Copy)]
+pub(crate) struct CheckedSchema<'a> {
+    kb: &'a Kb,
+    clause: usize,
+    bounds: &'a super::bounds::SchemaBoundEvidence,
+}
+
+impl std::fmt::Debug for CheckedSchema<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckedSchema")
+            .field("source_terms", &self.kb.source_terms)
+            .field("clause", &self.clause)
+            .field("bounds", &self.bounds)
+            .finish()
+    }
+}
+
+impl CheckedSchema<'_> {
+    pub(crate) fn bounds(&self) -> &super::bounds::SchemaBoundEvidence {
+        self.bounds
+    }
+
+    #[cfg(test)]
+    pub(crate) fn matches(&self, kb: &Kb, clause: usize) -> bool {
+        std::ptr::eq(kb, self.kb) && self.clause == clause
+    }
+}
+
+type RecordedClash<'a> = (
+    ClashReplay,
+    Option<super::graph::changes::Journal>,
+    Option<CheckedSchema<'a>>,
+);
+
 impl ClashReplay {
     /// The node bound by the checked empty-head clause.
     #[must_use]
@@ -3070,11 +3106,38 @@ impl DlProof {
         ctx: &DlProofContext<'_>,
         assumptions: &Assumptions<'_>,
     ) -> Result<ClashReplay, DlProofError> {
+        let (report, journal, _) = self.replay_clash_inner(index, ctx, assumptions, None)?;
+        debug_assert!(journal.is_none(), "ordinary replay requests no journal");
+        Ok(report)
+    }
+
+    #[cfg(test)]
+    fn replay_clash_recording<'a>(
+        &'a self,
+        index: usize,
+        ctx: &'a DlProofContext<'_>,
+        journal: super::graph::changes::Journal,
+    ) -> Result<RecordedClash<'a>, DlProofError> {
+        self.replay_clash_inner(index, ctx, &Assumptions::of_kb(), Some(journal))
+    }
+
+    fn replay_clash_inner<'a>(
+        &'a self,
+        index: usize,
+        ctx: &'a DlProofContext<'_>,
+        assumptions: &Assumptions<'_>,
+        mut journal: Option<super::graph::changes::Journal>,
+    ) -> Result<RecordedClash<'a>, DlProofError> {
         self.bound_to(ctx)?;
         let step = self
             .clashes
             .get(index)
             .ok_or_else(|| malformed(&format!("no clash step at index {index}")))?;
+        if journal.is_some() && step.current.is_none() {
+            return Err(malformed(
+                "causal recording requires checked current support",
+            ));
+        }
         let clauses = ctx.clauses.count();
         if step.clause >= clauses {
             return Err(DlProofError::UnknownClause {
@@ -3111,6 +3174,7 @@ impl DlProof {
                 });
             }
         }
+        let mut checked_schema = None;
         if let Some(class) = ctx.clauses.schema_class(step.clause, &ctx.kb.schema) {
             let evidence = step
                 .schema
@@ -3124,6 +3188,11 @@ impl DlProof {
             if step.current.is_none() {
                 return Err(malformed("prepared clash lacks current support"));
             }
+            checked_schema = Some(CheckedSchema {
+                kb: &ctx.kb,
+                clause: step.clause,
+                bounds: &evidence.bounds,
+            });
         } else if step.schema.is_some() {
             return Err(malformed("schema evidence attached to an unrelated clause"));
         }
@@ -3137,19 +3206,25 @@ impl DlProof {
                     self.replay_branch(branch, ctx)?;
                 }
             }
-            let (frame, facts) = super::hyper::replay_current_support(
+            let super::hyper::ReplaySupport {
+                frame,
+                facts,
+                mutations,
+            } = super::hyper::replay_current_support(
                 &ctx.kb,
                 assumptions,
                 &applications,
                 step.clause,
                 &evidence.frame,
                 &self.branches,
+                journal.take(),
             )?;
             if frame != step.frame || facts != step.witness {
                 return Err(malformed(
                     "current support does not establish the recorded inhabitant",
                 ));
             }
+            journal = mutations;
             Some(applications.len())
         } else {
             None
@@ -3182,11 +3257,12 @@ impl DlProof {
             );
             // Each supplied source derivation is checked separately; no cached
             // result establishes these steps or the final arithmetic comparison.
-            if let Some(evidence) = &step.schema {
+            if let Some(evidence) = &checked_schema {
+                let bounds = evidence.bounds();
                 checks.attest(
-                    evidence.bounds.class_steps.len()
-                        + evidence.bounds.qualifier_derivation().len()
-                        + evidence.bounds.roles.len()
+                    bounds.class_steps.len()
+                        + bounds.qualifier_derivation().len()
+                        + bounds.roles.len()
                         + 1,
                 );
             }
@@ -3200,23 +3276,27 @@ impl DlProof {
             5,
             &[TrustBaseEntry::Clausification, TrustBaseEntry::Grounding],
         );
-        Ok(ClashReplay {
-            node: step.node.clone(),
-            source_node: match step.node {
-                NodeRef::Individual(id)
-                    if support_steps.is_some()
-                        && ctx.kb.individuals.contains(&id)
-                        && (id as usize) < ctx.kb.interner.len() =>
-                {
-                    Some(ctx.kb.interner.value(id).clone())
-                }
-                _ => None,
+        Ok((
+            ClashReplay {
+                node: step.node.clone(),
+                source_node: match step.node {
+                    NodeRef::Individual(id)
+                        if support_steps.is_some()
+                            && ctx.kb.individuals.contains(&id)
+                            && (id as usize) < ctx.kb.interner.len() =>
+                    {
+                        Some(ctx.kb.interner.value(id).clone())
+                    }
+                    _ => None,
+                },
+                current_supported: support_steps.is_some(),
+                conclusion: DerivedConclusion::False,
+                clause: step.clause,
+                checks,
             },
-            current_supported: support_steps.is_some(),
-            conclusion: DerivedConclusion::False,
-            clause: step.clause,
-            checks,
-        })
+            journal,
+            checked_schema,
+        ))
     }
 
     /// RE-DERIVE the ALTERNATIVES of branch point `index` against the consumer's own ontology.

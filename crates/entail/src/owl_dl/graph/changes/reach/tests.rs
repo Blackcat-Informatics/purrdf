@@ -13,9 +13,9 @@ use crate::owl_dl::{
 const R: u32 = 20;
 const IND: u32 = 40;
 
-fn steps(
-    slice: &crate::owl_dl::graph::changes::slice::Slice,
-) -> impl Iterator<Item = super::Step> + '_ {
+fn steps<'a>(
+    slice: &'a crate::owl_dl::graph::changes::slice::Slice<'_>,
+) -> impl Iterator<Item = super::Step> + 'a {
     slice
         .transitive_nodes
         .iter()

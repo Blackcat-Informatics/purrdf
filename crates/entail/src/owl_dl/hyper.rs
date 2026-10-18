@@ -562,8 +562,17 @@ pub(crate) fn replay_current_support(
     clause: usize,
     frame: &[usize],
     branches: &[BranchStep],
-) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
-    Hyper::replay_support(kb, assumptions, applications, clause, frame, branches)
+    journal: Option<super::graph::changes::Journal>,
+) -> Result<ReplaySupport, super::proof::DlProofError> {
+    Hyper::replay_support_inner(
+        kb,
+        assumptions,
+        applications,
+        clause,
+        frame,
+        branches,
+        journal,
+    )
 }
 
 /// Exercise the same independent replay with its native write journal enabled.
@@ -2194,30 +2203,6 @@ impl<'a> Hyper<'a> {
         !st.clash
     }
 
-    pub(crate) fn replay_support(
-        kb: &'a Kb,
-        assumptions: &Assumptions<'_>,
-        applications: &[&super::support::Application],
-        clause_index: usize,
-        frame: &[usize],
-        branches: &[BranchStep],
-    ) -> Result<(Vec<NodeRef>, Vec<super::proof::ProofFact>), super::proof::DlProofError> {
-        let replay = Self::replay_support_inner(
-            kb,
-            assumptions,
-            applications,
-            clause_index,
-            frame,
-            branches,
-            None,
-        )?;
-        debug_assert!(
-            replay.mutations.is_none(),
-            "ordinary replay did not request mutation storage"
-        );
-        Ok((replay.frame, replay.facts))
-    }
-
     fn replay_support_inner(
         kb: &'a Kb,
         assumptions: &Assumptions<'_>,
@@ -3755,7 +3740,7 @@ mod tests {
         );
         assert!(
             matches!(
-                slice.inputs(&kb).collect::<Result<Vec<_>, _>>(),
+                slice.inputs().collect::<Result<Vec<_>, _>>(),
                 Err(crate::owl_dl::graph::changes::slice::Error::MissingInput(_))
             ),
             "synthetic native facts are not invented source assertions"
@@ -4388,7 +4373,7 @@ mod tests {
             .unwrap();
         kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
         assert!(matches!(
-            Hyper::replay_support(&kb, &Assumptions::of_kb(), &[], index, &[0, 0], &[]),
+            Hyper::replay_support_inner(&kb, &Assumptions::of_kb(), &[], index, &[0, 0], &[], None),
             Err(crate::owl_dl::proof::DlProofError::Stopped)
         ));
         kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));

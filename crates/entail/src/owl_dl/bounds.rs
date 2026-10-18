@@ -138,6 +138,21 @@ pub(crate) struct RoleStep {
     pub(crate) to: Role,
 }
 
+impl RoleStep {
+    /// The exact native input relation this two-form step checks.
+    pub(crate) fn input(self) -> super::input_source::Input {
+        use super::input_source::Input;
+        match (self.from, self.to) {
+            (Role::Named(sub), Role::Named(sup)) | (Role::Inv(sub), Role::Inv(sup)) => {
+                Input::SubRole { sub, sup }
+            }
+            (Role::Named(left), Role::Inv(right)) | (Role::Inv(left), Role::Named(right)) => {
+                Input::Inverse(left, right)
+            }
+        }
+    }
+}
+
 /// A class-local contradiction with its exact restrictions and source implications.
 ///
 /// The current inhabitant is deliberately absent here. It belongs to the recorded
@@ -330,15 +345,17 @@ fn check_steps(
 
 /// Verify a source role step without running the producer's path search.
 fn role_step_valid(kb: &Kb, from: Role, to: Role) -> bool {
-    match (from, to) {
-        (Role::Named(sub), Role::Named(sup)) | (Role::Inv(sub), Role::Inv(sup)) => kb
+    use super::input_source::Input;
+    match (RoleStep { from, to }).input() {
+        Input::SubRole { sub, sup } => kb
             .role_sub
             .get(&sup)
             .is_some_and(|members| members.contains(&sub)),
-        (Role::Named(left), Role::Inv(right)) | (Role::Inv(left), Role::Named(right)) => kb
+        Input::Inverse(left, right) => kb
             .inverses
             .get(&left)
             .is_some_and(|partners| partners.contains(&right)),
+        _ => unreachable!("a schema role step is an inclusion or inverse"),
     }
 }
 

@@ -16,6 +16,7 @@ use crate::owl_dl::{
 };
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
+mod schema;
 
 /// One normalized transitivity/hierarchy license for a selected immutable path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +71,8 @@ pub(crate) enum Error {
     MissingInput(Input),
     MissingSyntax,
     MissingSchema(usize),
+    UnexpectedSchema,
+    Stopped,
 }
 
 impl From<StorageError> for Error {
@@ -79,8 +82,8 @@ impl From<StorageError> for Error {
 }
 
 /// Checked native dependencies, with separately bound original input anchors.
-#[derive(Debug)]
-pub(crate) struct Slice {
+pub(crate) struct Slice<'a> {
+    kb: &'a Kb,
     pub(crate) causes: Vec<Cause>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
@@ -89,6 +92,26 @@ pub(crate) struct Slice {
     pub(crate) rules: Vec<Input>,
     pub(crate) tbox: Vec<usize>,
     guards: Vec<usize>,
+    pub(crate) schema: Option<crate::owl_dl::proof::CheckedSchema<'a>>,
+    pub(crate) schema_reads: Vec<schema::Read>,
+}
+
+impl std::fmt::Debug for Slice<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Slice")
+            .field("source_terms", &self.kb.source_terms)
+            .field("causes", &self.causes)
+            .field("owners", &self.owners)
+            .field("paths", &self.paths)
+            .field("transitive", &self.transitive)
+            .field("transitive_nodes", &self.transitive_nodes)
+            .field("rules", &self.rules)
+            .field("tbox", &self.tbox)
+            .field("guards", &self.guards)
+            .field("schema", &self.schema)
+            .field("schema_reads", &self.schema_reads)
+            .finish()
+    }
 }
 
 /// One selected assertion or role-rule input and its original native source owner.
@@ -99,21 +122,21 @@ pub(crate) struct SelectedInput {
     pub(crate) source: Source,
 }
 
-impl Slice {
+impl Slice<'_> {
     /// Bind actual checked input/inclusion captures. Multi-license schema guards
     /// still require their checked bound derivations, not an empty syntax set.
-    pub(crate) fn syntax_roots(
-        &self,
-        kb: &Kb,
-    ) -> Result<Vec<(crate::owl_dl::syntax::Space, usize)>, Error> {
+    pub(crate) fn syntax_roots(&self) -> Result<Vec<(crate::owl_dl::syntax::Space, usize)>, Error> {
         use crate::owl_dl::syntax::Space;
-        if let Some(&guard) = self.guards.first() {
-            return Err(Error::MissingSchema(guard));
+        let kb = self.kb;
+        for &guard in &self.guards {
+            if !self.schema.is_some_and(|schema| schema.matches(kb, guard)) {
+                return Err(Error::MissingSchema(guard));
+            }
         }
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         let mut roots = Vec::new();
-        for input in self.inputs(kb) {
+        for input in self.inputs() {
             if let Some(root) = kb
                 .inputs
                 .syntax(input?.input)
@@ -135,7 +158,20 @@ impl Slice {
                     .ok_or(Error::MissingSyntax)?;
                 kb.meta_sources.get(at).copied().ok_or(Error::MissingSyntax)
             });
-        for index in self.tbox.iter().copied().map(Ok).chain(internalized) {
+        let schema_inclusions = self.schema.iter().flat_map(|schema| {
+            let bounds = schema.bounds();
+            self.schema_reads
+                .iter()
+                .filter_map(|read| read.step(bounds).inclusion())
+        });
+        for index in self
+            .tbox
+            .iter()
+            .copied()
+            .chain(schema_inclusions)
+            .map(Ok)
+            .chain(internalized)
+        {
             let index = index?;
             let source = kb.tbox_sources.get(index).ok_or(Error::MissingSyntax)?;
             let (space, capture) = match source {
@@ -152,10 +188,8 @@ impl Slice {
     }
     /// Bind selected assertions and native role-rule predecessors. Expression,
     /// query and effect licenses remain separate graph obligations.
-    pub(crate) fn inputs<'a>(
-        &'a self,
-        kb: &'a Kb,
-    ) -> impl Iterator<Item = Result<SelectedInput, Error>> + 'a {
+    pub(crate) fn inputs(&self) -> impl Iterator<Item = Result<SelectedInput, Error>> + '_ {
+        let kb = self.kb;
         let facts = self.causes.iter().filter_map(|&cause| {
             let input = match cause.origin {
                 Origin::PreparedType => Input::Type(cause.index),
@@ -168,6 +202,13 @@ impl Slice {
         });
         facts
             .chain(self.rules.iter().map(|&input| (None, input)))
+            .chain(self.schema.iter().flat_map(|schema| {
+                schema
+                    .bounds()
+                    .roles
+                    .iter()
+                    .map(|step| (None, step.input()))
+            }))
             .map(|(cause, input)| match kb.inputs.get(input) {
                 None | Some(Source::Anchor(AxiomSource::Unrecorded)) => {
                     Err(Error::MissingInput(input))
@@ -534,7 +575,15 @@ const fn distinct(left: usize, right: usize) -> Fact {
 impl Journal {
     /// Consume observations once in replay order, then walk immutable parents.
     /// Unresolved role/effect support is rejected if selected by the terminal slice.
-    pub(crate) fn normalized_slice(&self, kb: &Kb) -> Result<Slice, Error> {
+    pub(crate) fn normalized_slice<'a>(&self, kb: &'a Kb) -> Result<Slice<'a>, Error> {
+        self.normalized_slice_with_schema(kb, None)
+    }
+
+    pub(crate) fn normalized_slice_with_schema<'a>(
+        &self,
+        kb: &'a Kb,
+        schema: Option<crate::owl_dl::proof::CheckedSchema<'a>>,
+    ) -> Result<Slice<'a>, Error> {
         let mut storage = Resident;
         let mut memory = Memory::new(&mut storage);
         let mut graph = Builder::default();
@@ -601,6 +650,7 @@ impl Journal {
         visited.resize(graph.nodes.len(), false);
         memory.push(&mut pending, root.ok_or(Error::MissingClash)?)?;
         let mut result = Slice {
+            kb,
             causes: Vec::new(),
             owners: Vec::new(),
             paths: Vec::new(),
@@ -609,6 +659,8 @@ impl Journal {
             rules: Vec::new(),
             tbox: Vec::new(),
             guards: Vec::new(),
+            schema,
+            schema_reads: Vec::new(),
         };
         while let Some(id) = pending.pop() {
             if visited[id] {
@@ -658,6 +710,18 @@ impl Journal {
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;
             }
+        }
+        if let Some(schema) = result.schema
+            && (result.guards.is_empty()
+                || result
+                    .guards
+                    .iter()
+                    .any(|&guard| !schema.matches(kb, guard)))
+        {
+            return Err(Error::UnexpectedSchema);
+        }
+        if let Some(schema) = result.schema {
+            result.schema_reads = schema::select(kb, schema.bounds(), &mut memory)?;
         }
         Ok(result)
     }
