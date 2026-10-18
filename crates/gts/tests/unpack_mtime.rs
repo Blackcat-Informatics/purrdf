@@ -60,7 +60,10 @@ fn filesystem_timestamps_keep_original_native_parser_and_epoch_failures() {
     let root = purrdf_testkit::temp_dir!("gts-files-errors-").expect("temp dir");
     let source = root.path().join("before-epoch");
     fs::write(&source, b"data").unwrap();
-    fs::File::open(&source)
+    // Windows requires a writable handle when changing file timestamps.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH - Duration::from_secs(1)))
         .unwrap();
