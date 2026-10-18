@@ -3029,6 +3029,33 @@ pub(crate) mod owned_row_regressions {
     }
 
     #[test]
+    fn borrowed_value_equality_keeps_the_original_allocation_refusal() {
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace, ledger, _) = account(base);
+        let value = purrdf_core::TermValue::typed_literal(
+            "1".repeat(4096),
+            purrdf_xsd::datatype::XSD_INTEGER,
+        );
+        let refusal = crate::equal_values(
+            &value,
+            &value,
+            crate::LanguageStringEquality::Core,
+            &workspace.capability(),
+        );
+        assert!(matches!(refusal, Err(EvalError::WorkspaceStopped)));
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original provider refusal")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn consuming_resident_iterator_moves_spilled_cells() {
         let mut cells = Solution::<TermId>::new();
         cells.try_reserve_exact(10).expect("resident test row");

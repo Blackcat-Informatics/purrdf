@@ -38,7 +38,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = "w3c/data-shapes"
-COMMIT = "5069ed3519c31cfcf074d2cf779542abc37ce80d"
+COMMIT = "4cd469867a1cc6d2fff80e8a40723b26c695d67a"
 LICENSE_NAME = "W3C Software and Document License"
 LICENSE_URL = "http://www.w3.org/Consortium/Legal/copyright-software"
 

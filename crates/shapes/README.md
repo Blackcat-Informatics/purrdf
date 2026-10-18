@@ -139,11 +139,10 @@ validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
 ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
 whether or not a shape uses the component.
 
-**Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
-`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
-tests) runs, and of the 544 an upstream manifest lists, 538 pass as approved
-and 6 are counted apart as non-canonical expected decimals, with an empty
-expected-failure ledger:
+**Conformance.** The whole W3C `shacl12-test-suite` (592 tests: 213
+`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 209 SPARQL 1.2 RL
+tests) runs, and of the 591 an upstream manifest lists, 591 pass as approved,
+with an empty expected-failure ledger:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
@@ -157,12 +156,11 @@ results carry the value node as `sh:value`, as the approved
 `core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
 names both the triple term and the reifier `t`); a non-conforming reifier's own
 results ride along as `sh:detail`. In six node-expression tests the approved
-result spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`,
-`"42.0"`, `"00"` for the XSD 1.1 canonical `"4"`, `"3"`, `"42"`, `"0"`); the
-expected value is correct, and the suite does not say whether "equal" means term
-or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six by
-substituting the canonical spelling, which for them equals value comparison. They
-are counted apart from the passes. `sparql/component/validator-001` passes by
+result spells a computed `xsd:decimal` as `"4.0"`, `"3.0"`, `"42.0"` and `"00"`;
+the specifications leave the lexical form of a computed literal to the processor,
+so PurRDF computes a decimal with a point and a fractional digit and `SECONDS` as
+the seconds part of its argument's lexical form, and all six pass term for term.
+`sparql/component/validator-001` passes by
 name with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits
 on a node that is neither the document's own IRI nor an `owl:Ontology` nor a
 `sh:ShapesGraph`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the

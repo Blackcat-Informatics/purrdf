@@ -1403,7 +1403,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
         let av = owned_value_of(ctx, ta)?;
         let bv = owned_value_of(ctx, tb)?;
-        return rdf_equal_in_admitted(&av, &bv, ctx.language_strings, &ctx.growth)?
+        return equal_values(&av, &bv, ctx.language_strings, &ctx.growth)?
             .map(|eq| intern_boolean(ctx, eq))
             .transpose();
     }
@@ -1463,7 +1463,7 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     {
         return Ok(None);
     }
-    rdf_equal_in_admitted(target_value, &cv, ctx.language_strings, &ctx.growth)
+    equal_values(target_value, &cv, ctx.language_strings, &ctx.growth)
 }
 
 /// Whether `value` is anything but a literal, or a literal whose lexical form is
@@ -1520,7 +1520,7 @@ fn rdf_equal_in(
     b: &TermValue,
     language_strings: LanguageStringEquality,
 ) -> Option<bool> {
-    rdf_equal_in_admitted(
+    equal_values(
         a,
         b,
         language_strings,
@@ -1529,7 +1529,19 @@ fn rdf_equal_in(
     .expect("resident term equality allocation")
 }
 
-fn rdf_equal_in_admitted(
+/// Compare borrowed native values under SPARQL `=` semantics.
+///
+/// This is the value-level equality used by expression evaluation, including
+/// numeric promotion, NaN, scoped blanks, RDF 1.2 triple components and SEP-0009
+/// composite values. It neither renders operands nor constructs a query/store.
+/// `language_strings` explicitly selects the core rule or its disjoint extension;
+/// `workspace` retains the caller's allocation admission.
+///
+/// `Ok(None)` is a SPARQL expression error, distinct from a boolean answer.
+///
+/// # Errors
+/// Returns the original operational or allocation refusal from the comparison.
+pub fn equal_values(
     a: &TermValue,
     b: &TermValue,
     language_strings: LanguageStringEquality,
@@ -6115,7 +6127,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 frame.admit(layout)
             });
             return match frame.finish_cast(cast)? {
-                Some(cast) => governed_xsd_to_term(ctx, &cast, cast.datatype().iri()),
+                Some(cast) => governed_cast_to_term(ctx, &cast, cast.datatype().iri()),
                 None => {
                     ctx.record_expression_error(Some(cast_error_code(&value)));
                     Ok(None)
@@ -6155,7 +6167,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                     }
                     Err(_) => return Ok(None),
                 };
-                return governed_xsd_to_term(ctx, &value, target.iri());
+                return governed_cast_to_term(ctx, &value, target.iri());
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -6193,8 +6205,8 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value, target.iri()),
-            Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
+            Ok(value) if target.is_calendar() => governed_cast_to_term(ctx, &value, target.iri()),
+            Ok(value) => governed_cast_to_term(ctx, &value, value.datatype().iri()),
             Err(code) => {
                 if target.is_numeric() {
                     ctx.record_expression_error(code);
@@ -6343,7 +6355,7 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
         return Ok(ValueCast::Cast(None));
     };
     if from == target {
-        return xsd_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value)));
+        return xsd_cast_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value)));
     }
     let result = match &*value {
         XsdValue::Duration(duration) => {
@@ -6358,7 +6370,7 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
                     let value = frame
                         .finish_value(Ok(XsdValue::Duration(duration)))?
                         .expect("duration cast has no numeric value-space error");
-                    Some(xsd_to_term(ctx, &value)?)
+                    Some(xsd_cast_to_term(ctx, &value)?)
                 }
                 Ok(None) | Err(purrdf_xsd::XsdError::TypeMismatch { .. }) => None,
                 Err(purrdf_xsd::XsdError::Storage(error)) => {
@@ -7459,7 +7471,8 @@ fn triple_part<D: DatasetView + Sync>(
 }
 
 /// Convert a computed [`XsdValue`] back into an interned [`SolutionTerm`] using the
-/// canonical typed-literal form. The datatype IRI comes from `v.datatype().iri()`.
+/// typed-literal form of a computed result ([`xsd_workspace_value`]). The datatype IRI
+/// comes from `v.datatype().iri()`.
 pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
@@ -7469,16 +7482,43 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
         .ok_or(EvalError::WorkspaceBoundOverflow)
 }
 
-/// One canonical producer for expressions and aggregate results. Borrowed native
+/// [`xsd_to_term`] for the value a cast or constructor converted: its XSD 1.1
+/// canonical form, never the form of a computed result.
+fn xsd_cast_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    v: &XsdValue,
+) -> Result<SolutionTerm<D::Id>, EvalError> {
+    let value = render_xsd_workspace_value(v, &ctx.growth, v.datatype().iri(), false)?;
+    ctx.intern_workspace_term(value)?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
+}
+
+/// One producer for expressions and aggregate results. A decimal an operator, a
+/// function or an aggregate COMPUTED is spelled with a point and a fractional digit
+/// (`4.0`); the specifications leave a computed literal's lexical form to the
+/// processor, and the SPARQL Query examples spell them so. Borrowed native
 /// inputs and render groups remain owned until the final literal is admitted.
 pub(crate) fn xsd_workspace_value(
     value: &XsdValue,
     workspace: &crate::WorkspaceCapability,
     datatype: &str,
 ) -> Result<crate::WorkspaceTerm, EvalError> {
+    render_xsd_workspace_value(value, workspace, datatype, true)
+}
+
+/// [`xsd_workspace_value`], with a decimal's point required only when `computed`.
+fn render_xsd_workspace_value(
+    value: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+    datatype: &str,
+    computed: bool,
+) -> Result<crate::WorkspaceTerm, EvalError> {
     let mut frame = crate::native_numeric::NumericFrame::new(workspace);
-    let prepared =
-        purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
+    let prepared = if computed {
+        purrdf_xsd::numeric::prepare_computed_numeric_text(value, &mut |layout| frame.admit(layout))
+    } else {
+        purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout))
+    };
     match frame.finish_text(prepared)? {
         Some(text) => numeric_text_value(text, datatype, workspace),
         None => {
@@ -7533,7 +7573,7 @@ fn borrowed_temporal_seconds_to_term<D: DatasetView + Sync>(
     }
     let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
     let prepared =
-        purrdf_xsd::numeric::prepare_decimal_text(seconds, &mut |layout| frame.admit(layout));
+        purrdf_xsd::numeric::prepare_seconds_field_text(seconds, &mut |layout| frame.admit(layout));
     let text = frame
         .finish_text(prepared.map(Some))?
         .ok_or(EvalError::WorkspaceBoundOverflow)?;
@@ -7699,10 +7739,29 @@ pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
     value: &XsdValue,
     datatype: &str,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    governed_term(ctx, value, datatype, true)
+}
+
+/// [`governed_xsd_to_term`] for a value a cast or constructor converted, or an
+/// operator passed through unchanged: its XSD 1.1 canonical form.
+fn governed_cast_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+    datatype: &str,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    governed_term(ctx, value, datatype, false)
+}
+
+fn governed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+    datatype: &str,
+    computed: bool,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
         return Ok(None);
     }
-    let value = xsd_workspace_value(value, &ctx.growth, datatype)?;
+    let value = render_xsd_workspace_value(value, &ctx.growth, datatype, computed)?;
     ctx.intern_workspace_term(value)?
         .ok_or(EvalError::WorkspaceBoundOverflow)
         .map(Some)
@@ -7755,7 +7814,7 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
     }
     // Identity keeps the same immutable parsed allocation, including its subtype.
     if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
-        return governed_xsd_to_term(ctx, value, value.datatype().iri());
+        return governed_cast_to_term(ctx, value, value.datatype().iri());
     }
     let capability = ctx.growth.clone();
     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
@@ -9090,26 +9149,26 @@ mod tests {
     #[test]
     fn function_ceil() {
         let ds = empty_ds();
-        // CEIL(2.1) = 3 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
+        // CEIL(2.1) = 3.0 (xsd:decimal; a computed whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Ceil, vec![typed_lit("2.1", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
     }
 
     #[test]
     fn function_floor() {
         let ds = empty_ds();
-        // FLOOR(2.9) = 2 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
+        // FLOOR(2.9) = 2.0 (xsd:decimal; a computed whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Floor, vec![typed_lit("2.9", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("2".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("2.0".to_owned()));
     }
 
     #[test]
     fn function_round() {
         let ds = empty_ds();
-        // ROUND(2.5) = 3 (round-half-toward-+infinity per XPath fn:round; XSD 1.1
-        // whole-decimal lexical has no point)
+        // ROUND(2.5) = 3.0 (round-half-toward-+infinity per XPath fn:round; a computed
+        // whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Round, vec![typed_lit("2.5", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
     }
 
     // ---- BIND integration: arithmetic column over a real BGP ---------------
@@ -9886,8 +9945,30 @@ mod tests {
         let seconds = Expression::FunctionCall(Function::Seconds, vec![dt].into());
         assert_eq!(lex(&ds, &hours), Some("10".to_owned()));
         assert_eq!(lex(&ds, &minutes), Some("30".to_owned()));
-        // SECONDS returns xsd:decimal; XSD 1.1 whole-decimal lexical has no point.
+        // SECONDS returns the seconds part of the lexical form, as xsd:decimal.
         assert_eq!(lex(&ds, &seconds), Some("45".to_owned()));
+    }
+
+    /// `SECONDS` is "the seconds part of the lexical form of arg": the two-digit
+    /// field, so zero seconds are `00`, a single-digit second keeps its leading
+    /// zero, and a fraction is kept. Its neighbour, a computed whole decimal,
+    /// carries a point instead.
+    #[test]
+    fn seconds_is_the_seconds_field_of_the_lexical_form() {
+        let ds = empty_ds();
+        for (lexical, datatype, expected) in [
+            ("2023-12-25T10:30:00", XSD_DATETIME, "00"),
+            ("2023-12-25T10:30:05Z", XSD_DATETIME, "05"),
+            ("10:30:13.815", XSD_TIME, "13.815"),
+        ] {
+            let seconds = Expression::FunctionCall(
+                Function::Seconds,
+                vec![typed_lit(lexical, datatype)].into(),
+            );
+            assert_eq!(lex(&ds, &seconds).as_deref(), Some(expected), "{lexical}");
+        }
+        let whole = Expression::FunctionCall(Function::Ceil, vec![typed_lit("0.5", XDEC)].into());
+        assert_eq!(lex(&ds, &whole).as_deref(), Some("1.0"));
     }
 
     #[test]

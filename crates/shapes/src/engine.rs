@@ -3758,17 +3758,25 @@ pub(crate) fn validate_dataset_as_document(
 /// A rules-engine failure: validation of a graph whose rules could not be executed
 /// has no answer.
 fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
-    if !shapes.rules.entailment {
+    // `sh:RulesEntailment` executes the default rule set, which holds every rule of the
+    // shapes graph, so a rule set named beside it adds nothing; rule sets alone execute
+    // together as a single rule set.
+    let options = if shapes.rules.entailment {
+        crate::rules::RuleOptions::default()
+    } else if shapes.rules.entailment_rule_sets.is_empty() {
         return Ok(None);
-    }
+    } else {
+        crate::rules::RuleOptions::default()
+            .with_rule_sets(shapes.rules.entailment_rule_sets.iter().cloned())
+    };
     let entailed = crate::rules::infer_with(
         data,
         shapes,
-        &crate::rules::RuleOptions::default(),
+        &options,
         crate::srl::eval::Reexecution::Incremental,
     )
     .map(|inference| Arc::clone(inference.dataset()))
-    .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
+    .map_err(|e| format!("the sh:entailment regime could not execute the rules: {e}"))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
 }
 

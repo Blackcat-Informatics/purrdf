@@ -50,8 +50,7 @@
 //!   `sht:Validate` entry parser, adding the 1.2 test types.
 //! * [`report_grading`] is the one `sht:Validate` grader. It returns verdicts and
 //!   asserts none, so both W3C harnesses grade a validation case identically.
-//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, with the table of
-//!   entries whose approved result spells a decimal non-canonically, shared by the
+//! * [`node_expr_grading`] is the one `sht:EvalNodeExpr` grader, shared by the
 //!   library harness and the command-line harness.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,6 +72,15 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// The vendored W3C data-shapes suite plus the first-party `af/` seam.
 pub const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl");
+
+/// The commit of `w3c/data-shapes` the vendored SHACL 1.0 suite was taken from
+/// (`vectors/shacl/README.md`). Bump only on a deliberate re-vendor.
+pub const W3C_SUITE_COMMIT: &str = "08adb3776709a014bc3062ede793c36275b22446";
+
+/// Exact number of vendored W3C entries (`core/` and `sparql/`) among the
+/// [`W3C_TOTAL_CASES`], the scope of a SHACL 2017 EARL report; the rest are the
+/// first-party `af/` seam ([`W3cCase::first_party`]).
+pub const W3C_SUBSET_CASES: usize = 120;
 
 /// The first-party numbered-case corpus.
 pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
@@ -232,6 +240,17 @@ pub struct W3cCase {
     /// distinct produced result with the same tuple whose details are exactly
     /// the stated ones (see [`ExpectedResult`]).
     pub expected_details: Vec<ExpectedResult>,
+    /// The SHACL law the shared report grader ([`report_grading`]) loads and
+    /// validates this case under; nothing else reads it. [`parse_entry`] sets the
+    /// compatibility law and the SHACL 1.2 discovery sets the dated 1.2 law. Lanes
+    /// that load shapes themselves (the SHACL 1.0 harness's own loaders, the
+    /// prepared-product, vocabulary-import and shacl-shacl lanes) ignore it by
+    /// design and always run the compatibility law.
+    pub profile: crate::profile::ShaclProfile,
+    /// Whether the case belongs to the first-party `af/` seam rather than to the
+    /// vendored W3C suite. Set by [`w3c_cases`]; every other discovery path leaves
+    /// it `false`.
+    pub first_party: bool,
 }
 
 /// One numbered case directory from the first-party corpus.
@@ -355,7 +374,11 @@ pub fn w3c_cases() -> Vec<W3cCase> {
     // and target/ sub-manifests.
     let af = root.join("af/manifest.ttl");
     if af.exists() {
+        let vendored = cases.len();
         collect_manifest(&af, &root, &mut cases);
+        for case in &mut cases[vendored..] {
+            case.first_party = true;
+        }
         af_case_files_are_all_reachable_from_a_manifest(&root.join("af"));
     }
 
@@ -540,6 +563,8 @@ pub fn parse_entry(
         expected_messages,
         expected_annotations,
         expected_details,
+        profile: crate::profile::ShaclProfile::LEGACY,
+        first_party: false,
     })
 }
 

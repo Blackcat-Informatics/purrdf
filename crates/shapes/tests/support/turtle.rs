@@ -51,6 +51,16 @@ pub fn refused(prefixes: &str, shapes_ttl: &str, needle: &str) {
     );
 }
 
+/// The load error's text for the shapes graph `prefixes` + `shapes_ttl`, which
+/// must be refused; a graph that loads fails the test showing its source.
+#[track_caller]
+pub fn refusal_text(prefixes: &str, shapes_ttl: &str) -> String {
+    match load(prefixes, shapes_ttl) {
+        Ok(_) => panic!("the shapes graph must be refused:\n{prefixes}{shapes_ttl}"),
+        Err(error) => error,
+    }
+}
+
 /// The data graph `prefixes` + `data_ttl` reads as.
 pub fn data(prefixes: &str, data_ttl: &str) -> Arc<RdfDataset> {
     parse_turtle_to_dataset(&format!("{prefixes}{data_ttl}"), None).expect("data parses")

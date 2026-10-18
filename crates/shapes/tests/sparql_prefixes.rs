@@ -6,8 +6,8 @@
 //!
 //! > A SHACL processor collects a set of prefix mappings as the union of all
 //! > individual prefix mappings that are values of the SPARQL property path
-//! > `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare` of the SPARQL-based
-//! > constraint or validator. [...] If such a collection of prefix declarations
+//! > `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare` of
+//! > the SPARQL-based constraint, validator or SPARQL-based node expression. [...] If such a collection of prefix declarations
 //! > contains multiple different namespaces for the same value of `sh:prefix`, then
 //! > the shapes graph is ill-formed. (Note that SHACL processors MAY ignore prefix
 //! > declarations that are never reached). If a SPARQL query has no value for
@@ -20,6 +20,9 @@
 //! `FILTER (?value = t:Value)`, so the OBSERVABLE is which namespace `t:` was bound
 //! to: `target#` reports exactly one violation, and every other binding reports
 //! none. Each treatment sits beside a control whose report differs from it.
+
+#[path = "support/turtle.rs"]
+mod turtle;
 
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 use purrdf_shapes::{ShapesError, ShapesImportError};
@@ -83,13 +86,6 @@ fn target_violation() -> Vec<String> {
     vec![format!("<{TARGET}Value>")]
 }
 
-fn load_error(shapes: &str) -> String {
-    match parse_shapes(shapes, None) {
-        Ok(_) => panic!("the shapes graph must be refused:\n{shapes}"),
-        Err(error) => error.to_string(),
-    }
-}
-
 // ── A PREFIX inside a query literal stays in that query ─────────────────────────
 
 /// The regression: a `PREFIX` line inside ONE constraint's query literal was read
@@ -111,7 +107,7 @@ SELECT $this ?value WHERE {{ $this ex:property ?value . FILTER (?value = t:Nothi
 "#,
         shape("")
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(
         error.contains("unparsable sh:select") && error.contains("undeclared prefix \"t\""),
         "ex:C1 names an undeclared prefix: {error}"
@@ -181,14 +177,14 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
         shape("sh:prefixes ex:Decls ;"),
         declare_t(TARGET)
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(error.contains("undeclared prefix \"t\""), "{error}");
 }
 
 // ── The sh:prefixes path ─────────────────────────────────────────────────────────
 
-/// `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`: the version IRI a query
-/// names is navigated back to its graph, whose imports are followed.
+/// `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`: the
+/// version IRI a query names is navigated back to its graph, whose imports are followed.
 ///
 /// The path is prefix collection over the shapes graph as it stands. `ex:G`, `ex:Q` and
 /// `ex:R` are nodes of the shapes graph, and `ex:G` is neither the shapes graph's IRI nor an
@@ -236,6 +232,47 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
     );
 }
 
+/// The same path reaches the declarations on the node `sh:prefixes` names, on the graph
+/// its version IRI belongs to, and on each import in either spelling: the node an
+/// `owl:imports` step arrives at, or the graph whose `owl:versionIRI` it is.
+///
+/// `ex:V2` is the version IRI of `ex:Shapes`, which declares `t:`; `ex:Shapes` imports
+/// `ex:BaseV1`, the version IRI of `ex:Base`, which declares `o:`. The query uses both
+/// labels. The neighbours each cut one hop of the path and the query that needs it is
+/// refused, so the test fails on a path that is too short and on one that reaches everything.
+#[test]
+fn the_prefixes_path_reaches_declarations_on_each_hop() {
+    let query_using = |labels: &str| {
+        format!(
+            "{PREFIXES}ex:Shape a sh:NodeShape ; sh:targetNode ex:Focus ; sh:sparql ex:C1 .\n\
+             ex:C1 sh:prefixes ex:V2 ; sh:select \"\"\"\n\
+             SELECT $this ?value WHERE {{ $this ex:property ?value . {labels} }}\"\"\" .\n"
+        )
+    };
+    let graph = |declarations: &str| {
+        format!(
+            "{}ex:Shapes owl:versionIRI ex:V2 ; owl:imports ex:BaseV1 .\n\
+             ex:Base owl:versionIRI ex:BaseV1 .\n{declarations}",
+            query_using("FILTER (?value = t:Value) FILTER (?value != o:Value)")
+        )
+    };
+    let both = format!(
+        "ex:Shapes sh:declare {} .\nex:Base sh:declare {} .\n",
+        declare_t(TARGET),
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert_eq!(violations(&graph(&both)), target_violation());
+
+    // Neighbours: a declaration the path does not reach leaves its label unbound.
+    let only_shapes = format!("ex:Shapes sh:declare {} .\n", declare_t(TARGET));
+    assert!(turtle::refusal_text("", &graph(&only_shapes)).contains("undeclared prefix \"o\""));
+    let only_base = format!(
+        "ex:Base sh:declare {} .\n",
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert!(turtle::refusal_text("", &graph(&only_base)).contains("undeclared prefix \"t\""));
+}
+
 // ── Conflicts ────────────────────────────────────────────────────────────────────
 
 /// Two different namespaces for `t` among the declarations a query reaches make
@@ -261,7 +298,7 @@ fn a_conflicting_prefix_is_refused_and_an_agreeing_one_loads() {
         )
     };
     for build in [&explicit as &dyn Fn(&str) -> String, &implicit] {
-        let error = load_error(&build(OTHER));
+        let error = turtle::refusal_text("", &build(OTHER));
         assert!(
             error.contains("ill-formed")
                 && error.contains("\"t\"")
@@ -323,13 +360,13 @@ fn a_malformed_reached_declaration_is_refused() {
             "{PREFIXES}{}\nex:P sh:declare {declaration} .\n",
             shape("sh:prefixes ex:P ;")
         );
-        let error = load_error(&shapes);
+        let error = turtle::refusal_text("", &shapes);
         assert!(
             error.contains("ill-formed") && error.contains(expected),
             "{declaration}: {error}"
         );
     }
-    let error = load_error(&format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
+    let error = turtle::refusal_text("", &format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
     assert!(error.contains("not an IRI or a blank node"), "{error}");
 }
 

@@ -468,6 +468,12 @@ fn check_pattern_node<'a>(
         }
         GraphPattern::Service { .. } => return Err(Violation::new(ViolationKind::Service)),
         GraphPattern::Values { .. } if rules == Rules::ServiceOnly => {}
+        // SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries MUST not contain a
+        // VALUES clause that mentions any potentially pre-bound variable". A clause
+        // "mentions" a variable when that variable is in its variable list, at any
+        // depth (a sub-SELECT or EXISTS body included; the draft lifted only the
+        // sub-SELECT projection restriction). A clause over names nothing pre-binds
+        // binds no pre-bound variable and is admitted.
         GraphPattern::Values { variables, .. } if rules == Rules::AppendixA => {
             if let Some(variable) = variables
                 .iter()

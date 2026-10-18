@@ -63,12 +63,24 @@ const VOCABULARY: [&str; 3] = [
 const VOCABULARY_LIST_FUNCTIONS: usize = 78;
 
 /// Cases whose answer legitimately changes when the vocabulary is merged, as
-/// `(case id, reason)`. Empty: no case in the three corpora reads the shapes graph
-/// in a way the vocabulary's declarations can reach.
-const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[];
+/// `(case id, reason)`.
+const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[(
+    "w3c12/sparql/node/sparql-syntax-error-001",
+    "a declared sht:Failure whose SPARQL constraint does not parse: the merged vocabulary's \
+     implicit prefix declarations lengthen the prologue the engine puts before the query, \
+     so both runs refuse the graph for the same syntax error at different byte offsets",
+)];
 
-/// Every case the three corpora contribute (129 + 73 + 174).
-const TOTAL_CASES: usize = 376;
+/// Cases that end in an error, not a report, although no manifest declares `sht:Failure`
+/// for them, as `(case id, reason)`: SHACL 1.2 features the engine does not evaluate. The
+/// ledger runs both ways, and its reasons are those of the prepared-product harness.
+const REFUSED_AT_LOAD: &[(&str, &str)] = &[(
+    "w3c12/sparql/pre-binding/pre-binding-009",
+    "the sh:sparql query contains VALUES, which the engine refuses with pre-bound variables",
+)];
+
+/// Every case the three corpora contribute (129 + 73 + 213).
+const TOTAL_CASES: usize = 415;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
@@ -95,11 +107,12 @@ const TOTAL_CASES: usize = 376;
 /// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
 /// so the triple is data; both runs load it with an empty import table, and it is
 /// compared on a report like every other case.
-const COMPARED_ON_REPORT: usize = 364;
+const COMPARED_ON_REPORT: usize = 401;
 
-/// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared
-/// `sht:Failure` inputs. With [`COMPARED_ON_REPORT`] they account for every case, so
-/// the refused-at-load gap is 0.
+/// The inputs among [`TOTAL_CASES`] that must be refused at load and are compared on
+/// an identical error: the declared `sht:Failure` inputs (13, one of them in
+/// [`INVARIANCE_EXCEPTIONS`]). With [`COMPARED_ON_REPORT`], the exception and
+/// [`REFUSED_AT_LOAD`] they account for every case.
 const DECLARED_REFUSAL_CASES: usize = 12;
 
 /// One case, reduced to what both parses need.
@@ -360,13 +373,17 @@ fn merging_the_vocabulary_changes_no_answer() {
         .filter(|input| !input.declared_failure)
         .map(|input| input.id.as_str())
         .collect();
-    assert!(
-        refused_at_load.is_empty(),
-        "entries the engine refuses at load (the gap must be exactly empty): {refused_at_load:?}"
+    let mut ledgered: Vec<&str> = REFUSED_AT_LOAD.iter().map(|(id, _)| *id).collect();
+    ledgered.sort_unstable();
+    let mut actual = refused_at_load;
+    actual.sort_unstable();
+    assert_eq!(
+        actual, ledgered,
+        "entries the engine refuses at load must be exactly the REFUSED_AT_LOAD ledger"
     );
     assert_eq!(
         not_on_report.len(),
-        DECLARED_REFUSAL_CASES,
+        DECLARED_REFUSAL_CASES + REFUSED_AT_LOAD.len(),
         "the declared refusals compared on an identical error"
     );
     assert_eq!(

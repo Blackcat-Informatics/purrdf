@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The actual finite positive prefix needed by a prepared contradiction.
+//! The actual finite positive prefixes needed by recorded clause contradictions.
 //!
 //! Unlike legacy structural clash grounding, replay starts with the consumer's
 //! source assertions and selected refutation assumptions. A licensed head creates
@@ -14,14 +14,14 @@ use super::bounds::{
 };
 use super::graph::{GeneratedRoot, NominalId};
 use super::hyper::Ground;
-use super::proof::{MAX_RECORDED_STEPS, SchemaClashEvidence};
+use super::proof::{CurrentSupportEvidence, MAX_RECORDED_STEPS, SchemaClashEvidence};
 use core::convert::Infallible;
 use purrdf_lex::walk::VecReserve;
 
 /// Disabled recording or the latest admitted predecessor in this tableau arm.
 #[derive(Clone, Copy)]
 pub(crate) enum Cursor {
-    /// No prepared support was requested, or its first physical refusal occurred.
+    /// No recording was requested, or its first physical refusal occurred.
     Disabled,
     /// The empty prefix has no predecessor; later prefixes name an arena entry.
     Active(Option<usize>),
@@ -38,10 +38,10 @@ pub(crate) struct Application {
 
 /// A branch copies only its latest predecessor index. The recorder owns every
 /// application once, including applications in alternatives later discarded.
-#[derive(Debug)]
-struct Link {
-    previous: Option<usize>,
-    application: Application,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Link {
+    pub(crate) previous: Option<usize>,
+    pub(crate) application: Application,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +64,10 @@ impl Journal {
     }
     pub(crate) const fn obstruction(&self) -> Option<SchemaObstruction> {
         self.stats.obstruction
+    }
+
+    pub(crate) fn into_links(self) -> Vec<Link> {
+        self.links
     }
 
     fn run<T>(
@@ -127,50 +131,81 @@ impl Journal {
 
     pub(crate) fn extract(
         &mut self,
-        bounds: &SchemaBoundEvidence,
+        bounds: Option<&SchemaBoundEvidence>,
         latest: Option<usize>,
         frame: &[usize],
-    ) -> Result<SchemaClashEvidence, SchemaObstruction> {
-        self.run(|memory, links| {
-            let mut support = Vec::new();
-            let mut previous = latest;
-            while let Some(index) = previous {
-                let link = &links[index];
-                memory.reserve(&mut support, 1)?;
-                let frame = memory.copy(&link.application.frame)?;
-                let head = copy_head(&link.application.head, memory)?;
-                support.push(Application {
-                    clause: link.application.clause,
-                    frame,
-                    branch: link.application.branch,
-                    head,
-                });
-                previous = link.previous;
-            }
-            support.reverse();
-            let class_steps = memory.copy(&bounds.class_steps)?;
-            let qualifier = match &bounds.qualifier {
-                super::bounds::QualifierProof::Object(steps) => {
-                    super::bounds::QualifierProof::Object(memory.copy(steps)?)
-                }
-                qualifier => qualifier.clone(),
-            };
-            let roles = memory.copy(&bounds.roles)?;
-            let bounds = SchemaBoundEvidence {
-                class: bounds.class,
-                lower: bounds.lower,
-                upper: bounds.upper,
-                class_steps,
-                qualifier,
-                roles,
-            };
-            Ok(SchemaClashEvidence {
-                bounds,
-                support,
-                frame: memory.copy(frame)?,
-            })
+    ) -> Result<(Option<SchemaClashEvidence>, CurrentSupportEvidence), SchemaObstruction> {
+        self.run(|memory, _| {
+            let schema = bounds
+                .map(|bounds| {
+                    copy_bounds(bounds, memory).map(|bounds| SchemaClashEvidence { bounds })
+                })
+                .transpose()?;
+            Ok((
+                schema,
+                CurrentSupportEvidence {
+                    latest,
+                    frame: memory.copy(frame)?,
+                },
+            ))
         })
     }
+}
+
+fn copy_bounds(
+    bounds: &SchemaBoundEvidence,
+    memory: &mut RecordingProducts<'_>,
+) -> Result<SchemaBoundEvidence, Failure<Infallible>> {
+    let class_steps = memory.copy(&bounds.class_steps)?;
+    let qualifier = match &bounds.qualifier {
+        super::bounds::QualifierProof::Object(steps) => {
+            super::bounds::QualifierProof::Object(memory.copy(steps)?)
+        }
+        qualifier => qualifier.clone(),
+    };
+    let roles = memory.copy(&bounds.roles)?;
+    Ok(SchemaBoundEvidence {
+        class: bounds.class,
+        lower: bounds.lower,
+        upper: bounds.upper,
+        class_steps,
+        qualifier,
+        roles,
+    })
+}
+
+/// Borrow the selected applications in source order; never copy their frames/heads.
+pub(crate) fn prefix<'a>(
+    links: &'a [Link],
+    latest: Option<usize>,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<Vec<&'a Application>, super::proof::DlProofError> {
+    use super::proof::{DlProofError, malformed};
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut ordered = Vec::new();
+    let mut previous = latest;
+    while let Some(index) = previous {
+        if purrdf_core::governor::is_stopped(stop) {
+            return Err(DlProofError::Stopped);
+        }
+        let link = links
+            .get(index)
+            .ok_or_else(|| malformed("missing current-support predecessor"))?;
+        if link.previous.is_some_and(|previous| previous >= index) {
+            return Err(malformed(
+                "current-support predecessors must precede their application",
+            ));
+        }
+        memory
+            .reserve_for_push(&mut ordered)
+            .map_err(DlProofError::Storage)?;
+        ordered.push(&link.application);
+        previous = link.previous;
+    }
+    ordered.reverse();
+    Ok(ordered)
 }
 
 fn copy_head<E>(
@@ -284,5 +319,41 @@ mod tests {
         assert!(measured.peak_working_bytes <= i64::try_from(journal.stats.peak_bytes).unwrap());
         drop(journal);
         assert_eq!(window.sample().retained_bytes, 0);
+    }
+
+    #[test]
+    fn clash_extraction_retains_shared_application_identities_without_copying_prefixes() {
+        let mut journal = Journal::default();
+        let common = journal
+            .record(None, 0, &[0], None, &[Ground::Concept(0, 1)])
+            .unwrap();
+        let left = journal
+            .record(
+                Some(common),
+                1,
+                &[0],
+                Some((0, 0)),
+                &[Ground::Concept(0, 2)],
+            )
+            .unwrap();
+        let right = journal
+            .record(
+                Some(common),
+                1,
+                &[0],
+                Some((0, 1)),
+                &[Ground::Concept(0, 3)],
+            )
+            .unwrap();
+        let (left_bounds, left) = journal.extract(None, Some(left), &[0]).unwrap();
+        let (right_bounds, right) = journal.extract(None, Some(right), &[0]).unwrap();
+        assert!(left_bounds.is_none() && right_bounds.is_none());
+        let links = journal.into_links();
+        let left = prefix(&links, left.latest, None).unwrap();
+        let right = prefix(&links, right.latest, None).unwrap();
+        assert_eq!(links.len(), 3);
+        assert_eq!(left.len() + right.len(), 4);
+        assert!(core::ptr::eq(left[0], right[0]));
+        assert!(!core::ptr::eq(left[1], right[1]));
     }
 }

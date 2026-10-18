@@ -165,6 +165,7 @@ jobs:
           cargo install cargo-c --version 0.10.23 --locked
           make capi-bundle
           python3 scripts/package-text-lexicons.py
+          make w3c-earl W3C_EARL_DIR=target/dist
           python3 scripts/check-release-notes.py --checksum-output target/dist/SHA256SUMS
 
       - name: Attest build provenance for C distribution
@@ -173,6 +174,8 @@ jobs:
           subject-path: |
             target/dist/purrdf-capi-*.tar.gz
             target/dist/purrdf-text-lexicons-*.tar.gz
+            target/dist/purrdf-shacl-earl.ttl
+            target/dist/purrdf-shacl12-earl.ttl
 
       - name: Upload artifact license evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -184,6 +187,8 @@ jobs:
             target/dist/purrdf-text-lexicons-*.tar.gz
             target/dist/*.license-receipt.json
             target/dist/SHA256SUMS
+            target/dist/purrdf-shacl-earl.ttl
+            target/dist/purrdf-shacl12-earl.ttl
 
       - name: Attest build provenance for crates
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -275,7 +280,7 @@ jobs:
           set -euo pipefail
 
           # Publishing locks assets. The helper creates/reuses a draft, uploads
-          # all five assets, downloads and verifies every byte, then publishes.
+          # all seven assets, downloads and verifies every byte, then publishes.
           # Existing immutable releases are verified read-only against their
           # retained checksums, without comparing a different rebuild.
           python3 scripts/publish-github-release.py --version "${VERSION#rust-v}" \

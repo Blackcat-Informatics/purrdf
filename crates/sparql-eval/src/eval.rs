@@ -96,7 +96,7 @@ impl Default for EvalOptions {
 /// engine does not know (see
 /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LanguageStringEquality {
+pub enum LanguageStringEquality {
     /// SPARQL 1.2 `sameValue` as written: a type error.
     Core,
     /// The operator extension: unequal.

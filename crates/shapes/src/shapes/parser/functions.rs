@@ -664,16 +664,17 @@ impl Parser<'_> {
 /// SHACL 1.2 SPARQL Extensions §7.3 in three moves:
 ///
 /// 1. The already-evaluated arguments become the argument scope, keyed by INDEX.
-///    An unbound argument in a required position leaves the call with no value
-///    (`Ok(None)` — SPARQL's own expression-error result), which is what §7.3's
-///    "otherwise the argument remains unbound" reduces to at a call boundary.
+///    An unbound argument, or one that is a blank node, in a required position leaves
+///    the call with no value (`Ok(None)` — SPARQL's own expression-error result); in
+///    an optional position it is left out of the scope and the arguments after it keep
+///    their indexes.
 /// 2. The body is evaluated over `call.focus_graph`, the graph the calling query is
 ///    reading, with the FUNCTION'S OWN IRI as focus node — §7.3: "there is no
 ///    dedicated focus node. Instead, the `focusNode` passed into a custom SPARQL
 ///    function based on a node expression is the IRI of the function itself."
-/// 3. Exactly one output node is returned; none is no value; more than one is a hard
-///    error, because the specification returns a node only in the one-member case
-///    and picking one would be inventing an answer.
+/// 3. Exactly one output node is returned; any other count is the call's SPARQL error
+///    (`Ok(None)`), because the specification returns a node only in the one-member
+///    case and picking one would be inventing an answer.
 ///
 /// The recursion guard is SEEDED from `call.depth`, so a cycle that passed through
 /// SPARQL to get here keeps counting rather than restarting.
@@ -681,15 +682,22 @@ pub(crate) fn invoke_expression_function(
     func: &Arc<CustomFunction>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {
-    let mut args: Vec<Term> = Vec::with_capacity(call.args.len());
+    let mut args: Vec<Option<Term>> = Vec::with_capacity(call.args.len());
     for (index, value) in call.args.iter().enumerate() {
-        match value {
-            Some(bound) => args.push(term_value_to_native(bound)),
-            // A trailing unbound OPTIONAL argument is simply not supplied; an unbound
-            // REQUIRED one leaves the call with no value at all.
-            None if index >= func.required => break,
-            None => return Ok(None),
+        // SHACL 1.2 SPARQL Extensions §7.3: an argument whose evaluation is an error
+        // makes the call an error "unless the corresponding sh:parameter for the
+        // argument has sh:optional true. In that case, the argument will be unbound in
+        // the scope", and "an argument that evaluates to a blank node leads to an
+        // evaluation failure and thus an error". A blank node is therefore treated as
+        // the error it is.
+        let bound = value
+            .as_ref()
+            .map(term_value_to_native)
+            .filter(|term| !matches!(term, Term::BlankNode(_)));
+        if bound.is_none() && index < func.required {
+            return Ok(None);
         }
+        args.push(bound);
     }
     // A fresh view over the calling query's own graph. Both halves are the same
     // frozen dataset, so the node expression reads exactly the graph the query is

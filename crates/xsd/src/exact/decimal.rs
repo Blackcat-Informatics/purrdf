@@ -28,6 +28,10 @@ pub struct PreparedDecimalText {
     digits: crate::bigint::PreparedDecimalDigits,
     scale: usize,
     length: usize,
+    /// Spell a whole-number value with a point and one fractional zero.
+    point_required: bool,
+    /// Spell the integer part with at least two digits, as a calendar seconds field.
+    seconds_field: bool,
 }
 
 struct DecimalPointWriter<'a, W: fmt::Write + ?Sized> {
@@ -76,7 +80,33 @@ impl PreparedDecimalText {
             digits,
             scale,
             length,
+            point_required: false,
+            seconds_field: false,
         })
+    }
+
+    /// The same value spelled with a decimal point and at least one fractional
+    /// digit: a whole number `4` becomes `4.0`, every other value is unchanged.
+    /// This is the form of a decimal an operation computes; the XSD 1.1
+    /// canonical form ([`Decimal::canonical_lexical`]) is the one without it.
+    #[must_use]
+    pub const fn with_required_point(mut self) -> Self {
+        if self.scale == 0 && !self.point_required {
+            self.point_required = true;
+            self.length += 2;
+        }
+        self
+    }
+
+    /// The same value spelled as the seconds field of a calendar lexical form:
+    /// the integer part has at least two digits (`00`, `05`, `13.815`).
+    #[must_use]
+    pub fn as_seconds_field(mut self) -> Self {
+        if !self.seconds_field && self.integer_digits() < 2 {
+            self.seconds_field = true;
+            self.length += 1;
+        }
+        self
     }
 
     /// Exact final length, known before allocating an output destination.
@@ -105,8 +135,16 @@ impl PreparedDecimalText {
         if self.digits.is_negative() {
             out.write_str("-")?;
         }
+        if self.seconds_field {
+            out.write_str("0")?;
+        }
         if self.scale == 0 {
-            return self.digits.write_unsigned(out);
+            self.digits.write_unsigned(out)?;
+            return if self.point_required {
+                out.write_str(".0")
+            } else {
+                Ok(())
+            };
         }
         if self.digits.digits_len() > self.scale {
             self.digits.write_unsigned(&mut DecimalPointWriter {

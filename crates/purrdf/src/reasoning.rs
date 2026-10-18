@@ -2339,8 +2339,8 @@ mod tests {
         };
         assert_eq!(
             rows[0][0].as_ref().expect("?m is bound"),
-            &TermValue::typed_literal("2", "http://www.w3.org/2001/XMLSchema#decimal"),
-            "MEDIAN of {{1, 2, 3}} is 2, computed over the closure query_with_entailment answers"
+            &TermValue::typed_literal("2.0", "http://www.w3.org/2001/XMLSchema#decimal"),
+            "MEDIAN of {{1, 2, 3}} is the computed decimal 2.0, over the closure query_with_entailment answers"
         );
     }
 

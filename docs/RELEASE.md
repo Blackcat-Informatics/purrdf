@@ -52,7 +52,9 @@ passes, `VERSION` matches the tree, the full changelog section and validated
 reviewed summary exist, and none
 of the three tags already exists locally or remotely. It then runs the Rust and
 wasm workspace gate, the generated C-ABI/header check, the native Python binding
-suite, and the optimized size-gated npm/wasm package tests. Only after every
+suite, the optimized size-gated npm/wasm package tests, and `make w3c-earl`, which
+regenerates the two W3C SHACL implementation reports for the commit about to be
+tagged. Only after every
 surface passes does it recheck the clean synchronized state and atomically push
 `rust-v0.2.2`, `py-v0.2.2`, and `npm-v0.2.2` together. No tag is created before
 the complete cross-surface preflight passes. Each tag triggers its own lane
@@ -308,8 +310,12 @@ publication. It copies the exact committed bytes, without truncation or a
 fallback to the full history. The workflow makes no repository commits.
 
 The GitHub Release is titled `PurRDF <version>` and hosts the Linux x86_64 GNU C
-SDK tar, its license receipt and the Cargo archive license receipt. Its
-`SHA256SUMS` hashes those three actual uploaded files, with one sorted
+SDK tar, its license receipt, the Cargo archive license receipt, the text
+lexicon data tar and the two W3C SHACL EARL reports, `purrdf-shacl-earl.ttl`
+(SHACL 2017) and `purrdf-shacl12-earl.ttl` (SHACL 1.2). The workflow generates
+the reports with `make w3c-earl W3C_EARL_DIR=target/dist` on the tagged commit,
+before `SHA256SUMS` is written, and attests them with the C distribution. Its
+`SHA256SUMS` hashes the six other actual uploaded files, with one sorted
 `<SHA-256>  <basename>` line per file. GitHub also supplies source ZIP and tar.gz
 downloads of the tagged repository. These source archives are distinct from the
 compiled C SDK. Preserve the full `CHANGELOG.md` history and commit both notes
@@ -317,7 +323,7 @@ sources **before** pushing the release tag.
 
 GitHub release immutability locks every asset when the release is published.
 `scripts/publish-github-release.py` therefore creates or reuses a **draft**,
-attaches all four files, downloads and verifies their sizes, GitHub SHA-256
+attaches all seven files, downloads and verifies their sizes, GitHub SHA-256
 digests and the retained checksum manifest against the audited local files,
 then publishes the draft. It checks that the remote tag resolves to the exact
 workflow commit before uploading and again before publication. Only a literal
@@ -328,7 +334,7 @@ tagged workflow to resume. See GitHub's
 
 An already published release is verified **read-only** against its retained
 checksum manifest and downloaded assets, rather than against a fresh rebuild.
-Its tag identity, reviewed notes and complete four-file asset set must match.
+Its tag identity, reviewed notes and complete seven-file asset set must match.
 Missing or corrupt assets fail the lane explicitly; the publisher never
 deletes a release, recreates it or moves a tag to work around immutability.
 

@@ -213,9 +213,11 @@ pub use error::{
     EvalError, EvaluatorInvariant, RetainedNativeFailure, StackExpectation, UnsupportedKind,
 };
 pub use eval::{
-    EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,
+    EvalCtx, EvalOptions, LanguageStringEquality, LossVocabulary, Outcome, StandpointPredicates,
+    eval, evaluate_query,
 };
 pub use execution::PreparedExecution;
+pub use expr::equal_values;
 // The debug-only escape hatch from `PreparedExecution`'s memo differential oracle,
 // re-exported at the crate root beside the handle it instruments. See
 // [`execution::set_memo_verification_enabled`] for why it exists and how narrow its

@@ -2394,40 +2394,7 @@ fn eval_node_expr_at_depth(
         // scope is replaced. The re-entry counter is charged and released on EVERY
         // path, so an erroring body never leaves the guard permanently raised.
         NodeExpr::CustomCall { func, args } => {
-            let body = func.body()?;
-            guard.enter_call(func.iri.as_str())?;
-            // Publish the depth for the duration of the body, so a `sh:select` inside
-            // it starts its query at this depth: a cycle that leaves this evaluator
-            // through SPARQL and re-enters through the §7.3 registration would
-            // otherwise restart the count at zero and never terminate.
-            let result = {
-                let _depth = crate::sparql::enter_call_depth_scope(guard.depth());
-                // The body's lowering lives under the function's own IRI: a body
-                // may call the function it belongs to, so it cannot be a subtree
-                // of any one call site. A body this walk never reached has none,
-                // which is the dynamic case `eval_unlowered` exists for.
-                match plan.body(lowered.body_iri()?) {
-                    Some(body_lowered) => eval_planned_node_expr_in_scope(
-                        store,
-                        focus,
-                        body,
-                        body_lowered,
-                        plan,
-                        guard,
-                        Scope::with_args(args),
-                    ),
-                    None => eval_unlowered(
-                        store,
-                        focus,
-                        body,
-                        guard,
-                        Scope::with_args(args),
-                        plan.binding().conformance_disallows(),
-                    ),
-                }
-            };
-            guard.exit_call();
-            let out = result?;
+            let out = eval_custom_call(store, focus, func, args, lowered, plan, guard)?;
             // §6.2: a custom LIST parameter expression evaluates its body "where an
             // evaluation failure is reported when there is more than 1 output node"
             // — a list parameter function produces at most one node. A NAMED
@@ -2435,13 +2402,7 @@ fn eval_node_expr_at_depth(
             // body is a sum over a multi-node argument, and a body may produce a
             // list.
             if func.kind == CustomFnKind::ListParameter && out.len() > 1 {
-                return Err(format!(
-                    "custom list parameter function <{}> produced {} output nodes; SHACL 1.2 Node \
-                     Expressions §6.2 reports an evaluation failure when there is more than one",
-                    func.iri.as_str(),
-                    out.len()
-                )
-                .into());
+                return Err(more_than_one_output_node(func, out.len()));
             }
             Ok(out)
         }
@@ -2516,57 +2477,135 @@ fn eval_node_expr_at_depth(
     }
 }
 
+/// The evaluation failure of a custom list parameter function whose body produced
+/// `count` (more than one) output nodes.
+fn more_than_one_output_node(func: &CustomFunction, count: usize) -> crate::error::ShapesError {
+    format!(
+        "custom list parameter function <{}> produced {count} output nodes; SHACL 1.2 Node \
+         Expressions §6.2 reports an evaluation failure when there is more than one",
+        func.iri.as_str(),
+    )
+    .into()
+}
+
+/// Evaluate the body of the custom function `func` with the argument scope `args` in
+/// force: `evalExpr(expr, focusGraph, focusNode, scope) -> evalExpr(body, focusGraph,
+/// focusNode, argScope)`, the output nodes as the body produced them.
+///
+/// The focus node and the focus graph both carry through unchanged; only the scope is
+/// replaced. The re-entry counter is charged and released on EVERY path, so an
+/// erroring body never leaves the guard permanently raised. How many output nodes a
+/// call may produce is the caller's rule: the node-expression evaluator reports an
+/// evaluation failure for a list parameter function that produces more than one, and a
+/// SPARQL call turns any count but one into a SPARQL error
+/// ([`eval_custom_function_call`]).
+fn eval_custom_call(
+    store: &ShaclData,
+    focus: &Term,
+    func: &Arc<CustomFunction>,
+    args: &[(ArgKey, NodeExpr)],
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, crate::error::ShapesError> {
+    let body = func.body()?;
+    guard.enter_call(func.iri.as_str())?;
+    // Publish the depth for the duration of the body, so a `sh:select` inside
+    // it starts its query at this depth: a cycle that leaves this evaluator
+    // through SPARQL and re-enters through the §7.3 registration would
+    // otherwise restart the count at zero and never terminate.
+    let result = {
+        let _depth = crate::sparql::enter_call_depth_scope(guard.depth());
+        // The body's lowering lives under the function's own IRI: a body
+        // may call the function it belongs to, so it cannot be a subtree
+        // of any one call site. A body this walk never reached has none,
+        // which is the dynamic case `eval_unlowered` exists for.
+        match plan.body(lowered.body_iri()?) {
+            Some(body_lowered) => eval_planned_node_expr_in_scope(
+                store,
+                focus,
+                body,
+                body_lowered,
+                plan,
+                guard,
+                Scope::with_args(args),
+            ),
+            None => eval_unlowered(
+                store,
+                focus,
+                body,
+                guard,
+                Scope::with_args(args),
+                plan.binding().conformance_disallows(),
+            ),
+        }
+    };
+    guard.exit_call();
+    result
+}
+
 /// Invoke a custom LIST parameter function from a SPARQL query — SHACL 1.2 SPARQL
 /// Extensions §7.3 "Evaluation of Custom SPARQL Functions".
 ///
 /// `args` are the ALREADY-EVALUATED argument values the SPARQL engine computed, in
-/// call order. §7.3 keys the scope by argument index, so they are bound to
-/// [`ArgKey::Index`] `0…n-1`; and it fixes the focus node explicitly — "During
+/// call order, `None` for an optional argument that is an error. §7.3 keys the scope
+/// by argument index, so they are bound to [`ArgKey::Index`] `0…n-1`, an unbound one
+/// leaving its index out of the scope ("the argument will be unbound in the scope")
+/// while the arguments after it keep theirs; and it fixes the focus node explicitly — "During
 /// SPARQL query evaluation there is no dedicated focus node. Instead, the
 /// `focusNode` passed into a custom SPARQL function based on a node expression is
 /// the IRI of the function itself" — so the body is evaluated with the function's
 /// own IRI as focus.
 ///
-/// The return follows §7.3's own two-case rule: "If the list of output nodes `rs`
-/// has exactly one member, then return that node." A body producing NO node has no
-/// value to give, which is `Ok(None)` — SPARQL's unbound expression result, the same
-/// signal every other value-less call in this crate returns. A body producing MORE
-/// than one node is a hard error: the specification refuses to pick one, and so does
-/// this, rather than returning a value it was not told to return.
+/// The return follows §7.3's own rule: "If the list of output nodes `rs` has exactly
+/// one member, then return that node. Otherwise, or if the evaluation produces an
+/// evaluation failure, the result of the SPARQL function call is an error." A SPARQL
+/// error is `Ok(None)`, SPARQL's unbound expression result and the same signal every
+/// other value-less call in this crate returns: the specification refuses to pick one
+/// of several nodes, and gives no value for none. A body that produces more than one
+/// node is therefore the call's SPARQL error, not a failure of the query around it.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when the body was never installed, when the re-entry depth
-/// bound is reached, when the body's evaluation fails, or when the body produces
-/// more than one output node.
+/// bound is reached, or when the body's evaluation fails.
 pub fn eval_custom_function_call(
     store: &ShaclData,
     func: &Arc<CustomFunction>,
-    args: &[Term],
+    args: &[Option<Term>],
     guard: &mut RecursionGuard,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
     let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
     for (index, value) in args.iter().enumerate() {
         let key = u64::try_from(index)
             .map_err(|e| format!("argument index {index} is not representable: {e}"))?;
-        bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
+        if let Some(value) = value {
+            bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
+        }
     }
     let call = NodeExpr::CustomCall {
         func: Arc::clone(func),
-        args: bound,
+        args: bound.clone(),
     };
     let focus = Term::NamedNode(func.iri.clone());
-    let out = eval_node_expr(store, &focus, &call, guard)?;
-    match out.as_slice() {
-        [] => Ok(None),
+    // The synthetic call has no preparation to have been lowered against: it is
+    // made of values the SPARQL engine has just computed (see `eval_unlowered`).
+    let lowering = crate::plan::lower_standalone_expression(&call);
+    let binding = lowering.bind(store.core_view());
+    guard.enter_node_expr()?;
+    let out = eval_custom_call(
+        store,
+        &focus,
+        func,
+        &bound,
+        lowering.expr(),
+        lowering.plan(&binding),
+        guard,
+    );
+    guard.exit_node_expr();
+    match out?.as_slice() {
         [only] => Ok(Some(only.clone())),
-        more => Err(format!(
-            "custom SPARQL function <{}> produced {} output nodes; SHACL 1.2 SPARQL Extensions \
-             §7.3 returns a value only when the body produces exactly one",
-            func.iri.as_str(),
-            more.len()
-        )
-        .into()),
+        _ => Ok(None),
     }
 }
 
@@ -2750,6 +2789,7 @@ mod tests {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -3725,6 +3765,7 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
                 rules: vec![],
             };

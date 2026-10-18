@@ -25,6 +25,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 MAXIMUM_BYTES = 64 * 1024
+EARL_FILES = ("purrdf-shacl-earl.ttl", "purrdf-shacl12-earl.ttl")
 
 
 def workspace_version(root: Path) -> str:
@@ -66,7 +67,7 @@ def release_notes(root: Path, requested: str | None = None) -> tuple[str, bytes]
 
 
 def checksum_bytes(root: Path, version: str) -> bytes:
-    """Hash exactly the C SDK, its two legal receipts, and the lexicon data bundle."""
+    """Hash exactly the C SDK, its legal receipts, lexicons and the two EARL reports."""
     directory = root / "target" / "dist"
     archives = sorted(directory.glob(f"purrdf-capi-{version}-*.tar.gz"))
     if len(archives) != 1:
@@ -79,13 +80,13 @@ def checksum_bytes(root: Path, version: str) -> bytes:
         ),
         root / "target" / "license-evidence-cargo.json",
         directory / f"purrdf-text-lexicons-{version}.tar.gz",
+        *(directory / name for name in EARL_FILES),
     ]
     lines = []
     for path in sorted(paths, key=lambda item: item.name):
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError("release checksum input is missing, empty or a symlink")
-        with path.open("rb") as source:
-            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
         lines.append(f"{digest}  {path.name}\n")
     return "".join(lines).encode("ascii")
 
@@ -156,13 +157,11 @@ def self_test() -> None:
         receipt.write_bytes(b"actual C receipt fixture")
         cargo = root / "target/license-evidence-cargo.json"
         cargo.write_bytes(b"actual Cargo receipt fixture")
-        lexicons = directory / "purrdf-text-lexicons-3.0.0.tar.gz"
-        lexicons.write_bytes(b"licensed lexicon data fixture")
+        for name in ("purrdf-text-lexicons-3.0.0.tar.gz", *EARL_FILES):
+            (directory / name).write_bytes(b"fixture " + name.encode())
         expected = b"".join(
             f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n".encode()
-            for item in sorted(
-                [archive, receipt, cargo, lexicons], key=lambda item: item.name
-            )
+            for item in sorted([*directory.iterdir(), cargo], key=lambda i: i.name)
         )
         assert checksum_bytes(root, "3.0.0") == expected
         archive.write_bytes(b"changed SDK fixture")

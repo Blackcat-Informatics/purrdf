@@ -813,8 +813,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
                            NULL, NULL, NULL, &buffer, &error);
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
     purrdf_buffer_data(buffer, &bytes, &len);
-    CHECK(contains_bytes(bytes, len, "\"5.123456789012345678901\""),
-          "exact temporal seconds keep twenty-one fractional places");
+    CHECK(contains_bytes(bytes, len, "\"05.123456789012345678901\""),
+          "exact temporal seconds are the two-digit seconds field with twenty-one fractional places");
     purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);
@@ -1477,8 +1477,9 @@ int main(int argc, char **argv) {
                   PURRDF_STATUS_OK &&
               median_bound == 1,
           "?m is bound");
-    CHECK(median_view.lexical.len == 1 && median_view.lexical.ptr[0] == '2',
-          "MEDIAN of {1, 2, 3} is 2");
+    CHECK(median_view.lexical.len == 3 &&
+              memcmp(median_view.lexical.ptr, "2.0", 3) == 0,
+          "MEDIAN of {1, 2, 3} is the computed decimal 2.0");
     purrdf_rowcursor_free(median_rows);
     purrdf_dataset_free(median_dataset);
 
@@ -1566,9 +1567,9 @@ int main(int argc, char **argv) {
                                 &entailed_median_bound) == PURRDF_STATUS_OK &&
               entailed_median_bound == 1,
           "entailed ?m is bound");
-    CHECK(entailed_median_view.lexical.len == 1 &&
-              entailed_median_view.lexical.ptr[0] == '2',
-          "MEDIAN of the entailed {1, 2, 3} is 2");
+    CHECK(entailed_median_view.lexical.len == 3 &&
+              memcmp(entailed_median_view.lexical.ptr, "2.0", 3) == 0,
+          "MEDIAN of the entailed {1, 2, 3} is the computed decimal 2.0");
     purrdf_buffer_free(entailed_median_report);
     purrdf_rowcursor_free(entailed_median_rows);
     purrdf_dataset_free(entailed_median_dataset);

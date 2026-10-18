@@ -73,6 +73,17 @@ dev = [
 # ignore `[tool.uv.sources]`, so a real `pip install purrdf[rdflib]` still pulls
 # the published wheel. Extras are opt-in, so this NEVER enters the default dev
 # (oracle) sync — the genuine rdflib in `[dependency-groups].dev` stays unshadowed.
+[tool.uv]
+# The extension is compiled from the workspace's Rust sources, so a change to any of
+# them (or to the lockfile) must rebuild it; uv's default keys see only this file.
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "../../Cargo.toml" },
+  { file = "../../Cargo.lock" },
+  { file = "../../crates/**/*.rs" },
+  { file = "src/**/*.rs" },
+]
+
 [tool.uv.sources]
 purrdf-rdflib = { path = "../python-rdflib-shadow" }
 
