@@ -161,6 +161,29 @@ fn schema_layout_without_its_evidence_is_not_a_second_encoding_of_a_legacy_proof
 }
 
 #[test]
+fn newer_layout_without_its_evidence_is_not_a_second_encoding_of_a_current_proof() {
+    let (proof, _) = derived();
+    assert_eq!(proof.merges, []);
+    assert_eq!(proof.branches, []);
+    let bytes = proof.encode();
+    let tag_end = 8 + PROOF_ENCODING_TAG.len();
+    assert_eq!(bytes[tag_end - 1], b'5');
+    assert_eq!(DlProof::decode(&bytes).unwrap().encode(), bytes);
+    for version in *b"67" {
+        let mut forged = bytes.clone();
+        forged[tag_end - 1] = version;
+        assert!(
+            matches!(
+                DlProof::decode(&forged),
+                Err(DlProofError::Malformed { .. })
+            ),
+            "v{} must require its own native evidence",
+            char::from(version)
+        );
+    }
+}
+
+#[test]
 fn refusing_native_support_keeps_search_parity_and_a_typed_incomplete_proof() {
     let mut fixture = Fixture::default();
     let class = fixture.name("A");

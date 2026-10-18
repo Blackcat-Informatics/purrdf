@@ -4539,6 +4539,16 @@ impl DlProof {
             });
         }
         let completion = reader.flag()?.then(|| reader.completion()).transpose()?;
+        if introduction && !branches.iter().any(|step| step.introduction_only) {
+            return Err(malformed(
+                "the introduction layout requires an NI-only branch",
+            ));
+        }
+        if merge_support && !introduction && !merges.iter().any(|step| step.current.is_some()) {
+            return Err(malformed(
+                "the merge-support layout requires native merge evidence",
+            ));
+        }
         if schema
             && schema_recording_obstruction.is_none()
             && !branches.iter().any(|step| step.introduction_only)
