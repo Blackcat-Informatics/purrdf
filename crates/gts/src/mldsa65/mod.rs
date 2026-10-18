@@ -96,6 +96,17 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        InvalidPublicKey => "mldsa65-invalid-public-key" {},
+        InvalidSecretKey => "mldsa65-invalid-secret-key" {},
+        InvalidSignature => "mldsa65-invalid-signature" {},
+        ContextTooLong => "mldsa65-context-too-long" {},
+        SamplingExhausted => "mldsa65-sampling-exhausted" {},
+        NonceExhausted => "mldsa65-nonce-exhausted" {},
+    }
+}
+
 struct SecretBytes(Vec<u8>);
 impl SecretBytes {
     fn zeros(length: usize) -> Self {

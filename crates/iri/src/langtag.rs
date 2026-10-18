@@ -601,6 +601,24 @@ pub enum LanguageTagError {
     TerminalSubtagNotAlphanum,
 }
 
+impl purrdf_hash::error::StructuredError for LanguageTagError {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        // Keep the existing public code home, while checking every unit shape.
+        match self {
+            Self::SubtagLengthZero
+            | Self::SubtagLengthOverEight
+            | Self::LanguageProductionUnmatched
+            | Self::ExtlangRepetitionExceeded
+            | Self::SingletonWithoutSubtag
+            | Self::PrivateUseWithoutSubtag
+            | Self::UnconsumedSubtag
+            | Self::TerminalPrimaryNotAlpha
+            | Self::TerminalSubtagNotAlphanum => {}
+        }
+        visitor.variant(self.diagnostic_code());
+    }
+}
+
 impl LanguageTagError {
     /// The stable machine-readable code for this failure.
     ///

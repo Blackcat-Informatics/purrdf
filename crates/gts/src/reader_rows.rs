@@ -4,13 +4,17 @@
 use purrdf_lex::cbor::Value;
 
 use crate::model::{AnnotationRow, Graph, ReifierRow, TermKind, Triple3};
+use crate::reader::as_i128;
 use crate::reader::as_idx;
+
+mod error;
+pub(crate) use error::RowError;
 
 pub(crate) enum RowDecode<T> {
     Skip,
     Row(T),
-    Damaged(&'static str),
-    Position(String),
+    Damaged(Box<RowError>),
+    Position(Box<RowError>),
 }
 
 pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<ReifierRow> {
@@ -18,7 +22,12 @@ pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<Reifie
         return RowDecode::Skip;
     };
     if !(4..=5).contains(&items.len()) {
-        return RowDecode::Damaged("reifies row must have 4 or 5 term ids");
+        return RowDecode::Damaged(Box::new(RowError::Width {
+            context: "reifies",
+            actual: items.len(),
+            minimum: 4,
+            maximum: 5,
+        }));
     }
 
     let (rid, s, p, o) = (
@@ -33,7 +42,11 @@ pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<Reifie
     let ok = matches!((rid, s, p, o), (Some(rid), Some(s), Some(p), Some(o))
         if rid < n && s < n && p < n && o < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
-        return RowDecode::Damaged("reifies row has bad/out-of-range ids");
+        return RowDecode::Damaged(Box::new(RowError::Ids {
+            context: "reifies",
+            values: items.iter().map(as_i128).collect(),
+            terms: n,
+        }));
     }
 
     let (Some(rid), Some(s), Some(p), Some(o)) = (rid, s, p, o) else {
@@ -51,7 +64,12 @@ pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<Ann
         return RowDecode::Skip;
     };
     if !(3..=4).contains(&items.len()) {
-        return RowDecode::Damaged("annot row must have 3 or 4 term ids");
+        return RowDecode::Damaged(Box::new(RowError::Width {
+            context: "annot",
+            actual: items.len(),
+            minimum: 3,
+            maximum: 4,
+        }));
     }
 
     let (reifier, predicate, value) = (as_idx(&items[0]), as_idx(&items[1]), as_idx(&items[2]));
@@ -61,14 +79,21 @@ pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<Ann
     let ok = matches!((reifier, predicate, value), (Some(r), Some(p), Some(v))
         if r < n && p < n && v < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
-        return RowDecode::Damaged("annot row has bad/out-of-range ids");
+        return RowDecode::Damaged(Box::new(RowError::Ids {
+            context: "annot",
+            values: items.iter().map(as_i128).collect(),
+            terms: n,
+        }));
     }
 
     let (Some(reifier), Some(predicate), Some(value)) = (reifier, predicate, value) else {
         return RowDecode::Skip;
     };
     if graph.terms[predicate].kind != TermKind::Iri {
-        return RowDecode::Position(format!("annot predicate {predicate} not an IRI"));
+        return RowDecode::Position(Box::new(RowError::AnnotationPredicate {
+            id: predicate,
+            actual: graph.terms[predicate].kind,
+        }));
     }
     if let Some(graph_name) = graph_slot
         && matches!(
@@ -76,9 +101,10 @@ pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<Ann
             TermKind::Literal | TermKind::Triple
         )
     {
-        return RowDecode::Position(format!(
-            "annot graph name {graph_name} is not an IRI or blank node"
-        ));
+        return RowDecode::Position(Box::new(RowError::AnnotationGraph {
+            id: graph_name,
+            actual: graph.terms[graph_name].kind,
+        }));
     }
     RowDecode::Row((reifier, predicate, value, graph_slot))
 }
@@ -89,7 +115,7 @@ pub(crate) fn check_quad_positions(
     p: usize,
     o: usize,
     graph_slot: Option<usize>,
-) -> Result<(), String> {
+) -> Result<(), Box<RowError>> {
     check_statement_positions(graph, (s, p, o), graph_slot, "quad")
 }
 
@@ -97,14 +123,18 @@ fn check_statement_positions(
     graph: &Graph,
     (s, p, o): Triple3,
     graph_slot: Option<usize>,
-    context: &str,
-) -> Result<(), String> {
+    context: &'static str,
+) -> Result<(), Box<RowError>> {
     let n = graph.terms.len();
     if !(s < n && p < n && o < n && graph_slot.is_none_or(|gv| gv < n)) {
-        return Err(format!(
-            "{context} ({s},{p},{o},{}) has out-of-range term ids",
-            fmt_opt(graph_slot)
-        ));
+        return Err(Box::new(RowError::Bounds {
+            context,
+            s,
+            p,
+            o,
+            graph: graph_slot,
+            terms: n,
+        }));
     }
 
     // A well-formed quad: predicate is an IRI, subject is not a literal, and any
@@ -120,10 +150,16 @@ fn check_statement_positions(
     if ok {
         Ok(())
     } else {
-        Err(format!(
-            "{context} ({s},{p},{o},{}) violates positions",
-            fmt_opt(graph_slot)
-        ))
+        Err(Box::new(RowError::Positions {
+            context,
+            s,
+            p,
+            o,
+            graph: graph_slot,
+            subject_kind: graph.terms[s].kind,
+            predicate_kind: graph.terms[p].kind,
+            graph_kind: graph_slot.map(|id| graph.terms[id].kind),
+        }))
     }
 }
 
@@ -131,5 +167,32 @@ fn fmt_opt(graph_slot: Option<usize>) -> String {
     match graph_slot {
         Some(value) => value.to_string(),
         None => "None".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_row_decode_layout_is_unchanged() {
+        #[expect(
+            dead_code,
+            reason = "the former representation is a frozen layout witness only"
+        )]
+        enum Previous<T> {
+            Skip,
+            Row(T),
+            Damaged(&'static str),
+            Position(String),
+        }
+        assert_eq!(
+            size_of::<RowDecode<ReifierRow>>(),
+            size_of::<Previous<ReifierRow>>()
+        );
+        assert_eq!(
+            size_of::<RowDecode<AnnotationRow>>(),
+            size_of::<Previous<AnnotationRow>>()
+        );
     }
 }

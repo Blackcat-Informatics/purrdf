@@ -51,6 +51,9 @@ use std::io::{self, Chain, Cursor, Read};
 use purrdf_deflate::GzipReader;
 use structured_zstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 
+mod refusal;
+use refusal::ZstdRefusal;
+
 /// The gzip magic bytes (RFC 1952 §2.3.1: `ID1 = 0x1f`, `ID2 = 0x8b`).
 const GZIP_MAGIC: &[u8] = &[0x1f, 0x8b];
 
@@ -96,21 +99,45 @@ impl fmt::Display for TransportEncoding {
 /// A truncated stream, a corrupt frame, and a stream that is not the claimed
 /// encoding at all all arrive here — every one of them as an error, never as a
 /// short read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TransportError {
     /// The encoding whose decoder failed.
     pub encoding: TransportEncoding,
-    /// The underlying decoder's message.
-    pub message: String,
+    /// The original I/O failure and any native decoder cause carried through it.
+    pub cause: purrdf_hash::error::IoFailure,
 }
 
-impl fmt::Display for TransportError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} decode failed: {}", self.encoding, self.message)
+impl TransportError {
+    /// Original decoder explanation, rendered only when explicitly requested.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.cause.message()
     }
 }
 
-impl std::error::Error for TransportError {}
+impl PartialEq for TransportError {
+    fn eq(&self, other: &Self) -> bool {
+        self.encoding == other.encoding
+            && (self.cause == other.cause || self.message() == other.message())
+    }
+}
+impl Eq for TransportError {}
+
+impl fmt::Display for TransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} decode failed: {}", self.encoding, self.cause)
+    }
+}
+
+purrdf_lex::error_source!(TransportError => { Self { cause, .. } => cause });
+
+impl purrdf_hash::error::StructuredError for TransportError {
+    purrdf_hash::error_visit! {
+        @record self { encoding, cause } => "gts-transport" {
+            "encoding" => Code(self.encoding.as_str()), "cause" => Cause(&self.cause),
+        }
+    }
+}
 
 /// Detect the transport encoding wrapping `data`.
 ///
@@ -178,7 +205,7 @@ pub fn decode_transport(
         .read_to_end(&mut out)
         .map_err(|err| TransportError {
             encoding,
-            message: err.to_string(),
+            cause: err.into(),
         })?;
     Ok(out)
 }
@@ -269,11 +296,26 @@ struct ZstdFrames<R: Read> {
 struct Counted<R> {
     inner: R,
     count: u64,
+    failure: Option<io::Error>,
 }
 
 impl<R: Read> Read for Counted<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.inner.read(buf)?;
+        if let Some(error) = &self.failure {
+            return Err(error.kind().into());
+        }
+        let n = match self.inner.read(buf) {
+            Ok(n) => n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+            Err(error) => {
+                let kind = error.kind();
+                self.failure = Some(error);
+                // The decoder receives the classification, while the exact
+                // source error is held until this decode call returns. This
+                // prevents a foreign formatter from rendering a native cause.
+                return Err(kind.into());
+            }
+        };
         self.count += n as u64;
         Ok(n)
     }
@@ -291,14 +333,26 @@ impl<R: Read> ZstdFrames<R> {
     /// not zstd at all is refused here.
     fn new(inner: R) -> io::Result<Self> {
         let mut frames = Self {
-            inner: Counted { inner, count: 0 },
+            inner: Counted {
+                inner,
+                count: 0,
+                failure: None,
+            },
             decoder: FrameDecoder::new(),
             in_frame: false,
             frames: 0,
             done: false,
         };
-        frames.next_frame()?;
+        let result = frames.next_frame();
+        frames.prefer_source_failure(result)?;
         Ok(frames)
+    }
+
+    fn prefer_source_failure<T>(&mut self, result: io::Result<T>) -> io::Result<T> {
+        match self.inner.failure.take() {
+            Some(error) => Err(error),
+            None => result,
+        }
     }
 
     /// Read into `buf` until it is full or the source ends; the count read.
@@ -323,15 +377,13 @@ impl<R: Read> ZstdFrames<R> {
             let got = self.fill(&mut magic)?;
             if got == 0 {
                 if self.frames == 0 {
-                    return Err(zstd_error("no zstd frame in the input"));
+                    return Err(ZstdRefusal::NoFrame.into_io());
                 }
                 self.done = true;
                 return Ok(());
             }
             if got < magic.len() {
-                return Err(zstd_error(format!(
-                    "{got} byte(s) after the last zstd frame do not begin another frame"
-                )));
+                return Err(ZstdRefusal::TrailingPrefix { actual: got }.into_io());
             }
             let value = u32::from_le_bytes(magic);
             if value == ZSTD_FRAME_MAGIC {
@@ -343,30 +395,29 @@ impl<R: Read> ZstdFrames<R> {
             }
             if value & ZSTD_SKIPPABLE_MASK == ZSTD_SKIPPABLE_MAGIC {
                 let mut size = [0u8; 4];
-                if self.fill(&mut size)? < size.len() {
-                    return Err(zstd_error(
-                        "skippable zstd frame truncated in its size field",
-                    ));
+                let actual = self.fill(&mut size)?;
+                if actual < size.len() {
+                    return Err(ZstdRefusal::SkippableSize { actual }.into_io());
                 }
                 let size = u64::from(u32::from_le_bytes(size));
                 let skipped = io::copy(&mut (&mut self.inner).take(size), &mut io::sink())?;
                 if skipped < size {
-                    return Err(zstd_error(format!(
-                        "skippable zstd frame truncated: {skipped} of {size} bytes"
-                    )));
+                    return Err(ZstdRefusal::SkippablePayload {
+                        actual: skipped,
+                        expected: size,
+                    }
+                    .into_io());
                 }
                 self.frames += 1;
                 continue;
             }
-            return Err(zstd_error(format!(
-                "bytes {magic:02x?} after the last zstd frame do not begin another frame"
-            )));
+            return Err(ZstdRefusal::TrailingMagic { actual: magic }.into_io());
         }
     }
 }
 
-impl<R: Read> Read for ZstdFrames<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+impl<R: Read> ZstdFrames<R> {
+    fn read_decoded(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -388,7 +439,7 @@ impl<R: Read> Read for ZstdFrames<R> {
                     && self.decoder.can_collect() == 0
                     && !self.decoder.is_finished()
                 {
-                    return Err(zstd_error("zstd frame truncated"));
+                    return Err(ZstdRefusal::TruncatedFrame.into_io());
                 }
                 continue;
             }
@@ -397,6 +448,13 @@ impl<R: Read> Read for ZstdFrames<R> {
             }
             self.next_frame()?;
         }
+    }
+}
+
+impl<R: Read> Read for ZstdFrames<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let result = self.read_decoded(buf);
+        self.prefer_source_failure(result)
     }
 }
 
@@ -452,7 +510,7 @@ pub fn transport_reader<R: Read>(
             TransportReaderInner::Zstd(Box::new(ZstdFrames::new(reader).map_err(|err| {
                 TransportError {
                     encoding: TransportEncoding::Zstd,
-                    message: err.to_string(),
+                    cause: err.into(),
                 }
             })?))
         }
@@ -542,8 +600,8 @@ mod tests {
     /// parser does.
     fn stream_decode(data: &[u8], source_name: Option<&str>) -> io::Result<Vec<u8>> {
         let (encoding, stream) = sniff_transport(data, source_name)?;
-        let mut reader =
-            transport_reader(stream, encoding).map_err(|err| io::Error::other(err.to_string()))?;
+        let mut reader = transport_reader(stream, encoding)
+            .map_err(|err| purrdf_hash::error::io_error(io::ErrorKind::Other, err))?;
         let mut out = Vec::new();
         reader.read_to_end(&mut out)?;
         Ok(out)

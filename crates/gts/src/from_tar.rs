@@ -57,14 +57,14 @@ pub fn from_seekable_tar_to_writer<R: Read + Seek, W: Write>(
 ) -> Result<(), TarError> {
     reader
         .seek(SeekFrom::Start(0))
-        .map_err(|err| TarError::new(format!("seek tar input: {err}")))?;
+        .map_err(|cause| TarError::io("seek tar input", None, cause))?;
     let mut prefix = [0_u8; 4];
     let n = reader
         .read(&mut prefix)
-        .map_err(|err| TarError::new(format!("read tar prefix: {err}")))?;
+        .map_err(|cause| TarError::io("read tar prefix", None, cause))?;
     reader
         .seek(SeekFrom::Start(0))
-        .map_err(|err| TarError::new(format!("seek tar input: {err}")))?;
+        .map_err(|cause| TarError::io("seek tar input", None, cause))?;
     if detect_transport(&prefix[..n], options.source_name.as_deref()).is_some() {
         return from_tar_to_writer(reader, writer, options);
     }
@@ -82,14 +82,14 @@ pub fn from_seekable_tar_to_writer<R: Read + Seek, W: Write>(
         let digest = (entry.kind == FileEntryKind::File)
             .then(|| digest_blob_range(reader, source))
             .transpose()
-            .map_err(TarError::new)?;
+            .map_err(TarError::Files)?;
         let file_entry = file_entry_from_seek_tar(entry, digest.clone(), options)?;
         if let Some(digest) = digest {
             blobs.entry(digest).or_insert(source);
         }
         entries.push(file_entry);
     }
-    pack_entries_v2_with_blob_ranges(&entries, reader, &blobs, writer).map_err(TarError::new)
+    pack_entries_v2_with_blob_ranges(&entries, reader, &blobs, writer).map_err(TarError::Files)
 }
 
 /// Read a tar stream and author files-profile-v2 GTS bytes to `writer`.
@@ -101,7 +101,7 @@ pub fn from_tar_to_writer<R: Read, W: Write>(
     let mut input = Vec::new();
     reader
         .read_to_end(&mut input)
-        .map_err(|err| TarError::new(format!("read tar input: {err}")))?;
+        .map_err(|cause| TarError::io("read tar input", None, cause))?;
     write_tar_data_as_gts(&input, writer, options)
 }
 
@@ -120,7 +120,9 @@ fn write_tar_data_as_gts<W: Write>(
             let digest = file_entry
                 .digest
                 .clone()
-                .ok_or_else(|| TarError::new(format!("file entry {} has no digest", entry.path)))?;
+                .ok_or_else(|| TarError::MissingDigest {
+                    path: entry.path.clone(),
+                })?;
             blobs.entry(digest).or_insert(FileBlobBytes {
                 data: entry.data,
                 media_type: None,
@@ -129,7 +131,7 @@ fn write_tar_data_as_gts<W: Write>(
         }
         entries.push(file_entry);
     }
-    pack_entries_v2_with_blob_bytes(&entries, &blobs, writer).map_err(TarError::new)
+    pack_entries_v2_with_blob_bytes(&entries, &blobs, writer).map_err(TarError::Files)
 }
 
 /// Author a files-profile-v2 GTS archive from bytes containing tar, tar.gz, or tar.zst.
@@ -146,8 +148,7 @@ fn decompress_input<'a>(
     data: &'a [u8],
     source_name: Option<&str>,
 ) -> Result<Cow<'a, [u8]>, TarError> {
-    decode_detected(data, source_name)
-        .map_err(|err| TarError::new(format!("decode tar input: {err}")))
+    decode_detected(data, source_name).map_err(TarError::Transport)
 }
 
 fn file_entry_from_tar(
@@ -155,41 +156,42 @@ fn file_entry_from_tar(
     options: &FromTarOptions,
 ) -> Result<FileEntry, TarError> {
     if entry.path.is_empty() {
-        return Err(TarError::new("empty tar path"));
+        return Err(TarError::EmptyPath);
     }
     match entry.kind {
         FileEntryKind::Symlink => {
             if !options.allow_symlinks {
-                return Err(TarError::new(format!(
-                    "refusing symlink entry {}: use --allow-symlinks",
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-symlinks",
+                });
             }
             require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Hardlink => {
             if !options.allow_symlinks {
-                return Err(TarError::new(format!(
-                    "refusing hardlink entry {}: use --allow-symlinks",
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-symlinks",
+                });
             }
             require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Fifo | FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             if !options.allow_special {
-                return Err(TarError::new(format!(
-                    "refusing {} entry {}: use --allow-special",
-                    entry.kind.as_str(),
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-special",
+                });
             }
         }
         FileEntryKind::Socket => {
-            return Err(TarError::new(format!(
-                "unsupported tar socket entry {}",
-                entry.path
-            )));
+            return Err(TarError::ImportSocket {
+                path: entry.path.clone(),
+            });
         }
         FileEntryKind::File | FileEntryKind::Directory => {}
     }
@@ -220,41 +222,42 @@ fn file_entry_from_seek_tar(
     options: &FromTarOptions,
 ) -> Result<FileEntry, TarError> {
     if entry.path.is_empty() {
-        return Err(TarError::new("empty tar path"));
+        return Err(TarError::EmptyPath);
     }
     match entry.kind {
         FileEntryKind::Symlink => {
             if !options.allow_symlinks {
-                return Err(TarError::new(format!(
-                    "refusing symlink entry {}: use --allow-symlinks",
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-symlinks",
+                });
             }
             require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Hardlink => {
             if !options.allow_symlinks {
-                return Err(TarError::new(format!(
-                    "refusing hardlink entry {}: use --allow-symlinks",
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-symlinks",
+                });
             }
             require_link_target(&entry.path, entry.link_target.as_deref())?;
         }
         FileEntryKind::Fifo | FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             if !options.allow_special {
-                return Err(TarError::new(format!(
-                    "refusing {} entry {}: use --allow-special",
-                    entry.kind.as_str(),
-                    entry.path
-                )));
+                return Err(TarError::Refused {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    option: "--allow-special",
+                });
             }
         }
         FileEntryKind::Socket => {
-            return Err(TarError::new(format!(
-                "unsupported tar socket entry {}",
-                entry.path
-            )));
+            return Err(TarError::ImportSocket {
+                path: entry.path.clone(),
+            });
         }
         FileEntryKind::File | FileEntryKind::Directory => {}
     }
@@ -283,16 +286,15 @@ fn file_entry_from_seek_tar(
 /// one check both the streamed and the seekable tar readers apply to a link.
 fn require_link_target(path: &str, link_target: Option<&str>) -> Result<(), TarError> {
     if link_target.is_none_or(str::is_empty) {
-        return Err(TarError::new(format!(
-            "link entry {path} has no link target"
-        )));
+        return Err(TarError::ImportLinkTarget {
+            path: path.to_owned(),
+        });
     }
     Ok(())
 }
 
 fn format_mtime(seconds: u64) -> Result<String, TarError> {
-    i64::try_from(seconds)
-        .map_err(|_| "out of range")
-        .and_then(|secs| crate::rfc3339::format(secs, 0))
-        .map_err(|err| TarError::new(format!("invalid tar mtime {seconds}: {err}")))
+    let signed =
+        i64::try_from(seconds).map_err(|cause| TarError::MtimeConversion { seconds, cause })?;
+    crate::rfc3339::format(signed, 0).map_err(|cause| TarError::MtimeFormat { seconds, cause })
 }

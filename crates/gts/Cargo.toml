@@ -125,3 +125,8 @@ harness = false
 # Frozen MMR identities and variable-length frame preimages, native and wasm.
 name = "mmr_preimages"
 harness = false
+
+[[test]]
+# Native error fields through the same generic consumer on native and wasm.
+name = "structured_errors"
+harness = false

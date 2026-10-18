@@ -66,6 +66,43 @@ impl fmt::Display for SignatureError {
 
 impl std::error::Error for SignatureError {}
 
+impl purrdf_hash::error::StructuredError for SignatureError {
+    purrdf_hash::error_visit! {
+        InvalidPublicKey => "ed25519-invalid-public-key" {},
+        InvalidR => "ed25519-invalid-r" {},
+        NonCanonicalS => "ed25519-non-canonical-s" {},
+        SmallOrder => "ed25519-small-order" {},
+        Mismatch => "ed25519-signature-mismatch" {},
+        InvalidLength { expected, actual } => "ed25519-invalid-length" {
+            "expected" => Unsigned(*expected as u128), "actual" => Unsigned(*actual as u128),
+        },
+    }
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::{Signature, VerifyingKey};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn original_signature_and_key_length_failures_expose_typed_counts() {
+        for (error, expected, actual) in [
+            (Signature::try_from(&[0; 63][..]).unwrap_err(), 64, 63),
+            (VerifyingKey::try_from(&[0; 31][..]).unwrap_err(), 32, 31),
+        ] {
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, "ed25519-invalid-length");
+            assert!(
+                matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == expected)
+            );
+            assert!(
+                matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == actual)
+            );
+        }
+    }
+}
+
 fn exact<const N: usize>(bytes: &[u8]) -> Result<[u8; N], SignatureError> {
     bytes.try_into().map_err(|_| SignatureError::InvalidLength {
         expected: N,

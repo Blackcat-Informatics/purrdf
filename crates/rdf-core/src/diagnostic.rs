@@ -4,6 +4,8 @@
 use std::fmt;
 use std::hash::Hash;
 
+use purrdf_hash::error::{ErrorValue, StructuredError};
+
 pub use purrdf_lex::diagnostic::{
     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
 };
@@ -43,6 +45,12 @@ impl fmt::Display for RdfSeverity {
     }
 }
 
+impl StructuredError for RdfSeverity {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant(self.as_str());
+    }
+}
+
 /// Concrete or logical location attached to an RDF diagnostic.
 ///
 /// Every field is `Ord` (plain `Option<String>`/`Option<u32>`/`Option<u64>`),
@@ -77,6 +85,25 @@ pub struct RdfLocation {
 }
 
 purrdf_lex::resident_clone!(RdfLocation);
+
+impl StructuredError for RdfLocation {
+    purrdf_hash::error_visit! {
+        @record self { path, line, column, logical, subject, gts_term_id,
+            gts_quad_index, gts_reifier_id, gts_frame_index, gts_segment_index }
+        => "rdf-location" {
+            "path" => Value(self.path.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "line" => Value(self.line.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "column" => Value(self.column.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "logical" => Value(self.logical.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "subject" => Value(self.subject.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "gts_term_id" => Value(self.gts_term_id.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_quad_index" => Value(self.gts_quad_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_reifier_id" => Value(self.gts_reifier_id.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_frame_index" => Value(self.gts_frame_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+            "gts_segment_index" => Value(self.gts_segment_index.map_or(ErrorValue::Absent, |value| ErrorValue::Unsigned(u128::from(value)))),
+        }
+    }
+}
 
 impl RdfLocation {
     /// Copy physical and logical locations without allocating ahead of admission.
@@ -254,7 +281,6 @@ impl fmt::Display for RdfLocation {
 ///     message: "failure".to_owned(), detail: None, location: None,
 /// };
 /// ```
-#[derive(PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RdfDiagnostic {
     /// The diagnostic severity level.
@@ -273,10 +299,40 @@ pub struct RdfDiagnostic {
 /// Cold reporting payloads share one owner so ordinary diagnostics retain the
 /// original single optional pointer. Native ingress carries StorageError inline
 /// until this reporting boundary; no attachment is allocated on successful work.
-#[derive(PartialEq, Eq)]
 struct DiagnosticAttachments {
     presentation: Option<DiagnosticPresentation>,
     storage: Option<purrdf_lex::allocation::StorageError>,
+    cause: Option<DiagnosticCause>,
+}
+
+/// An immutable native cause retaining its independently admitted original owner.
+/// Its grant covers both the erased error box and this shared control; clones
+/// retain that same grant rather than charging or copying the original payload.
+pub type DiagnosticCause =
+    purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>;
+
+impl StructuredError for DiagnosticAttachments {
+    purrdf_hash::error_visit! {
+        @record self { presentation, storage, cause } => "rdf-diagnostic-attachments" {
+            "presentation" => Value(self.presentation.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "storage" => Value(self.storage.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Cause(value))),
+            "native_cause" => Value(self.cause.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Cause(&***value))),
+        }
+    }
+}
+
+impl StructuredError for RdfDiagnostic {
+    purrdf_hash::error_visit! {
+        @record self { severity, code, message, detail, location, attachments }
+        => "rdf-diagnostic" {
+            "severity" => Record(&self.severity),
+            "code" => Code(&self.code),
+            "message" => Text(&self.message),
+            "detail" => Value(self.detail.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "location" => Value(self.location.as_deref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "attachments" => Value(self.attachments.as_deref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+        }
+    }
 }
 
 // These fields were exposed by the original derives. Keep their names, order
@@ -310,6 +366,22 @@ impl Hash for RdfDiagnostic {
         self.storage_error().hash(state);
     }
 }
+
+// Native causes have no generic value equality. Keep the established diagnostic
+// equality/hash over its compatibility fields and typed presentation/storage,
+// independently of supplemental provenance and private attachment allocation.
+impl PartialEq for RdfDiagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        self.severity == other.severity
+            && self.code == other.code
+            && self.message == other.message
+            && self.detail == other.detail
+            && self.location == other.location
+            && self.presentation() == other.presentation()
+            && self.storage_error() == other.storage_error()
+    }
+}
+impl Eq for RdfDiagnostic {}
 
 purrdf_lex::resident_clone!(RdfDiagnostic);
 
@@ -352,6 +424,7 @@ impl RdfDiagnostic {
                     memory.boxed(DiagnosticAttachments {
                         presentation,
                         storage: attachments.storage,
+                        cause: attachments.cause.clone(),
                     })
                 })
                 .transpose()?,
@@ -360,6 +433,7 @@ impl RdfDiagnostic {
 
     /// Exact concrete heap capacity, excluding the outer diagnostic value.
     /// Location and attachment boxes, spare arrays and all owned text count.
+    /// Shared native causes retain independent grants and are not charged again.
     #[must_use]
     pub fn retained_bytes(&self) -> Option<usize> {
         let mut bytes = self
@@ -437,6 +511,41 @@ impl RdfDiagnostic {
         }
     }
 
+    /// Borrow the original native error, without formatting or copying it.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.attachments
+            .as_ref()?
+            .cause
+            .as_ref()
+            .map(|cause| &***cause)
+    }
+
+    /// Attach an already admitted native cause through this diagnostic's owner.
+    /// The cause's independent grant survives copies of the diagnostic.
+    /// Existing diagnostic buffers must already belong to this memory account;
+    /// this operation admits only a new attachment box when one is needed.
+    ///
+    /// # Errors
+    /// Returns admission or allocation refusal before allocating an attachment.
+    pub fn with_native_cause<S: purrdf_lex::allocation::Admission + ?Sized>(
+        mut self,
+        cause: DiagnosticCause,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match &mut self.attachments {
+            Some(attachments) => attachments.cause = Some(cause),
+            None => {
+                self.attachments = Some(memory.boxed(DiagnosticAttachments {
+                    presentation: None,
+                    storage: None,
+                    cause: Some(cause),
+                })?);
+            }
+        }
+        Ok(self)
+    }
+
     /// Attach validated presentation data and render its compatibility English.
     #[must_use]
     pub fn with_presentation(mut self, presentation: DiagnosticPresentation) -> Self {
@@ -450,6 +559,7 @@ impl RdfDiagnostic {
                 self.attachments = Some(Box::new(DiagnosticAttachments {
                     presentation: Some(presentation),
                     storage: None,
+                    cause: None,
                 }));
             }
         }
@@ -557,6 +667,7 @@ impl From<purrdf_lex::allocation::StorageError> for RdfDiagnostic {
         diagnostic.attachments = Some(Box::new(DiagnosticAttachments {
             presentation: None,
             storage: Some(error),
+            cause: None,
         }));
         diagnostic
     }
@@ -571,6 +682,9 @@ impl From<purrdf_iri::IriReadError> for RdfDiagnostic {
 }
 impl std::error::Error for RdfDiagnostic {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let Some(cause) = self.native_cause() {
+            return Some(cause);
+        }
         self.attachments
             .as_ref()
             .and_then(|attachments| attachments.storage.as_ref())
@@ -854,7 +968,7 @@ mod tests {
             IriError::BadScheme("1_bad".to_owned()),
             IriError::BadPercentEncoding(7),
             IriError::DisallowedChar('漢', 12),
-            IriError::BadAuthority("unclosed host".to_owned()),
+            IriError::BadAuthority(purrdf_iri::AuthorityError::UnterminatedIpLiteral),
             IriError::NonAbsoluteBase("relative".to_owned()),
             IriError::NoBase {
                 reference: "relative\"\\漢".to_owned(),

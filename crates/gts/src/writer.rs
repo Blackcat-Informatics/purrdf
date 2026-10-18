@@ -8,6 +8,9 @@
 //! graph/file frame families plus transformed, encrypted, and signed payloads.
 //! Deterministic CBOR and BLAKE3 self-hashes are handled by [`crate::wire`].
 
+mod error;
+pub use error::FrameError;
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -245,7 +248,9 @@ impl Default for SnapshotOptions {
 #[non_exhaustive]
 pub enum WriterError {
     /// Invalid caller options.
-    InvalidFrame(String),
+    InvalidFrame(FrameError),
+    /// Recovery of the existing append chain failed.
+    Append(crate::reader::AppendError),
     /// The writer catalog cannot satisfy a requested codec.
     MissingCatalogEntry(String),
     /// Codec encode failure.
@@ -261,7 +266,8 @@ pub enum WriterError {
 impl fmt::Display for WriterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidFrame(detail) => f.write_str(detail),
+            Self::InvalidFrame(detail) => detail.fmt(f),
+            Self::Append(cause) => cause.fmt(f),
             Self::MissingCatalogEntry(name) => {
                 write!(f, "writer catalog has no entry for codec '{name}'")
             }
@@ -275,23 +281,23 @@ impl fmt::Display for WriterError {
     }
 }
 
-impl std::error::Error for WriterError {
-    /// The codec's own error, when the writer failed because the codec did.
-    ///
-    /// `Codec` adds no information of its own — it says only that the failure came from
-    /// below — so returning `None` made the wrapper the whole visible message and hid
-    /// the encoding fault it was carrying.
-    ///
-    /// Provider and signing faults preserve their own actionable source errors.
-    /// Frame/catalog faults and a missing provider are local boundary failures.
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Codec(inner) => Some(inner),
-            Self::Randomness(inner) => Some(inner),
-            Self::Signing(inner) => Some(inner),
-            Self::MissingRandomnessProvider => None,
-            Self::InvalidFrame(_) | Self::MissingCatalogEntry(_) => None,
-        }
+purrdf_lex::error_source!(WriterError {
+    InvalidFrame,
+    Append,
+    Codec,
+    Randomness,
+    Signing
+});
+
+impl purrdf_hash::error::StructuredError for WriterError {
+    purrdf_hash::error_visit! {
+        InvalidFrame(cause) => "gts-writer-invalid-frame" { "cause" => Cause(cause) },
+        Append(cause) => "gts-writer-append" { "cause" => Cause(cause) },
+        MissingCatalogEntry(name) => "gts-writer-missing-codec" { "name" => Text(name) },
+        Codec(cause) => "gts-writer-codec" { "cause" => Cause(cause) },
+        MissingRandomnessProvider => "gts-writer-missing-randomness" {},
+        Randomness(cause) => "gts-writer-randomness" { "cause" => Cause(cause) },
+        Signing(cause) => "gts-writer-signing" { "cause" => Cause(cause) },
     }
 }
 
@@ -643,32 +649,24 @@ fn assign_catalog_ids(
     let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
     for (id, codec) in base {
         if !seen_names.insert(&codec.name) {
-            return Err(WriterError::InvalidFrame(format!(
-                "duplicate codec name {:?} in the writer catalog (§5 \"cat\" is a map)",
-                codec.name
-            )));
+            return Err(WriterError::InvalidFrame(FrameError::DuplicateCodecName {
+                name: codec.name.clone(),
+            }));
         }
         if !seen_ids.insert(*id) {
-            return Err(WriterError::InvalidFrame(format!(
-                "duplicate codec id {id} in the writer catalog (§5 \"cat\" is a map)"
-            )));
+            return Err(WriterError::InvalidFrame(FrameError::DuplicateCodecId {
+                id: *id,
+            }));
         }
         ids.insert((codec.name.clone(), None), *id);
     }
     if dict_names.is_empty() {
         return Ok(ids);
     }
-    let mut next = base
-        .iter()
-        .map(|(id, _)| *id)
-        .max()
-        .unwrap_or(-1)
+    let maximum = base.iter().map(|(id, _)| *id).max().unwrap_or(-1);
+    let mut next = maximum
         .checked_add(1)
-        .ok_or_else(|| {
-            WriterError::InvalidFrame(
-                "writer catalog ids leave no range for dictionary-bound entries".to_string(),
-            )
-        })?;
+        .ok_or_else(|| WriterError::InvalidFrame(FrameError::DictionaryIdStart { maximum }))?;
     let dict_capable: BTreeSet<String> = ids
         .keys()
         .filter(|(name, _)| is_dict_capable(name))
@@ -678,9 +676,10 @@ fn assign_catalog_ids(
         .len()
         .checked_mul(dict_names.len())
         .ok_or_else(|| {
-            WriterError::InvalidFrame(
-                "writer catalog entry count overflows while assigning dictionaries".to_string(),
-            )
+            WriterError::InvalidFrame(FrameError::DictionaryEntryCount {
+                codecs: dict_capable.len(),
+                dictionaries: dict_names.len(),
+            })
         })?;
     for name in dict_capable {
         for dict in dict_names {
@@ -688,10 +687,10 @@ fn assign_catalog_ids(
             remaining -= 1;
             if remaining > 0 {
                 next = next.checked_add(1).ok_or_else(|| {
-                    WriterError::InvalidFrame(
-                        "writer catalog ids overflow while assigning dictionary-bound entries"
-                            .to_string(),
-                    )
+                    WriterError::InvalidFrame(FrameError::DictionaryIdRange {
+                        last: next,
+                        remaining,
+                    })
                 })?;
             }
         }
@@ -856,10 +855,9 @@ impl Writer {
             .as_deref()
             .is_some_and(|layout| layout != "streamable")
         {
-            return Err(WriterError::InvalidFrame(format!(
-                "unsupported layout claim {:?} (§3.3)",
-                options.layout
-            )));
+            return Err(WriterError::InvalidFrame(FrameError::Layout {
+                actual: options.layout,
+            }));
         }
         let base_catalog = options.catalog.unwrap_or_else(default_catalog);
 
@@ -869,14 +867,12 @@ impl Writer {
         let mut dicts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
         for (name, bytes) in options.dicts {
             if name.is_empty() {
-                return Err(WriterError::InvalidFrame(
-                    "an in-band dictionary name must be non-empty (§5 \"dct\")".to_string(),
-                ));
+                return Err(WriterError::InvalidFrame(FrameError::EmptyDictionaryName));
             }
             if dicts.insert(name.clone(), bytes).is_some() {
-                return Err(WriterError::InvalidFrame(format!(
-                    "duplicate in-band dictionary name {name:?} (§5 \"dct\" is a map)"
-                )));
+                return Err(WriterError::InvalidFrame(
+                    FrameError::DuplicateDictionaryName { name },
+                ));
             }
         }
         let dict_names: BTreeSet<&str> = dicts.keys().map(String::as_str).collect();
@@ -892,12 +888,12 @@ impl Writer {
         let catalog_ids = assign_catalog_ids(&base_catalog, &dict_names)?;
 
         // The declared level is only meaningful on a zstd-family entry.
-        if options.zstd_level.is_some()
+        if let Some(level) = options.zstd_level
             && !catalog_ids.keys().any(|(name, _)| is_dict_capable(name))
         {
-            return Err(WriterError::InvalidFrame(
-                "zstd_level requires a zstd or zstd-rsyncable catalog entry".to_string(),
-            ));
+            return Err(WriterError::InvalidFrame(FrameError::CatalogLevel {
+                level,
+            }));
         }
 
         let cls_by_name: BTreeMap<&str, &str> = base_catalog
@@ -985,11 +981,10 @@ impl Writer {
     /// returns ONLY the appended frames, ready to append to the existing file.
     ///
     /// # Errors
-    /// Returns [`WriterError::InvalidFrame`] when `existing` carries no readable
+    /// Returns [`WriterError::Append`] when `existing` carries no readable
     /// segment header, or its frame chain cannot be walked to a head id.
     pub fn appending(existing: &[u8]) -> Result<Self, WriterError> {
-        let state =
-            crate::reader::segment_append_state(existing).map_err(WriterError::InvalidFrame)?;
+        let state = crate::reader::segment_append_state(existing).map_err(WriterError::Append)?;
         Self::continuing(state)
     }
 
@@ -1009,16 +1004,18 @@ impl Writer {
         let mut seen_ids: BTreeSet<i64> = BTreeSet::new();
         for row in &state.catalog {
             if !seen_ids.insert(row.id) {
-                return Err(WriterError::InvalidFrame(format!(
-                    "cannot append: catalog id {} appears more than once",
-                    row.id
-                )));
+                return Err(WriterError::InvalidFrame(FrameError::AppendDuplicateId {
+                    id: row.id,
+                }));
             }
             let key = (row.name.clone(), row.dct.clone());
             if catalog_ids.insert(key.clone(), row.id).is_some() {
-                return Err(WriterError::InvalidFrame(format!(
-                    "cannot append: catalog entry {key:?} appears more than once"
-                )));
+                return Err(WriterError::InvalidFrame(
+                    FrameError::AppendDuplicateEntry {
+                        name: key.0,
+                        dictionary: key.1,
+                    },
+                ));
             }
         }
         let declared_levels: BTreeSet<i32> = state
@@ -1028,10 +1025,9 @@ impl Writer {
             .filter_map(|row| row.level)
             .collect();
         if declared_levels.len() > 1 {
-            return Err(WriterError::InvalidFrame(format!(
-                "cannot append: the segment catalog declares conflicting zstd levels \
-                 {declared_levels:?} (§8.5 \"level\")"
-            )));
+            return Err(WriterError::InvalidFrame(FrameError::AppendLevels {
+                levels: declared_levels,
+            }));
         }
         let declared_zstd_level = declared_levels.first().copied();
         let (dicts, head) = (state.dicts, state.head);
@@ -1187,45 +1183,45 @@ impl<M: FrameMode> Writer<M> {
         } = options;
 
         if payload.is_some() && raw.is_some() {
-            return Err(WriterError::InvalidFrame(
-                "payload and raw are mutually exclusive".to_string(),
-            ));
+            return Err(WriterError::InvalidFrame(FrameError::ConflictingSources));
         }
         let transforms_data = !transform.is_empty() || encrypt.is_some();
         if transforms_data && payload.is_none() && raw.is_none() {
-            return Err(WriterError::InvalidFrame(
-                "transform/encrypt requires a payload or raw source".to_string(),
-            ));
+            return Err(WriterError::InvalidFrame(FrameError::MissingSource {
+                transforms: transform.len(),
+                encrypted: encrypt.is_some(),
+            }));
         }
-        if zstd_level.is_some() && !transform.iter().any(|name| is_dict_capable(name)) {
-            return Err(WriterError::InvalidFrame(
-                "zstd_level requires a zstd or zstd-rsyncable transform".to_string(),
-            ));
+        if let Some(level) = zstd_level
+            && !transform.iter().any(|name| is_dict_capable(name))
+        {
+            return Err(WriterError::InvalidFrame(FrameError::FrameLevel { level }));
         }
         // A frame may not encode at a level the catalog does not declare — the
         // declared `level` is a wire fact readers gate on, not a hint.
         if let (Some(declared), Some(requested)) = (self.declared_zstd_level, zstd_level)
             && declared != requested
         {
-            return Err(WriterError::InvalidFrame(format!(
-                "frame zstd_level {requested} contradicts the pack's declared level \
-                 {declared} (§8.5 catalog \"level\")"
-            )));
+            return Err(WriterError::InvalidFrame(FrameError::LevelMismatch {
+                requested,
+                declared,
+            }));
         }
         // Fail closed on an unknown dictionary name: never a silent no-dict encode.
         let dict_bytes: Option<&[u8]> = match dict.as_deref() {
             None => None,
             Some(name) => Some(self.dicts.get(name).map(Vec::as_slice).ok_or_else(|| {
-                WriterError::InvalidFrame(format!(
-                    "frame names in-band dictionary {name:?}, which this pack does not pin \
-                     (§5 header \"dct\")"
-                ))
+                WriterError::InvalidFrame(FrameError::UnknownDictionary {
+                    name: name.to_owned(),
+                })
             })?),
         };
-        if dict_bytes.is_some() && !transform.iter().any(|name| is_dict_capable(name)) {
-            return Err(WriterError::InvalidFrame(
-                "a frame dictionary requires a zstd or zstd-rsyncable transform".to_string(),
-            ));
+        if let Some(name) = dict.as_ref()
+            && !transform.iter().any(|name| is_dict_capable(name))
+        {
+            return Err(WriterError::InvalidFrame(FrameError::DictionaryTransform {
+                name: name.clone(),
+            }));
         }
         let mut frame: Vec<(Value, Value)> = vec![("t".into(), frame_type.into())];
 

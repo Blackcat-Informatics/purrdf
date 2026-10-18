@@ -8,6 +8,9 @@ use crate::model::{Diagnostic, Graph, StreamableInfo};
 use crate::reader::{StreamingSink, push_diagnostic};
 use crate::wire::map_get;
 
+mod error;
+use error::LayoutError;
+
 #[derive(Clone, Debug)]
 pub(crate) struct IndexRecord {
     pub(crate) abs_index: u64,
@@ -43,12 +46,14 @@ pub(crate) fn layout_check(
             g,
             sink,
             Diagnostic {
+                cause: None,
                 code: "StreamableLayoutError".to_string(),
                 detail: "segment claims layout 'streamable' but carries no intact \
                      index footer (§3.3)"
                     .to_string(),
                 frame_index: None,
-            },
+            }
+            .with_native_cause(LayoutError::MissingFooter),
         );
         return StreamableInfo {
             claimed: true,
@@ -74,6 +79,7 @@ pub(crate) fn layout_check(
             g,
             sink,
             Diagnostic {
+                cause: None,
                 code: "StreamableLayoutError".to_string(),
                 detail: format!(
                     "index footer contradicts the frames it covers: count {count} \
@@ -81,7 +87,17 @@ pub(crate) fn layout_check(
                  must be that frame's id (§3.3)"
                 ),
                 frame_index: Some(abs_pos),
-            },
+            }
+            .with_native_cause(LayoutError::Footer {
+                count,
+                preceding: rel_pos - 1,
+                head: head.clone(),
+                actual: count
+                    .checked_sub(1)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| frame_ids.get(index))
+                    .cloned(),
+            }),
         );
     }
     for (blob_abs, digest, described) in blob_events {
@@ -91,13 +107,19 @@ pub(crate) fn layout_check(
                 g,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "StreamableLayoutError".to_string(),
                     detail: format!(
                         "covered blob {digest} delivered before its stream:digest \
                      description (catalog-before-payload, §3.3)"
                     ),
                     frame_index: Some(*blob_abs),
-                },
+                }
+                .with_native_cause(LayoutError::BlobOrder {
+                    digest: digest.clone(),
+                    frame: *blob_abs,
+                    covered: count,
+                }),
             );
         }
     }
@@ -122,45 +144,55 @@ pub(crate) fn check_index_mmr(
         };
         let rel_pos = record.abs_index.saturating_sub(index_offset);
         let preceding = rel_pos.saturating_sub(1);
-        let mut detail = None;
+        let mut error = None;
         if root.len() != 32 {
-            detail = Some("index mmr root is not a 32-byte digest".to_string());
+            error = Some(LayoutError::MmrWidth { root: root.clone() });
         } else if record.count > preceding {
-            detail = Some(format!(
-                "index mmr covers {} frame(s), but only {preceding} precede the index",
-                record.count
-            ));
+            error = Some(LayoutError::MmrPreceding {
+                count: record.count,
+                preceding,
+            });
         } else if record.count > frame_ids.len() as u64 {
-            detail = Some(format!(
-                "index mmr covers {} frame(s), but the segment has {} frame id(s)",
-                record.count,
-                frame_ids.len()
-            ));
+            error = Some(LayoutError::MmrCount {
+                count: record.count,
+                frames: frame_ids.len(),
+            });
         } else if record.count > 0
             && usize::try_from(record.count - 1)
                 .ok()
                 .and_then(|index| frame_ids.get(index))
                 .is_none_or(|id| *id != record.head)
         {
-            detail = Some("index mmr head does not match the last covered frame".to_string());
+            error = Some(LayoutError::MmrHead {
+                head: record.head.clone(),
+                actual: usize::try_from(record.count - 1)
+                    .ok()
+                    .and_then(|index| frame_ids.get(index))
+                    .cloned(),
+            });
         } else {
             let computed = mmr::root(
                 &frame_ids[..usize::try_from(record.count)
                     .expect("count admitted against bounded frame table")],
             );
             if computed != *root {
-                detail = Some("index mmr root does not match the covered frame ids".to_string());
+                error = Some(LayoutError::MmrRoot {
+                    root: root.clone(),
+                    computed,
+                });
             }
         }
-        if let Some(detail) = detail {
+        if let Some(error) = error {
             push_diagnostic(
                 g,
                 sink,
                 Diagnostic {
+                    cause: None,
                     code: "IndexMmrError".to_string(),
-                    detail,
+                    detail: error.to_string(),
                     frame_index: Some(record.abs_index),
-                },
+                }
+                .with_native_cause(error),
             );
         }
     }

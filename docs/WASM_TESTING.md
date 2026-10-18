@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 182 named cases in 31 integration targets,
-with 192 executions across 36 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 215 named cases in 32 integration targets,
+with 225 executions across 37 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
@@ -131,6 +131,8 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-sparql-eval` / `evidence_ingress` | scalar | All twenty exact cases registered in the original target | Preserves polarity, closure, unknown status, scope, ledger cells and accepted ordering through actual operators and query forms; native empty, late-emitted and unclosed whole-search declarations retain their original owners and admitted COUNT bounds through EXISTS and ASK functions without an external evidence source. Thirty-six actual empty-producer combinations cover complete/open/incomplete search, explicit source scope, positive EXISTS, NOT EXISTS and nested MINUS: only closed complete absence decides the predicate; unresolved membership remains enumerable. Producer refusal prevents partial publication. |
 | `purrdf-core` / `triple_carrier` | scalar | All six exact cases selected in `make wasm-test` | Pins 12/8/12-byte row layouts, all bound patterns and lazy side indexes, lexical/statement/canonical identity, named-role refusal and shared first-cause/fresh-read behavior. |
 | `purrdf-gts` / `mmr_preimages` | scalar | `streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids` | Replays the frozen inclusion proof and root and compares variable-length frame commitments at CBOR width boundaries against the independent tree encoder. |
+| `purrdf-gts` / `structured_errors` | scalar | All 31 exact cases selected in `make wasm-test` | Exercises the actual native reader, writer, framing, proof, policy, compaction, dictionary and transport refusals through one generic borrowed visitor. Preserves original I/O owners and sources, nested records, full-width counts, JSON/CBOR values, exact floating-point bits, empty/absent fields and typed cryptographic/codec causes without rendering them. |
+| `purrdf-deflate` / `deflate_conformance` | scalar | `bad_crc_refused_in_first_and_second_member`, `decompressed_limit_refuses_bomb` | Checks original CRC counts and decompression limits through the actual streaming I/O bridge and its borrowed native cause. |
 | `purrdf-sparql-eval` / `statement_indexes` | scalar + SIMD | `native_and_compact_statement_queries_keep_answers_and_candidate_work`, `named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause` | Compares native and compact statement-query answers and candidate work, and checks named-graph refusal before lazy index allocation with the original cause retained. |
 | `purrdf-datalog` / `rules_runtime` | scalar | The five selected `triple_` cases | Exercises actual predicate-only keys, original wide host IDs, compiler/chase/proof, immutable Base through retraction and NoOutput semantics. |
 | `purrdf-sparql-eval` / `host_identity` | scalar | The three selected `triple_` cases | Checks typed named-graph refusal before nested/empty shortcuts and actual default-query bags, unbound cells, paths and graph output. |

@@ -17,10 +17,87 @@ const TIMESTAMP_BYTES: usize = 6;
 const RANDOMNESS_BYTES: usize = 10;
 const MAX_RANDOMNESS: u128 = (1u128 << 80) - 1;
 
-purrdf_lex::message_error! {
-    /// Error raised for invalid ULID construction or parsing.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct UlidError, detail;
+/// Error raised for invalid ULID construction or parsing.
+#[derive(Clone, Debug)]
+pub struct UlidError {
+    detail: String,
+    reason: UlidReason,
+}
+
+impl PartialEq for UlidError {
+    fn eq(&self, other: &Self) -> bool {
+        // Native provenance supplements the original message-based identity.
+        self.detail == other.detail
+    }
+}
+impl Eq for UlidError {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum UlidReason {
+    Message,
+    Timestamp { actual: u64 },
+    Counter { actual: u128 },
+    Parse(CrockfordError),
+    CounterOverflow { actual: u128 },
+}
+
+impl UlidError {
+    /// A caller-supplied explanation, retained verbatim as message data.
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            reason: UlidReason::Message,
+        }
+    }
+
+    /// The unchanged human-readable explanation.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl fmt::Display for UlidError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+purrdf_lex::error_source!(UlidError => { Self { reason: UlidReason::Parse(cause), .. } => cause });
+
+impl purrdf_hash::error::StructuredError for UlidError {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self { detail, reason } = self;
+        match reason {
+            UlidReason::Message => {
+                visitor.variant("gts-ulid-message");
+                visitor.value(Some("message"), ErrorValue::Message(detail));
+            }
+            UlidReason::Timestamp { actual } => {
+                visitor.variant("gts-ulid-timestamp");
+                visitor.value(Some("actual"), ErrorValue::Unsigned(u128::from(*actual)));
+                visitor.value(
+                    Some("maximum"),
+                    ErrorValue::Unsigned(u128::from(Ulid::MAX_TIMESTAMP_MS)),
+                );
+            }
+            UlidReason::Counter { actual } => {
+                visitor.variant("gts-ulid-counter");
+                visitor.value(Some("actual"), ErrorValue::Unsigned(*actual));
+                visitor.value(Some("maximum"), ErrorValue::Unsigned(MAX_RANDOMNESS));
+            }
+            UlidReason::Parse(cause) => {
+                visitor.variant("gts-ulid-parse");
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
+            }
+            UlidReason::CounterOverflow { actual } => {
+                visitor.variant("gts-ulid-counter-overflow");
+                visitor.value(Some("actual"), ErrorValue::Unsigned(*actual));
+                visitor.value(Some("maximum"), ErrorValue::Unsigned(u128::MAX));
+            }
+        }
+    }
 }
 
 /// A 128-bit ULID value with canonical Crockford Base32 rendering.
@@ -37,9 +114,12 @@ impl Ulid {
         randomness: [u8; RANDOMNESS_BYTES],
     ) -> Result<Self, UlidError> {
         if timestamp_ms > Self::MAX_TIMESTAMP_MS {
-            return Err(UlidError::new(format!(
-                "ULID timestamp {timestamp_ms} exceeds 48-bit range"
-            )));
+            return Err(UlidError {
+                detail: format!("ULID timestamp {timestamp_ms} exceeds 48-bit range"),
+                reason: UlidReason::Timestamp {
+                    actual: timestamp_ms,
+                },
+            });
         }
 
         let mut bytes = [0u8; 16];
@@ -52,9 +132,10 @@ impl Ulid {
     /// Construct a deterministic ULID from a timestamp and 80-bit counter.
     pub fn from_counter(timestamp_ms: u64, counter: u128) -> Result<Self, UlidError> {
         if counter > MAX_RANDOMNESS {
-            return Err(UlidError::new(
-                "ULID counter exceeds 80-bit randomness field",
-            ));
+            return Err(UlidError {
+                detail: "ULID counter exceeds 80-bit randomness field".into(),
+                reason: UlidReason::Counter { actual: counter },
+            });
         }
         let counter_bytes = counter.to_be_bytes();
         let mut randomness = [0u8; RANDOMNESS_BYTES];
@@ -101,7 +182,7 @@ impl FromStr for Ulid {
         crockford::parse_u128(text)
             .map(|value| Self(value.to_be_bytes()))
             .map_err(|error| {
-                UlidError::new(match error {
+                let detail = match error {
                     CrockfordError::Length { .. } => {
                         format!("ULID must be {ULID_LEN} Crockford Base32 characters")
                     }
@@ -113,7 +194,11 @@ impl FromStr for Ulid {
                         "ULID exceeds 128-bit range because the first digit is greater than 7"
                             .to_owned()
                     }
-                })
+                };
+                UlidError {
+                    detail,
+                    reason: UlidReason::Parse(error),
+                }
             })
     }
 }
@@ -143,10 +228,12 @@ impl DeterministicUlidGenerator {
     /// Return the next deterministic ULID in sequence.
     pub fn next_ulid(&mut self) -> Result<Ulid, UlidError> {
         let ulid = Ulid::from_counter(self.timestamp_ms, self.next_counter)?;
-        self.next_counter = self
-            .next_counter
-            .checked_add(1)
-            .ok_or_else(|| UlidError::new("ULID counter overflow"))?;
+        self.next_counter = self.next_counter.checked_add(1).ok_or_else(|| UlidError {
+            detail: "ULID counter overflow".into(),
+            reason: UlidReason::CounterOverflow {
+                actual: self.next_counter,
+            },
+        })?;
         Ok(ulid)
     }
 }

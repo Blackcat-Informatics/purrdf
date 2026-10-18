@@ -170,8 +170,74 @@ impl Severity {
     }
 }
 
+/// Native reason for a profile-policy finding, independent of its presentation.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ProfileReason {
+    /// The profile requires a signed frame.
+    SignatureRequired,
+    /// Cryptographic verification rejected these signatures.
+    SignatureInvalid {
+        /// Number of invalid signatures.
+        count: usize,
+    },
+    /// These signatures have unresolved verification keys.
+    SignatureUnverified {
+        /// Number of unresolved signatures.
+        count: usize,
+    },
+    /// No valid signature satisfies the supplied deployment trust policy.
+    SignerUntrusted,
+    /// Valid signatures were supplied without deployment trust anchors.
+    SignerTrustNotEvaluated,
+    /// No selected signature commits to a segment head.
+    HeadCommitmentRequired,
+    /// An opaque recipient identifier violates the configured shape.
+    RecipientKidPublic {
+        /// Original configured identifier pattern.
+        pattern: String,
+        /// Original refused recipient identifier.
+        kid: String,
+    },
+    /// A recipient has no string identifier; retain the original value if any.
+    RecipientKidMissing {
+        /// Original non-string identifier, or absence.
+        actual: Option<Value>,
+        /// Original recipient row, including a non-map row or repeated fields.
+        recipient: Value,
+    },
+    /// A used vocabulary has no corresponding profile declaration.
+    VocabularyUndeclared {
+        /// Used vocabulary namespace.
+        vocabulary: &'static str,
+    },
+    /// A declared profile's vocabulary is unused.
+    VocabularyUnused {
+        /// Declared profile's vocabulary namespace.
+        vocabulary: &'static str,
+    },
+    /// Stream vocabulary occurs without the corresponding layout claim.
+    StreamWithoutLayout,
+}
+
+impl purrdf_hash::error::StructuredError for ProfileReason {
+    purrdf_hash::error_visit! {
+        SignatureRequired => "gts-profile-signature-required" {},
+        SignatureInvalid { count } => "gts-profile-signature-invalid" { "count" => Unsigned(*count as u128) },
+        SignatureUnverified { count } => "gts-profile-signature-unverified" { "count" => Unsigned(*count as u128) },
+        SignerUntrusted => "gts-profile-signer-untrusted" {},
+        SignerTrustNotEvaluated => "gts-profile-signer-trust-not-evaluated" {},
+        HeadCommitmentRequired => "gts-profile-head-commitment-required" {},
+        RecipientKidPublic { pattern, kid } => "gts-profile-recipient-kid-public" { "pattern" => Text(pattern), "kid" => Text(kid) },
+        RecipientKidMissing { actual, recipient } => "gts-profile-recipient-kid-missing" { "actual" => Value(actual.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))), "recipient" => Record(recipient) },
+        VocabularyUndeclared { vocabulary } => "gts-profile-vocabulary-undeclared" { "vocabulary" => Iri(vocabulary) },
+        VocabularyUnused { vocabulary } => "gts-profile-vocabulary-unused" { "vocabulary" => Iri(vocabulary) },
+        StreamWithoutLayout => "gts-profile-stream-without-layout" { "vocabulary" => Iri(STREAM_NS), "layout" => Code("streamable") },
+    }
+}
+
 /// One profile or trust-policy finding.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ProfileFinding {
     /// Stable diagnostic code.
     pub code: String,
@@ -179,10 +245,46 @@ pub struct ProfileFinding {
     pub severity: Severity,
     /// Human-readable explanation.
     pub detail: String,
+    /// Original policy reason and typed inputs, without parsing the explanation.
+    pub reason: ProfileReason,
     /// Profile that produced the finding, when profile-specific.
     pub profile: Option<String>,
     /// Segment index in a multi-segment file, when evaluated segment-by-segment.
     pub segment_index: Option<u64>,
+}
+
+impl Eq for ProfileFinding {}
+
+impl PartialEq for ProfileFinding {
+    fn eq(&self, other: &Self) -> bool {
+        // Supplemental native provenance does not change the established
+        // diagnostic identity, as for the reader's Diagnostic. In particular,
+        // an original CBOR NaN must not make a finding unequal to its clone.
+        (
+            &self.code,
+            self.severity,
+            &self.detail,
+            &self.profile,
+            self.segment_index,
+        ) == (
+            &other.code,
+            other.severity,
+            &other.detail,
+            &other.profile,
+            other.segment_index,
+        )
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProfileFinding {
+    purrdf_hash::error_visit! {
+        @record self { code, severity, detail, reason, profile, segment_index } => "gts-profile-finding" {
+            "code" => Code(&self.code), "severity" => Code(self.severity.as_str()), "detail" => Text(&self.detail),
+            "reason" => Record(&self.reason),
+            "profile" => Value(self.profile.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "segment_index" => Value(self.segment_index.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value))))
+        }
+    }
 }
 
 impl ProfileFinding {
@@ -190,6 +292,7 @@ impl ProfileFinding {
         code: &str,
         severity: Severity,
         detail: impl Into<String>,
+        reason: ProfileReason,
         profile: Option<&str>,
         segment_index: Option<u64>,
     ) -> Self {
@@ -197,6 +300,7 @@ impl ProfileFinding {
             code: code.to_string(),
             severity,
             detail: detail.into(),
+            reason,
             profile: profile.map(str::to_string),
             segment_index,
         }
@@ -290,6 +394,7 @@ fn signature_policy_findings(
             "ProfileSignatureRequired",
             Severity::Error,
             format!("profile '{profile}' requires signed frames"),
+            ProfileReason::SignatureRequired,
             Some(profile),
             segment_index,
         )];
@@ -305,6 +410,7 @@ fn signature_policy_findings(
             "ProfileSignatureInvalid",
             Severity::Error,
             format!("profile '{profile}' has {invalid} invalid signature(s)"),
+            ProfileReason::SignatureInvalid { count: invalid },
             Some(profile),
             segment_index,
         ));
@@ -320,6 +426,7 @@ fn signature_policy_findings(
             "ProfileSignatureUnverified",
             Severity::Error,
             format!("profile '{profile}' has {unverified} unresolved signature(s)"),
+            ProfileReason::SignatureUnverified { count: unverified },
             Some(profile),
             segment_index,
         ));
@@ -333,6 +440,7 @@ fn signature_policy_findings(
             "ProfileSignerUntrusted",
             Severity::Error,
             format!("profile '{profile}' has no deployment-trusted valid signer"),
+            ProfileReason::SignerUntrusted,
             Some(profile),
             segment_index,
         ));
@@ -344,6 +452,7 @@ fn signature_policy_findings(
                 "profile '{profile}' signatures are cryptographically valid; \
                  no deployment trust policy was supplied"
             ),
+            ProfileReason::SignerTrustNotEvaluated,
             Some(profile),
             segment_index,
         ));
@@ -367,6 +476,7 @@ fn evidence_head_findings(graph: &Graph, segment_index: Option<u64>) -> Vec<Prof
             "EvidenceHeadCommitmentRequired",
             Severity::Error,
             "profile 'evidence' requires a signed segment head commitment",
+            ProfileReason::HeadCommitmentRequired,
             Some("evidence"),
             segment_index,
         )];
@@ -411,6 +521,10 @@ fn opaque_recipient_findings(
                             "opaque-profile high-privacy recipient kid must match {:?}, got {:?}",
                             policy.pseudonymous_kid_pattern, kid
                         ),
+                        ProfileReason::RecipientKidPublic {
+                            pattern: policy.pseudonymous_kid_pattern.clone(),
+                            kid: kid.clone(),
+                        },
                         Some("opaque"),
                         segment_index,
                     )),
@@ -418,6 +532,10 @@ fn opaque_recipient_findings(
                         "OpaqueRecipientKidMissing",
                         Severity::Error,
                         "opaque-profile recipient lacks a string kid",
+                        ProfileReason::RecipientKidMissing {
+                            actual: kid.cloned(),
+                            recipient: recipient.clone(),
+                        },
                         Some("opaque"),
                         segment_index,
                     )),
@@ -469,6 +587,7 @@ fn profile_vocab_findings(
                 "ProfileVocabularyUndeclared",
                 Severity::Error,
                 format!("segment uses {vocab} vocabulary but does not declare '{profile}'"),
+                ProfileReason::VocabularyUndeclared { vocabulary: vocab },
                 Some(profile),
                 segment_index,
             ));
@@ -478,6 +597,7 @@ fn profile_vocab_findings(
                 "ProfileVocabularyUnused",
                 Severity::Warning,
                 format!("segment declares '{profile}' but uses no {vocab} vocabulary"),
+                ProfileReason::VocabularyUnused { vocabulary: vocab },
                 Some(profile),
                 segment_index,
             ));
@@ -515,6 +635,7 @@ fn stream_vocab_findings(graph: &Graph, segment_index: Option<u64>) -> Vec<Profi
             "segment uses {STREAM_NS} vocabulary but does not claim layout \
              'streamable' (§13.3)"
         ),
+        ProfileReason::StreamWithoutLayout,
         Some("stream"),
         segment_index,
     )]

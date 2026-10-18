@@ -64,6 +64,10 @@ pub enum PositionError {
     ColumnLimit,
 }
 
+impl purrdf_hash::error::StructuredError for PositionError {
+    purrdf_hash::error_visit! { ColumnLimit => "iri-position-column-limit" {} }
+}
+
 impl core::fmt::Display for PositionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

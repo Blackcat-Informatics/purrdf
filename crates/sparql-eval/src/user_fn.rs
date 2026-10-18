@@ -471,6 +471,11 @@ impl NativeFnContext<'_> {
         self.workspace
     }
 
+    /// Whether this invocation has already recorded its original governor stop.
+    pub(crate) fn has_stopped(&self) -> bool {
+        self.stopped.get().is_some()
+    }
+
     /// Preserve the first actual physical failure without rendering a second
     /// diagnostic or replacing the governor's original stop cause.
     pub(crate) fn record_physical_failure(&self, error: EvalError) {

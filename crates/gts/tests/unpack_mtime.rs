@@ -11,10 +11,221 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_gts::files::{
     FileEntry, FileEntryKind, UnpackOptions, pack_entries_v2, unpack_with_options,
 };
 use purrdf_gts::reader::read;
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+#[test]
+fn filesystem_pack_unpack_and_diff_keep_native_paths_and_original_io() {
+    use purrdf_gts::files::{diff, pack, unpack};
+    let root = purrdf_testkit::temp_dir!("gts-files-native-").expect("temp dir");
+    let missing = root.path().join("missing");
+    let error = pack(&[&missing]).unwrap_err();
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "gts-files-io");
+    assert!(
+        matches!(fields.field("path"), ErrorValue::Bytes(value) if value == missing.as_os_str().as_encoded_bytes())
+    );
+    let cause = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<purrdf_hash::error::IoFailure>()
+        .unwrap();
+    assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
+    assert!(error.to_string().starts_with(&format!("{missing:?}: ")));
+
+    let source = root.path().join("leaf.bin");
+    fs::write(&source, b"native files").unwrap();
+    let bytes = pack(&[&source]).unwrap();
+    let graph = read(&bytes, true, None);
+    let dest = root.path().join("extracted");
+    unpack(&graph, &dest, false).unwrap();
+    assert_eq!(fs::read(dest.join("leaf.bin")).unwrap(), b"native files");
+    assert_eq!(diff(&graph, &dest).unwrap(), Vec::<String>::new());
+    fs::write(dest.join("leaf.bin"), b"changed").unwrap();
+    assert_eq!(diff(&graph, &dest).unwrap(), ["modified: leaf.bin"]);
+}
+
+#[test]
+fn filesystem_timestamps_keep_original_native_parser_and_epoch_failures() {
+    let root = purrdf_testkit::temp_dir!("gts-files-errors-").expect("temp dir");
+    let source = root.path().join("before-epoch");
+    fs::write(&source, b"data").unwrap();
+    fs::File::open(&source)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(UNIX_EPOCH - Duration::from_secs(1)))
+        .unwrap();
+    let error = purrdf_gts::files::pack(&[&source]).unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-time-before-epoch");
+    assert!(
+        matches!(fields.field("path"), ErrorValue::Bytes(value) if value == source.as_os_str().as_encoded_bytes())
+    );
+    let original = fields.child("cause");
+    assert_eq!(original.code, "std-system-time");
+    assert!(matches!(original.field("seconds"), ErrorValue::Unsigned(1)));
+    assert!(matches!(
+        original.field("nanoseconds"),
+        ErrorValue::Unsigned(0)
+    ));
+
+    let graph = read(
+        &pack_entries_v2(&[directory("bad-date", "not-a-date")]).unwrap(),
+        true,
+        None,
+    );
+    let error = unpack_with_options(
+        &graph,
+        &root.path().join("invalid"),
+        &UnpackOptions::default(),
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-parse-modified");
+    assert!(matches!(
+        fields.field("actual"),
+        ErrorValue::Text("not-a-date")
+    ));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_xsd::rfc3339::ParseError>()
+    );
+}
+
+#[test]
+fn extraction_refusals_keep_original_link_targets_and_wide_owner_ids() {
+    let root = purrdf_testkit::temp_dir!("gts-extraction-errors-").expect("temp dir");
+    let entry = FileEntry {
+        path: "sub/link".into(),
+        kind: FileEntryKind::Symlink,
+        link_target: Some("../../outside".into()),
+        ..FileEntry::default()
+    };
+    let graph = read(&pack_entries_v2(&[entry]).unwrap(), true, None);
+    let error = unpack_with_options(
+        &graph,
+        &root.path().join("links"),
+        &UnpackOptions {
+            allow_symlinks: true,
+            ..UnpackOptions::default()
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-symlink-escape");
+    assert!(matches!(fields.field("path"), ErrorValue::Text("sub/link")));
+    assert!(matches!(
+        fields.field("target"),
+        ErrorValue::Text("../../outside")
+    ));
+
+    let entry = FileEntry {
+        path: "owner".into(),
+        kind: FileEntryKind::Directory,
+        uid: Some(u64::MAX),
+        gid: Some(0),
+        ..FileEntry::default()
+    };
+    let graph = read(&pack_entries_v2(&[entry]).unwrap(), true, None);
+    let error = unpack_with_options(
+        &graph,
+        &root.path().join("owners"),
+        &UnpackOptions {
+            same_owner: true,
+            ..UnpackOptions::default()
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-unsupported-owner");
+    assert!(
+        matches!(fields.field("uid"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(matches!(fields.field("gid"), ErrorValue::Unsigned(0)));
+
+    for (kind, target) in [
+        (FileEntryKind::Symlink, Some("sibling")),
+        (FileEntryKind::Fifo, None),
+    ] {
+        let entry = FileEntry {
+            path: "node".into(),
+            kind,
+            link_target: target.map(str::to_owned),
+            ..FileEntry::default()
+        };
+        let graph = read(&pack_entries_v2(&[entry]).unwrap(), true, None);
+        let error = unpack_with_options(
+            &graph,
+            &root.path().join(kind.as_str()),
+            &UnpackOptions {
+                allow_symlinks: true,
+                allow_special: true,
+                ..UnpackOptions::default()
+            },
+        )
+        .unwrap_err();
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "gts-files-unsupported-extraction");
+        assert!(matches!(fields.field("kind"), ErrorValue::Code(value) if value == kind.as_str()));
+        assert!(!root.path().join(kind.as_str()).join("node").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn filesystem_refusals_keep_non_utf8_paths_and_real_redirecting_ancestors() {
+    use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    let root = purrdf_testkit::temp_dir!("gts-native-paths-").expect("temp dir");
+    let source = root.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let name = std::ffi::OsString::from_vec(vec![b'n', 255]);
+    fs::write(source.join(&name), b"payload").unwrap();
+    let error = purrdf_gts::files::pack(&[&source]).unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-non-utf8-path");
+    assert!(
+        matches!(fields.field("path"), ErrorValue::Bytes(value) if value == name.as_encoded_bytes())
+    );
+
+    let dest = root.path().join("dest");
+    let outside = root.path().join("outside");
+    fs::create_dir(&dest).unwrap();
+    fs::create_dir(&outside).unwrap();
+    symlink(&outside, dest.join("redirect")).unwrap();
+    let graph = read(
+        &pack_entries_v2(&[FileEntry {
+            path: "redirect/leaf".into(),
+            data: Some(vec![1]),
+            ..FileEntry::default()
+        }])
+        .unwrap(),
+        true,
+        None,
+    );
+    let error = unpack_with_options(&graph, &dest, &UnpackOptions::default()).unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-files-destination-escape");
+    assert!(matches!(
+        fields.field("path"),
+        ErrorValue::Text("redirect/leaf")
+    ));
+    assert!(
+        matches!(fields.field("ancestor"), ErrorValue::Bytes(value) if value == outside.canonicalize().unwrap().as_os_str().as_encoded_bytes())
+    );
+    assert!(!outside.join("leaf").exists());
+}
 
 // Windows file times have 100 ns resolution, so use exactly representable
 // fractions while still checking preservation beyond whole seconds.

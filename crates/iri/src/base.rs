@@ -439,6 +439,16 @@ pub enum BaseOrigin {
     Enclosing,
 }
 
+impl purrdf_hash::error::StructuredError for BaseOrigin {
+    purrdf_hash::error_visit! {
+        Caller => "iri-base-caller" {},
+        Directive { line, column } => "iri-base-directive" {
+            "line" => Unsigned(u128::from(*line)), "column" => Unsigned(u128::from(*column)),
+        },
+        Enclosing => "iri-base-enclosing" {},
+    }
+}
+
 impl core::fmt::Display for BaseOrigin {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -475,6 +485,15 @@ pub enum BaseInScope {
         /// How it came to be in force.
         origin: BaseOrigin,
     },
+}
+
+impl purrdf_hash::error::StructuredError for BaseInScope {
+    purrdf_hash::error_visit! {
+        Absent => "iri-base-absent" {},
+        InForce { iri, origin } => "iri-base-in-force" {
+            "iri" => Iri(iri), "origin" => Record(origin),
+        },
+    }
 }
 
 impl Clone for BaseInScope {

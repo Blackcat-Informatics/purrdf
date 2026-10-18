@@ -154,11 +154,14 @@ impl Default for RecallOptions<'_> {
 #[non_exhaustive]
 pub enum MemoryError {
     /// Reading or writing the package file failed.
-    Io(std::io::Error),
+    Io(purrdf_hash::error::IoFailure),
     /// The claim text was empty.
     EmptyClaim,
     /// The confidence was not finite or fell outside `[0, 1]`.
-    InvalidConfidence,
+    InvalidConfidence {
+        /// Original rejected value, including any NaN payload bits.
+        actual: f64,
+    },
     /// The tool agent IRI was empty.
     EmptyTool,
     /// An invocation IRI was supplied but empty.
@@ -176,7 +179,7 @@ impl fmt::Display for MemoryError {
         match self {
             Self::Io(err) => write!(f, "{err}"),
             Self::EmptyClaim => f.write_str("a claim needs text"),
-            Self::InvalidConfidence => {
+            Self::InvalidConfidence { .. } => {
                 f.write_str("confidence must be finite and in the range [0, 1]")
             }
             Self::EmptyTool => f.write_str("a tool call needs a tool agent IRI"),
@@ -192,33 +195,24 @@ impl fmt::Display for MemoryError {
     }
 }
 
-impl std::error::Error for MemoryError {
-    /// The wrapped cause, for the two variants that carry one.
-    ///
-    /// `Io` holds a [`std::io::Error`] and `Author` a [`WriterError`], and both were
-    /// unreachable through the standard chain — so a caller saw that writing memory
-    /// failed without seeing that the disk was full or which frame the writer refused.
-    /// `Author`'s chain now runs two links deep, through the writer to the codec.
-    ///
-    /// The rest return `None`: each is a validation finding about the claim being
-    /// recorded, complete as stated and wrapping nothing.
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(inner) => Some(inner),
-            Self::Author(inner) => Some(inner),
-            Self::EmptyClaim
-            | Self::InvalidConfidence
-            | Self::EmptyTool
-            | Self::EmptyInvocation
-            | Self::EmptyGeneratedEntity
-            | Self::UnknownClaim(_) => None,
-        }
+purrdf_lex::error_source!(MemoryError { Io, Author });
+
+impl purrdf_hash::error::StructuredError for MemoryError {
+    purrdf_hash::error_visit! {
+        Io(cause) => "gts-memory-io" { "cause" => Cause(cause) },
+        EmptyClaim => "gts-memory-empty-claim" {},
+        InvalidConfidence { actual } => "gts-memory-invalid-confidence" { "actual" => Float64Bits(actual.to_bits()) },
+        EmptyTool => "gts-memory-empty-tool" {},
+        EmptyInvocation => "gts-memory-empty-invocation" {},
+        EmptyGeneratedEntity => "gts-memory-empty-generated-entity" {},
+        UnknownClaim(claim) => "gts-memory-unknown-claim" { "claim" => Iri(claim) },
+        Author(cause) => "gts-memory-author" { "cause" => Cause(cause) },
     }
 }
 
 impl From<std::io::Error> for MemoryError {
     fn from(err: std::io::Error) -> Self {
-        Self::Io(err)
+        Self::Io(err.into())
     }
 }
 
@@ -373,7 +367,7 @@ impl Memory {
                 .last()
                 .map_or_else(Vec::new, |segment| segment.terms.clone());
             let append_state = segment_append_state(&bytes)
-                .map_err(WriterError::InvalidFrame)
+                .map_err(WriterError::Append)
                 .map_err(MemoryError::Author)?;
             (terms, Some(append_state))
         };
@@ -439,7 +433,7 @@ impl Memory {
         if let Some(confidence) = options.confidence
             && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
         {
-            return Err(MemoryError::InvalidConfidence);
+            return Err(MemoryError::InvalidConfidence { actual: confidence });
         }
 
         let created = now_rfc3339();
@@ -822,7 +816,7 @@ impl Memory {
         match fs::metadata(&self.path) {
             Ok(meta) => Ok(meta.len()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-            Err(err) => Err(MemoryError::Io(err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -842,7 +836,7 @@ impl Memory {
             } else {
                 Some(
                     segment_append_state(&segment)
-                        .map_err(WriterError::InvalidFrame)
+                        .map_err(WriterError::Append)
                         .map_err(MemoryError::Author)?,
                 )
             }

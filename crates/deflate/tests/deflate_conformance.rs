@@ -670,10 +670,45 @@ fn bad_crc_refused_in_first_and_second_member() {
     let mut bad_first = one.clone();
     let at = bad_first.len() - 8;
     bad_first[at] ^= 1;
-    let err = gzip::decompress(&[bad_first, two.clone()].concat()).expect_err("bad crc");
+    let bad = [bad_first, two.clone()].concat();
+    let err = gzip::decompress(&bad).expect_err("bad crc");
     assert!(
         matches!(err, Error::CrcMismatch { member: 0, .. }),
         "{err:?}"
+    );
+    let io = GzipReader::new(bad.as_slice())
+        .read_to_end(&mut Vec::new())
+        .expect_err("streamed CRC failure");
+    assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+    let failure = purrdf_hash::error::IoFailure::from(io);
+    let record = purrdf_testkit::error_capture::Capture::read(&failure);
+    assert!(matches!(
+        record.field("message"),
+        purrdf_hash::error::ErrorValue::Absent
+    ));
+    let bridge = record.child("cause");
+    assert_eq!(bridge.code, "std-io-native-cause");
+    let cause = bridge.child("cause");
+    assert_eq!(cause.code, "gzip-crc-mismatch");
+    assert!(matches!(
+        cause.field("member"),
+        purrdf_hash::error::ErrorValue::Unsigned(0)
+    ));
+    let computed = Crc32::checksum(b"first member");
+    assert!(
+        matches!(cause.field("computed"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(computed))
+    );
+    assert!(
+        matches!(cause.field("stored"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(computed ^ 1))
+    );
+    assert!(
+        failure
+            .original()
+            .get_ref()
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<Error>()
     );
 
     let mut bad_second = two;
@@ -1154,6 +1189,13 @@ fn decompressed_limit_refuses_bomb() {
         .read_to_end(&mut Vec::new())
         .expect_err("bomb");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    let failure = purrdf_hash::error::IoFailure::from(err);
+    let record = purrdf_testkit::error_capture::Capture::read(&failure);
+    let cause = record.child("cause").child("cause");
+    assert_eq!(cause.code, "deflate-limit-exceeded");
+    assert!(
+        matches!(cause.field("limit"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == u128::from(limit))
+    );
     // One byte under the true size refuses; the true size is accepted.
     let small = gzip::compress(&vec![0u8; 100_000], Level::DEFAULT);
     assert!(matches!(

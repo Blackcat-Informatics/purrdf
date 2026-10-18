@@ -333,9 +333,15 @@ impl GeoRelation {
                 workspace,
             ));
         }
-        let (rows, work) = self
-            .rows(args, meter, geo)
-            .map_err(|error| super::error::native_error(&error, workspace))?;
+        let (rows, work) = self.rows(args, meter, geo).map_err(|error| {
+            // The work observer translates this invocation's refusal into
+            // the kernel's cancellation signal, not a producer failure.
+            if matches!(error.original(), GeoError::Cancelled) && meter.has_stopped() {
+                EvalError::WorkspaceStopped
+            } else {
+                super::error::native_error(&error, workspace)
+            }
+        })?;
         let bound = [args.get(SUBJECT), args.get(OBJECT)]
             .map(|value| value.map(|value| workspace.clone_term(value)).transpose());
         let [subject, object] = bound;
