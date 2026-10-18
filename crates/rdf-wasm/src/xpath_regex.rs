@@ -34,10 +34,10 @@ pub(crate) fn parse(name: Option<&str>) -> Result<Option<Profile>, String> {
 
 /// `options` evaluating `REGEX`/`REPLACE` under `profile` with the production bounds, or
 /// unchanged when no law was selected ([`purrdf_validate::xpath_regex::query_options`]).
-pub(crate) const fn select(
-    options: QueryOptions<'_, '_>,
+pub(crate) const fn select<'options, 'providers>(
+    options: QueryOptions<'options, 'providers>,
     profile: Option<Profile>,
-) -> QueryOptions<'_, '_> {
+) -> QueryOptions<'options, 'providers> {
     purrdf_validate::xpath_regex::query_options(options, profile)
 }
 

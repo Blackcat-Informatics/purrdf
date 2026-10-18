@@ -121,7 +121,7 @@ fn borrowed_native_ranked_and_positional_producers_keep_their_rows() {
     drop(owned);
     drop(dataset);
     for (output, expected) in outputs {
-        assert!(!expected.is_empty());
+        assert_ne!(expected, [] as [Vec<String>; 0]);
         let (_, rows) = output.solutions().unwrap();
         let actual: Vec<Vec<_>> = rows
             .iter()

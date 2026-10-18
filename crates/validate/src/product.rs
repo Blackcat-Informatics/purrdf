@@ -1482,7 +1482,7 @@ mod tests {
     fn host_wiring() -> (
         purrdf_shapes::product::UserFunctionRegistry,
         purrdf_shapes::product::AggregateRegistry,
-        purrdf_shapes::product::PropertyFunctionRegistry,
+        purrdf_shapes::product::PropertyFunctionRegistry<'static>,
     ) {
         (
             native_registry(),

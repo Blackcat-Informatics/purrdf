@@ -769,7 +769,7 @@ impl ViewOp for EntailedQueryOp<'_> {
 /// Grouped for the reason [`ConvertOptions`](crate::convert::ConvertOptions) is: the
 /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
 /// is the only thing keeping them apart.
-pub(crate) struct QueryOptions<'a, 'a> {
+pub(crate) struct QueryOptions<'a> {
     /// The immutable geographic profile selected by `--geo-profile`.
     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     /// `--data`: the data-source path.
@@ -832,7 +832,7 @@ pub(crate) fn parse_division(text: &str) -> Result<DivisionPolicy, String> {
 
 /// Run the `query` subcommand.
 pub(crate) fn run(
-    options: &QueryOptions<'_, '_>,
+    options: &QueryOptions<'_>,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
 ) -> Result<CliOutcome, CliError> {
@@ -1081,7 +1081,7 @@ pub(crate) fn run(
 /// refusing it, and `--loss-ledger`/`--jsonld-options` did not even document it. All
 /// three now name what to drop, matching every other refusal in this function.
 fn refuse_unenforceable_combinations(
-    options: &QueryOptions<'_, '_>,
+    options: &QueryOptions<'_>,
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let named = options.governors.named();
@@ -1189,7 +1189,7 @@ fn refuse_unenforceable_combinations(
 /// on stdout — there are no rows, not even an empty result set, because an empty result set
 /// on stdout is the claim "this query has no answers" and this run never asked it.
 fn emit_entailed(
-    options: &QueryOptions<'_, '_>,
+    options: &QueryOptions<'_>,
     provenance_namespace: Option<&ProvenanceNamespace>,
     answered: GovernedEntailment,
     ledger_target: &LedgerTarget,
@@ -1216,7 +1216,7 @@ fn emit_entailed(
 /// certificate licensed to the same [`emit_result`], so a partial answer is a well-formed
 /// document of the requested format rather than a special one.
 fn emit_governed(
-    options: &QueryOptions<'_, '_>,
+    options: &QueryOptions<'_>,
     provenance_namespace: Option<&ProvenanceNamespace>,
     outcome: &GovernedOutcome,
     ledger_target: &LedgerTarget,

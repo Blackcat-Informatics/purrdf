@@ -205,7 +205,7 @@ fn run(
 /// declarations (the parse-time recognition [`engine`] used to carry) folded together
 /// with the fixture's relation registry, so an intentionally EMPTY registry (A5) still
 /// parses the caller IRI as a call rather than falling back to an ordinary triple pattern.
-fn env_of<'query>(relations: PropertyFunctionRegistry<'query>) -> ExtensionEnv<'query> {
+fn env_of(relations: PropertyFunctionRegistry<'_>) -> ExtensionEnv<'_> {
     ExtensionEnv::new(
         parser_options(),
         relations,
