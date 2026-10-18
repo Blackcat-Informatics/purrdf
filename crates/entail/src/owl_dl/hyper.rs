@@ -438,6 +438,18 @@ enum ApplySite<'f> {
     Unrecorded,
     /// A consumer-checked application whose native mutations are being observed.
     Observed { application: usize },
+    Closing {
+        application: usize,
+        original: &'f super::support::Application,
+        expected: &'f MergeStep,
+        checked: &'f std::cell::Cell<bool>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ReplayGoal<'a> {
+    Clash { clause: usize, frame: &'a [usize] },
+    Merge(&'a MergeStep),
 }
 
 /// One independently checked replay and its requested native mutation owner.
@@ -568,15 +580,32 @@ pub(crate) fn replay_current_support(
         kb,
         assumptions,
         applications,
-        clause,
-        frame,
+        ReplayGoal::Clash { clause, frame },
         branches,
         journal,
     )
 }
 
-/// Exercise the same independent replay with its native write journal enabled.
-/// The public causal operation is not exposed until its read licenses and slice exist.
+/// Check a recorded merge's original prefix and closing native inequality.
+pub(crate) fn replay_merge_support(
+    kb: &Kb,
+    assumptions: &Assumptions<'_>,
+    applications: &[&super::support::Application],
+    step: &MergeStep,
+    branches: &[BranchStep],
+    journal: Option<super::graph::changes::Journal>,
+) -> Result<ReplaySupport, super::proof::DlProofError> {
+    Hyper::replay_support_inner(
+        kb,
+        assumptions,
+        applications,
+        ReplayGoal::Merge(step),
+        branches,
+        journal,
+    )
+}
+
+/// Exercise the same independent replay with its native observation journal enabled.
 #[cfg(test)]
 pub(crate) fn replay_observing_support(
     kb: &Kb,
@@ -591,8 +620,7 @@ pub(crate) fn replay_observing_support(
         kb,
         assumptions,
         applications,
-        clause,
-        frame,
+        ReplayGoal::Clash { clause, frame },
         branches,
         Some(journal),
     )
@@ -824,6 +852,39 @@ impl<'a> Hyper<'a> {
             right,
             joined,
         } = identified;
+        if let ApplySite::Closing {
+            original,
+            expected,
+            checked,
+            ..
+        } = site
+        {
+            if expected.atom() == Some(atom) {
+                let licence = if let Some((branch, ordinal)) = original.branch {
+                    MergeLicence::Branch {
+                        branch,
+                        ordinal,
+                        atom,
+                    }
+                } else {
+                    MergeLicence::Clause {
+                        clause: original.clause,
+                        frame: frame_refs(st, &original.frame),
+                        atom,
+                    }
+                };
+                checked.set(
+                    st.clash
+                        && expected.clashed()
+                        && cause == expected.cause()
+                        && &left == expected.left()
+                        && &right == expected.right()
+                        && &joined == expected.joined()
+                        && &licence == expected.licence(),
+                );
+            }
+            return;
+        }
         let Some(trace) = self.trace.as_ref() else {
             return;
         };
@@ -841,10 +902,15 @@ impl<'a> Hyper<'a> {
                 atom,
             },
             ApplySite::Unrecorded | ApplySite::Observed { .. } => MergeLicence::Unrecorded,
+            ApplySite::Closing { .. } => unreachable!("closing replay was checked above"),
         };
-        trace.borrow_mut().merge(MergeStep::new(
-            cause, left, right, joined, st.clash, licence,
-        ));
+        let mut step = MergeStep::new(cause, left, right, joined, st.clash, licence);
+        if st.clash
+            && let super::support::Cursor::Active(Some(latest)) = st.support
+        {
+            step.current = Some(latest);
+        }
+        trace.borrow_mut().merge(step);
     }
 
     /// Write down a concrete-domain clash, if this run is recording.
@@ -2100,7 +2166,9 @@ impl<'a> Hyper<'a> {
                     branch,
                     ordinal,
                 } => Some((*index, *frame, Some((*branch, *ordinal)))),
-                ApplySite::Unrecorded | ApplySite::Observed { .. } => None,
+                ApplySite::Unrecorded | ApplySite::Observed { .. } | ApplySite::Closing { .. } => {
+                    None
+                }
             };
             if let Some((index, frame, branch)) = application {
                 st.support = trace
@@ -2111,7 +2179,9 @@ impl<'a> Hyper<'a> {
                     });
             }
         }
-        let observing = if let ApplySite::Observed { application } = site {
+        let observing = if let ApplySite::Observed { application }
+        | ApplySite::Closing { application, .. } = site
+        {
             self.g
                 .change_cause(super::graph::changes::Origin::Application, *application);
             true
@@ -2122,6 +2192,19 @@ impl<'a> Hyper<'a> {
             if observing {
                 self.g.change_atom(at);
             }
+            if let ApplySite::Closing {
+                application,
+                expected,
+                ..
+            } = site
+                && expected.atom() == Some(at)
+            {
+                self.g
+                    .select_reads(Some(super::graph::changes::ReadOwner::Merge {
+                        application: *application,
+                        atom: at,
+                    }));
+            }
             match atom {
                 Ground::Concept(node, concept) => {
                     self.g.add_concept(st, *node, *concept);
@@ -2130,7 +2213,9 @@ impl<'a> Hyper<'a> {
                     self.g.add_self_loop(st, *node, *role);
                 }
                 Ground::AtLeast(node, n, role, filler) => {
-                    if let ApplySite::Observed { application } = site {
+                    if let ApplySite::Observed { application }
+                    | ApplySite::Closing { application, .. } = site
+                    {
                         self.g
                             .select_reads(Some(super::graph::changes::ReadOwner::Counting {
                                 application: *application,
@@ -2222,8 +2307,7 @@ impl<'a> Hyper<'a> {
         kb: &'a Kb,
         assumptions: &Assumptions<'_>,
         applications: &[&super::support::Application],
-        clause_index: usize,
-        frame: &[usize],
+        goal: ReplayGoal<'_>,
         branches: &[BranchStep],
         journal: Option<super::graph::changes::Journal>,
     ) -> Result<ReplaySupport, super::proof::DlProofError> {
@@ -2274,6 +2358,7 @@ impl<'a> Hyper<'a> {
         if observing {
             check()?;
         }
+        let closing_checked = std::cell::Cell::new(false);
         for (index, application) in applications.iter().enumerate() {
             check()?;
             if observing {
@@ -2359,19 +2444,51 @@ impl<'a> Hyper<'a> {
                     "current-support consequence is not the single licensed head",
                 ));
             }
-            let site = if observing {
+            let closing = match goal {
+                ReplayGoal::Merge(step) if index + 1 == applications.len() => Some(step),
+                _ => None,
+            };
+            let site = if let Some(expected) = closing {
+                ApplySite::Closing {
+                    application: index,
+                    original: application,
+                    expected,
+                    checked: &closing_checked,
+                }
+            } else if observing {
                 ApplySite::Observed { application: index }
             } else {
                 ApplySite::Unrecorded
             };
             let open = driver.apply(&mut state, &application.head, &site);
             check()?;
+            if closing.is_some() {
+                if open || !closing_checked.get() || state.clique_exhausted.get() {
+                    return Err(super::proof::malformed(
+                        "recorded merge has no reachable native inequality closure",
+                    ));
+                }
+                return Ok(ReplaySupport {
+                    frame: Vec::new(),
+                    facts: Vec::new(),
+                    mutations: driver.g.finish_changes(),
+                });
+            }
             if !open || state.clique_exhausted.get() {
                 return Err(super::proof::malformed(
                     "current-support replay did not produce a complete open prefix",
                 ));
             }
         }
+        let ReplayGoal::Clash {
+            clause: clause_index,
+            frame,
+        } = goal
+        else {
+            return Err(super::proof::malformed(
+                "merge closure has no original final application",
+            ));
+        };
         if observing {
             driver
                 .g
@@ -3335,7 +3452,7 @@ fn ground<N: Clone>(disjunct: &[HeadAtom], frame: &[N]) -> Vec<Ground<N>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hyper, MergeLicence, decide, decide_recording};
+    use super::{Hyper, MergeLicence, ReplayGoal, decide, decide_recording};
     use crate::owl_dl::Kb;
     use crate::owl_dl::clause::{HeadAtom, derive};
     use crate::owl_dl::concept::{Concept, Role};
@@ -4269,8 +4386,10 @@ mod tests {
                 &kb,
                 &Assumptions::of_kb(),
                 &[],
-                index,
-                &[0, 0],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
                 &[],
                 Some(Journal::default()),
             ),
@@ -4439,7 +4558,17 @@ mod tests {
             .unwrap();
         kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
         assert!(matches!(
-            Hyper::replay_support_inner(&kb, &Assumptions::of_kb(), &[], index, &[0, 0], &[], None),
+            Hyper::replay_support_inner(
+                &kb,
+                &Assumptions::of_kb(),
+                &[],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
+                &[],
+                None
+            ),
             Err(crate::owl_dl::proof::DlProofError::Stopped)
         ));
         kb.stop = Some(Arc::new(Stop(AtomicUsize::new(0))));
@@ -4448,8 +4577,10 @@ mod tests {
                 &kb,
                 &Assumptions::of_kb(),
                 &[],
-                index,
-                &[0, 0],
+                ReplayGoal::Clash {
+                    clause: index,
+                    frame: &[0, 0]
+                },
                 &[],
                 Some(crate::owl_dl::graph::changes::Journal::default())
             ),

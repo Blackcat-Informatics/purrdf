@@ -168,6 +168,7 @@ use schema::{decode_schema_clash, encode_schema_clash};
 const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");
 const SCHEMA_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v4");
 const CURRENT_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v5");
+const MERGE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v6");
 
 /// Domain-separation tag for [`contract_digest`].
 const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
@@ -843,9 +844,12 @@ pub enum MergeLicence {
 /// What a replay establishes and what it does not is spelled out on
 /// [`DlProof::replay_merge`]: the LICENCE is re-derived; that the identification also CLOSED
 /// the state ([`Self::clashed`]) is completion-graph state a proof term does not carry, and is
-/// reported unattested.
+/// reported unattested by that standalone license check. Whole-refutation replay additionally
+/// verifies an original recorded prefix and its native closing inequality when available.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeStep {
+    /// Original application ending in this identification; absent in legacy records.
+    pub(crate) current: Option<usize>,
     /// Which rule forced the identification.
     cause: MergeCause,
     /// The identity the LICENSING atom names for the absorbing side.
@@ -884,6 +888,7 @@ impl MergeStep {
         licence: MergeLicence,
     ) -> Self {
         Self {
+            current: None,
             cause,
             left,
             right,
@@ -897,6 +902,19 @@ impl MergeStep {
     #[must_use]
     pub const fn licence(&self) -> &MergeLicence {
         &self.licence
+    }
+
+    /// Whether the original native application prefix was recorded for this merge.
+    #[must_use]
+    pub const fn has_current_support(&self) -> bool {
+        self.current.is_some()
+    }
+
+    pub(crate) const fn atom(&self) -> Option<usize> {
+        match self.licence {
+            MergeLicence::Clause { atom, .. } | MergeLicence::Branch { atom, .. } => Some(atom),
+            MergeLicence::Unrecorded => None,
+        }
     }
 
     /// Which rule forced the identification.
@@ -1600,7 +1618,9 @@ impl Recorder {
     ) -> DlProof {
         DlProof {
             schema_recording_obstruction: self.support.obstruction(),
-            support: if self.clashes.iter().any(|step| step.current.is_some()) {
+            support: if self.clashes.iter().any(|step| step.current.is_some())
+                || self.merges.iter().any(|step| step.current.is_some())
+            {
                 self.support.into_links()
             } else {
                 Vec::new()
@@ -2476,8 +2496,8 @@ impl BranchReplay {
 ///
 /// * That the merge CLOSED the state. [`MergeStep::clashed`] says the two nodes were forced
 ///   distinct, and distinctness is completion-graph state a proof term does not carry. Counted
-///   [`CheckReport::unattested`], and it is why a [`BranchOutcome::Merge`] closure still leaves
-///   [`RefutationReplay::is_closed`] `false`.
+///   [`CheckReport::unattested`] by this standalone license check. Whole-refutation replay
+///   additionally checks the original native prefix and closing inequality when recorded.
 /// * That the licensing clause instance was REACHABLE — the same gap
 ///   [`DlProof::replay_clash`] reports, and for the same reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2518,6 +2538,8 @@ impl MergeReplay {
 /// `true` only when every alternative of every branch point reached a REPLAYED closure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefutationReplay {
+    /// Merge closures whose original reachable inequality was independently replayed.
+    checked_merges: usize,
     /// How many branch points the checker verified exhaustive.
     branches: usize,
     /// How many clash leaves it re-derived.
@@ -2550,9 +2572,9 @@ impl RefutationReplay {
     /// A licensed merge is not a discharged closure: [`DlProof::replay_merge`] establishes that
     /// the clause instance forced the identification, not that the two nodes were forced
     /// DISTINCT — which is what actually closed the state, and which is completion-graph state
-    /// a proof term does not carry. Counted separately from [`Self::unrecorded`] because
-    /// "licensed, closure unattested" and "nothing was written down" are different facts, and
-    /// both make [`Self::is_closed`] answer `false`.
+    /// the standalone license check does not establish. Whole-refutation replay additionally
+    /// checks recorded current prefixes; [`Self::checked_merges`] counts those closed leaves.
+    /// A legacy merge without current support remains unattested and prevents closure.
     #[must_use]
     pub const fn merges(&self) -> usize {
         self.merges
@@ -2590,15 +2612,20 @@ impl RefutationReplay {
     /// IN FULL.
     ///
     /// Exactly that, and deliberately not more. It does NOT say that every witness atom of
-    /// every leaf was reduced to an asserted axiom of the caller's ABox — reachability is not
-    /// established by this stage, and [`CheckReport::unattested`] is where that is reported.
-    /// What it does say is that every alternative closed on a re-derived clause instance: a
-    /// branch whose closure was [`BranchOutcome::Unrecorded`], a concrete-domain clash
-    /// ([`Self::data_clashes`]) or an identification ([`Self::merges`]) makes this `false`,
-    /// because none of those three is a derivation of `false` the checker reproduced.
+    /// every leaf was reduced to an asserted axiom of the caller's ABox. The explicit trust
+    /// boundary and any remaining unattested facts are in [`CheckReport`]. Each alternative
+    /// must close on a re-derived clause instance or a merge with its original reachable
+    /// inequality checked. Unrecorded leaves, concrete-domain records and legacy merges
+    /// without current support prevent closure.
     #[must_use]
     pub const fn is_closed(&self) -> bool {
-        self.unrecorded == 0 && self.merges == 0 && self.data_clashes == 0
+        self.unrecorded == 0 && self.merges == self.checked_merges && self.data_clashes == 0
+    }
+
+    /// Merge leaves whose original prefix and closing inequality were checked.
+    #[must_use]
+    pub const fn checked_merges(&self) -> usize {
+        self.checked_merges
     }
 }
 
@@ -3789,6 +3816,7 @@ impl DlProof {
         }
         self.require_complete_recording()?;
         let mut report = RefutationReplay {
+            checked_merges: 0,
             branches: 0,
             clashes: 0,
             merges: 0,
@@ -3817,6 +3845,25 @@ impl DlProof {
         Ok(report)
     }
 
+    fn current_applications<'a>(
+        &'a self,
+        ctx: &DlProofContext<'_>,
+        latest: Option<usize>,
+        path: &[(usize, usize)],
+    ) -> Result<Vec<&'a super::support::Application>, DlProofError> {
+        let applications = super::support::prefix(&self.support, latest, ctx.kb.stop.as_deref())?;
+        if !applications
+            .iter()
+            .filter_map(|application| application.branch)
+            .eq(path.iter().copied())
+        {
+            return Err(malformed(
+                "current support comes from another branch alternative",
+            ));
+        }
+        Ok(applications)
+    }
+
     /// Verify one recorded CLOSURE and, when it is a branch point, everything below it.
     ///
     /// `at` names where the outcome was filed, for a diagnostic. Recursion is bounded by the
@@ -3842,19 +3889,7 @@ impl DlProof {
                     return Err(dangling("no clash step at that index"));
                 }
                 if let Some(evidence) = &self.clashes[index].current {
-                    let applications = super::support::prefix(
-                        &self.support,
-                        evidence.latest,
-                        ctx.kb.stop.as_deref(),
-                    )?;
-                    let choices = applications
-                        .iter()
-                        .filter_map(|application| application.branch);
-                    if !choices.eq(path.iter().copied()) {
-                        return Err(malformed(
-                            "current support comes from another branch alternative",
-                        ));
-                    }
+                    self.current_applications(ctx, evidence.latest, path)?;
                 }
                 let journal = capture
                     .as_ref()
@@ -3893,11 +3928,37 @@ impl DlProof {
                 if !merge.clashed {
                     return Err(dangling("the named merge did not close the state"));
                 }
-                // The identification's LICENCE is re-derived against the caller's own clause
-                // set. What that does NOT establish is the distinctness that closed the state,
-                // which is why this is counted apart from a replayed clash leaf and why it
-                // still makes `is_closed` answer `false`.
-                let replay = self.replay_merge(index, ctx)?;
+                // The standalone license check stays separate from original-prefix replay.
+                // Legacy records remain unattested; current support must prove the actual
+                // native inequality and exact identifying operation in this branch.
+                let mut replay = self.replay_merge(index, ctx)?;
+                if let Some(latest) = merge.current {
+                    let applications = self.current_applications(ctx, Some(latest), path)?;
+                    let journal = capture
+                        .as_ref()
+                        .map(|_| super::graph::changes::Journal::default());
+                    let checked = super::hyper::replay_merge_support(
+                        &ctx.kb,
+                        assumptions,
+                        &applications,
+                        merge,
+                        &self.branches,
+                        journal,
+                    )?;
+                    if let Some(capture) = capture.as_deref_mut() {
+                        capture.push_merge(
+                            index,
+                            &checked
+                                .mutations
+                                .expect("requested merge replay owns its journal"),
+                            &ctx.kb,
+                        )?;
+                    }
+                    // replay_merge left exactly this closing inequality unattested.
+                    replay.checks.unattested -= 1;
+                    replay.checks.attest(1);
+                    report.checked_merges += 1;
+                }
                 report.merges += 1;
                 report.checks.absorb(&replay.checks);
                 Ok(())
@@ -4003,7 +4064,9 @@ impl DlProof {
     /// The canonical byte encoding of the proof.
     ///
     /// Current-support recordings use v5, storing each application once with an
-    /// earlier predecessor and each clash's cursor/frame separately. Proofs without
+    /// earlier predecessor and each clash's cursor/frame separately. A recorded merge
+    /// closure uses v6, adding its original final-application cursor to that same arena.
+    /// Proofs without
     /// current evidence or recording refusal keep the v3 layout. Decoding also
     /// admits v4 prepared prefixes and normalizes them to the shared arena; their
     /// re-encoding is v5. All stored applications obey the recording ceiling.
@@ -4033,6 +4096,7 @@ impl DlProof {
     /// u64 merge_count, then per merge:
     ///     u8 cause ordinal, node left, node right, node joined, u8 clashed
     ///     licence                                 -- u8 kind and then that kind's fields
+    ///     v6: u8 has_current_support, then u64 original final application
     /// u64 data_clash_count, node each
     /// outcome                                     -- the root's
     /// u64 branch_count, then per branch:
@@ -4058,14 +4122,18 @@ impl DlProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        let schema = self.schema_recording_obstruction.is_some()
+        let merge_support = self.merges.iter().any(|step| step.current.is_some());
+        let schema = merge_support
+            || self.schema_recording_obstruction.is_some()
             || self
                 .clashes
                 .iter()
                 .any(|step| step.schema.is_some() || step.current.is_some());
         frame_le(
             &mut out,
-            if schema {
+            if merge_support {
+                MERGE_PROOF_ENCODING_TAG.as_bytes()
+            } else if schema {
                 CURRENT_PROOF_ENCODING_TAG.as_bytes()
             } else {
                 PROOF_ENCODING_TAG.as_bytes()
@@ -4152,6 +4220,12 @@ impl DlProof {
             encode_node(&mut out, &step.joined);
             out.push(u8::from(step.clashed));
             encode_licence(&mut out, &step.licence);
+            if merge_support {
+                out.push(u8::from(step.current.is_some()));
+                if let Some(latest) = step.current {
+                    out.extend_from_slice(&(latest as u64).to_le_bytes());
+                }
+            }
         }
         out.extend_from_slice(&(self.data_clashes.len() as u64).to_le_bytes());
         for node in &self.data_clashes {
@@ -4218,7 +4292,8 @@ impl DlProof {
     pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
         let mut reader = Reader::new(bytes);
         let tag = reader.frame()?;
-        let current = tag == CURRENT_PROOF_ENCODING_TAG.as_bytes();
+        let merge_support = tag == MERGE_PROOF_ENCODING_TAG.as_bytes();
+        let current = merge_support || tag == CURRENT_PROOF_ENCODING_TAG.as_bytes();
         let schema = current || tag == SCHEMA_PROOF_ENCODING_TAG.as_bytes();
         if !schema && tag != PROOF_ENCODING_TAG.as_bytes() {
             return Err(malformed(
@@ -4362,7 +4437,19 @@ impl DlProof {
             let joined = reader.node()?;
             let clashed = reader.flag()?;
             let licence = reader.licence()?;
+            let latest = if merge_support && reader.flag()? {
+                let latest = reader.length()?;
+                if latest >= support.len() {
+                    return Err(malformed(
+                        "merge current support names no original application",
+                    ));
+                }
+                Some(latest)
+            } else {
+                None
+            };
             merges.push(MergeStep {
+                current: latest,
                 cause,
                 left,
                 right,
@@ -4408,12 +4495,13 @@ impl DlProof {
         let completion = reader.flag()?.then(|| reader.completion()).transpose()?;
         if schema
             && schema_recording_obstruction.is_none()
+            && !merges.iter().any(|step| step.current.is_some())
             && !clashes
                 .iter()
                 .any(|step| step.schema.is_some() || step.current.is_some())
         {
             return Err(malformed(
-                "the current-support layout requires clash evidence or a recording obstruction",
+                "the current-support layout requires native terminal evidence or a recording obstruction",
             ));
         }
         if !reader.is_exhausted() {
@@ -7083,23 +7171,24 @@ mod tests {
         );
     }
 
-    /// A merge closure is counted APART from a replayed clash leaf, and does not make a
-    /// refutation read as closed.
-    ///
-    /// The whole reason [`RefutationReplay::merges`] exists: replaying a licence establishes
-    /// that the clause forced the identification, never that the two nodes were forced
-    /// DISTINCT — which is what actually closed the branch.
+    /// Current merge support checks the closing inequality; legacy licenses remain unattested.
     #[test]
-    fn a_merge_closure_is_licensed_but_does_not_close_the_refutation() {
-        let (proof, ctx) = at_most_merge();
+    fn a_merge_closure_requires_its_original_reachable_inequality() {
+        let (mut proof, ctx) = at_most_merge();
         let replay = proof
             .replay_refutation(&ctx)
             .expect("the tree walks: every alternative reached a recorded closure");
         assert!(replay.merges() >= 1, "{replay:?}");
-        assert!(
-            !replay.is_closed(),
-            "a licensed identification is not a re-derived derivation of false: {replay:?}"
-        );
+        assert!(replay.is_closed(), "{replay:?}");
+        assert_eq!(replay.checked_merges(), replay.merges());
+        assert_eq!(replay.checks().unattested(), 0);
+        for merge in &mut proof.merges {
+            merge.current = None;
+        }
+        let proof = DlProof::decode(&proof.encode()).unwrap();
+        let replay = proof.replay_refutation(&ctx).unwrap();
+        assert!(!replay.is_closed());
+        assert_eq!(replay.checked_merges(), 0);
         assert!(replay.checks().unattested() > 0);
     }
 

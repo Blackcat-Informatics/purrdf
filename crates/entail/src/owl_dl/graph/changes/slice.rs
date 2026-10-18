@@ -113,7 +113,7 @@ impl Derivation {
             return Err(Error::MissingClash);
         };
         match owners.get(owner) {
-            Some(owner @ ReadOwner::Clash { .. }) => Ok(*owner),
+            Some(owner @ (ReadOwner::Clash { .. } | ReadOwner::Merge { .. })) => Ok(*owner),
             _ => Err(Error::MissingClash),
         }
     }
@@ -899,7 +899,9 @@ impl Journal {
                 event += 1;
             }
             let start = graph.parents.len();
-            if let ReadOwner::Counting { application, .. } = selected.owner {
+            if let ReadOwner::Counting { application, .. } | ReadOwner::Merge { application, .. } =
+                selected.owner
+            {
                 let &body = graph
                     .applications
                     .get(&application)
@@ -960,6 +962,7 @@ impl Journal {
                         .insert((application, atom), id, &mut memory)?;
                 }
                 ReadOwner::Clash { .. } => root = Some(id),
+                ReadOwner::Merge { .. } => root = Some(id),
             }
         }
         let mut pending = Vec::new();

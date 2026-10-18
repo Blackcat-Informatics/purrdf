@@ -34,6 +34,10 @@ pub(crate) enum ReadOwner {
         application: usize,
         atom: usize,
     },
+    Merge {
+        application: usize,
+        atom: usize,
+    },
     Clash {
         clause: usize,
     },

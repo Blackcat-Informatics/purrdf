@@ -60,7 +60,7 @@ impl Captures {
         capture: Capture,
     ) -> Result<(), DlProofError> {
         if !replay.is_closed()
-            || capture.clashes.len() != replay.clashes()
+            || capture.clashes.len() != replay.clashes() + replay.checked_merges()
             || capture.clashes.is_empty()
         {
             return Err(unavailable(
@@ -72,7 +72,17 @@ impl Captures {
         }
         for clash in &capture.clashes {
             if let Err(error) = &clash.support {
-                return Err(support_error(run, clash.index, error));
+                let error = support_error(run, clash.index, error);
+                return Err(if clash.merge {
+                    match error {
+                        DlProofError::CausalSupport { kind, detail, .. } => {
+                            unavailable(run, None, kind, format!("merge {}: {detail}", clash.index))
+                        }
+                        original => original,
+                    }
+                } else {
+                    error
+                });
             }
         }
         let mut memory = Memory::resume(&mut self.storage, self.live);

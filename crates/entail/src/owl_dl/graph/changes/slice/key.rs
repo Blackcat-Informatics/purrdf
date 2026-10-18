@@ -115,7 +115,7 @@ pub(super) fn select(kb: &Kb, equality: usize) -> Result<Derivation<'_>, Error> 
             return Err(missing());
         };
         if !report.is_closed()
-            || report.clashes() != capture.clashes.len()
+            || report.clashes() + report.checked_merges() != capture.clashes.len()
             || capture.clashes.is_empty()
             || capture.clashes.iter().any(|clash| clash.support.is_err())
         {

@@ -486,6 +486,94 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
     ));
 }
 
+fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
+    use purrdf_core::RdfLiteral;
+    use purrdf_core::collections::{ListVocab, build_rdf_list};
+    use purrdf_entail::proof_source::causal::{CausalFact, CausalMutation, CausalObservation};
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("F");
+    let property = f.name("p");
+    let restriction = f.builder.intern_blank("count", BlankScope(52)).unwrap();
+    let nominal = f.builder.intern_blank("nominal", BlankScope(52)).unwrap();
+    let bound = f
+        .builder
+        .intern_literal(RdfLiteral {
+            lexical_form: "3".to_owned(),
+            datatype: Some(purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER.to_owned()),
+            language: None,
+            direction: None,
+        })
+        .unwrap();
+    f.edge(class, rdfs::SUB_CLASS_OF, restriction);
+    f.edge(restriction, owl::ON_PROPERTY, property);
+    f.edge(restriction, owl::ON_CLASS, filler);
+    f.edge(restriction, owl::MIN_QUALIFIED_CARDINALITY, bound);
+    let members = [f.name("first"), f.name("second")];
+    let cells = [
+        f.builder.intern_blank("list0", BlankScope(52)).unwrap(),
+        f.builder.intern_blank("list1", BlankScope(52)).unwrap(),
+    ];
+    let vocab = ListVocab {
+        first: f.builder.intern_iri(rdf::FIRST).unwrap(),
+        rest: f.builder.intern_iri(rdf::REST).unwrap(),
+        nil: f.builder.intern_iri(rdf::NIL).unwrap(),
+    };
+    let head = build_rdf_list(
+        members,
+        &vocab,
+        |index| cells[index],
+        |subject, predicate, object| {
+            f.builder
+                .push_quad(subject, predicate, object, None)
+                .unwrap();
+        },
+    );
+    f.edge(nominal, owl::ONE_OF, head);
+    f.edge(filler, rdfs::SUB_CLASS_OF, nominal);
+    let subject = f.name("subject");
+    f.edge(subject, rdf::TYPE, class);
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let original = answer.proof().unwrap();
+    let proof = purrdf_entail::ServiceProof::decode(&original.encode()).unwrap();
+    assert_eq!(proof.encode(), original.encode());
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let (_, refutation) = checked.refutations().next().unwrap();
+    assert!(refutation.replay().is_closed());
+    assert!(refutation.replay().branches() > 0);
+    assert!(refutation.replay().checked_merges() > 1);
+    assert_eq!(
+        refutation.clashes().len(),
+        refutation.replay().checked_merges()
+    );
+    for leaf in refutation.clashes() {
+        assert!(leaf.is_merge());
+        assert!(matches!(
+            leaf.root().observation(),
+            CausalObservation::Merge { .. }
+        ));
+        assert!(
+            leaf.root()
+                .reads()
+                .any(|fact| matches!(fact, CausalFact::Distinct(..)))
+        );
+        assert!(leaf.steps().any(|step| matches!(
+            step.observation(),
+            CausalObservation::Effect {
+                mutation: CausalMutation::Distinct { .. },
+                ..
+            }
+        )));
+    }
+}
+
 purrdf_testkit::harness_main!(
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
@@ -495,4 +583,5 @@ purrdf_testkit::harness_main!(
     current_clash_borrows_the_independent_prepared_consumer,
     public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs,
     public_causal_service_binds_the_requested_question_and_query_assumptions,
+    public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip,
 );

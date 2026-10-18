@@ -134,7 +134,7 @@ impl<'a> CausalRefutation<'a> {
             .map(move |ordinal| CausalBranch::checked(this.proof, this.kb, ordinal))
     }
 
-    /// Checked clash leaves in their original refutation-tree traversal order.
+    /// Checked clause and inequality-closing merge leaves in original traversal order.
     pub fn clashes(&self) -> impl ExactSizeIterator<Item = CausalClash<'a>> + 'a + use<'a> {
         let this = *self;
         this.capture.clashes.iter().map(move |clash| CausalClash {
@@ -168,7 +168,14 @@ pub struct CausalClash<'a> {
 }
 
 impl<'a> CausalClash<'a> {
-    /// Original clash ordinal; not a source term or a cross-proof identity.
+    /// Whether this leaf is an independently checked inequality-closing merge.
+    /// Its index then addresses the original proof's merges rather than clauses.
+    #[must_use]
+    pub fn is_merge(&self) -> bool {
+        matches!(self.root().observation(), CausalObservation::Merge { .. })
+    }
+    /// Original clause-clash or merge ordinal, as distinguished by `is_merge`.
+    /// Not a source term or a cross-proof identity.
     #[must_use]
     pub const fn index(&self) -> usize {
         self.index
@@ -215,6 +222,9 @@ impl<'a> CausalClash<'a> {
     /// Actual schema-bound derivation checked for this leaf, when present.
     #[must_use]
     pub fn schema(&self) -> Option<CausalSchema<'a>> {
+        if self.is_merge() {
+            return None;
+        }
         self.proof.clashes[self.index]
             .schema
             .as_ref()
@@ -483,6 +493,13 @@ pub enum CausalObservation<'a> {
         /// Original at-least head-atom ordinal.
         atom: usize,
     },
+    /// Reachable native identification closed by an existing checked inequality.
+    Merge {
+        /// Original checked final application.
+        application: usize,
+        /// Original identifying head atom.
+        atom: usize,
+    },
     /// Terminal checked empty-head clause.
     Clash {
         /// Empty-head clause ordinal in the independently prepared calculus.
@@ -532,6 +549,9 @@ impl<'a> CausalStep<'a> {
                 ReadOwner::Clash { clause } => CausalObservation::Clash { clause },
                 ReadOwner::Counting { application, atom } => {
                     CausalObservation::Counting { application, atom }
+                }
+                ReadOwner::Merge { application, atom } => {
+                    CausalObservation::Merge { application, atom }
                 }
             },
         }

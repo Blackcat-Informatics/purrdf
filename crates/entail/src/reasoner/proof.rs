@@ -1084,6 +1084,10 @@ impl ServiceProof {
             }
             if causal.is_some()
                 || proof
+                    .merges()
+                    .iter()
+                    .any(crate::owl_dl::proof::MergeStep::has_current_support)
+                || proof
                     .clashes()
                     .iter()
                     .any(|step| step.schema_evidence().is_some())

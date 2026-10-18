@@ -2425,6 +2425,12 @@ impl<'a> Graph<'a> {
             std::mem::swap(&mut keep, &mut discard);
         }
         if are_distinct(st, keep, discard) {
+            self.observe_read(ReadFact::Node(keep));
+            self.observe_read(ReadFact::Node(discard));
+            self.observe_read(ReadFact::Distinct {
+                left: keep,
+                right: discard,
+            });
             st.clash = true;
             return;
         }

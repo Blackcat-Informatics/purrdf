@@ -3,9 +3,9 @@
 
 //! Actual question-bound public verification, with explicit missing-evidence refusals.
 
-/// A merge license alone must not attest the inequality that closed its branch.
+/// The original native prefix must establish the inequality closing a nominal merge.
 #[test]
-fn public_causal_counting_refuses_unchecked_merge_closure() {
+fn public_causal_counting_checks_reachable_merge_closure_and_generated_inequality() {
     let mut f = Fixture::default();
     let a = f.name("A");
     let filler = f.name("F");
@@ -27,16 +27,97 @@ fn public_causal_counting_refuses_unchecked_merge_closure() {
     assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
     let consumer = Reasoner::with_proofs(&source).unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
+    let proof = answer.proof().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let (_, refutation) = checked.refutations().next().unwrap();
+    assert!(refutation.replay().is_closed());
+    assert_eq!(refutation.replay().checked_merges(), 1);
+    let clash = refutation.clashes().next().unwrap();
+    assert!(clash.is_merge());
     assert!(matches!(
-        answer.proof().unwrap().verify_prepared_causal(
-            &Question::Consistency,
-            Some(answer.certificate()),
-            &ctx
-        ),
+        clash.root().observation(),
+        CausalObservation::Merge { .. }
+    ));
+    assert!(
+        clash
+            .root()
+            .reads()
+            .any(|fact| matches!(fact, CausalFact::Distinct(..)))
+    );
+    assert!(clash.steps().any(|step| matches!(
+        step.observation(),
+        CausalObservation::Effect {
+            mutation: CausalMutation::Distinct { .. },
+            ..
+        }
+    )));
+    assert!(
+        clash
+            .steps()
+            .any(|step| matches!(step.observation(), CausalObservation::Counting { .. }))
+    );
+    for step in clash.steps() {
+        for fact in step.reads() {
+            if let CausalFact::Role { to, .. } = fact {
+                assert_ne!(
+                    to.term(),
+                    Some(ResolvedTerm::Source(&source.term_value(unrelated)))
+                );
+            }
+        }
+    }
+    let roundtrip = ServiceProof::decode(&proof.encode()).unwrap();
+    assert_eq!(roundtrip.encode(), proof.encode());
+    assert!(
+        roundtrip
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .unwrap()
+            .refutations()
+            .next()
+            .unwrap()
+            .1
+            .replay()
+            .is_closed()
+    );
+    let legacy = rewrite(proof, |native| {
+        for merge in &mut native.merges {
+            merge.current = None;
+        }
+    });
+    assert!(matches!(
+        legacy.verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx),
         Err(DlProofError::CausalSupport {
             kind: CausalSupportKind::Unclosed,
             ..
         })
+    ));
+    let missing = rewrite(proof, |native| {
+        native
+            .merges
+            .iter_mut()
+            .find(|merge| merge.current.is_some())
+            .unwrap()
+            .current = Some(usize::MAX);
+    });
+    assert!(ServiceProof::decode(&missing.encode()).is_err());
+    assert!(
+        missing
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .is_err()
+    );
+    let wrong_join = rewrite(proof, |native| {
+        native
+            .merges
+            .iter_mut()
+            .find(|merge| merge.current.is_some())
+            .unwrap()
+            .joined = crate::owl_dl::proof::NodeRef::Anonymous(u32::MAX);
+    });
+    assert!(matches!(
+        wrong_join.verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx),
+        Err(DlProofError::Malformed { .. })
     ));
 }
 
@@ -110,6 +191,56 @@ use crate::reasoner::{Question, Reasoner, RunProof, ServiceProof, schema_tests::
 use purrdf_core::RdfDataset;
 use purrdf_iri::vocab::{owl, rdf, rdfs};
 use std::sync::Arc;
+
+/// Every original nominal alternative must reach its own independently checked merge.
+#[test]
+fn public_causal_merge_closes_every_nominal_branch_and_rejects_wrong_prefix() {
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("F");
+    let property = f.name("p");
+    f.bounds(class, property, filler, 3, true, false);
+    let nominal = f.blank();
+    let first = f.name("first");
+    let second = f.name("second");
+    let members = f.list(&[first, second]);
+    f.edge(nominal, owl::ONE_OF, members);
+    f.edge(filler, rdfs::SUB_CLASS_OF, nominal);
+    f.instance("subject", class);
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
+    let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let (_, refutation) = checked.refutations().next().unwrap();
+    assert!(refutation.replay().is_closed());
+    assert!(refutation.replay().branches() > 0);
+    assert!(refutation.replay().checked_merges() > 1);
+    assert_eq!(
+        refutation.clashes().len(),
+        refutation.replay().checked_merges()
+    );
+    assert!(refutation.clashes().all(|clash| clash.is_merge()
+        && matches!(clash.root().observation(), CausalObservation::Merge { .. })));
+    let forged = rewrite(&proof, |native| {
+        let first = native.merges.iter().find_map(|step| step.current).unwrap();
+        for step in &mut native.merges {
+            if step.current.is_some() {
+                step.current = Some(first);
+            }
+        }
+    });
+    assert!(
+        forged
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .is_err()
+    );
+}
 
 /// A real source contradiction with no complex gate or repository corpus producer.
 fn contradiction() -> Arc<RdfDataset> {
