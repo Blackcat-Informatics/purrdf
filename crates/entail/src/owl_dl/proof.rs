@@ -3963,7 +3963,7 @@ impl DlProof {
                 }
                 // The standalone license check stays separate from original-prefix replay.
                 // Legacy records remain unattested; current support must prove the actual
-                // native inequality and exact identifying operation in this branch.
+                // native inequality and exact identifying operation on the selected proof path.
                 let mut replay = self.replay_merge(index, ctx)?;
                 if let Some(latest) = merge.current {
                     let applications = self.current_applications(ctx, Some(latest), path)?;
