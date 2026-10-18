@@ -171,11 +171,14 @@ impl PropertyFunction for CountingProducer {
         }
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let bound: Vec<Option<TermValue>> =
             args.flattened().map(Option::<&TermValue>::cloned).collect();
         if let Some(candidate) = bound[CANDIDATE_POSITION].clone() {
@@ -298,7 +301,7 @@ const INTERSECTING: [&str; 2] = ["shared/", "shared/"];
 fn fixture_registry(
     exclusion: ExclusionBasis,
     generations: Option<Generations>,
-) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
+) -> (PropertyFunctionRegistry<'static>, [Arc<Reads>; 2]) {
     shaped_registry(exclusion, generations, DISJOINT, None)
 }
 
@@ -310,7 +313,7 @@ fn shaped_registry(
     generations: Option<Generations>,
     prefixes: [&'static str; 2],
     moves: Option<&Arc<AtomicBool>>,
-) -> (PropertyFunctionRegistry, [Arc<Reads>; 2]) {
+) -> (PropertyFunctionRegistry<'static>, [Arc<Reads>; 2]) {
     let counters = [Arc::new(Reads::default()), Arc::new(Reads::default())];
     let shared = DomainTag::parse(&ex("domain/shared")).expect("the fixture tag is an IRI");
     let mut registry = PropertyFunctionRegistry::new();
@@ -405,7 +408,7 @@ fn request() -> RetrievalRequest {
 }
 
 /// The rendered bundle for `registry`: exactly what `search` would compile.
-fn compiled(registry: &PropertyFunctionRegistry) -> CompiledRetrieval {
+fn compiled(registry: &PropertyFunctionRegistry<'static>) -> CompiledRetrieval {
     let statistics = FixtureStatistics;
     let profile = profile();
     let env = AdmissionEnvironment {
@@ -495,7 +498,7 @@ fn both<T: Clone>(value: T) -> BTreeMap<Iri, T> {
 /// Execute `bundle` on `schedule` and fuse it as `search` does.
 fn run(
     bundle: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     counters: &[Arc<Reads>; 2],
     dataset: &RdfDataset,
     schedule: ReadSchedule,
@@ -507,7 +510,7 @@ fn run(
 /// fusion asks anything — the instant an index can move under a read that pinned it.
 fn run_then(
     bundle: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     counters: &[Arc<Reads>; 2],
     dataset: &RdfDataset,
     schedule: ReadSchedule,
@@ -1261,14 +1264,14 @@ type Holds<'a> = Box<dyn Fn(&str) -> Vec<String> + 'a>;
 
 /// Execute `bundle` on demand and ask every stream about a foreign and an own
 /// candidate, then read it to its end.
-fn asked(bundle: &CompiledRetrieval, registry: &PropertyFunctionRegistry) -> Asked {
+fn asked(bundle: &CompiledRetrieval, registry: &PropertyFunctionRegistry<'static>) -> Asked {
     asked_over(bundle, registry, common::empty_dataset())
 }
 
 /// [`asked`], over `dataset`.
 fn asked_over(
     bundle: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &RdfDataset,
 ) -> Asked {
     let ExecutionResult {
@@ -2500,7 +2503,10 @@ mod text_relation {
     pub(super) fn registry(
         dataset: &RdfDataset,
         basis: ExclusionBasis,
-    ) -> (PropertyFunctionRegistry, [Arc<SearchObservations>; 2]) {
+    ) -> (
+        PropertyFunctionRegistry<'static>,
+        [Arc<SearchObservations>; 2],
+    ) {
         let shared = DomainTag::parse(&ex("domain/shared")).expect("the fixture tag is an IRI");
         let mut registry = PropertyFunctionRegistry::new();
         let observed = sides().map(|(stratum, predicate, producer, _)| {
@@ -2535,7 +2541,7 @@ mod text_relation {
     }
 
     /// What `search` would compile for the needle over both sides.
-    pub(super) fn compiled(registry: &PropertyFunctionRegistry) -> CompiledRetrieval {
+    pub(super) fn compiled(registry: &PropertyFunctionRegistry<'static>) -> CompiledRetrieval {
         let statistics = TextStatistics;
         let profile = profile();
         let env = AdmissionEnvironment {

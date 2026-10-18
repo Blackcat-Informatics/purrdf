@@ -451,7 +451,7 @@ pub fn admit_shapes_product_with_implementations(
     product: &[u8],
     functions: &UserFunctionRegistry,
     aggregates: &AggregateRegistry,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     implementation_identity: &[u8],
 ) -> Result<PreparedShapes, ShapesProductError> {
     ShapesProduct::open(product)?.admit(

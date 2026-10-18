@@ -50,7 +50,7 @@ fn options() -> ParserOptions {
 
 /// The host's relation: three (person, team) pairs, held in host memory and reachable
 /// from no graph.
-fn relations() -> ExtensionEnv {
+fn relations() -> ExtensionEnv<'static> {
     let iri = |local: &str| TermValue::iri(format!("{EX}{local}"));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -407,11 +407,14 @@ impl PropertyFunction for DeclaredHugeRelation {
         1_000_000
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(OneRowCursor { emitted: false }))
     }
 }
@@ -444,7 +447,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 
 /// The options a host with relations in scope hands a governed entry.
 /// The environment a fixture registry is interpreted in.
-fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
+fn env_of(relations: PropertyFunctionRegistry<'static>) -> ExtensionEnv<'static> {
     ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly")
 }
 

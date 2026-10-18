@@ -521,7 +521,7 @@ impl From<FusionError> for SearchError {
 #[allow(clippy::future_not_send)]
 pub async fn search<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -547,7 +547,7 @@ where
 #[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -581,7 +581,7 @@ where
 #[allow(clippy::future_not_send)]
 async fn search_bound<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -662,7 +662,7 @@ where
 #[allow(clippy::future_not_send)]
 async fn read_and_fuse<D>(
     compiled: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &D,
     profile: &FusionProfile,
     scope: Option<(

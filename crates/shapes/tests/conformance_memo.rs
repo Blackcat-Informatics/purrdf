@@ -197,18 +197,21 @@ impl PropertyFunction for AskCountingRelation {
 
     /// One invocation of the relation, which is one evaluation of the constraint
     /// whose body names it.
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         ASKS.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(EmptyCursor))
     }
 }
 
 /// A registry carrying the one relation [`INNER_CONSTRAINT`] reaches.
-fn counting_relations() -> Arc<PropertyFunctionRegistry> {
+fn counting_relations() -> Arc<PropertyFunctionRegistry<'static>> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         ASKED_IRI.to_owned(),

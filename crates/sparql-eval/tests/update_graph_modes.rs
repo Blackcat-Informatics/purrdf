@@ -180,7 +180,7 @@ fn execute(
     engine: &NativeSparqlEngine,
     dataset: &mut Arc<RdfDataset>,
     text: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     governed: bool,
 ) -> Result<(), RdfDiagnostic> {
     if governed {
@@ -243,7 +243,7 @@ fn check(
     before: &Image,
     expected: &Image,
     operation: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     failure: Option<&str>,
 ) {
     let engine = NativeSparqlEngine::new();

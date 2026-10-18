@@ -234,7 +234,7 @@ pub struct ClosureRelations<'a> {
 /// constructor's parameter, and the private reader that calls it — and a
 /// hand-repeated `dyn Fn` signature is three places for the three to drift apart.
 pub type RelationRebuilder<'a> =
-    dyn Fn(&RdfDataset) -> Result<PropertyFunctionRegistry, EvalError> + 'a;
+    dyn Fn(&RdfDataset) -> Result<PropertyFunctionRegistry<'static>, EvalError> + 'a;
 
 impl std::fmt::Debug for ClosureRelations<'_> {
     /// Which of the two shapes this value has. The rebuilder itself is host code with no
@@ -306,7 +306,7 @@ fn relations_over_closure(
     relations: &ClosureRelations<'_>,
     closure: &RdfDataset,
     surrogates: &BTreeSet<String>,
-) -> Result<Option<PropertyFunctionRegistry>, ReasoningError> {
+) -> Result<Option<PropertyFunctionRegistry<'static>>, ReasoningError> {
     let Some(build) = relations.rebuild else {
         return Ok(None);
     };
@@ -393,7 +393,7 @@ pub fn query_with_entailment<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
 ) -> Result<(SparqlResult, ReasoningReport), ReasoningError> {
     // Parse first so invalid queries fail before potentially expensive closure work.
@@ -923,7 +923,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
@@ -965,7 +965,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     closure: &EntailmentClosure<'_>,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {

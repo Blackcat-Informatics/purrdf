@@ -9,14 +9,18 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 172 named cases in 28 integration targets,
-with 182 executions across 33 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 179 named cases in 30 integration targets,
+with 189 executions across 35 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
 carrier semantic acceptance targets. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
 32-bit target; the scoped text cases retain original candidate rows and scores.
+The query-local producer cases exercise borrowed snapshot retirement, in-pull
+work and cancellation stops, original source-failure precedence, physical
+cell-admission refusal and retained complete/partial rows. Borrowed native text
+registrations reproduce their owned ranked and positional neighbors exactly.
 The twenty-one real-producer cases exercise both shipped text and kNN strata,
 pre-depth membership, unknown receipts, generation identity, native admission
 refusal, independent candidate depths, original fusion evidence, retained fused
@@ -131,6 +135,8 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-shapes` / `srl_language` | scalar | `triple_carrier_runs_the_public_rl_program_without_quad_storage`, `triple_rl_keeps_statement_roles_and_scoped_blank_identity` | Runs the public compact SRL entry, pins quad-model parity and compact result tables, and preserves scoped blank and statement roles. |
 | `purrdf-text` / `physical_shapes` | scalar | All twenty-one exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |
 | `purrdf-retrieval` / `real_producers` | scalar | All twenty-one exact cases registered in the original target | Exercises the shipped text and kNN strata, scoped ranks, retained fused acceptance without another producer call, and typed terminal suffix-settlement refusal with original owner release. |
+| `purrdf-sparql-eval` / `query_completion` | scalar | The six `borrowed_*` cases selected in the Makefile | Checks original snapshot identity, cursor survival after registry-handle release, work/cancellation inside cursor pulls, operational precedence, bounded cell birth, and complete/partial row ownership after scope teardown. |
+| `purrdf-text` / `search_property_function` | scalar | `borrowed_native_ranked_and_positional_producers_keep_their_rows` | Replays borrowed native ranked and positional registration against exact owned-registration answers. |
 | `purrdf-text` / `wasm_determinism` | scalar | `scoped_text_bound_candidates_retain_unknown_membership`, `scoped_text_depth_preserves_original_unknown_rows_and_scores`, `scoped_text_preserves_original_constraint_failure` | Retains original scoped candidate membership, unknown rows, scores and constraint failures through production text retrieval. |
 
 The hash benchmark targets remain native benchmarks. No benchmark smoke target

@@ -703,7 +703,7 @@ pub fn query_eval_parser_options() -> ParserOptions {
 pub fn query_eval_options<'a>(
     case: &SparqlTestCase,
     env: &'a purrdf_sparql_eval::ExtensionEnv,
-) -> QueryOptions<'a> {
+) -> QueryOptions<'a, 'a> {
     QueryOptions::new()
         .with_env(env)
         .with_disjoint_language_strings(
@@ -791,7 +791,7 @@ pub fn update_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::Exte
 /// Public so a differential corpus that re-applies a suite update applies it exactly as
 /// [`run`] does.
 #[must_use]
-pub fn update_eval_options(env: &purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'_> {
+pub fn update_eval_options(env: &purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'_, '_> {
     QueryOptions::new()
         .with_env(env)
         .with_load(Some(&OfflineLoadResolver))

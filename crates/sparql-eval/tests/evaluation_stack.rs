@@ -617,7 +617,7 @@ fn a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_co
 
 /// A relation `<rel:tag>` binding `<s1>` to `<t>`, for a request whose property-function
 /// call sends its plan through the feasibility pass, which walks the whole pattern.
-fn tag_relation() -> purrdf_sparql_eval::ExtensionEnv {
+fn tag_relation() -> purrdf_sparql_eval::ExtensionEnv<'static> {
     let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
     registry.register(
         format!("{EX}rel/tag"),

@@ -90,7 +90,7 @@ fn ontology(turtle: &str) -> Arc<RdfDataset> {
 
 /// A one-alternative `ex:p`-forward walk registered at [`WALK`], snapshotted over
 /// `dataset`.
-fn walk_registry(dataset: &RdfDataset) -> PropertyFunctionRegistry {
+fn walk_registry(dataset: &RdfDataset) -> PropertyFunctionRegistry<'static> {
     let step = PathStep::new(vec![(
         TermValue::iri(format!("{NS}p")),
         PathDirection::Forward,
@@ -140,7 +140,7 @@ fn answer(
     dataset: &Arc<RdfDataset>,
     query: &str,
     entailment: QueryEntailment<'_>,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     relations: &ClosureRelations<'_>,
 ) -> Result<SparqlResult, purrdf::ReasoningError> {
     let outcome = query_with_entailment_governed(

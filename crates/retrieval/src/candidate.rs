@@ -414,7 +414,7 @@ impl Eq for CandidatePlan {}
 pub fn plan_candidates(
     terms: &[RequestTerm],
     depths: &CandidateDepths,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     statistics: &impl Statistics,
 ) -> Result<CandidatePlan, CandidatePlanError> {
     let parts = crate::planner::plan_read(

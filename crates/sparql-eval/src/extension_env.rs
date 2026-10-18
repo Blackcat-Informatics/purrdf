@@ -115,7 +115,7 @@ const EMPTY_PARSER_OPTIONS: ParserOptions = ParserOptions {
 /// See the module documentation for why this is one value rather than four
 /// arguments.
 #[derive(Debug)]
-pub struct ExtensionEnv {
+pub struct ExtensionEnv<'query> {
     /// The caller-declared parser options, before the registry's exact IRIs are
     /// unioned in. Retained because it is part of this environment's identity: two
     /// environments whose *effective* options coincide by accident, one having
@@ -128,7 +128,7 @@ pub struct ExtensionEnv {
     /// of `Arc<dyn …>` trait objects and — load-bearing — PRESERVES its
     /// [`RegistryId`], so a clone is the same registry instance for every purpose a
     /// plan's identity cares about.
-    relations: PropertyFunctionRegistry,
+    relations: PropertyFunctionRegistry<'query>,
     aggregates: AggregateRegistry,
     shapes: crate::shapes::ShapeRegistry,
     /// [`Self::base`] with `relations`' registered IRIs unioned into
@@ -170,7 +170,7 @@ pub struct ExtensionEnv {
 /// every user would get its own [`OnceLock`] and the memoized content digest would
 /// be computed once PER USE rather than once. A `static` is one value with one
 /// cell — which is also why its interior mutability is correct rather than a hazard.
-static EMPTY: ExtensionEnv = ExtensionEnv {
+static EMPTY: ExtensionEnv<'static> = ExtensionEnv {
     base: EMPTY_PARSER_OPTIONS,
     relations: PropertyFunctionRegistry::EMPTY,
     aggregates: AggregateRegistry::EMPTY,
@@ -182,7 +182,7 @@ static EMPTY: ExtensionEnv = ExtensionEnv {
     id: RegistryId::EMPTY,
 };
 
-impl ExtensionEnv {
+impl<'query> ExtensionEnv<'query> {
     /// Build an environment and derive everything it will ever be asked for.
     ///
     /// # The derivation, and why it is spelled here and nowhere else
@@ -218,7 +218,7 @@ impl ExtensionEnv {
     /// environment over empty registries reads no declaration and cannot fail.
     pub fn new(
         base: ParserOptions,
-        relations: PropertyFunctionRegistry,
+        relations: PropertyFunctionRegistry<'query>,
         aggregates: AggregateRegistry,
     ) -> Result<Self, EvalError> {
         let effective = match derive_parser_options(&base, &relations)? {
@@ -249,7 +249,7 @@ impl ExtensionEnv {
     /// # Errors
     ///
     /// [`EvalError`] if a registered relation's declaration methods panic.
-    pub fn over_relations(relations: PropertyFunctionRegistry) -> Result<Self, EvalError> {
+    pub fn over_relations(relations: PropertyFunctionRegistry<'query>) -> Result<Self, EvalError> {
         Self::new(EMPTY_PARSER_OPTIONS, relations, AggregateRegistry::EMPTY)
     }
 
@@ -264,7 +264,7 @@ impl ExtensionEnv {
     /// [`EvalError`] if a registered relation's or aggregate's declaration methods
     /// panic.
     pub fn over(
-        relations: PropertyFunctionRegistry,
+        relations: PropertyFunctionRegistry<'query>,
         aggregates: AggregateRegistry,
     ) -> Result<Self, EvalError> {
         Self::new(EMPTY_PARSER_OPTIONS, relations, aggregates)
@@ -288,9 +288,12 @@ impl ExtensionEnv {
     /// # Errors
     ///
     /// [`EvalError`] if a registered relation's declaration methods panic.
-    pub fn with_relations(&self, relations: PropertyFunctionRegistry) -> Result<Self, EvalError> {
+    pub fn with_relations<'providers>(
+        &self,
+        relations: PropertyFunctionRegistry<'providers>,
+    ) -> Result<ExtensionEnv<'providers>, EvalError> {
         Ok(
-            Self::new(self.base.clone(), relations, self.aggregates.clone())?
+            ExtensionEnv::new(self.base.clone(), relations, self.aggregates.clone())?
                 .with_shapes(self.shapes.clone()),
         )
     }
@@ -355,7 +358,7 @@ impl ExtensionEnv {
     /// for the same reason both registry modules' `registry_fingerprint`
     /// short-circuit there, and its id is [`RegistryId::EMPTY`].
     #[must_use]
-    pub const fn empty() -> &'static Self {
+    pub const fn empty() -> &'static ExtensionEnv<'static> {
         &EMPTY
     }
 
@@ -379,7 +382,7 @@ impl ExtensionEnv {
 
     /// The relation registry a lowered call resolves against.
     #[must_use]
-    pub fn relations(&self) -> &PropertyFunctionRegistry {
+    pub fn relations(&self) -> &PropertyFunctionRegistry<'query> {
         &self.relations
     }
 
@@ -457,7 +460,7 @@ impl ExtensionEnv {
 /// [`EvalError`] if a registered relation's declaration methods panic.
 pub(crate) fn derive_parser_options<'a>(
     base: &'a ParserOptions,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
 ) -> Result<Cow<'a, ParserOptions>, EvalError> {
     if registry.is_empty() {
         return Ok(Cow::Borrowed(base));
@@ -485,7 +488,7 @@ pub(crate) fn derive_parser_options<'a>(
 /// namespace (a hard error versus ordinary data), so they must not share a digest.
 fn content_digest(
     base: &ParserOptions,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
 ) -> Result<ContentDigest, EvalError> {
     let mut bytes = Vec::new();
@@ -531,7 +534,7 @@ mod tests {
     const C: &str = "http://example.org/rel/c";
 
     /// A registry over `iris`, registered in the order given.
-    fn relations(iris: &[&str]) -> PropertyFunctionRegistry {
+    fn relations(iris: &[&str]) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         for iri in iris {
             registry.register(
@@ -542,7 +545,7 @@ mod tests {
         registry
     }
 
-    fn env(base: ParserOptions, iris: &[&str]) -> ExtensionEnv {
+    fn env(base: ParserOptions, iris: &[&str]) -> ExtensionEnv<'static> {
         ExtensionEnv::new(base, relations(iris), AggregateRegistry::EMPTY)
             .expect("declarations read cleanly")
     }

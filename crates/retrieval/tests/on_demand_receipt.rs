@@ -121,11 +121,14 @@ impl PropertyFunction for IndexedProducer {
         ROWS
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(IndexedCursor {
             index: self.index.clone(),
             minted: Arc::clone(&self.minted),
@@ -191,12 +194,12 @@ impl PfCursor for IndexedCursor {
 
 /// The registry, with the left producer's index behaving as `left` says and the
 /// right one's stable.
-fn registry(left: Index) -> PropertyFunctionRegistry {
+fn registry(left: Index) -> PropertyFunctionRegistry<'static> {
     counted_registry(left).0
 }
 
 /// [`registry`], with each producer's count of the rows it minted, in stratum order.
-fn counted_registry(left: Index) -> (PropertyFunctionRegistry, [Arc<AtomicU64>; 2]) {
+fn counted_registry(left: Index) -> (PropertyFunctionRegistry<'static>, [Arc<AtomicU64>; 2]) {
     let minted = [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))];
     let mut registry = PropertyFunctionRegistry::new();
     let block = DomainTag::parse(&ex("domain/shared")).expect("a valid tag");

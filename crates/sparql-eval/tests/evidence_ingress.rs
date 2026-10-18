@@ -2365,20 +2365,26 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
             self.inner.rows_per_invocation(mode)
         }
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &PfArgs<'_>,
             ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             self.open_admitted(args, ceiling, WorkspaceCapability::resident())
                 .and_then(purrdf_sparql_eval::WorkspaceCursor::into_resident)
         }
-        fn open_admitted(
+        fn open_admitted<'cursor>(
             &self,
             args: &PfArgs<'_>,
             _ceiling: Option<u64>,
             workspace: WorkspaceCapability,
-        ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+        ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             let query = {
                 let mut retained = self
                     .query

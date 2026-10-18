@@ -38,7 +38,7 @@ pub struct ShapeRequest<'a> {
     /// Exact original output column order.
     pub schema: &'a VarSchema,
     /// Caller-owned producers; spelling an IRI alone confers no capability.
-    pub relations: &'a PropertyFunctionRegistry,
+    pub relations: &'a PropertyFunctionRegistry<'a>,
     /// True when the current invocation reads a named graph.
     pub named_graph: bool,
     /// The invocation has an explicit evidence source. Its original expression

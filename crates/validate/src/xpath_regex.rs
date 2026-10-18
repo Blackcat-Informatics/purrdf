@@ -106,10 +106,10 @@ pub fn sparql_engine(profile: Option<Profile>) -> NativeSparqlEngine {
 /// bounds, or unchanged when no law was selected — the per-request form of
 /// [`sparql_engine`], for a host whose engine is shared across requests.
 #[must_use]
-pub const fn query_options(
-    options: QueryOptions<'_>,
+pub const fn query_options<'options, 'providers>(
+    options: QueryOptions<'options, 'providers>,
     profile: Option<Profile>,
-) -> QueryOptions<'_> {
+) -> QueryOptions<'options, 'providers> {
     match profile {
         Some(profile) => options.with_xpath_regex(profile, Limits::new()),
         None => options,

@@ -450,7 +450,7 @@ impl JobRun<'_> {
     pub(crate) fn options<'o>(
         &'o self,
         env: &'o purrdf_sparql_eval::ExtensionEnv,
-    ) -> QueryOptions<'o> {
+    ) -> QueryOptions<'o, 'o> {
         QueryOptions::new()
             .with_env(env)
             .with_remote(
@@ -471,7 +471,7 @@ impl JobRun<'_> {
         &'o self,
         env: &'o purrdf_sparql_eval::ExtensionEnv,
         division: DivisionPolicy,
-    ) -> QueryOptions<'o> {
+    ) -> QueryOptions<'o, 'o> {
         self.options(env).with_division(division)
     }
 
@@ -483,7 +483,7 @@ impl JobRun<'_> {
         division: DivisionPolicy,
         xpath_regex: Option<Profile>,
         geo: &'o purrdf_validate::geo::GeoProfile,
-    ) -> QueryOptions<'o> {
+    ) -> QueryOptions<'o, 'o> {
         crate::xpath_regex::select(self.options_under(env, division).with_geo(geo), xpath_regex)
     }
 

@@ -1453,7 +1453,7 @@ impl StratumUnit {
     pub(crate) fn exclusion_sparql(
         &self,
         ranking: &PreparedQuery,
-        registry: &PropertyFunctionRegistry,
+        registry: &PropertyFunctionRegistry<'_>,
     ) -> Option<Result<Vec<Vec<LookupText>>, String>> {
         if !self.declares_exclusion() {
             return None;
@@ -2361,7 +2361,7 @@ impl LookupText {
 /// caller's bytes.
 fn supplied_exclusion_texts(
     ranking: &PreparedQuery,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     basis: ExclusionBasis,
 ) -> Result<Vec<Vec<LookupText>>, String> {
     let shape = ranking
@@ -2448,7 +2448,7 @@ fn supplied_exclusion_texts(
 /// not.
 fn qualifying_lookup(
     source: &ColumnSource<'_>,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     basis: ExclusionBasis,
 ) -> Result<LookupText, String> {
     let call = source.call();
@@ -2550,7 +2550,7 @@ fn qualifying_lookup(
 /// text either.
 fn lookup_mode_is_declared(
     call: &PropertyFunctionCall,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     declaration: &RankedDeclaration,
     candidate: &Variable,
     arguments: &[&TermPattern],
@@ -3249,11 +3249,14 @@ mod tests {
             if mode.is_bound(0) { 1 } else { 64 }
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Err(EvalError::function("never opened by these tests"))
         }
     }

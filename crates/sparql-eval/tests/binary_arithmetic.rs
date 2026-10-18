@@ -29,7 +29,7 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const STAT_NS: &str = "http://example.org/agg/";
 
 /// Every row of `query`, over the empty dataset, under `options`.
-fn run(query: &str, options: QueryOptions<'_>) -> Vec<Vec<Option<TermValue>>> {
+fn run(query: &str, options: QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
     let dataset = empty();
     let result = NativeSparqlEngine::new()
         .query_with_options_view(

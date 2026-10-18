@@ -728,6 +728,17 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_completion -- --exact \
+				borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released \
+				borrowed_producers_keep_frozen_snapshot_and_original_result_owners \
+				borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence \
+				borrowed_producers_discard_candidates_when_the_original_source_fails \
+				borrowed_producers_refuse_unaffordable_rows_and_release_original_admission \
+				borrowed_producers_keep_partial_rows_after_the_query_scope_ends \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test search_property_function -- --exact \
+				borrowed_native_ranked_and_positional_producers_keep_their_rows \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
 				all_shared_dl_proof_vectors_match_the_current_native_boundary \
 				imported_closure_proofs_check_against_the_consumers_native_snapshot \

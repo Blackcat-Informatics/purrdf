@@ -6,6 +6,7 @@
 //! Generic query publication must include reads after the last algebra node.
 mod support;
 
+use purrdf_core::TermGuard as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -1902,7 +1903,531 @@ fn public_explain_projection_holds_real_execution_permit_through_final_read() {
     }
 }
 
+const STORED_RELATION: &str = "http://example.org/stored-records";
+const STORED_QUERY: &str = "SELECT ?s ?o WHERE { ?s <http://example.org/stored-records> ?o }";
+
+#[derive(Debug, Default)]
+struct StoredPulls {
+    examined: AtomicUsize,
+    unmetered: AtomicUsize,
+    admission_failed: AtomicBool,
+    cancellation: Option<(CancellationFlag, usize)>,
+    poison_on_stop: bool,
+}
+
+/// The producer borrows the captured original view; its iterator borrows it too.
+struct StoredProducer<'query> {
+    snapshot: &'query Source,
+    modes: [purrdf_sparql_eval::BindingPattern; 1],
+    generation: Arc<str>,
+    pulls: Arc<StoredPulls>,
+}
+impl<'query> StoredProducer<'query> {
+    fn new(snapshot: &'query Source, generation: Arc<str>, pulls: Arc<StoredPulls>) -> Self {
+        Self {
+            snapshot,
+            modes: [purrdf_sparql_eval::PfArity::new(1, 1).all_free_mode()],
+            generation,
+            pulls,
+        }
+    }
+}
+impl purrdf_sparql_eval::PropertyFunction for StoredProducer<'_> {
+    fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+        purrdf_sparql_eval::Volatility::Stable
+    }
+    fn arity(&self) -> purrdf_sparql_eval::PfArity {
+        purrdf_sparql_eval::PfArity::new(1, 1)
+    }
+    fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+        &self.modes
+    }
+    fn rows_per_invocation(&self, _: purrdf_sparql_eval::BindingPattern) -> u64 {
+        self.snapshot.resident.len_hint().unwrap()
+    }
+    purrdf_sparql_eval::resident_property_open!();
+    fn open_admitted<'cursor>(
+        &self,
+        args: &purrdf_sparql_eval::PfArgs<'_>,
+        _: Option<u64>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, purrdf_sparql_eval::EvalError>
+    where
+        Self: 'cursor,
+    {
+        let mut bindings = purrdf_sparql_eval::AdmittedVec::with_capacity(2, &workspace)?;
+        for value in args.flattened() {
+            bindings.push(value.map(|value| workspace.clone_term(value)).transpose()?)?;
+        }
+        purrdf_sparql_eval::WorkspaceCursor::new(
+            StoredCursor {
+                snapshot: self.snapshot,
+                rows: self.snapshot.quads(),
+                generation: self.generation.clone(),
+                pulls: self.pulls.clone(),
+                bindings,
+                workspace: workspace.clone(),
+            },
+            &workspace,
+            "borrowed stored-record cursor",
+        )
+    }
+}
+struct StoredCursor<'query, I> {
+    snapshot: &'query Source,
+    rows: I,
+    generation: Arc<str>,
+    pulls: Arc<StoredPulls>,
+    bindings: purrdf_sparql_eval::AdmittedVec<Option<purrdf_sparql_eval::WorkspaceTerm>>,
+    workspace: purrdf_sparql_eval::WorkspaceCapability,
+}
+impl<I: Iterator<Item = QuadIds>> StoredCursor<'_, I> {
+    fn pull(
+        &mut self,
+        context: Option<&purrdf_sparql_eval::NativeFnContext<'_>>,
+    ) -> Result<Option<purrdf_sparql_eval::AdmittedPfRow>, purrdf_sparql_eval::EvalError> {
+        loop {
+            for _ in 0..32 {
+                if let Some(context) = context {
+                    if context
+                        .checkpoint()
+                        .and_then(|()| context.charge_work(1))
+                        .is_err()
+                    {
+                        if self.pulls.poison_on_stop {
+                            self.snapshot.refuse();
+                        }
+                        return Ok(None);
+                    }
+                } else {
+                    self.pulls.unmetered.fetch_add(1, Ordering::Relaxed);
+                }
+                let work = self.pulls.examined.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some((cancel, at)) = &self.pulls.cancellation
+                    && work == *at
+                {
+                    cancel.cancel();
+                }
+            }
+            let Some(row) = self.rows.next() else {
+                return Ok(None);
+            };
+            let admitted = (|| {
+                let mut terms = purrdf_sparql_eval::AdmittedVec::with_capacity(2, &self.workspace)?;
+                for id in [row.s, row.o] {
+                    let guard = self
+                        .snapshot
+                        .resolve(id)
+                        .map_err(|_| purrdf_sparql_eval::EvalError::WorkspaceStopped)?;
+                    let purrdf_core::TermRef::Iri(iri) = guard.term() else {
+                        panic!("IRI fixture")
+                    };
+                    terms.push(self.workspace.iri(iri)?)?;
+                }
+                Ok::<_, purrdf_sparql_eval::EvalError>(terms)
+            })();
+            if admitted.is_err() {
+                self.pulls.admission_failed.store(true, Ordering::Relaxed);
+            }
+            let terms = admitted?;
+            if self
+                .bindings
+                .iter()
+                .zip(terms.iter())
+                .any(|(bound, value)| bound.as_ref().is_some_and(|bound| **bound != **value))
+            {
+                continue;
+            }
+            return purrdf_sparql_eval::AdmittedPfRow::from_terms(
+                terms.into_iter(),
+                &self.workspace,
+            )
+            .map(Some);
+        }
+    }
+}
+impl<I: Iterator<Item = QuadIds>> purrdf_sparql_eval::PfCursor for StoredCursor<'_, I> {
+    fn next(&mut self) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+        self.pull(None)?
+            .map(purrdf_sparql_eval::AdmittedPfRow::try_into_resident)
+            .transpose()
+    }
+    fn next_metered(
+        &mut self,
+        context: &purrdf_sparql_eval::NativeFnContext<'_>,
+    ) -> Result<Option<purrdf_sparql_eval::PfRow>, purrdf_sparql_eval::EvalError> {
+        self.pull(Some(context))?
+            .map(purrdf_sparql_eval::AdmittedPfRow::try_into_resident)
+            .transpose()
+    }
+    fn next_admitted(
+        &mut self,
+    ) -> Result<Option<purrdf_sparql_eval::AdmittedPfRow>, purrdf_sparql_eval::EvalError> {
+        self.pull(None)
+    }
+    fn next_admitted_metered(
+        &mut self,
+        context: &purrdf_sparql_eval::NativeFnContext<'_>,
+    ) -> Result<Option<purrdf_sparql_eval::AdmittedPfRow>, purrdf_sparql_eval::EvalError> {
+        self.pull(Some(context))
+    }
+    fn generation(&self) -> purrdf_sparql_eval::IndexGeneration {
+        purrdf_sparql_eval::IndexGeneration::Declared(self.generation.clone())
+    }
+}
+
+fn stored_environment<'query>(
+    producer: Arc<dyn purrdf_sparql_eval::PropertyFunction + 'query>,
+) -> purrdf_sparql_eval::ExtensionEnv<'query> {
+    let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
+    registry.register(STORED_RELATION, producer);
+    purrdf_sparql_eval::ExtensionEnv::empty()
+        .with_relations(registry)
+        .unwrap()
+}
+
+/// Both callback and cursor borrow the retired snapshot; results retain only owned rows.
+fn borrowed_producers_keep_frozen_snapshot_and_original_result_owners() {
+    let engine = NativeSparqlEngine::new();
+    let live = Mutex::new(Source::at(RefusalSite::BoundedHealthy));
+    let mut accounts = Vec::new();
+    for (operation, owned) in [false, true, false].into_iter().enumerate() {
+        let captured = {
+            let current = live.lock().unwrap();
+            if owned {
+                // The resident-only memory relation keeps its existing owned
+                // contract; borrowed storage producers use the bounded view.
+                let mut neighbor = Source::at(RefusalSite::Never);
+                neighbor.resident = current.resident.clone();
+                neighbor
+            } else {
+                current.clone()
+            }
+        };
+        let expected = engine
+            .query(
+                &captured.resident,
+                request("SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }"),
+            )
+            .unwrap();
+        let mut replacement = Source::at(RefusalSite::BoundedHealthy);
+        let subject = format!("fresh-{operation}");
+        let object = format!("new-{operation}");
+        replacement.resident = support::local_dataset([(subject.as_str(), "p", object.as_str())]);
+        *live.lock().unwrap() = replacement;
+        let state = captured.state.clone();
+        let resident = Arc::downgrade(&captured.resident);
+        let pulls = Arc::new(StoredPulls::default());
+        let generation: Arc<str> = format!("captured-{operation}").into();
+        let producer: Arc<dyn purrdf_sparql_eval::PropertyFunction + '_> = if owned {
+            let rows = expected
+                .solutions()
+                .unwrap()
+                .1
+                .iter()
+                .map(|row| row.iter().map(|cell| cell.clone().unwrap()).collect())
+                .collect();
+            let owned: Arc<dyn purrdf_sparql_eval::PropertyFunction> =
+                Arc::new(purrdf_sparql_eval::MemoryRelation::new(1, 1, rows).unwrap());
+            owned
+        } else {
+            Arc::new(StoredProducer::new(
+                &captured,
+                generation.clone(),
+                pulls.clone(),
+            ))
+        };
+        let environment = stored_environment(producer);
+        let answer = engine
+            .query_governed_fallible_view(
+                &captured,
+                request(STORED_QUERY),
+                QueryOptions::EMPTY.with_env(&environment),
+                &QueryGovernors::METERED,
+            )
+            .unwrap();
+        assert_eq!(answer.result.solutions(), expected.solutions());
+        assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            pulls.examined.load(Ordering::Relaxed),
+            if owned { 0 } else { 64 }
+        );
+        let purrdf_sparql_eval::GovernedOutcome::Complete {
+            result, relations, ..
+        } = engine
+            .query_governed(
+                &captured.resident,
+                request(STORED_QUERY),
+                QueryOptions::EMPTY.with_env(&environment),
+                &QueryGovernors::METERED,
+            )
+            .unwrap()
+        else {
+            panic!("healthy witnessed native query")
+        };
+        assert_eq!(result.solutions(), expected.solutions());
+        assert!(
+            owned
+                || relations
+                    .witness
+                    .get(STORED_RELATION)
+                    .unwrap()
+                    .generations
+                    .contains(&purrdf_sparql_eval::IndexGeneration::Declared(generation))
+        );
+        assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+        drop(result);
+        drop(relations);
+        drop(environment);
+        drop(captured);
+        assert!(resident.upgrade().is_none());
+        let clone = answer.result.clone();
+        drop(answer);
+        assert_eq!(clone.solutions(), expected.solutions());
+        if !owned {
+            assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+        }
+        drop(clone);
+        accounts.push(state);
+    }
+    // Cached plans retain their original admission grants, never the snapshot.
+    drop(engine);
+    for account in accounts {
+        account.assert_released();
+    }
+}
+
+/// Captured source references outlive the temporary producer and registry handles.
+fn borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released() {
+    let source = Source::at(RefusalSite::BoundedHealthy);
+    let engine = NativeSparqlEngine::new();
+    let pulls = Arc::new(StoredPulls::default());
+    let mut cursor = {
+        let environment = stored_environment(Arc::new(StoredProducer::new(
+            &source,
+            Arc::from("independent-snapshot"),
+            pulls.clone(),
+        )));
+        let options = QueryOptions::EMPTY.with_env(&environment);
+        let prepared = engine
+            .prepare_query_with_options(STORED_QUERY, None, options)
+            .unwrap();
+        engine.open_call_cursor(&prepared, options).unwrap()
+    };
+    let row = cursor.next_row(&*source.resident).unwrap().unwrap();
+    assert_eq!(
+        row,
+        vec![
+            Some(TermValue::iri("http://example.org/s")),
+            Some(TermValue::iri("http://example.org/o"))
+        ]
+    );
+    assert!(cursor.next_row(&*source.resident).unwrap().is_none());
+    assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+    assert_eq!(pulls.examined.load(Ordering::Relaxed), 64);
+    drop(cursor);
+    drop(engine);
+    source.assert_released();
+}
+
+/// Work performed inside one pull observes the original operation's stop state.
+fn borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence() {
+    for cancelled in [false, true] {
+        for poison_on_stop in [false, true] {
+            let engine = NativeSparqlEngine::new();
+            let source = Source::at(RefusalSite::BoundedHealthy);
+            let cancellation = CancellationFlag::new();
+            let pulls = Arc::new(StoredPulls {
+                cancellation: cancelled.then(|| (cancellation.clone(), 2)),
+                poison_on_stop,
+                ..StoredPulls::default()
+            });
+            let environment = stored_environment(Arc::new(StoredProducer::new(
+                &source,
+                Arc::from("stopped-snapshot"),
+                pulls.clone(),
+            )));
+            let governors = if cancelled {
+                QueryGovernors::METERED.with_stop_signal(Arc::new(cancellation))
+            } else {
+                QueryGovernors::METERED.with_fuel(16)
+            };
+            let answer = engine.query_governed_fallible_view(
+                &source,
+                request(STORED_QUERY),
+                QueryOptions::EMPTY.with_env(&environment),
+                &governors,
+            );
+            let examined = pulls.examined.load(Ordering::Relaxed);
+            assert!(
+                examined > 0 && examined < 32,
+                "work before stop: {examined}"
+            );
+            assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+            if poison_on_stop {
+                let error =
+                    assert_source_refusal(answer, &source, RefusedRead::FinalRead(source.site));
+                assert!(error.evidence().governors.tripped.is_some());
+            } else {
+                let error = answer.expect_err("a stopped pull cannot publish completion");
+                let FallibleSparqlError::BudgetExhausted {
+                    tripped, evidence, ..
+                } = &error
+                else {
+                    panic!("typed governor stop: {error:?}");
+                };
+                assert_eq!(evidence.governors.tripped, Some(*tripped));
+                if cancelled {
+                    assert_eq!(
+                        *tripped,
+                        TrippedGovernor::Stopped {
+                            cause: StopCause::Cancelled
+                        }
+                    );
+                    assert_eq!(examined, 2);
+                }
+                assert!(!evidence.view.failed);
+                source.assert_receipt(&evidence.view);
+            }
+            drop(environment);
+            drop(engine);
+            source.assert_released();
+        }
+    }
+}
+
+/// Lazy producer faults remain failures through modifiers and left/union branches.
+fn borrowed_producers_discard_candidates_when_the_original_source_fails() {
+    for site in [
+        RefusalSite::Iterator,
+        RefusalSite::Term,
+        RefusalSite::AfterRow,
+    ] {
+        for query in [
+            STORED_QUERY,
+            "SELECT ?s ?o WHERE { ?s <http://example.org/stored-records> ?o } LIMIT 2",
+            "SELECT ?s ?o WHERE { VALUES ?seed { 1 } OPTIONAL { ?s <http://example.org/stored-records> ?o } }",
+            "SELECT ?s ?o WHERE { { ?s <http://example.org/stored-records> ?o } UNION { VALUES (?s ?o) { (<http://example.org/a> <http://example.org/b>) } } }",
+        ] {
+            let engine = NativeSparqlEngine::new();
+            let source = Source::at(site);
+            let pulls = Arc::new(StoredPulls::default());
+            let environment = stored_environment(Arc::new(StoredProducer::new(
+                &source,
+                Arc::from("failing-snapshot"),
+                pulls.clone(),
+            )));
+            assert_source_refusal(
+                engine.query_governed_fallible_view(
+                    &source,
+                    request(query),
+                    QueryOptions::EMPTY.with_env(&environment),
+                    &QueryGovernors::METERED,
+                ),
+                &source,
+                RefusedRead::FinalRead(site),
+            );
+            assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+            drop(environment);
+            drop(engine);
+            source.assert_released();
+        }
+    }
+}
+
+/// A physical refusal during cell birth keeps the provider's original typed cause.
+fn borrowed_producers_refuse_unaffordable_rows_and_release_original_admission() {
+    fn run(limit: u64) -> (u64, bool) {
+        let engine = NativeSparqlEngine::new();
+        let mut source = Source::at(RefusalSite::BoundedHealthy);
+        let subject = "s".repeat(16_384);
+        source.resident = support::local_dataset([(subject.as_str(), "p", "o")]);
+        let state = Arc::get_mut(&mut source.state).unwrap();
+        state.live_limit = limit;
+        state.term_bound = 32_768;
+        let pulls = Arc::new(StoredPulls::default());
+        let environment = stored_environment(Arc::new(StoredProducer::new(
+            &source,
+            Arc::from("bounded-snapshot"),
+            pulls.clone(),
+        )));
+        let answer = engine.query_governed_fallible_view(
+            &source,
+            request(STORED_QUERY),
+            QueryOptions::EMPTY.with_env(&environment),
+            &QueryGovernors::METERED,
+        );
+        let refused_inside_cursor = pulls.admission_failed.load(Ordering::Relaxed);
+        if refused_inside_cursor {
+            assert_source_refusal(answer, &source, RefusedRead::Workspace);
+        } else {
+            if limit == u64::MAX {
+                assert!(answer.is_ok(), "healthy bounded control: {answer:?}");
+            }
+            drop(answer);
+        }
+        let peak = source.peak_owned_bytes.load(Ordering::Relaxed);
+        assert!(peak <= limit);
+        drop(environment);
+        drop(engine);
+        source.assert_released();
+        (peak, refused_inside_cursor)
+    }
+    let (healthy_peak, refused) = run(u64::MAX);
+    assert!(!refused);
+    let refused_inside_cursor = (256..healthy_peak).step_by(128).any(|limit| run(limit).1);
+    assert!(
+        refused_inside_cursor,
+        "sweep must reach an admitted cursor's cell allocation"
+    );
+}
+
+/// A certified prefix owns rows after its borrowed provider and snapshot are gone.
+fn borrowed_producers_keep_partial_rows_after_the_query_scope_ends() {
+    let engine = NativeSparqlEngine::new();
+    let mut source = Source::at(RefusalSite::BoundedHealthy);
+    source.resident = support::local_dataset([("s1", "p", "o1"), ("s2", "p", "o2")]);
+    let state = source.state.clone();
+    let resident = Arc::downgrade(&source.resident);
+    let pulls = Arc::new(StoredPulls::default());
+    let environment = stored_environment(Arc::new(StoredProducer::new(
+        &source,
+        Arc::from("partial-snapshot"),
+        pulls.clone(),
+    )));
+    let error = engine
+        .query_governed_fallible_view(
+            &source,
+            request(STORED_QUERY),
+            QueryOptions::EMPTY.with_env(&environment),
+            &QueryGovernors::METERED.with_max_answers(1),
+        )
+        .expect_err("answer ceiling preserves a prefix");
+    let FallibleSparqlError::BudgetExhausted {
+        partial: PartialAnswers::Certain(partial),
+        ..
+    } = error
+    else {
+        panic!("positive producer must retain a certified partial result");
+    };
+    assert_eq!(pulls.unmetered.load(Ordering::Relaxed), 0);
+    drop(environment);
+    drop(source);
+    drop(engine);
+    assert!(resident.upgrade().is_none());
+    assert_eq!(partial.result().solutions().unwrap().1.len(), 1);
+    assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+    drop(partial);
+    state.assert_released();
+}
+
 purrdf_testkit::harness_main!(
+    borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released,
+    borrowed_producers_refuse_unaffordable_rows_and_release_original_admission,
+    borrowed_producers_keep_partial_rows_after_the_query_scope_ends,
+    borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence,
+    borrowed_producers_discard_candidates_when_the_original_source_fails,
+    borrowed_producers_keep_frozen_snapshot_and_original_result_owners,
     materialized_existing_cells_use_actual_payload_admission,
     partial_materialized_cells_keep_actual_payload_admission,
     public_explain_projection_holds_real_execution_permit_through_final_read,

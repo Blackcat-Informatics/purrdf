@@ -3393,7 +3393,7 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     survey_pattern_plans_admitted(
@@ -3412,7 +3412,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     pattern: &GraphPattern,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
@@ -3925,7 +3925,7 @@ fn record_call_estimate(
     call: &PropertyFunctionCall,
     bound: &VarSchema,
     driving_rows: u64,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
     let Some(relation) = relations.resolve(&call.iri) else {
@@ -6724,7 +6724,7 @@ mod survey_tests {
         active_dataset: &ActiveDataset<D::Id>,
         active_graph: GraphMatch<D::Id>,
         pattern: &GraphPattern,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         survey: &mut PlanSurvey,
     ) -> Result<(), EvalError> {
         if survey
@@ -7014,16 +7014,19 @@ mod survey_tests {
             ROWS_PER_INVOCATION
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(EmptyCursor))
         }
     }
 
-    fn relations() -> PropertyFunctionRegistry {
+    fn relations() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(RELATION, Arc::new(Declared::new()));
         registry

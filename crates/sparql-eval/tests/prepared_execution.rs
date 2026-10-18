@@ -944,7 +944,7 @@ const RELATION_QUERY: &str = "PREFIX rel: <https://example.org/rel/>\n\
 
 /// The host relation: three (person, team) pairs held in host memory, reachable
 /// from no graph.
-fn relation_registry() -> PropertyFunctionRegistry {
+fn relation_registry() -> PropertyFunctionRegistry<'static> {
     let iri = |local: &str| TermValue::iri(format!("{REL_EX}{local}"));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -985,7 +985,7 @@ fn relation_dataset() -> Arc<RdfDataset> {
 /// The extension environment `registry` describes, which is what a query text is
 /// read against: whether `rel:memberOf` is a data edge or a call is decided here,
 /// not by the text.
-fn relations_env(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
+fn relations_env(registry: &PropertyFunctionRegistry<'static>) -> ExtensionEnv<'static> {
     ExtensionEnv::over_relations(registry.clone())
         .expect("the fixture relation declares without panicking")
 }
@@ -1096,7 +1096,7 @@ fn product_registry() -> AggregateRegistry {
 
 /// The extension environment `registry` describes — the aggregate twin of
 /// [`relations_env`], and what a `Custom` aggregate IRI is admitted against.
-fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv {
+fn aggregates_env(registry: &AggregateRegistry) -> ExtensionEnv<'static> {
     ExtensionEnv::over_aggregates(registry.clone())
         .expect("the fixture aggregate declares without panicking")
 }

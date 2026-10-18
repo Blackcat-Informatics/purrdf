@@ -971,7 +971,7 @@ fn crate_sources_contain_no_function_pointers() {
 
 /// A one-producer registry whose declaration names `domains` and is otherwise
 /// fixed, so the fingerprint difference below can come from nothing else.
-fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
+fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         "http://example.org/ns#ranked",
@@ -994,7 +994,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry {
 }
 
 /// The baseline plan, recording `registry`'s durable content fingerprint.
-fn plan_against(registry: &PropertyFunctionRegistry) -> Plan {
+fn plan_against(registry: &PropertyFunctionRegistry<'static>) -> Plan {
     Plan {
         registry_content_fingerprint: registry
             .content_fingerprint()

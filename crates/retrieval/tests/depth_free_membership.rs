@@ -71,7 +71,7 @@ fn registry(
     shape: Shape,
     modes: &[&str],
     exclusion: ExclusionBasis,
-) -> (PropertyFunctionRegistry, Arc<Mutex<Vec<String>>>) {
+) -> (PropertyFunctionRegistry<'static>, Arc<Mutex<Vec<String>>>) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let shared = DomainTag::parse(&ex("domain/shared")).expect("fixture domain tags are IRIs");
     let mut registry = PropertyFunctionRegistry::new();
@@ -363,6 +363,6 @@ fn the_lookup_shape_frees_the_depth_and_binds_the_candidate() {
     );
 }
 
-fn registry_no_depth() -> (PropertyFunctionRegistry, Arc<Mutex<Vec<String>>>) {
+fn registry_no_depth() -> (PropertyFunctionRegistry<'static>, Arc<Mutex<Vec<String>>>) {
     registry(Shape::NoDepth, &["fb", "bb"], ExclusionBasis::Membership)
 }

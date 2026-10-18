@@ -238,7 +238,7 @@ fn rows(result: &SparqlResult) -> String {
 fn observe(
     dataset: &Arc<RdfDataset>,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> Observation {
     let outcome = NativeSparqlEngine::new()
@@ -285,7 +285,7 @@ fn observe(
 /// Run `query` metered, then at half its metered fuel and at half its metered scratch,
 /// on pools of every size, `REPEATS` times each: every run of one ceiling must report
 /// the same observation, and the halved fuel ceiling must really trip.
-fn assert_deterministic(query: &str, options: QueryOptions<'_>) {
+fn assert_deterministic(query: &str, options: QueryOptions<'_, '_>) {
     const REPEATS: usize = 6;
     let dataset = dataset();
     let metered = rayon::ThreadPoolBuilder::new()

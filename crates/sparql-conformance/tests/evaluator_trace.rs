@@ -112,7 +112,7 @@ struct Prepared<'a> {
     query: String,
     dataset: Arc<RdfDataset>,
     remote: InProcessServiceResolver,
-    env: ExtensionEnv,
+    env: ExtensionEnv<'static>,
     ordered: bool,
     volatile: bool,
 }
@@ -126,7 +126,7 @@ impl Prepared<'_> {
         }
     }
 
-    fn options(&self) -> QueryOptions<'_> {
+    fn options(&self) -> QueryOptions<'_, '_> {
         QueryOptions::new()
             .with_env(&self.env)
             .with_remote(Some(&self.remote))

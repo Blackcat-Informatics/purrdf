@@ -1241,6 +1241,7 @@ impl<T> Iterator for AdmittedVecIntoIter<T> {
         self.values.size_hint()
     }
 }
+impl<T> ExactSizeIterator for AdmittedVecIntoIter<T> {}
 impl<T> IntoIterator for AdmittedVec<T> {
     type Item = T;
     type IntoIter = AdmittedVecIntoIter<T>;

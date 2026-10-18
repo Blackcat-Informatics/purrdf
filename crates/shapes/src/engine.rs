@@ -6488,11 +6488,14 @@ mod tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             let counter = if crate::sparql::current_parser_options().is_some() {
                 &self.saw
             } else {
@@ -7060,11 +7063,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             let flagged = matches!(
                 args.get(0),
                 Some(::purrdf_rdf::TermValue::Literal { lexical_form, .. }) if lexical_form == "bad"
