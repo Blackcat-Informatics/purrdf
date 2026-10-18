@@ -227,6 +227,14 @@ fn inputs() -> Vec<Input> {
 // ── The two judges ────────────────────────────────────────────────────────────
 
 /// PurRDF's parser: `Err` is a refusal, with its message.
+///
+/// Deliberately the compatibility law, not a case's `profile`. This lane asks whether the
+/// parser refuses exactly the STRUCTURALLY invalid shapes graphs `shacl-shacl.ttl` flags,
+/// once per distinct shapes FILE (a file can serve cases graded under different laws). A
+/// dated law adds refusals the structural oracle cannot see, such as the pre-binding
+/// restrictions on a `sh:sparql` body, and would make every such graph a false
+/// disagreement; the compatibility law is the one whose parse-time refusals are the
+/// structural ones. Which law accepts a graph is graded by the report lanes instead.
 fn purrdf_refusal(input: &Input) -> Option<String> {
     from_dataset_with_base(
         &input.dataset,

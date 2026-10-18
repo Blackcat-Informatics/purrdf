@@ -138,36 +138,31 @@ const TOTAL_CASES: usize = W3C_TOTAL_CASES + FIRST_PARTY_TOTAL_CASES + W3C12_VAL
 ///   input the validator is REQUIRED to reject. The SHACL 1.0 suite has exactly
 ///   seven, all under `sparql/pre-binding/`, each carrying a `sh:sparql` body that
 ///   SHACL's pre-binding rules forbid; the SHACL 1.2 suite has
-///   [`W3C12_DECLARED_FAILURES`];
-/// * a SHACL 1.2 case named in [`W3C12_REFUSED_AT_LOAD`], with its reason.
+///   [`W3C12_DECLARED_FAILURES`].
+///
+/// There is no other entry: every case loads under its own `profile`'s law (the
+/// 2017 entries under the Recommendation, the SHACL 1.2 entries under the editor's
+/// draft), so `pre-binding-009`, which only the compatibility law refused, loads.
 ///
 /// So this bucket is not an excuse list, and `Case::refusal_is_declared` enforces
 /// that correspondence case by case rather than trusting the number.
 ///
 /// The count is asserted in addition to the rule, because the rule alone would
 /// be satisfied by a parser that had started refusing NOTHING at all.
-const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES + W3C12_REFUSED_AT_LOAD.len();
+const UNLOADABLE_CASES: usize = 7 + W3C12_DECLARED_FAILURES;
 
 /// The W3C SHACL 1.2 `sht:Validate` entries whose manifest declares
 /// `mf:result sht:Failure` — inputs a validator must reject, admitted to the
 /// unloadable bucket by the same rule as the seven SHACL 1.0 ones.
-const W3C12_DECLARED_FAILURES: usize = 6;
+const W3C12_DECLARED_FAILURES: usize = 1;
 
-/// W3C SHACL 1.2 `sht:Validate` entries whose shapes graph this engine REFUSES at
-/// load, each with the reason — SHACL 1.2 features `w3c12_conformance.rs` ledgers
-/// as unevaluated, where the engine's answer is a load error rather than a report. There is no shapes graph to pack, so the codec has nothing to say
-/// about them. The ledger runs both ways: an entry whose shapes graph starts
-/// loading fails the suite, and so does an unledgered 1.2 case that stops loading.
-///
-/// Every other SHACL 1.2 `sht:Validate` shapes graph that is not a declared
-/// failure loads, packs and agrees — including
-/// `inference-rules/rules-entailment-validation`, whose `sh:RulesEntailment`
-/// regime runs the rules before validation.
-const W3C12_REFUSED_AT_LOAD: &[(&str, &str)] = &[(
-    "w3c12/sparql/pre-binding/pre-binding-009",
-    "the sh:sparql query contains VALUES, which the engine refuses with pre-bound \
-         variables (stricter than the Working Draft's mentions-a-pre-bound-variable rule)",
-)];
+/// The W3C SHACL 1.2 `sht:Validate` entries that declare `mf:result sht:Failure` and whose
+/// shapes graph LOADS under the editor's-draft law: the draft's own pre-binding and
+/// SPARQL-failure rules refuse them at validation, typed, so the three lanes agree on an
+/// identical error (`sparql-failure-001`, `unsupported-sparql-001`, `-002`, `-003`,
+/// `-005`, `-006`). Under the compatibility law the five pre-binding ones were refused at
+/// load; they sit in the agreed bucket now that the case's own law loads them.
+const W3C12_DECLARED_VALIDATION_FAILURES: usize = 6;
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -206,9 +201,10 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 ///
 /// # What it counts
 ///
-/// Every loadable SHACL 1.2 `sht:Validate` entry agrees on a report: 202 of the
-/// suite's 213 — all but its [`W3C12_DECLARED_FAILURES`] and its
-/// [`W3C12_REFUSED_AT_LOAD`]. `validator-001` is among
+/// Of the 213 SHACL 1.2 `sht:Validate` entries, 212 load: all but
+/// [`W3C12_DECLARED_FAILURES`]. Six of the 212 are declared failures the three lanes agree
+/// on as an identical error ([`W3C12_DECLARED_VALIDATION_FAILURES`]), so 206 agree on a
+/// report. `validator-001` is among
 /// them in both suites: its `owl:imports <http://datashapes.org/dash>` sits on a node
 /// that is not an import anchor, so it is data, and the shapes graph loads with an
 /// empty import table. The other 195 come from the SHACL 1.0 suite and the
@@ -266,6 +262,9 @@ const AGREED_WITH_RESULTS_CASES: usize = 375;
 struct Loaded {
     shapes: Arc<Shapes>,
     data: Arc<RdfDataset>,
+    /// The law the case is loaded, restored and validated under: the case's own `profile`
+    /// for the W3C entries, the compatibility law for the first-party corpus.
+    profile: purrdf_shapes::ShaclProfile,
 }
 
 /// One discovered case, corpus-qualified, with its inputs already loaded (or the
@@ -340,13 +339,16 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
         Some(&file_iri(&case.shapes_path)),
     )
     .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
+    // Under the case's own law, as the grading harness loads it: the 2017 entries
+    // under the Recommendation, the SHACL 1.2 entries under the editor's draft.
+    let shapes = purrdf_shapes::shapes::from_dataset_with_options(
         &shapes_dataset,
         None,
         &doc_prefixes,
         None,
         case.shapes_graph_iri.clone(),
         &purrdf_shapes::ShapesImports::new(),
+        &purrdf_shapes::engine::ValidationOptions::default().with_profile(case.profile),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
 
@@ -360,6 +362,7 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
     Ok(Loaded {
         shapes: Arc::new(shapes),
         data,
+        profile: case.profile,
     })
 }
 
@@ -388,6 +391,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
     Ok(Loaded {
         shapes: Arc::new(shapes),
         data,
+        profile: purrdf_shapes::ShaclProfile::LEGACY,
     })
 }
 
@@ -434,13 +438,16 @@ fn classify(loaded: &Loaded) -> Bucket {
     // by value. That is the right shape anyway: the two lanes are two independent
     // restores of one artifact, which is exactly how a consumer meets them.
     let host = HostBindings::empty();
+    let options = purrdf_shapes::engine::ValidationOptions::default().with_profile(loaded.profile);
     let open = |lane: &str| match ShapesProduct::open(&bytes) {
         Ok(view) => Ok(view),
         Err(e) => Err(Bucket::Disagreed(format!(
             "the product this build just wrote does not open for the {lane} lane: {e}"
         ))),
     };
-    let admitted = match open("ADMIT").map(|view| view.admit(&ShapesProfile::CORE, &host)) {
+    let admitted = match open("ADMIT")
+        .map(|view| view.admit_with_options(&ShapesProfile::CORE, &host, &options))
+    {
         Ok(Ok(prepared)) => prepared,
         Ok(Err(e)) => {
             return Bucket::Disagreed(format!(
@@ -449,7 +456,9 @@ fn classify(loaded: &Loaded) -> Bucket {
         }
         Err(bucket) => return bucket,
     };
-    let rebuilt = match open("REBUILD").map(|view| view.rebuild(&ShapesProfile::CORE, &host)) {
+    let rebuilt = match open("REBUILD")
+        .map(|view| view.rebuild_with_options(&ShapesProfile::CORE, &host, &options))
+    {
         Ok(Ok(prepared)) => prepared,
         Ok(Err(e)) => {
             return Bucket::Disagreed(format!(
@@ -563,10 +572,7 @@ fn product_corpus_equivalence() {
         };
         let id = format!("w3c12/{}", case.id);
         cases.push(Case {
-            refusal_is_declared: matches!(case.expected, Expected::Failure)
-                || W3C12_REFUSED_AT_LOAD
-                    .iter()
-                    .any(|(ledgered, _)| *ledgered == id),
+            refusal_is_declared: matches!(case.expected, Expected::Failure),
             loaded: load_w3c(&case),
             id,
         });
@@ -655,20 +661,18 @@ fn product_corpus_equivalence() {
             }
             Bucket::Agreed(outcome) => {
                 agreed += 1;
-                if W3C12_REFUSED_AT_LOAD
-                    .iter()
-                    .any(|(ledgered, _)| *ledgered == id)
-                {
-                    errors.push(format!(
-                        "XLOAD [{id}]: W3C12_REFUSED_AT_LOAD says this shapes graph is refused \
-                         at load, but it loads, packs and agrees now; remove the entry"
-                    ));
-                }
                 if let Ok((_, results)) = &outcome.answer {
                     agreed_on_report += 1;
                     if *results > 0 {
                         agreed_with_results += 1;
                     }
+                } else if !case.refusal_is_declared {
+                    errors.push(format!(
+                        "ERRORED [{id}]: the three lanes agree on a validation error, and the \
+                         corpus does not DECLARE `mf:result sht:Failure` for this case; only a \
+                         declared failure may agree on an error rather than a report. {}",
+                        outcome.summary()
+                    ));
                 }
                 if let Some((dimension, reason)) = refusal_ledger.get(id) {
                     errors.push(format!(
@@ -755,6 +759,12 @@ fn product_corpus_equivalence() {
         "the number of cases that agreed on an actual report moved; three lanes agreeing on \
          an identical failure is agreement, but it is not evidence that any two reports were \
          compared"
+    );
+    assert_eq!(
+        agreed - agreed_on_report,
+        W3C12_DECLARED_VALIDATION_FAILURES,
+        "the agreed cases that ended in an identical validation error are exactly the declared \
+         SHACL 1.2 failures that load under the editor's-draft law"
     );
     assert_eq!(
         agreed_with_results, AGREED_WITH_RESULTS_CASES,

@@ -295,10 +295,10 @@ impl Violation {
             ViolationKind::Service => SERVICE_REFUSAL.to_owned(),
             ViolationKind::Values => {
                 "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
-             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
-             refuses every VALUES, which is stricter than the Working Draft's \
-             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
-             requires the stricter reading)"
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; the \
+             compatibility law refuses every VALUES because the 2017 Recommendation's \
+             pre-binding rules ban VALUES outright in a query with pre-bound variables, \
+             which is stricter than the Working Draft's mentions-a-pre-bound-variable rule)"
                     .to_owned()
             }
             ViolationKind::PreboundValues => format!(

@@ -38,10 +38,11 @@ use std::fs;
 use std::sync::Arc;
 
 use purrdf_rdf::RdfDataset;
+use purrdf_shapes::ShaclProfile;
 use purrdf_shapes::engine::{PreparedShapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
-use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_base};
+use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_options};
 use purrdf_shapes::text_ingest::{
     parse_ntriples_to_dataset, parse_turtle_document, parse_turtle_to_dataset,
 };
@@ -69,14 +70,6 @@ const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[(
     "a declared sht:Failure whose SPARQL constraint does not parse: the merged vocabulary's \
      implicit prefix declarations lengthen the prologue the engine puts before the query, \
      so both runs refuse the graph for the same syntax error at different byte offsets",
-)];
-
-/// Cases that end in an error, not a report, although no manifest declares `sht:Failure`
-/// for them, as `(case id, reason)`: SHACL 1.2 features the engine does not evaluate. The
-/// ledger runs both ways, and its reasons are those of the prepared-product harness.
-const REFUSED_AT_LOAD: &[(&str, &str)] = &[(
-    "w3c12/sparql/pre-binding/pre-binding-009",
-    "the sh:sparql query contains VALUES, which the engine refuses with pre-bound variables",
 )];
 
 /// Every case the three corpora contribute (129 + 73 + 213).
@@ -109,17 +102,21 @@ const TOTAL_CASES: usize = 415;
 /// compared on a report like every other case.
 const COMPARED_ON_REPORT: usize = 401;
 
-/// The inputs among [`TOTAL_CASES`] that must be refused at load and are compared on
-/// an identical error: the declared `sht:Failure` inputs (13, one of them in
-/// [`INVARIANCE_EXCEPTIONS`]). With [`COMPARED_ON_REPORT`], the exception and
-/// [`REFUSED_AT_LOAD`] they account for every case.
-const DECLARED_REFUSAL_CASES: usize = 12;
+/// The inputs among [`TOTAL_CASES`] that must end in an error under their own law and are
+/// compared on an identical error: the declared `sht:Failure` inputs (14, one of them in
+/// [`INVARIANCE_EXCEPTIONS`]; some are refused at load, the SHACL 1.2 pre-binding ones
+/// at validation). With [`COMPARED_ON_REPORT`] and the exception they account for every
+/// case.
+const DECLARED_REFUSAL_CASES: usize = 13;
 
 /// One case, reduced to what both parses need.
 struct Input {
     id: String,
     shapes_text: String,
     base: Option<String>,
+    /// The law the case is graded under (`tc.profile`); the first-party corpus runs the
+    /// compatibility law.
+    profile: ShaclProfile,
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
     /// The manifest expects `sht:Failure`: the one reason a case may be compared on an
@@ -140,13 +137,14 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
     let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?
         .prefixes;
-    let shapes = from_dataset_with_base(
+    let shapes = from_dataset_with_options(
         &dataset,
         None,
         &prefixes,
         input.box_role_vocab.clone(),
         input.shapes_graph.clone(),
         &purrdf_shapes::ShapesImports::new(),
+        &purrdf_shapes::engine::ValidationOptions::default().with_profile(input.profile),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     Ok((dataset, shapes))
@@ -170,6 +168,7 @@ fn inputs() -> Vec<Input> {
             id: format!("corpus/{}", case.name),
             shapes_text,
             base: None,
+            profile: ShaclProfile::LEGACY,
             box_role_vocab: Some(first_party_box_role_vocab()),
             shapes_graph: None,
             declared_failure: false,
@@ -194,6 +193,7 @@ fn inputs() -> Vec<Input> {
             id,
             shapes_text,
             base: Some(file_iri(&case.shapes_path)),
+            profile: case.profile,
             box_role_vocab: None,
             shapes_graph: case.shapes_graph_iri.clone(),
             declared_failure: matches!(case.expected, Expected::Failure),
@@ -292,12 +292,14 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
             .to_product(&ShapesProfile::CORE)
             .map_err(|e| format!("the merged shapes graph does not pack: {e}"))?;
         let host = HostBindings::empty();
+        let options =
+            purrdf_shapes::engine::ValidationOptions::default().with_profile(input.profile);
         for lane in ["admit", "rebuild"] {
             let view = ShapesProduct::open(&bytes).map_err(|e| format!("{lane}: open: {e}"))?;
             let restored = if lane == "admit" {
-                view.admit(&ShapesProfile::CORE, &host)
+                view.admit_with_options(&ShapesProfile::CORE, &host, &options)
             } else {
-                view.rebuild(&ShapesProfile::CORE, &host)
+                view.rebuild_with_options(&ShapesProfile::CORE, &host, &options)
             }
             .map_err(|e| format!("{lane}: {e}"))?;
             let restored_report = report(input, restored.shapes());
@@ -365,25 +367,21 @@ fn merging_the_vocabulary_changes_no_answer() {
         "VOCABULARY-INVARIANCE: {compared_on_report} compared on a report of {}",
         inputs.len()
     );
-    // The ratchet gap: a case compared only on an identical load error is a
-    // declared `sht:Failure` input or an expected import refusal, never an entry
-    // the engine refuses at load otherwise.
+    // The ratchet gap: a case compared only on an identical error is a declared
+    // `sht:Failure` input, never an entry that errors under its own law otherwise.
     let refused_at_load: Vec<&str> = not_on_report
         .iter()
         .filter(|input| !input.declared_failure)
         .map(|input| input.id.as_str())
         .collect();
-    let mut ledgered: Vec<&str> = REFUSED_AT_LOAD.iter().map(|(id, _)| *id).collect();
-    ledgered.sort_unstable();
-    let mut actual = refused_at_load;
-    actual.sort_unstable();
-    assert_eq!(
-        actual, ledgered,
-        "entries the engine refuses at load must be exactly the REFUSED_AT_LOAD ledger"
+    assert!(
+        refused_at_load.is_empty(),
+        "entries that end in an error under their own law must be declared `sht:Failure`: \
+         {refused_at_load:?}"
     );
     assert_eq!(
         not_on_report.len(),
-        DECLARED_REFUSAL_CASES + REFUSED_AT_LOAD.len(),
+        DECLARED_REFUSAL_CASES,
         "the declared refusals compared on an identical error"
     );
     assert_eq!(
