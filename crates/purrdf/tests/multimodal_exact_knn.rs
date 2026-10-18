@@ -217,7 +217,7 @@ fn registry(
     dataset: &RdfDataset,
     basis: ExclusionBasis,
 ) -> (
-    PropertyFunctionRegistry,
+    PropertyFunctionRegistry<'static>,
     Arc<SearchObservations>,
     Arc<KnnObservations>,
 ) {
@@ -482,7 +482,7 @@ fn a_text_and_exact_knn_read_stops_early_on_lookups_and_scans_the_space_once() {
 /// returning the `?d` of each row.
 fn bound_candidate(
     engine: &NativeSparqlEngine,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     dataset: &RdfDataset,
     pf: &str,
     term: &TermValue,
@@ -517,7 +517,7 @@ fn bound_candidate(
 /// The free ranked reading `?n <pf> ( seed OFFER ?d )`, as `(term, distance)` pairs.
 fn ranked_reading(
     engine: &NativeSparqlEngine,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     dataset: &RdfDataset,
     pf: &str,
 ) -> BTreeMap<TermValue, TermValue> {

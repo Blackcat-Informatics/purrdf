@@ -1469,7 +1469,7 @@ unsafe fn update_governed_entry(
 /// the environment reads every declaration.
 fn aggregate_env(
     aggregates: Option<&AggregateRegistry>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, PurrdfError> {
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, PurrdfError> {
     purrdf_sparql_eval::ExtensionEnv::over_aggregates(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )

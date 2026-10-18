@@ -1026,7 +1026,7 @@ struct DatasetExclusion<'d, D: DatasetView<ReadError = std::convert::Infallible>
     /// the run that produced the rows. An execution prepared against one registry
     /// and run under another is refused by the evaluator, so the same value must
     /// reach both calls — see [`execute_within`]'s own single-environment note.
-    env: purrdf_sparql_eval::SharedWorkspace<ExtensionEnv>,
+    env: purrdf_sparql_eval::SharedWorkspace<ExtensionEnv<'static>>,
     /// The lookups themselves, one list per alternative and one lookup per
     /// qualifying call of it, in the order
     /// [`StratumUnit::exclusion_sparql`](crate::StratumUnit) derived them, each
@@ -1795,7 +1795,7 @@ pub async fn execute<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
 ) -> Result<C::Output<'d>, ExecutionError> {
     execute_within(compiled, registry, dataset, ReadSchedule::Materialised).await
@@ -1846,7 +1846,7 @@ pub async fn execute_within<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
 ) -> Result<C::Output<'d>, ExecutionError> {
@@ -1866,7 +1866,7 @@ pub async fn execute_scoped_within<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
     bindings: &'d crate::ConstraintBindings<'d>,
@@ -1916,7 +1916,7 @@ fn execute_bound<
     C: CompiledRead,
 >(
     compiled: &C,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
     schedule: ReadSchedule,
     mut scoped: Option<ScopedExecutionInput<'_, 'd, D::Id>>,
@@ -3214,7 +3214,7 @@ struct CallRead<'d, D: DatasetView + Sync> {
     /// The stratum this read is for.
     stratum: Iri,
     /// The open invocation.
-    cursor: CallCursor,
+    cursor: CallCursor<'static>,
     /// Where the invocation's solutions carry the candidate and the block.
     columns: CandidateColumns,
     /// The planned depth: the most rows this stratum may contribute.

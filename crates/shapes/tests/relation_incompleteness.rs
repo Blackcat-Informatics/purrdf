@@ -81,18 +81,21 @@ impl PropertyFunction for AttestingRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(AttestingCursor {
             incomplete: self.incomplete,
         }))
     }
 }
 
-fn registry(incomplete: Option<&'static str>) -> Arc<PropertyFunctionRegistry> {
+fn registry(incomplete: Option<&'static str>) -> Arc<PropertyFunctionRegistry<'static>> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL_IRI.to_owned(),
@@ -140,7 +143,9 @@ fn people() -> Arc<RdfDataset> {
 }
 
 /// Validate the fixture with `relations` installed, on the governed lane.
-fn validate(relations: Arc<PropertyFunctionRegistry>) -> Result<GovernedValidation, String> {
+fn validate(
+    relations: Arc<PropertyFunctionRegistry<'static>>,
+) -> Result<GovernedValidation, String> {
     let _relations = enter_property_function_scope(relations);
     validate_dataset_with_governors(&people(), &shapes(), None, &QueryGovernors::UNBOUNDED)
         .map_err(|error| error.to_string())

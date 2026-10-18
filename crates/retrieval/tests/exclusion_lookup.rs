@@ -99,11 +99,14 @@ impl PropertyFunction for DeclaredRelation {
         }
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(EmptyCursor))
     }
 }
@@ -137,7 +140,7 @@ fn register(
     basis: ExclusionBasis,
     completeness: Completeness,
     mode: CandidateMode,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let arity = PfArity::new(1, 1);
     let candidate_bound = BindingPattern::from_bound_positions(arity.total(), [0]);
     let modes = match mode {

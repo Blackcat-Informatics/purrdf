@@ -130,11 +130,14 @@ impl PropertyFunction for ModedProducer {
         self.declared_for(mode)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // How many rows this call may return. A self-bounding relation is bounded by
         // the request in its own argument and by nothing else; one the evaluator bounds
         // takes no request and is cut by the branch's `LIMIT`.
@@ -233,7 +236,7 @@ fn registry(
     bound_rows: u64,
     free_rows: u64,
     held: usize,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let arity = match shape {
         Shape::EvaluatorBounded => PfArity::new(1, 1),
         Shape::SelfBounding => PfArity::new(1, 2),
@@ -349,7 +352,7 @@ impl Statistics for NoStatistics {
 }
 
 /// The depth and the declared row bound the layer records for one registry.
-fn planned(registry: &PropertyFunctionRegistry) -> (u32, Option<u64>) {
+fn planned(registry: &PropertyFunctionRegistry<'static>) -> (u32, Option<u64>) {
     let stats = NoStatistics::new();
     let request = RetrievalRequest::complete(vec![needle()]);
     let planned = plan(&request, registry, &stats).expect("the needle plans");
@@ -368,13 +371,15 @@ fn planned(registry: &PropertyFunctionRegistry) -> (u32, Option<u64>) {
 }
 
 /// Run one registry's plan end to end and report the stratum's status.
-fn status(registry: &PropertyFunctionRegistry) -> ProducerStatus {
+fn status(registry: &PropertyFunctionRegistry<'static>) -> ProducerStatus {
     run(registry).expect("the units run").1
 }
 
 /// Plan, compile and execute one registry, returning the compiled depth beside the
 /// stratum's status.
-fn run(registry: &PropertyFunctionRegistry) -> Result<(u32, ProducerStatus), ExecutionError> {
+fn run(
+    registry: &PropertyFunctionRegistry<'static>,
+) -> Result<(u32, ProducerStatus), ExecutionError> {
     let stats = NoStatistics::new();
     let request = RetrievalRequest::complete(vec![needle()]);
     let planned = plan(&request, registry, &stats).expect("the needle plans");
@@ -391,7 +396,10 @@ fn run(registry: &PropertyFunctionRegistry) -> Result<(u32, ProducerStatus), Exe
 }
 
 /// Raise `stratum/docs`'s depth to `depth` in a fresh plan and admit it.
-fn admit_at_depth(registry: &PropertyFunctionRegistry, depth: u32) -> Result<(), AdmissionError> {
+fn admit_at_depth(
+    registry: &PropertyFunctionRegistry<'static>,
+    depth: u32,
+) -> Result<(), AdmissionError> {
     let stats = NoStatistics::new();
     let request = RetrievalRequest::complete(vec![needle()]);
     let mut planned = plan(&request, registry, &stats).expect("the needle plans");
@@ -861,7 +869,7 @@ fn registry_declaring(
     shape: Shape,
     modes: Vec<BindingPattern>,
     rows: u64,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let arity = match shape {
         Shape::EvaluatorBounded => PfArity::new(1, 1),
         Shape::SelfBounding => PfArity::new(1, 2),

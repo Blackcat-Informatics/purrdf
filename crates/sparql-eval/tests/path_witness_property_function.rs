@@ -113,7 +113,7 @@ fn limits(min: u32, max: u32) -> PathLimits {
 }
 
 /// A registry holding one [`PathWitnessRelation`] under [`WALK`].
-fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionRegistry {
+fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         WALK.to_owned(),
@@ -123,7 +123,10 @@ fn walk_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionR
 }
 
 /// A registry holding one [`ShortestPathWitnessRelation`] under [`SHORTEST`].
-fn shortest_registry(graph: Arc<PathGraph>, limits: PathLimits) -> PropertyFunctionRegistry {
+fn shortest_registry(
+    graph: Arc<PathGraph>,
+    limits: PathLimits,
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         SHORTEST.to_owned(),
@@ -178,7 +181,7 @@ impl Answers {
 fn run(
     data: &RdfDataset,
     query: &str,
-    registry: &ExtensionEnv,
+    registry: &ExtensionEnv<'_>,
 ) -> Result<Answers, purrdf_core::RdfDiagnostic> {
     let result = NativeSparqlEngine::new().query_with_options_view(
         data,
@@ -202,7 +205,7 @@ fn run(
 /// declarations (the parse-time recognition [`engine`] used to carry) folded together
 /// with the fixture's relation registry, so an intentionally EMPTY registry (A5) still
 /// parses the caller IRI as a call rather than falling back to an ordinary triple pattern.
-fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
+fn env_of(relations: PropertyFunctionRegistry<'_>) -> ExtensionEnv<'_> {
     ExtensionEnv::new(
         parser_options(),
         relations,
@@ -212,7 +215,7 @@ fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
 }
 
 /// Evaluate `query`, requiring it to succeed.
-fn solve(data: &RdfDataset, query: &str, env: &ExtensionEnv) -> Answers {
+fn solve(data: &RdfDataset, query: &str, env: &ExtensionEnv<'_>) -> Answers {
     run(data, query, env).expect("the call resolves and evaluates")
 }
 

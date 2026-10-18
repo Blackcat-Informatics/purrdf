@@ -70,7 +70,7 @@ const REL_SIBLING: &str = "http://example.org/rel/flaggedElsewhere";
 const GENERATION: &str = "flag-index@7";
 
 /// A registry holding `REL`, plus the shared invocation counter.
-fn registry() -> (Arc<PropertyFunctionRegistry>, Arc<AtomicU64>) {
+fn registry() -> (Arc<PropertyFunctionRegistry<'static>>, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -127,7 +127,7 @@ fn data() -> Arc<RdfDataset> {
 /// Validate `shapes(predicate)` with `relations` installed.
 fn validate_with(
     predicate: &str,
-    relations: Arc<PropertyFunctionRegistry>,
+    relations: Arc<PropertyFunctionRegistry<'static>>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
     validate_dataset(&data(), &shapes(predicate)).map_err(|error| error.to_string())
@@ -244,7 +244,7 @@ const REL_MISSING: &str = "http://example.org/rel/neverRegistered";
 /// Validate with `relations` installed AND `REL_NS` declared as a relation namespace.
 fn validate_under_declared_namespace(
     predicate: &str,
-    relations: Arc<PropertyFunctionRegistry>,
+    relations: Arc<PropertyFunctionRegistry<'static>>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
     let _options = enter_parser_options_scope(Arc::new(ParserOptions {
@@ -635,7 +635,7 @@ ex:FlagShape
 /// Validate a `sh:sparql` constraint with `relations` installed and `REL_NS` declared.
 fn validate_constraint_under_declared_namespace(
     predicate: &str,
-    relations: Arc<PropertyFunctionRegistry>,
+    relations: Arc<PropertyFunctionRegistry<'static>>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
     let _options = enter_parser_options_scope(Arc::new(ParserOptions {

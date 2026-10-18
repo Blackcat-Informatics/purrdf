@@ -606,7 +606,7 @@ fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
 pub(super) fn build_relations(
     specs: Vec<(String, RelationSpec, Attestation)>,
     dataset: &RdfDataset,
-) -> PyResult<Option<PropertyFunctionRegistry>> {
+) -> PyResult<Option<PropertyFunctionRegistry<'static>>> {
     if specs.is_empty() {
         return Ok(None);
     }
@@ -632,7 +632,7 @@ pub(super) fn build_relations(
 pub(super) fn registry_over(
     specs: Vec<(String, RelationSpec, Attestation)>,
     dataset: &RdfDataset,
-) -> Result<PropertyFunctionRegistry, String> {
+) -> Result<PropertyFunctionRegistry<'static>, String> {
     let mut registry = PropertyFunctionRegistry::new();
     for (iri, spec, attestation) in specs {
         let relation = build_relation(&iri, spec, dataset)?;

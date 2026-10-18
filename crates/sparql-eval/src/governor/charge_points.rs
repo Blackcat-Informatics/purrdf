@@ -893,11 +893,14 @@ impl crate::property_fn::PropertyFunction for CountingRelation {
         self.declared
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &crate::property_fn::PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
+    ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opens.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(CountingCursor {
             rows: self.rows.clone(),
@@ -937,7 +940,7 @@ impl crate::property_fn::PfCursor for CountingCursor {
 /// A registry holding `relation` under [`PF`].
 fn pf_registry(
     relation: Arc<dyn crate::property_fn::PropertyFunction>,
-) -> crate::property_fn::PropertyFunctionRegistry {
+) -> crate::property_fn::PropertyFunctionRegistry<'static> {
     let mut registry = crate::property_fn::PropertyFunctionRegistry::new();
     registry.register(PF, relation);
     registry
@@ -984,7 +987,7 @@ fn pf_dataset(links: usize) -> Arc<RdfDataset> {
 fn run_with_relations(
     pattern: &GraphPattern,
     dataset: &RdfDataset,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
     governors: &QueryGovernors,
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));

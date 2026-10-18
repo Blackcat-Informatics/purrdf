@@ -83,7 +83,7 @@ pub(crate) struct SafetyRegistries<'a> {
     /// The SHACL-AF / native function table (`EvalCtx::user_functions`).
     pub(crate) functions: &'a UserFunctionRegistry,
     /// The property-function table (`EvalCtx::property_functions`).
-    pub(crate) relations: &'a PropertyFunctionRegistry,
+    pub(crate) relations: &'a PropertyFunctionRegistry<'a>,
     /// The custom-aggregate table (`EvalCtx::aggregates`), consulted by
     /// [`crate::eval::EvalCtx::may_fork_aggregate`] rather than by the
     /// expression/pattern walks above — a `Custom` aggregate is not an
@@ -796,7 +796,7 @@ fn pattern_reaches_unsafe_builtin(
 /// meaning yet, and classifying an unknown callee's volatility as `Stable` would be a
 /// guess in the one direction that can silently change an answer. A sequential fallback
 /// is always correct, so "when in doubt, UNSAFE".
-fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry) -> bool {
+fn property_function_is_unsafe(iri: &str, relations: &PropertyFunctionRegistry<'_>) -> bool {
     resolved_is_unsafe(relations.resolve(iri).map(|relation| relation.volatility()))
 }
 
@@ -1707,7 +1707,7 @@ mod tests {
     }
 
     /// Only a relation table configured.
-    fn relations(registry: &PropertyFunctionRegistry) -> SafetyRegistries<'_> {
+    fn relations<'a>(registry: &'a PropertyFunctionRegistry<'a>) -> SafetyRegistries<'a> {
         SafetyRegistries {
             functions: NONE.functions,
             relations: registry,
@@ -1965,16 +1965,19 @@ mod tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &crate::property_fn::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
+        ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Err(EvalError::function("not invoked by the safety gate"))
         }
     }
 
-    fn registry_with(volatility: Volatility) -> PropertyFunctionRegistry {
+    fn registry_with(volatility: Volatility) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             RELATION_IRI,
@@ -2792,18 +2795,21 @@ mod walk_tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &crate::property_fn::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::error::EvalError> {
+        ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, crate::error::EvalError>
+        where
+            Self: 'cursor,
+        {
             Err(crate::error::EvalError::function(
                 "not invoked by the safety gate",
             ))
         }
     }
 
-    fn relations() -> PropertyFunctionRegistry {
+    fn relations() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         for (iri, volatility) in [
             (RELATION_STABLE, Volatility::Stable),
@@ -2830,7 +2836,7 @@ mod walk_tests {
     /// Both tables configured.
     fn configured<'a>(
         functions: &'a UserFunctionRegistry,
-        relations: &'a PropertyFunctionRegistry,
+        relations: &'a PropertyFunctionRegistry<'_>,
     ) -> SafetyRegistries<'a> {
         SafetyRegistries {
             functions,

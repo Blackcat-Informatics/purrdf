@@ -30,7 +30,7 @@ fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
     run_with(query, QueryOptions::EMPTY)
 }
 
-fn run_with(query: &str, options: QueryOptions<'_>) -> Vec<Vec<Option<TermValue>>> {
+fn run_with(query: &str, options: QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(

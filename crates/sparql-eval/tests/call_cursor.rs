@@ -65,11 +65,14 @@ impl PropertyFunction for Ranked {
         HOLDS
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.offered
             .lock()
             .expect("the fixture recorder is never poisoned")
@@ -122,7 +125,9 @@ type Offered = Arc<Mutex<Vec<Option<u64>>>>;
 
 /// An environment holding the fixture relation, the counter of rows it minted, and
 /// the ceilings it was offered.
-fn recording_environment(moves_after: Option<u64>) -> (ExtensionEnv, Arc<AtomicU64>, Offered) {
+fn recording_environment(
+    moves_after: Option<u64>,
+) -> (ExtensionEnv<'static>, Arc<AtomicU64>, Offered) {
     let minted = Arc::new(AtomicU64::new(0));
     let offered: Offered = Arc::default();
     let mut registry = PropertyFunctionRegistry::new();
@@ -142,7 +147,7 @@ fn recording_environment(moves_after: Option<u64>) -> (ExtensionEnv, Arc<AtomicU
 }
 
 /// An environment holding the fixture relation, and the counter of rows it minted.
-fn environment(moves_after: Option<u64>) -> (ExtensionEnv, Arc<AtomicU64>) {
+fn environment(moves_after: Option<u64>) -> (ExtensionEnv<'static>, Arc<AtomicU64>) {
     let (env, minted, _) = recording_environment(moves_after);
     (env, minted)
 }
@@ -207,7 +212,7 @@ fn open(
     query: &str,
     moves_after: Option<u64>,
 ) -> (
-    Result<purrdf_sparql_eval::CallCursor, String>,
+    Result<purrdf_sparql_eval::CallCursor<'static>, String>,
     Arc<AtomicU64>,
 ) {
     let (env, minted) = environment(moves_after);

@@ -188,7 +188,7 @@ pub struct ScopedStratum {
 impl ScopedStratum {
     pub(crate) fn opened(
         stratum: &str,
-        cursor: &purrdf_sparql_eval::CallCursor,
+        cursor: &purrdf_sparql_eval::CallCursor<'_>,
         scope: &NativeCandidateScope<'_>,
         exclusions: ScopedRows,
         workspace: &WorkspaceCapability,

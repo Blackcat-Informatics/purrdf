@@ -93,11 +93,14 @@ impl PropertyFunction for OneRowRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opens.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(OneRowCursor {
             rows: vec![self.row.clone()].into_iter(),

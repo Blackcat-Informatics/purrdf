@@ -348,7 +348,7 @@ impl GovernedEntry<'_> {
         source: &'d SegmentedSession,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<SegmentedError, GovernedEvidence<SegmentedEvidence>> {
         match self {

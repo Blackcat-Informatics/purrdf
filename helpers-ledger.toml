@@ -2276,11 +2276,12 @@ reason = "PropertyFunction::arity is a required method with no default: every re
 members = [
     "purrdf_shapes::shacl_corpora::CorpusRelation::arity",
     "purrdf_sparql_eval::test_crate::prepared_admission::SubjectBoundRelation::arity",
+    "purrdf_sparql_eval::test_crate::query_completion::StoredProducer::arity",
 ]
 kind = "shim"
 criterion = "a"
 anchor = "purrdf_sparql_eval::PropertyFunction::arity"
-reason = "The required PropertyFunction::arity of two different relation types (the SHACL corpus relation and an admission-test mock), each declaring its own one-to-one arity; spelt through fully qualified paths, so they group apart from the other one-to-one relations."
+reason = "The required PropertyFunction::arity of three different relation types (the SHACL corpus relation, an admission-test mock and the captured storage-snapshot fixture), each declaring its own one-to-one arity; spelt through fully qualified paths, so they group apart from the other one-to-one relations."
 
 [[distinct]]
 members = [

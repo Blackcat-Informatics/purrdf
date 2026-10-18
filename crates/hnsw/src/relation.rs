@@ -864,12 +864,15 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
     /// row — and this relation does not claim one.
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let invocation = KnnInvocation::open_owned(
             "the HNSW relation",
             args,
@@ -1112,7 +1115,7 @@ pub struct RankedHnswRegistration {
 /// PurRDF supplies no IRI: the caller's predicate is what a query text names the provider
 /// by, which is the second of the three approximation channels the contract requires.
 pub fn register_ranked_hnsw_relation<A: Arithmetic>(
-    registry: &mut PropertyFunctionRegistry,
+    registry: &mut PropertyFunctionRegistry<'_>,
     iri: impl Into<String>,
     space: Arc<HnswSpace<A>>,
     declared: RankedHnswRegistration,
@@ -1150,7 +1153,7 @@ pub fn register_ranked_hnsw_relation<A: Arithmetic>(
 /// kind, depth datatype, vector-order disclosure and domain declaration a
 /// plain-SPARQL host has no reason to invent.
 pub fn register_hnsw_relation<A: Arithmetic>(
-    registry: &mut PropertyFunctionRegistry,
+    registry: &mut PropertyFunctionRegistry<'_>,
     iri: impl Into<String>,
     space: Arc<HnswSpace<A>>,
 ) {

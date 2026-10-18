@@ -50,7 +50,7 @@ fn high_cost_query() -> String {
 
 fn high_cost_calibration(
     request: SparqlRequest<'_>,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
 ) -> (u64, u64, purrdf_alloc_probe::Measurement) {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)

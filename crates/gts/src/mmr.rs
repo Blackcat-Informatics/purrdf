@@ -7,16 +7,15 @@
 //! [`purrdf_lex::json`], under its default depth cap.
 
 use purrdf_hash::Domain;
+use purrdf_hash::blake3::RecordHasher;
 use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::head;
 use purrdf_lex::json::{self, Object, Value as Json};
 
 use crate::reader::{as_i128, as_idx};
-use crate::wire::{
-    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
-    unwrap_header,
-};
+use crate::wire::{MAGIC, VERSION, content_id, header_id, iter_items, map_get, unwrap_header};
 
 /// Stable detached proof schema tag emitted by [`Proof::to_json`].
 pub const PROOF_SCHEMA: &str = "gts-mmr-proof-v1";
@@ -178,30 +177,24 @@ impl MmrPeaks {
             .count
             .checked_add(1)
             .ok_or(MmrStateError::CountOverflow)?;
-        let mut carried = MmrPeak {
-            height: 0,
-            hash: leaf_hash(self.count, frame_id),
-        };
-        while self
-            .peaks
-            .last()
-            .is_some_and(|peak| peak.height == carried.height)
-        {
+        let mut height = 0;
+        let mut hash = leaf_hash(self.count, frame_id);
+        while self.peaks.last().is_some_and(|peak| peak.height == height) {
             let left = self.peaks.pop().expect("matching left peak exists");
-            let height = carried.height + 1;
-            carried = MmrPeak {
-                height,
-                hash: parent_hash(height, &left.hash, &carried.hash),
-            };
+            height += 1;
+            hash = parent_hash(height, &left.hash, &hash);
         }
-        self.peaks.push(carried);
+        self.peaks.push(MmrPeak {
+            height,
+            hash: hash.to_vec(),
+        });
         self.count = count;
         Ok(())
     }
 
     /// Commit to the count and ordered peaks using the existing root preimage.
     pub fn root(&self) -> Vec<u8> {
-        root_hash(self.count, &self.peaks)
+        root_hash(self.count, &self.peaks).to_vec()
     }
 }
 
@@ -253,50 +246,53 @@ struct Node {
     height: usize,
     start: usize,
     end: usize,
-    hash: Vec<u8>,
+    hash: [u8; 32],
     left: Option<Box<Self>>,
     right: Option<Box<Self>>,
 }
 
-fn uint(n: u64) -> Value {
-    Value::from(n)
+// Arrays contain only definite-length text, unsigned integers and byte strings:
+// streaming their heads through the shared CBOR encoder is already canonical.
+// BLAKE3's Write implementation is infallible; only its fixed stack state and
+// CBOR's nine-byte header buffer are needed, regardless of payload length.
+fn node_hasher(domain: Domain, arity: u64, coordinate: u64) -> RecordHasher {
+    let mut hash = RecordHasher::new();
+    hash_head(&mut hash, head::ARRAY, arity);
+    head::write_text(&mut hash, domain.as_str()).expect("BLAKE3 writes cannot fail");
+    hash_head(&mut hash, head::UNSIGNED, coordinate);
+    hash
 }
 
-fn leaf_hash(index: u64, frame_id: &[u8]) -> Vec<u8> {
-    blake3_256(&canonical(&Value::Array(vec![
-        LEAF_DOMAIN.as_str().into(),
-        uint(index),
-        Value::Bytes(frame_id.to_vec()),
-    ])))
-    .to_vec()
+fn hash_head(hash: &mut RecordHasher, major: u8, argument: u64) {
+    head::write_head(hash, major, argument).expect("BLAKE3 writes cannot fail");
 }
 
-fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> Vec<u8> {
-    blake3_256(&canonical(&Value::Array(vec![
-        PARENT_DOMAIN.as_str().into(),
-        uint(parent_height as u64),
-        Value::Bytes(left.to_vec()),
-        Value::Bytes(right.to_vec()),
-    ])))
-    .to_vec()
+fn hash_bytes(hash: &mut RecordHasher, bytes: &[u8]) {
+    head::write_bytes(hash, bytes).expect("BLAKE3 writes cannot fail");
 }
 
-fn root_hash(count: u64, peaks: &[MmrPeak]) -> Vec<u8> {
-    let peak_values: Vec<Value> = peaks
-        .iter()
-        .map(|peak| {
-            Value::Array(vec![
-                uint(peak.height as u64),
-                Value::Bytes(peak.hash.clone()),
-            ])
-        })
-        .collect();
-    blake3_256(&canonical(&Value::Array(vec![
-        ROOT_DOMAIN.as_str().into(),
-        uint(count),
-        Value::Array(peak_values),
-    ])))
-    .to_vec()
+fn leaf_hash(index: u64, frame_id: &[u8]) -> [u8; 32] {
+    let mut hash = node_hasher(LEAF_DOMAIN, 3, index);
+    hash_bytes(&mut hash, frame_id);
+    *hash.finalize().as_bytes()
+}
+
+fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> [u8; 32] {
+    let mut hash = node_hasher(PARENT_DOMAIN, 4, parent_height as u64);
+    hash_bytes(&mut hash, left);
+    hash_bytes(&mut hash, right);
+    *hash.finalize().as_bytes()
+}
+
+fn root_hash(count: u64, peaks: &[MmrPeak]) -> [u8; 32] {
+    let mut hash = node_hasher(ROOT_DOMAIN, 3, count);
+    hash_head(&mut hash, head::ARRAY, peaks.len() as u64);
+    for peak in peaks {
+        hash_head(&mut hash, head::ARRAY, 2);
+        hash_head(&mut hash, head::UNSIGNED, peak.height as u64);
+        hash_bytes(&mut hash, &peak.hash);
+    }
+    *hash.finalize().as_bytes()
 }
 
 fn build_nodes(frame_ids: &[Vec<u8>]) -> Vec<Node> {
@@ -340,7 +336,7 @@ fn peak_list(nodes: &[Node]) -> Vec<MmrPeak> {
         .iter()
         .map(|node| MmrPeak {
             height: node.height,
-            hash: node.hash.clone(),
+            hash: node.hash.to_vec(),
         })
         .collect()
 }
@@ -366,7 +362,7 @@ fn peak_fold(frame_ids: &[Vec<u8>]) -> Vec<MmrPeak> {
 /// The root commits to both the frame count and the ordered peak list, so
 /// adding a frame changes the root even when an earlier proof path is reused.
 pub fn root(frame_ids: &[Vec<u8>]) -> Vec<u8> {
-    root_hash(frame_ids.len() as u64, &peak_fold(frame_ids))
+    root_hash(frame_ids.len() as u64, &peak_fold(frame_ids)).to_vec()
 }
 
 fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
@@ -381,7 +377,7 @@ fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
             path.push(ProofStep {
                 parent_height: node.height,
                 side: ProofSide::Right,
-                hash: right.hash.clone(),
+                hash: right.hash.to_vec(),
             });
             return true;
         }
@@ -389,7 +385,7 @@ fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
         path.push(ProofStep {
             parent_height: node.height,
             side: ProofSide::Left,
-            hash: left.hash.clone(),
+            hash: left.hash.to_vec(),
         });
         return true;
     }
@@ -416,7 +412,7 @@ pub fn prove(frame_ids: &[Vec<u8>], target_index: usize) -> Option<Proof> {
         count: frame_ids.len(),
         leaf_index: target_index,
         frame_id: frame_ids[target_index].clone(),
-        root: root_hash(frame_ids.len() as u64, &peaks),
+        root: root_hash(frame_ids.len() as u64, &peaks).to_vec(),
         peak_index,
         peaks,
         path,
@@ -532,11 +528,11 @@ pub fn verify_proof(proof: &Proof) -> Result<(), String> {
             peak.height
         ));
     }
-    if carried != peak.hash {
+    if carried.as_slice() != peak.hash.as_slice() {
         return Err("proof path does not reconstruct the selected peak".to_string());
     }
     let computed_root = root_hash(proof.count as u64, &proof.peaks);
-    if computed_root != proof.root {
+    if computed_root.as_slice() != proof.root.as_slice() {
         return Err("proof peaks do not reconstruct the declared root".to_string());
     }
     Ok(())
@@ -840,6 +836,84 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::{blake3_256, canonical};
+
+    #[test]
+    fn streamed_node_preimages_match_canonical_trees_without_allocations() {
+        let coordinates = [
+            0,
+            23,
+            24,
+            255,
+            256,
+            65_535,
+            65_536,
+            u64::from(u32::MAX),
+            1_u64 << 32,
+            u64::MAX,
+        ];
+        let lengths = [0, 23, 24, 255, 256, 65_535, 65_536];
+        for coordinate in coordinates {
+            for length in lengths {
+                let bytes = vec![0x91; length];
+                let peaks = vec![MmrPeak {
+                    height: 63,
+                    hash: bytes.clone(),
+                }];
+                let expected_leaf = blake3_256(&canonical(&Value::Array(vec![
+                    LEAF_DOMAIN.as_str().into(),
+                    coordinate.into(),
+                    Value::Bytes(bytes.clone()),
+                ])));
+                let expected_parent = blake3_256(&canonical(&Value::Array(vec![
+                    PARENT_DOMAIN.as_str().into(),
+                    63_u64.into(),
+                    Value::Bytes(bytes.clone()),
+                    Value::Bytes(bytes.clone()),
+                ])));
+                let expected_root = blake3_256(&canonical(&Value::Array(vec![
+                    ROOT_DOMAIN.as_str().into(),
+                    coordinate.into(),
+                    Value::Array(vec![Value::Array(vec![
+                        63_u64.into(),
+                        Value::Bytes(bytes.clone()),
+                    ])]),
+                ])));
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let leaf = leaf_hash(coordinate, &bytes);
+                let parent = parent_hash(63, &bytes, &bytes);
+                let root = root_hash(coordinate, &peaks);
+                let measured = window.close();
+                assert_eq!(leaf, expected_leaf);
+                assert_eq!(parent, expected_parent);
+                assert_eq!(root, expected_root);
+                assert_eq!(measured.allocations, 0, "{measured:?}");
+                assert_eq!(measured.requested_bytes, 0, "{measured:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn frontier_carries_allocate_only_the_public_digest() {
+        // Existing frontier capacity accommodates the resulting single peak;
+        // all three parents must carry through fixed-size internal digests.
+        let mut frontier = MmrPeaks::from_parts(7, synthetic_peaks(7)).expect("valid frontier");
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        frontier.push(&[42; 32]).expect("append fits");
+        let measured = window.close();
+        assert_eq!(frontier.count(), 8);
+        assert_eq!(frontier.peaks().len(), 1);
+        assert_eq!(frontier.peaks()[0].height, 3);
+        assert_eq!(measured.allocations, 1, "{measured:?}");
+        assert_eq!(measured.requested_bytes, 32, "{measured:?}");
+
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let root = frontier.root();
+        let measured = window.close();
+        assert_eq!(root.len(), 32);
+        assert_eq!(measured.allocations, 1, "{measured:?}");
+        assert_eq!(measured.requested_bytes, 32, "{measured:?}");
+    }
 
     fn id(n: u8) -> Vec<u8> {
         vec![n; 32]
@@ -997,7 +1071,7 @@ mod tests {
     /// The tree-building computation `root` used before the peaks-only fold.
     fn root_via_tree(frame_ids: &[Vec<u8>]) -> Vec<u8> {
         let nodes = build_nodes(frame_ids);
-        root_hash(frame_ids.len() as u64, &peak_list(&nodes))
+        root_hash(frame_ids.len() as u64, &peak_list(&nodes)).to_vec()
     }
 
     #[test]
@@ -1288,10 +1362,7 @@ mod tests {
         preimage.extend_from_slice(&left);
         preimage.extend_from_slice(b"\x58\x20");
         preimage.extend_from_slice(&right);
-        assert_eq!(
-            parent_hash(63, &left, &right),
-            blake3_256(&preimage).to_vec()
-        );
+        assert_eq!(parent_hash(63, &left, &right), blake3_256(&preimage));
     }
 
     #[test]

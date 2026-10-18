@@ -116,7 +116,9 @@ pub fn iri(local: &str) -> TermValue {
 }
 
 /// Query options carrying `env`, the extension environment a call is admitted against.
-pub fn with_env(env: &ExtensionEnv) -> QueryOptions<'_> {
+pub fn with_env<'options, 'providers>(
+    env: &'options ExtensionEnv<'providers>,
+) -> QueryOptions<'options, 'providers> {
     QueryOptions::new().with_env(env)
 }
 

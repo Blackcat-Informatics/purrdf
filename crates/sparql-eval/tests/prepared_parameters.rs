@@ -113,11 +113,14 @@ impl PropertyFunction for Related {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let Some(TermValue::Iri(subject)) = args.get(0) else {
             return Err(EvalError::function(
                 "the subject at position 0 is free or not an IRI; this relation is declared \
@@ -147,7 +150,7 @@ impl PfCursor for OneRow {
 
 /// The relation registered under the fixture predicate, and the handle a test reads its
 /// invocation count back from.
-fn registry() -> (PropertyFunctionRegistry, Arc<Related>) {
+fn registry() -> (PropertyFunctionRegistry<'static>, Arc<Related>) {
     let relation = Arc::new(Related::new());
     let registered: Arc<dyn PropertyFunction> = Arc::<Related>::clone(&relation);
     let mut registry = PropertyFunctionRegistry::new();
@@ -155,7 +158,7 @@ fn registry() -> (PropertyFunctionRegistry, Arc<Related>) {
     (registry, relation)
 }
 
-fn environment(registry: &PropertyFunctionRegistry) -> ExtensionEnv {
+fn environment<'query>(registry: &PropertyFunctionRegistry<'query>) -> ExtensionEnv<'query> {
     ExtensionEnv::over_relations(registry.clone()).expect("the fixture declaration reads cleanly")
 }
 
@@ -164,7 +167,7 @@ fn run(
     engine: &NativeSparqlEngine,
     execution: &mut PreparedExecution,
     dataset: &RdfDataset,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
 ) -> Result<usize, purrdf_core::RdfDiagnostic> {
     engine.execute(execution, dataset, options, |outcome| match outcome {
         InternedOutcome::Solutions(solutions) => solutions.len(),
@@ -759,11 +762,14 @@ impl PropertyFunction for Owns {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let Some(subject) = args.get(0) else {
             return Err(EvalError::function(
                 "the subject at position 0 is free; this relation is declared `bf` and cannot \
@@ -813,7 +819,7 @@ fn answers(
     engine: &NativeSparqlEngine,
     execution: &mut PreparedExecution,
     dataset: &RdfDataset,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     column: usize,
 ) -> Result<Vec<String>, purrdf_core::RdfDiagnostic> {
     engine.execute(execution, dataset, options, |outcome| match outcome {

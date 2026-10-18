@@ -98,11 +98,14 @@ impl PropertyFunction for CeilingRecorder {
         self.inner.rows_per_invocation(mode)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.ceilings.lock().expect("uncontended").push(ceiling);
         self.inner.open(args, ceiling)
     }

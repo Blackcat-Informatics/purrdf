@@ -148,11 +148,14 @@ impl PropertyFunction for Table {
         2
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let input = args.get(0).cloned();
         self.invocations
             .lock()
@@ -297,12 +300,12 @@ const DOORS: [Door; 6] = [
 ];
 
 /// A registry holding one bound-only [`Table`], and the recorder it writes to.
-fn relations() -> (ExtensionEnv, Arc<Mutex<Vec<Invocation>>>) {
+fn relations() -> (ExtensionEnv<'static>, Arc<Mutex<Vec<Invocation>>>) {
     relations_declaring(&["bf"])
 }
 
 /// A registry holding one [`Table`] declaring `modes`, and the recorder it writes to.
-fn relations_declaring(modes: &[&str]) -> (ExtensionEnv, Arc<Mutex<Vec<Invocation>>>) {
+fn relations_declaring(modes: &[&str]) -> (ExtensionEnv<'static>, Arc<Mutex<Vec<Invocation>>>) {
     let invocations = Arc::new(Mutex::new(Vec::new()));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -357,7 +360,7 @@ fn interned_rows<D: purrdf_core::DatasetView<ReadError = std::convert::Infallibl
 fn request(
     engine: &NativeSparqlEngine,
     data: &Arc<RdfDataset>,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     door: Door,
     lane: ShaclPrebinding,
     query: &str,
@@ -428,7 +431,7 @@ fn request(
 fn prepared(
     engine: &NativeSparqlEngine,
     data: &Arc<RdfDataset>,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     lane: ShaclPrebinding,
     query: &str,
     value: &TermValue,
@@ -625,7 +628,7 @@ const HELD: usize = KINDS.len() * NAMES.len();
 /// through every request door, each on a fresh engine — and hold every run to
 /// `expected` and to a relation invoked bound, with exactly `value`, every time.
 fn admitted_bound_everywhere(
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     invocations: &Mutex<Vec<Invocation>>,
     lane: ShaclPrebinding,
     query: &str,

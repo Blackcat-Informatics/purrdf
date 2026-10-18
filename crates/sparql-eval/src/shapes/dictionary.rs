@@ -22,7 +22,7 @@ use purrdf_sparql_algebra::{
 
 pub(crate) fn offer(
     pattern: &GraphPattern,
-    relations: &crate::PropertyFunctionRegistry,
+    relations: &crate::PropertyFunctionRegistry<'_>,
     has_evidence_source: bool,
     workspace: &WorkspaceCapability,
 ) -> Result<Option<ShapeOffer>, EvalError> {

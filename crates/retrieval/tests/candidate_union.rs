@@ -43,7 +43,7 @@ impl Statistics for NoDepthStatistics {
     }
 }
 
-fn mocks() -> PropertyFunctionRegistry {
+fn mocks() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     for (stratum, values) in [
         ("lexical", vec!["a", "b", "c", "d"]),
@@ -204,7 +204,14 @@ impl PropertyFunction for ArgumentProducer {
     fn rows_per_invocation(&self, _: BindingPattern) -> u64 {
         2
     }
-    fn open(&self, args: &PfArgs<'_>, _: Option<u64>) -> Result<Box<dyn PfCursor>, EvalError> {
+    fn open<'cursor>(
+        &self,
+        args: &PfArgs<'_>,
+        _: Option<u64>,
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let args: Vec<_> = args.flattened().collect();
         let Some(TermValue::Literal { lexical_form, .. }) = args[2] else {
             panic!("actual compiled depth argument must be bound");
@@ -558,7 +565,14 @@ impl PropertyFunction for FaultingProducer {
             20
         }
     }
-    fn open(&self, args: &PfArgs<'_>, _: Option<u64>) -> Result<Box<dyn PfCursor>, EvalError> {
+    fn open<'cursor>(
+        &self,
+        args: &PfArgs<'_>,
+        _: Option<u64>,
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(FaultingCursor {
             fault: self.fault,
             emitted: 0,
@@ -593,7 +607,7 @@ impl PfCursor for FaultingCursor {
     }
 }
 
-fn fault_registry(fault: NativeFault) -> PropertyFunctionRegistry {
+fn fault_registry(fault: NativeFault) -> PropertyFunctionRegistry<'static> {
     let mut registry = mocks();
     registry.register_ranked(
         "http://example.org/pf/fault",

@@ -98,7 +98,7 @@ fn index_of(dataset: &RdfDataset) -> Arc<TextIndex> {
 
 /// A registry holding a ranked-retrieval relation over `index`, under the
 /// fixture IRI.
-fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
+fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         SEARCH.to_owned(),
@@ -113,7 +113,7 @@ fn registry_of(index: &Arc<TextIndex>) -> PropertyFunctionRegistry {
 fn evaluate(
     engine: &NativeSparqlEngine,
     dataset: &RdfDataset,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'static>,
     query: &str,
 ) -> SparqlResult {
     engine
@@ -137,7 +137,7 @@ fn evaluate(
 fn srj(
     engine: &NativeSparqlEngine,
     dataset: &RdfDataset,
-    relations: &PropertyFunctionRegistry,
+    relations: &PropertyFunctionRegistry<'static>,
     query: &str,
 ) -> String {
     let result = evaluate(engine, dataset, relations, query);

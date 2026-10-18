@@ -629,11 +629,14 @@ impl crate::property_fn::PropertyFunction for TagRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &crate::property_fn::PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::EvalError> {
+    ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, crate::EvalError>
+    where
+        Self: 'cursor,
+    {
         let rows = match args.get(0) {
             Some(purrdf_core::TermValue::Iri(subject)) => {
                 let tag = purrdf_core::TermValue::Literal {

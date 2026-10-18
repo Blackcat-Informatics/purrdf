@@ -111,11 +111,14 @@ impl PropertyFunction for BoundSubjectLookup {
         self.rows_per_subject
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // The declared mode is `bf`, so a free subject is an invocation no declared
         // mode subsumes: refusing it is the hard-fail doctrine (an empty cursor would
         // be indistinguishable from an honest empty answer). The feasibility pass

@@ -1625,21 +1625,27 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
     /// selection only when it is free; otherwise the full `k` are ranked and the cursor
     /// does the cutting, spending the licence only on rows it emits. The membership
     /// answer is at most one row and needs no such care.
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
             .and_then(crate::WorkspaceCursor::into_resident)
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: crate::WorkspaceCapability,
-    ) -> Result<crate::WorkspaceCursor, EvalError> {
+    ) -> Result<crate::WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let invocation = KnnInvocation::open_owned(
             "the embedding kNN relation",
             args,

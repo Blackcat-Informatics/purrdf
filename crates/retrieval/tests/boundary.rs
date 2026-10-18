@@ -101,7 +101,7 @@ fn single_registry(
     producer_iri: &str,
     rows: u64,
     count: usize,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         producer_iri,
@@ -136,7 +136,10 @@ fn single_profile(stratum_iri: &str) -> FusionProfile {
 /// Run `sparql` through the evaluator itself, with no composition type in the
 /// path: this is exactly what a caller does when it stops at `compile` (or
 /// starts at `execute`).
-fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Option<TermValue>>> {
+fn run_query(
+    sparql: &str,
+    registry: &PropertyFunctionRegistry<'static>,
+) -> Vec<Vec<Option<TermValue>>> {
     let dataset = RdfDatasetBuilder::new()
         .freeze()
         .expect("an empty default graph is structurally valid");
@@ -1603,7 +1606,7 @@ async fn execute_shape<
     D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync,
 >(
     compiled: &CompiledRetrieval,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     dataset: &'d D,
 ) -> Result<ExecutionResult<'d>, ExecutionError> {
     execute(compiled, registry, dataset).await
@@ -1627,7 +1630,7 @@ where
 #[allow(clippy::future_not_send)]
 async fn search_shape<S, D>(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &S,
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
@@ -1666,7 +1669,7 @@ fn no_stage_takes_a_selector() {
     // instantiation; the other two parameters and the result are exact.
     let _: fn(
         &RetrievalRequest,
-        &PropertyFunctionRegistry,
+        &PropertyFunctionRegistry<'static>,
         &MockStatistics,
     ) -> Result<Plan, PlanError> = plan;
     let _: fn(&Plan, &AdmissionEnvironment<'_>) -> Result<CompiledRetrieval, AdmissionError> =
@@ -2010,7 +2013,7 @@ fn registry_declaring(
     count: usize,
     domains: CandidateDomains,
     duplicates: DuplicatePolicy,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut declaration = ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)], true);
     declaration.domains = domains;
     declaration.duplicates = duplicates;
@@ -2034,7 +2037,7 @@ fn registry_within_one_block(
     producer_iri: &str,
     rows: u64,
     count: usize,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     registry_declaring(
         stratum_iri,
         producer_iri,

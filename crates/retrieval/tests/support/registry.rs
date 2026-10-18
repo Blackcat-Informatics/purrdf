@@ -144,11 +144,14 @@ impl PropertyFunction for MockProducer {
         self.rows
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // A bound position is an input the call site supplied, and the engine
         // drops any row that disagrees with it there. Echoing the input back is
         // the cheapest correct behaviour, and it is what makes these fixtures
@@ -204,7 +207,7 @@ pub fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFuncti
 
 /// The fixture registry: a catch-all producer the host declares mandatory, a
 /// literal producer, an IRI-seed producer, and one unranked producer.
-pub fn fixture_registry() -> PropertyFunctionRegistry {
+pub fn fixture_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
         kind: TermKind::Literal,

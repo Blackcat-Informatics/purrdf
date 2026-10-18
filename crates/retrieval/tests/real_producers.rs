@@ -1018,7 +1018,7 @@ fn space_over(rows: &[(&str, Vec<f64>)], guard: KnnGuard) -> EmbeddingSpace {
 
 /// Register both real relations as ranked producers, using the declaration each
 /// relation hands out for a caller-supplied stratum.
-fn registry() -> PropertyFunctionRegistry {
+fn registry() -> PropertyFunctionRegistry<'static> {
     registry_with(EmbeddingKnnRelation::new(Arc::new(embedding_space())))
 }
 
@@ -1026,14 +1026,14 @@ fn registry() -> PropertyFunctionRegistry {
 /// relation, the same space and the same host declarations, so two registries built
 /// from two relations over one space differ in the relation's arithmetic and in
 /// nothing else.
-fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry {
+fn registry_with<A: Arithmetic>(knn: EmbeddingKnnRelation<A>) -> PropertyFunctionRegistry<'static> {
     registry_with_text(knn, TextSearchRelation::new(Arc::new(text_index())))
 }
 
 fn registry_with_text<A: Arithmetic>(
     knn: EmbeddingKnnRelation<A>,
     text: TextSearchRelation,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text_declaration = text
@@ -1456,7 +1456,7 @@ fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_st
 // runtime-agnostic future; see the same allow on `search` itself.
 #[allow(clippy::future_not_send)]
 async fn manual_composition(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &NoStatistics,
     data: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
@@ -1811,7 +1811,7 @@ fn one_stratum_profile(stratum: &str) -> FusionProfile {
 /// The declaration is the relation's own rather than one written here, which is
 /// what makes the assertions below statements about the shipped producer: a
 /// hand-written `Unique` would only prove that this test can write the word.
-fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
+fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let text = TextSearchRelation::new(Arc::new(index));
     let declaration = text
@@ -1832,7 +1832,7 @@ fn text_only_registry(index: TextIndex) -> PropertyFunctionRegistry {
 }
 
 /// Register the nearest-neighbour relation alone, under its own declaration.
-fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
+fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let knn = EmbeddingKnnRelation::new(Arc::new(space));
     let declaration = knn.ranked_declaration(
@@ -1860,7 +1860,7 @@ fn knn_only_registry(space: EmbeddingSpace) -> PropertyFunctionRegistry {
 /// reported as having broken its promise rather than as an opaque error.
 fn answer_under_the_declared_contract(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     data: &RdfDataset,
     profile: &FusionProfile,
 ) -> SearchResult {
@@ -2271,12 +2271,15 @@ impl PropertyFunction for CountingTextRelation {
         self.inner.supports_candidate_scope()
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<purrdf_sparql_eval::WorkspaceCursor, EvalError> {
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opened.fetch_add(1, Ordering::Relaxed);
         let cursor = self.inner.open_admitted(args, ceiling, workspace.clone())?;
         if self.refuse_suffix.is_none() && self.attachment.is_none() {
@@ -2312,7 +2315,7 @@ impl PropertyFunction for CountingTextRelation {
 }
 
 struct PrefixRefusalCursor {
-    cursor: purrdf_sparql_eval::WorkspaceCursor,
+    cursor: purrdf_sparql_eval::WorkspaceCursor<'static>,
     calls: Option<Arc<AtomicU64>>,
     attachment: Option<NativeAttachment>,
 }
@@ -2371,7 +2374,7 @@ impl PfCursor for PrefixRefusalCursor {
 ///
 /// The declaration is the shipped relation's own — read off the relation before it
 /// is wrapped — so the registry describes the real producer and not the wrapper.
-fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
+fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry<'static>, Arc<AtomicU64>) {
     let mut registry = PropertyFunctionRegistry::new();
     let inner = TextSearchRelation::new(Arc::new(index));
     let declaration = inner
@@ -2404,7 +2407,7 @@ fn counting_text_registry(index: TextIndex) -> (PropertyFunctionRegistry, Arc<At
 /// bound is the one thing neither of those two can report.
 fn sole_producer_answer(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     data: &RdfDataset,
 ) -> (purrdf_retrieval::Plan, SearchResult) {
     let statistics = NoStatistics;
@@ -2566,7 +2569,9 @@ const SAMPLE_EVIDENCE: &str = "this space was embedded over the first half of \
 /// The space really is short — it is built from a truncated row list, not
 /// labelled as though it were — so the declaration beside it is a statement a
 /// reader can falsify by deleting the truncation.
-fn registry_over_a_partial_vector_space(fidelity: RankFidelity) -> PropertyFunctionRegistry {
+fn registry_over_a_partial_vector_space(
+    fidelity: RankFidelity,
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text = TextSearchRelation::new(Arc::new(text_index()));
@@ -2602,7 +2607,7 @@ fn registry_over_a_partial_vector_space(fidelity: RankFidelity) -> PropertyFunct
 }
 
 /// Run the standard request against `registry` over the whole dataset.
-fn answer_from(registry: &PropertyFunctionRegistry) -> SearchResult {
+fn answer_from(registry: &PropertyFunctionRegistry<'static>) -> SearchResult {
     let data = dataset();
     let statistics = NoStatistics;
     let environment = AdmissionEnvironment {

@@ -57,11 +57,14 @@ impl PropertyFunction for Silent {
         10
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(Empty))
     }
 }
@@ -86,7 +89,7 @@ impl Statistics for Bounds {
     }
 }
 
-fn registry() -> PropertyFunctionRegistry {
+fn registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/any"),

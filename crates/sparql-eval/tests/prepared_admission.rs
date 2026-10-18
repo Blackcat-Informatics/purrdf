@@ -426,16 +426,19 @@ impl purrdf_sparql_eval::PropertyFunction for SubjectBoundRelation {
     fn rows_per_invocation(&self, _: purrdf_core::binding_pattern::BindingPattern) -> u64 {
         1
     }
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &purrdf_sparql_eval::PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+    where
+        Self: 'cursor,
+    {
         self.relation.open(args, ceiling)
     }
 }
 
-fn subject_bound_registry() -> ExtensionEnv {
+fn subject_bound_registry() -> ExtensionEnv<'static> {
     use purrdf_core::{TermValue, binding_pattern::BindingPattern};
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(

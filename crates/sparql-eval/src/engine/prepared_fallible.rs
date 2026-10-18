@@ -36,7 +36,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         let reporting = super::reserve_governed_reporting(dataset, governors)?;
@@ -84,7 +84,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         preflight_governed_fallible_view(dataset, state)?;
@@ -111,7 +111,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &AdmittedSubstitutions<'_>,
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         state: &crate::workspace::SharedWorkspace<GovernorState>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
@@ -163,7 +163,7 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         source: &'d (dyn ServiceResolver + Sync),
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         self.query_prepared_governed_fallible_view(
@@ -202,7 +202,7 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         source: &'d (dyn ServiceResolver + Sync),
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
         self.query_prepared_governed_fallible_in_operation(

@@ -199,7 +199,7 @@ fn capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate() {
         Some(TermValue::typed_literal(input, XSD_DECIMAL))
     );
 }
-fn statistical_env() -> purrdf_sparql_eval::extension_env::ExtensionEnv {
+fn statistical_env() -> purrdf_sparql_eval::extension_env::ExtensionEnv<'static> {
     let mut aggregates = purrdf_sparql_eval::AggregateRegistry::default();
     aggregates.register_statistical_aggregates("http://example.org/stat#");
     purrdf_sparql_eval::extension_env::ExtensionEnv::new(

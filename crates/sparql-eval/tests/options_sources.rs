@@ -176,7 +176,7 @@ impl GraphResolver for FixedDocument {
 fn update(
     engine: &NativeSparqlEngine,
     update: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut store = local();
     engine.update_with_options(&mut store, request(update), options)?;

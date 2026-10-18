@@ -27,7 +27,7 @@ use purrdf::{DistanceMetric, RdfDatasetBuilder, SparqlRequest, SparqlResult, Ter
 const NEAREST: &str = "https://example.org/pf#nearest";
 
 /// A small deterministic space, built and registered using only umbrella names.
-fn registered_space(rows: usize) -> (PropertyFunctionRegistry, Vec<TermValue>) {
+fn registered_space(rows: usize) -> (PropertyFunctionRegistry<'static>, Vec<TermValue>) {
     let dims = 4;
     let mut state = 0x51DE_0000_1234_ABCD_u64;
     let mut data = Vec::with_capacity(rows * dims);
@@ -53,7 +53,7 @@ fn registered_space(rows: usize) -> (PropertyFunctionRegistry, Vec<TermValue>) {
     (registry, terms)
 }
 
-fn answer(registry: &PropertyFunctionRegistry, query: &str) -> usize {
+fn answer(registry: &PropertyFunctionRegistry<'static>, query: &str) -> usize {
     let data = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(

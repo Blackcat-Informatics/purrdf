@@ -54,14 +54,17 @@ fn space(rows: usize) -> (Arc<HnswSpace>, Vec<TermValue>) {
 }
 
 /// A registry with the relation registered under `NEAREST` — the whole of what a host does.
-fn registry(space: &Arc<HnswSpace>) -> PropertyFunctionRegistry {
+fn registry(space: &Arc<HnswSpace>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(NEAREST.to_owned(), Arc::new(space.relation()));
     registry
 }
 
 /// Evaluate `query` with `registry` in scope and return the solution rows as terms.
-fn answer(registry: &PropertyFunctionRegistry, query: &str) -> Vec<Vec<Option<TermValue>>> {
+fn answer(
+    registry: &PropertyFunctionRegistry<'static>,
+    query: &str,
+) -> Vec<Vec<Option<TermValue>>> {
     let data = dataset();
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -245,7 +248,7 @@ mod bounded_native_workspace {
         source: &SegmentedSession,
         query: &str,
         prepared: &PreparedQuery,
-        options: QueryOptions<'_>,
+        options: QueryOptions<'_, '_>,
         route: Route,
     ) -> RetainedSparqlResult {
         match route {
@@ -403,7 +406,7 @@ mod bounded_native_workspace {
 
     fn observed_registry(
         space: &Arc<HnswSpace>,
-    ) -> (PropertyFunctionRegistry, Arc<HnswObservations>) {
+    ) -> (PropertyFunctionRegistry<'static>, Arc<HnswObservations>) {
         let relation = space.relation();
         let observations = relation.observations();
         let mut registry = PropertyFunctionRegistry::new();

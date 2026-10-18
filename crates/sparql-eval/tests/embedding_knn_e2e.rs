@@ -160,7 +160,7 @@ fn space(rows: &[(&str, Vec<f64>)]) -> EmbeddingSpace {
 }
 
 /// The whole of what a host does: register a relation over a space under its own IRI.
-fn registry(rows: &[(&str, Vec<f64>)]) -> ExtensionEnv {
+fn registry(rows: &[(&str, Vec<f64>)]) -> ExtensionEnv<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         SPACE_IRI,
@@ -198,7 +198,7 @@ fn rows_of(result: &SparqlResult) -> Vec<Vec<String>> {
 }
 
 /// Answer `query` against `relations`, ungoverned.
-fn answer(query: &str, env: &ExtensionEnv) -> SparqlResult {
+fn answer(query: &str, env: &ExtensionEnv<'static>) -> SparqlResult {
     NativeSparqlEngine::new()
         .query_with_options_view(&*support::unrelated_quad(), request(query), with_env(env))
         .expect("the call resolves and evaluates")
@@ -301,7 +301,7 @@ fn the_answer_is_byte_identical_across_two_independently_built_artifacts() {
     reversed_rows.reverse();
     let reversed = registry(&reversed_rows);
 
-    let render = |env: &ExtensionEnv| {
+    let render = |env: &ExtensionEnv<'static>| {
         purrdf_sparql_results::to_json(
             &answer(QUERY, env),
             &purrdf_sparql_results::ResultProvenance::default(),
@@ -434,7 +434,7 @@ fn the_search_charge_follows_the_space_size_rather_than_the_rows_returned() {
                    SELECT ?neighbour WHERE { ?neighbour knn:points ( d:a 1 ?distance ) }\n";
 
     let engine = NativeSparqlEngine::new();
-    let measure = |env: &ExtensionEnv| {
+    let measure = |env: &ExtensionEnv<'static>| {
         let explanation = engine
             .explain_query_with_options(&support::unrelated_quad(), one_row, None, with_env(env))
             .expect("explain");
