@@ -2270,6 +2270,7 @@ impl<'a> Hyper<'a> {
                     .select_reads(Some(super::graph::changes::ReadOwner::Application {
                         index,
                         clause: application.clause,
+                        branch: application.branch,
                     }));
             }
             let supported = application.clause < driver.clauses.count()
@@ -3365,6 +3366,7 @@ mod tests {
         driver.g.select_reads(Some(ReadOwner::Application {
             index: 0,
             clause: 0,
+            branch: None,
         }));
         assert!(driver.g.has_concept(&state, right, b));
         driver.g.select_reads(None);
@@ -3376,6 +3378,7 @@ mod tests {
         driver.g.select_reads(Some(ReadOwner::Application {
             index: 1,
             clause: 1,
+            branch: None,
         }));
         assert!(driver.g.has_concept(&state, left, a));
         assert!(driver.g.has_concept(&state, right, b));
@@ -3400,11 +3403,13 @@ mod tests {
             let slice = journal.normalized_slice(&kb).unwrap();
             assert!(slice.owners.contains(&ReadOwner::Application {
                 index: 1,
-                clause: 1
+                clause: 1,
+                branch: None
             }));
             assert!(!slice.owners.contains(&ReadOwner::Application {
                 index: 0,
-                clause: 0
+                clause: 0,
+                branch: None
             }));
             assert!(
                 slice
@@ -3449,6 +3454,7 @@ mod tests {
         driver.g.select_reads(Some(ReadOwner::Application {
             index: 0,
             clause: 0,
+            branch: None,
         }));
         driver.g.observe_read(ReadFact::Node(left));
         driver.g.observe_read(ReadFact::Node(right));
@@ -3494,7 +3500,8 @@ mod tests {
         );
         assert!(slice.owners.contains(&ReadOwner::Application {
             index: 0,
-            clause: 0
+            clause: 0,
+            branch: None
         }));
     }
 
@@ -3785,6 +3792,7 @@ mod tests {
         driver.g.select_reads(Some(ReadOwner::Application {
             index: 0,
             clause: 0,
+            branch: None,
         }));
         driver.g.observe_read(ReadFact::Node(root));
         driver.g.select_reads(None);
@@ -3801,7 +3809,8 @@ mod tests {
         let slice = journal.normalized_slice(&kb).unwrap();
         assert!(slice.owners.contains(&ReadOwner::Application {
             index: 0,
-            clause: 0
+            clause: 0,
+            branch: None
         }));
         for mutation in [
             Mutation::Node {

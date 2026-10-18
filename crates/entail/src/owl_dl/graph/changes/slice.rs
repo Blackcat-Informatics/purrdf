@@ -18,7 +18,7 @@ use crate::owl_dl::{
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
 mod key;
-mod schema;
+pub(crate) mod schema;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -98,6 +98,8 @@ pub(crate) struct Derivation {
     pub(crate) vertices: Vec<Vertex>,
     pub(crate) parents: Vec<usize>,
     pub(crate) reads: Vec<Read>,
+    /// Sparse selected node births address the one canonical effect table.
+    pub(crate) births: Vec<(usize, usize)>,
 }
 
 impl Derivation {
@@ -143,10 +145,12 @@ pub(crate) struct Support {
     pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
+    pub(crate) path_ordinals: Vec<usize>,
     pub(crate) transitive: Vec<TransitiveRead>,
     pub(crate) transitive_nodes: Vec<TransitiveNode>,
     pub(crate) rules: Vec<Input>,
     pub(crate) tbox: Vec<usize>,
+    pub(crate) internalized: Vec<(u32, usize)>,
     pub(crate) guards: Vec<usize>,
     pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
     pub(crate) schema_reads: Vec<schema::Read>,
@@ -163,10 +167,12 @@ impl std::fmt::Debug for Support {
             .field("effects", &self.effects)
             .field("owners", &self.owners)
             .field("paths", &self.paths)
+            .field("path_ordinals", &self.path_ordinals)
             .field("transitive", &self.transitive)
             .field("transitive_nodes", &self.transitive_nodes)
             .field("rules", &self.rules)
             .field("tbox", &self.tbox)
+            .field("internalized", &self.internalized)
             .field("guards", &self.guards)
             .field("role_clauses", &self.role_clauses)
             .field("schema_reads", &self.schema_reads)
@@ -199,10 +205,12 @@ pub(crate) struct Slice<'a> {
     pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
+    pub(crate) path_ordinals: Vec<usize>,
     pub(crate) transitive: Vec<TransitiveRead>,
     pub(crate) transitive_nodes: Vec<TransitiveNode>,
     pub(crate) rules: Vec<Input>,
     pub(crate) tbox: Vec<usize>,
+    pub(crate) internalized: Vec<(u32, usize)>,
     guards: Vec<usize>,
     pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
     pub(crate) schema: Option<crate::owl_dl::proof::CheckedSchema<'a>>,
@@ -218,10 +226,12 @@ impl std::fmt::Debug for Slice<'_> {
             .field("source_terms", &self.kb.source_terms)
             .field("owners", &self.owners)
             .field("paths", &self.paths)
+            .field("path_ordinals", &self.path_ordinals)
             .field("transitive", &self.transitive)
             .field("transitive_nodes", &self.transitive_nodes)
             .field("rules", &self.rules)
             .field("tbox", &self.tbox)
+            .field("internalized", &self.internalized)
             .field("guards", &self.guards)
             .field("role_clauses", &self.role_clauses)
             .field("schema", &self.schema)
@@ -257,10 +267,12 @@ impl Slice<'_> {
             effects: self.effects,
             owners: self.owners,
             paths: self.paths,
+            path_ordinals: self.path_ordinals,
             transitive: self.transitive,
             transitive_nodes: self.transitive_nodes,
             rules: self.rules,
             tbox: self.tbox,
+            internalized: self.internalized,
             guards: self.guards,
             role_clauses: self.role_clauses,
             schema_reads: self.schema_reads,
@@ -376,19 +388,7 @@ impl Slice<'_> {
                 memory.push(&mut roots, (Space::Source, root))?;
             }
         }
-        let internalized = self
-            .effects
-            .iter()
-            .map(|(_, event)| &event.cause)
-            .filter(|cause| cause.origin == Origin::Internalized)
-            .map(|cause| {
-                let at = kb
-                    .meta
-                    .iter()
-                    .position(|&concept| concept as usize == cause.index)
-                    .ok_or(Error::MissingSyntax)?;
-                kb.meta_sources.get(at).copied().ok_or(Error::MissingSyntax)
-            });
+        let internalized = self.internalized.iter().map(|&(_, source)| source);
         let schema_inclusions = self.schema.iter().flat_map(|schema| {
             let bounds = schema.bounds();
             self.schema_reads
@@ -400,11 +400,9 @@ impl Slice<'_> {
             .iter()
             .copied()
             .chain(schema_inclusions)
-            .map(Ok)
             .chain(internalized)
         {
             poll(kb)?;
-            let index = index?;
             let source = kb.tbox_sources.get(index).ok_or(Error::MissingSyntax)?;
             let (space, capture) = match source {
                 AxiomSource::Unrecorded => return Err(Error::MissingSyntax),
@@ -487,6 +485,7 @@ struct Builder {
     nodes: Vec<Dependency>,
     parents: Vec<usize>,
     paths: Vec<PathStep>,
+    path_ordinals: Vec<usize>,
     transitive: Vec<TransitiveRead>,
     transitive_nodes: Vec<TransitiveNode>,
     rules: Vec<Input>,
@@ -600,7 +599,12 @@ impl Builder {
                 witness: RoleWitness::Language { start, end },
                 ..
             } => {
-                for step in paths.get(start..end).ok_or(Error::MissingPath)? {
+                for (offset, step) in paths
+                    .get(start..end)
+                    .ok_or(Error::MissingPath)?
+                    .iter()
+                    .enumerate()
+                {
                     match step.kind {
                         PathKind::Edge { index, letter } => {
                             self.edge(index, letter, step.from.0, step.to.0, memory)?;
@@ -612,6 +616,7 @@ impl Builder {
                         }
                     }
                     memory.push(&mut self.paths, *step)?;
+                    memory.push(&mut self.path_ordinals, start + offset)?;
                 }
                 Ok(())
             }
@@ -954,14 +959,17 @@ impl Journal {
                 vertices: Vec::new(),
                 parents: Vec::new(),
                 reads: Vec::new(),
+                births: Vec::new(),
             },
             effects: Vec::new(),
             owners: Vec::new(),
             paths: Vec::new(),
+            path_ordinals: Vec::new(),
             transitive: Vec::new(),
             transitive_nodes: Vec::new(),
             rules: Vec::new(),
             tbox: Vec::new(),
+            internalized: Vec::new(),
             guards: Vec::new(),
             role_clauses: Vec::new(),
             schema,
@@ -985,6 +993,22 @@ impl Journal {
             let observation = if let Some(ordinal) = node.event {
                 let event = self.events[ordinal];
                 let selected = result.effects.len();
+                if let Mutation::Node { node, .. } = event.mutation {
+                    memory.push(&mut result.derivation.births, (node, selected))?;
+                }
+                if event.cause.origin == Origin::Internalized {
+                    let at = kb
+                        .meta
+                        .iter()
+                        .position(|&concept| concept as usize == event.cause.index)
+                        .ok_or(Error::MissingSyntax)?;
+                    let source = kb
+                        .meta_sources
+                        .get(at)
+                        .copied()
+                        .ok_or(Error::MissingSyntax)?;
+                    memory.push(&mut result.internalized, (kb.meta[at], source))?;
+                }
                 memory.push(&mut result.effects, (ordinal, event))?;
                 Observation::Effect(selected)
             } else if let Some(owner) = node.owner {
@@ -1014,6 +1038,10 @@ impl Journal {
             memory.extend(
                 &mut result.paths,
                 graph.paths[node.paths.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.path_ordinals,
+                graph.path_ordinals[node.paths.clone()].iter().copied(),
             )?;
             memory.extend(
                 &mut result.transitive,
@@ -1065,6 +1093,10 @@ impl Journal {
             .derivation
             .vertices
             .sort_unstable_by_key(|vertex| vertex.id);
+        result
+            .derivation
+            .births
+            .sort_unstable_by_key(|&(node, _)| node);
         if let Some(schema) = result.schema
             && (result.guards.is_empty()
                 || result

@@ -40,7 +40,7 @@ pub enum SchemaReason<'a> {
     },
 }
 
-fn step<'a>(kb: &'a Kb, step: &SchemaStep) -> ResolvedSchemaStep<'a> {
+pub(super) fn step<'a>(kb: &'a Kb, step: &SchemaStep) -> ResolvedSchemaStep<'a> {
     let reason = match step.rule {
         SchemaRule::Assume => SchemaReason::Assume,
         SchemaRule::Top => SchemaReason::Top,

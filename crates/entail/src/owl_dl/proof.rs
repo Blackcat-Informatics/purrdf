@@ -1707,6 +1707,17 @@ impl ProofAnswer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DlProofError {
+    /// The selected causal operation lacks a required checked dependency.
+    CausalSupport {
+        /// Service run, when checking through a service-bound entry point.
+        run: Option<usize>,
+        /// Clash ordinal, when the refusal belongs to one leaf.
+        clash: Option<usize>,
+        /// Stable category, distinct from physical refusal and semantic verdicts.
+        kind: source::causal::CausalSupportKind,
+        /// Complete native refusal context, including original local keys.
+        detail: String,
+    },
     /// The consumer's own latched stop signal interrupted native proof checking.
     Stopped,
     /// A prepared clash's observational support could not be recorded completely.
@@ -2019,6 +2030,15 @@ pub enum DlProofError {
 impl std::fmt::Display for DlProofError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            } => write!(
+                f,
+                "causal support unavailable for run {run:?}, clash {clash:?}: {kind:?}: {detail}"
+            ),
             Self::SchemaPreparation { obstruction } => {
                 write!(f, "OWL-DL schema proof checking refused: {obstruction:?}")
             }
@@ -3143,9 +3163,12 @@ impl DlProof {
             .get(index)
             .ok_or_else(|| malformed(&format!("no clash step at index {index}")))?;
         if journal.is_some() && step.current.is_none() {
-            return Err(malformed(
-                "causal recording requires checked current support",
-            ));
+            return Err(DlProofError::CausalSupport {
+                run: None,
+                clash: Some(index),
+                kind: source::causal::CausalSupportKind::CurrentSupport,
+                detail: "causal recording requires checked current support".to_owned(),
+            });
         }
         let clauses = ctx.clauses.count();
         if step.clause >= clauses {

@@ -161,6 +161,7 @@ fn selected_effects_require_birth_parent_and_application_and_refuse_reserved_ide
         graph.select_reads(Some(ReadOwner::Application {
             index,
             clause: index,
+            branch: None,
         }));
         graph.observe_read(ReadFact::Node(parent));
         graph.select_reads(None);
@@ -176,11 +177,13 @@ fn selected_effects_require_birth_parent_and_application_and_refuse_reserved_ide
     assert_derivation(&slice, &journal);
     assert!(slice.owners.contains(&ReadOwner::Application {
         index: 1,
-        clause: 1
+        clause: 1,
+        branch: None
     }));
     assert!(!slice.owners.contains(&ReadOwner::Application {
         index: 0,
-        clause: 0
+        clause: 0,
+        branch: None
     }));
     assert!(
         slice.effects.iter().all(
@@ -208,7 +211,7 @@ fn selected_effects_require_birth_parent_and_application_and_refuse_reserved_ide
     );
     assert!(parents.iter().any(|id| {
         let vertex = &slice.derivation.vertices[slice.derivation.vertices.binary_search_by_key(id, |v| v.id).unwrap()];
-        matches!(vertex.observation, Observation::Reads(index) if slice.owners[index] == ReadOwner::Application { index: 1, clause: 1 })
+        matches!(vertex.observation, Observation::Reads(index) if slice.owners[index] == ReadOwner::Application { index: 1, clause: 1, branch: None })
     }));
     let original_root = slice.derivation.root;
     slice.derivation.root = born.id;

@@ -338,6 +338,154 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
     }
 }
 
+/// The actual public operation exposes selected source support and original dependency edges.
+fn public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs() {
+    use purrdf_entail::proof_source::{
+        ResolvedTerm,
+        causal::{CausalInputSource, CausalMutation, CausalObservation},
+    };
+    for blank in [false, true] {
+        let dataset = derived(blank);
+        let producer = Reasoner::with_proofs(&dataset).unwrap();
+        let answer = producer.consistency();
+        let proof = answer.proof().unwrap();
+        let consumer = Reasoner::with_proofs(&dataset).unwrap();
+        let ctx = consumer.borrowed_proof_context().unwrap();
+        let ordinary = proof
+            .verify_prepared(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .unwrap();
+        let causal = proof
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .unwrap();
+        assert_eq!(causal.report(), &ordinary);
+        assert_eq!(causal.question(), &Question::Consistency);
+        assert_ne!(causal.refutations().len(), 0);
+        assert_ne!(
+            causal
+                .refutations()
+                .flat_map(|(_, refutation)| refutation.clashes())
+                .count(),
+            0
+        );
+        let expected = if blank {
+            TermValue::Blank {
+                label: "subject".to_owned(),
+                scope: BlankScope(47),
+            }
+        } else {
+            term("subject")
+        };
+        for (_, refutation) in causal.refutations() {
+            assert!(refutation.replay().is_closed());
+            for clash in refutation.clashes() {
+                assert!(matches!(
+                    clash.root().observation(),
+                    CausalObservation::Clash { .. }
+                ));
+                let ordinals = clash
+                    .steps()
+                    .map(|step| step.ordinal())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let mut named = false;
+                let mut body_read = false;
+                for step in clash.steps() {
+                    assert!(
+                        step.parents()
+                            .all(|parent| parent.ordinal() < step.ordinal()
+                                && ordinals.contains(&parent.ordinal()))
+                    );
+                    if let CausalObservation::Effect {
+                        mutation:
+                            CausalMutation::Node {
+                                node,
+                                named: Some(ResolvedTerm::Source(value)),
+                                ..
+                            },
+                        ..
+                    } = step.observation()
+                    {
+                        assert_ne!(value, &term("disconnected"));
+                        assert!(node.same_node(&node));
+                        if value == &expected {
+                            assert_eq!(node.term(), Some(ResolvedTerm::Source(&expected)));
+                            named = true;
+                        }
+                    }
+                    for read in step.reads() {
+                        body_read |= matches!(
+                            read,
+                            purrdf_entail::proof_source::causal::CausalFact::Concept(..)
+                        );
+                    }
+                }
+                assert!(named);
+                assert!(body_read);
+                assert!(clash.inputs().all(|input| match input.source() {
+                    CausalInputSource::Axiom(
+                        purrdf_entail::proof_source::ResolvedAxiomSource::Triple {
+                            subject: ResolvedTerm::Source(value),
+                            ..
+                        },
+                    ) => value != &term("disconnected"),
+                    _ => true,
+                }));
+                assert_ne!(clash.syntax_roots().len(), 0);
+            }
+        }
+    }
+}
+
+/// A query's anonymous premise stays separate from source terms and cannot verify another question.
+fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
+    use purrdf_entail::proof_source::causal::{CausalCauseKind, CausalMutation, CausalObservation};
+    let mut fixture = Fixture::default();
+    let a = fixture.name("A");
+    let b = fixture.name("B");
+    let c = fixture.name("C");
+    fixture.edge(a, rdfs::SUB_CLASS_OF, b);
+    fixture.edge(a, rdfs::SUB_CLASS_OF, c);
+    fixture.edge(b, owl::DISJOINT_WITH, c);
+    let dataset = fixture.freeze();
+    let mut producer = Reasoner::with_proofs(&dataset).unwrap();
+    let answer = producer.class_satisfiability(&term("A")).unwrap();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let question = Question::ClassSatisfiability { class: term("A") };
+    let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
+    consumer.prepare(&question).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    let proof = answer.proof().unwrap();
+    let causal = proof
+        .verify_prepared_causal(&question, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let mut assumption = false;
+    for (_, refutation) in causal.refutations() {
+        for clash in refutation.clashes() {
+            for step in clash.steps() {
+                if let CausalObservation::Effect { cause, mutation } = step.observation() {
+                    assumption |= cause.kind() == CausalCauseKind::AssumedAnonymousType;
+                    if let CausalMutation::Node {
+                        node, named: None, ..
+                    } = mutation
+                    {
+                        assert_eq!(node.term(), None);
+                    }
+                }
+            }
+        }
+    }
+    assert!(assumption);
+    assert!(matches!(
+        proof.verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx),
+        Err(purrdf_entail::DlProofError::WrongQuestion { .. })
+    ));
+    let wrong = Reasoner::with_proofs(&Fixture::default().freeze()).unwrap();
+    let wrong_ctx = wrong.borrowed_proof_context().unwrap();
+    assert!(matches!(
+        proof.verify_prepared_causal(&question, Some(answer.certificate()), &wrong_ctx),
+        Err(purrdf_entail::DlProofError::InputMismatch { .. })
+    ));
+}
+
 purrdf_testkit::harness_main!(
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
@@ -345,4 +493,6 @@ purrdf_testkit::harness_main!(
     current_clash_checks_fresh_refutation_assumptions_without_a_source_name,
     current_clash_replays_equality_before_observing_role_premises,
     current_clash_borrows_the_independent_prepared_consumer,
+    public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs,
+    public_causal_service_binds_the_requested_question_and_query_assumptions,
 );

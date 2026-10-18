@@ -25,8 +25,14 @@ impl fmt::Debug for RoleRules {
 /// Only the independently checked binding owns these reads, never search candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadOwner {
-    Application { index: usize, clause: usize },
-    Clash { clause: usize },
+    Application {
+        index: usize,
+        clause: usize,
+        branch: Option<(usize, usize)>,
+    },
+    Clash {
+        clause: usize,
+    },
 }
 
 /// The native fact selected by a successful body predicate.

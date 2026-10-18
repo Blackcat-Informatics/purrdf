@@ -14,6 +14,7 @@ use crate::owl_dl::concept::{Concept, Role};
 use purrdf_core::TermValue;
 use purrdf_xsd::range::DataRange;
 
+pub mod causal;
 mod origin;
 mod schema;
 pub use origin::ResolvedAxiomSource;

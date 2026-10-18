@@ -23,8 +23,12 @@ pub(crate) struct Read {
 }
 
 impl Read {
-    pub(super) fn step(self, bounds: &SchemaBoundEvidence) -> &SchemaStep {
+    pub(crate) fn step(self, bounds: &SchemaBoundEvidence) -> &SchemaStep {
         &steps(bounds, self.part)[self.index]
+    }
+
+    pub(crate) fn is_qualifier(self) -> bool {
+        self.part == Part::Qualifier
     }
 }
 
@@ -86,5 +90,6 @@ pub(super) fn select(
             }
         }
     }
+    selected.sort_unstable();
     Ok(selected)
 }

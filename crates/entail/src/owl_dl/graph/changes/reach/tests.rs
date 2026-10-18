@@ -115,6 +115,7 @@ fn transitive_cache_keeps_hierarchy_inverse_paths_and_rebuilds_after_equality() 
         g.select_reads(Some(ReadOwner::Application {
             index: 0,
             clause: 1,
+            branch: None,
         }));
         g.observe_read(ReadFact::Node(original));
         g.observe_read(ReadFact::Node(extra));
@@ -129,7 +130,8 @@ fn transitive_cache_keeps_hierarchy_inverse_paths_and_rebuilds_after_equality() 
         let slice = g.finish_changes().unwrap().normalized_slice(&kb).unwrap();
         assert!(slice.owners.contains(&ReadOwner::Application {
             index: 0,
-            clause: 1
+            clause: 1,
+            branch: None
         }));
         assert_eq!(slice.transitive.len(), 1);
         assert!(slice.transitive.iter().all(|step| step.role == role));
