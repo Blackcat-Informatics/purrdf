@@ -617,6 +617,21 @@ pub enum TemporalReadError {
     Storage(crate::bigint::LimbScratchError),
 }
 
+impl purrdf_hash::error::StructuredError for TemporalReadError {
+    purrdf_hash::error_visit! {
+        Invalid { datatype, reason } => "temporal-invalid" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        OutOfRange { datatype, reason } => "temporal-out-of-range" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        ConstructorRange { datatype, reason } => "temporal-constructor-range" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        Storage(error) => "temporal-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl TemporalReadError {
     /// The existing F&O error classification without constructing owned text.
     #[must_use]

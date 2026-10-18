@@ -88,6 +88,52 @@ fn current_clash_preserves_named_and_scoped_blank_source_identity() {
     }
 }
 
+fn public_dataset_views_preserve_source_identity_and_causal_verification() {
+    for blank in [false, true] {
+        let source = derived(blank);
+        let bytes = purrdf_core::PackBuilder::build_bytes(&source).unwrap();
+        let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
+        let producer = Reasoner::with_proofs(&view).unwrap();
+        let answer = producer.consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        assert_eq!(
+            answer.certificate(),
+            Reasoner::new(&view).unwrap().consistency().certificate(),
+        );
+        let consumer = Reasoner::with_proofs(&view).unwrap();
+        let context = consumer.borrowed_proof_context().unwrap();
+        let proof = answer.proof().unwrap();
+        proof
+            .verify(
+                &view,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &context,
+            )
+            .unwrap();
+        let captured = proof
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
+            .unwrap();
+        let mut branches = 0;
+        for (_, refutation) in captured.refutations() {
+            branches += 1;
+            assert!(refutation.replay().is_closed());
+            for clash in refutation.clashes() {
+                assert!(clash.inputs().next().is_some());
+            }
+        }
+        assert!(branches > 0);
+        let (verdict, raw) = prove_consistency(&view).unwrap();
+        assert_eq!(verdict, ProofAnswer::Inconsistent);
+        let independent = DlProofContext::of_ontology(&view).unwrap();
+        assert_eq!(
+            independent.input(),
+            DlProofContext::of_ontology(&source).unwrap().input()
+        );
+        assert!(raw.replay_refutation(&independent).unwrap().is_closed());
+    }
+}
+
 fn current_clash_preserves_public_service_certificate_and_verification() {
     let dataset = derived(false);
     let plain = Reasoner::new(&dataset).unwrap().consistency();
@@ -1039,6 +1085,7 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
 }
 
 purrdf_testkit::harness_main!(
+    public_dataset_views_preserve_source_identity_and_causal_verification,
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
     current_clash_replays_generated_existential_witnesses,

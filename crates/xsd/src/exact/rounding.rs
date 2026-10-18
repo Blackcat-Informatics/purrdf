@@ -189,6 +189,12 @@ pub struct DivisionPolicyError {
     text: String,
 }
 
+impl purrdf_hash::error::StructuredError for DivisionPolicyError {
+    purrdf_hash::error_visit! {
+        @record self { text } => "division-policy-invalid" { "text" => Text(&self.text) }
+    }
+}
+
 impl std::fmt::Display for DivisionPolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

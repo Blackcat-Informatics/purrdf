@@ -42,6 +42,24 @@ pub enum DecimalConstructionError<E> {
     Storage(LimbScratchError),
 }
 
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for RationalComparisonError<E>
+{
+    purrdf_hash::error_visit! {
+        CostOverflow => "rational-comparison-cost-overflow" {},
+        Admission(error) => "rational-comparison-admission" { "cause" => Cause(error) },
+    }
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for DecimalConstructionError<E>
+{
+    purrdf_hash::error_visit! {
+        Admission(error) => "decimal-construction-admission" { "cause" => Cause(error) },
+        Storage(error) => "decimal-construction-storage" { "cause" => Cause(error) },
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ComparisonPhase {
     Scan,

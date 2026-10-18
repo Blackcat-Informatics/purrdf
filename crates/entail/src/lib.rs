@@ -1117,6 +1117,34 @@ mod tests {
         }
     }
 
+    /// Constructor reads must not publish a reasoner from a failed source prefix.
+    #[test]
+    fn operational_failure_returns_no_partial_reasoner_or_identity() {
+        for fail_term in [false, true] {
+            for recorded in [false, true] {
+                let source = FailingSource {
+                    dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+                    fail_term,
+                    failed: std::cell::Cell::new(false),
+                };
+                let error = if recorded {
+                    Reasoner::with_proofs(&source)
+                } else {
+                    Reasoner::new(&source)
+                }
+                .expect_err("source refusal is fatal");
+                assert!(
+                    matches!(
+                        error,
+                        EntailError::SourceRead(_) | EntailError::Canonicalization(_)
+                    ),
+                    "{error}"
+                );
+                assert!(error.to_string().contains("injected source failure"));
+            }
+        }
+    }
+
     #[test]
     fn operational_failure_returns_no_partial_closure_or_report() {
         let rules = RuleSet::default();

@@ -186,6 +186,18 @@ pub enum BinaryReadError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for BinaryReadError {
+    purrdf_hash::error_visit! {
+        InvalidLexical { datatype, reason } => "binary-invalid-lexical" {
+            "datatype" => Iri(datatype.iri()), "reason" => Text(reason),
+        },
+        LayoutOverflow => "binary-layout-overflow" {},
+        OutputTooShort { needed, available } => "binary-output-too-short" {
+            "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
+        },
+    }
+}
+
 impl BinaryReadError {
     fn base64(reason: &'static str) -> Self {
         Self::InvalidLexical {

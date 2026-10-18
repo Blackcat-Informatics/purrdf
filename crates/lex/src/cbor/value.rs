@@ -25,6 +25,10 @@ impl fmt::Display for IntegerRangeError {
 
 impl std::error::Error for IntegerRangeError {}
 
+impl purrdf_hash::error::StructuredError for IntegerRangeError {
+    purrdf_hash::error_visit! { @record self {} => "cbor-integer-out-of-range" {} }
+}
+
 impl Integer {
     /// `-2^64`, the most negative integer major type 1 carries.
     pub const MIN: Self = Self(-(1_i128 << 64));

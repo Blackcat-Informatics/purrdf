@@ -2849,18 +2849,19 @@ fn proof_source_error(error: EntailError) -> DlProofError {
 }
 
 impl DlProofContext<'static> {
-    /// Read `ontology` into a checking context.
+    /// Read the caller's ontology view directly into a checking context.
     ///
     /// # Errors
     ///
-    /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph;
+    /// [`DlProofError::Ontology`] if the source is not a well-formed OWL graph or
+    /// a source read fails during preparation;
     /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
     /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same input.
-    pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
+    pub fn of_ontology<D: purrdf_core::DatasetView>(ontology: &D) -> Result<Self, DlProofError> {
         let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
         let mut kb = Kb::from_dataset_recording(
             ontology,
@@ -4595,11 +4596,14 @@ impl DlProof {
 /// # Errors
 ///
 /// [`EntailError::Parse`] if the dataset is not a well-formed OWL graph;
+/// [`EntailError::SourceRead`] if the view refuses a preparation read;
 /// [`EntailError::Canonicalization`] if computing its producer-independent identity is
 /// refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
 /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
 /// [`purrdf_core::canonicalize`] would raise for the same input.
-pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
+pub fn prove_consistency<D: purrdf_core::DatasetView>(
+    ontology: &D,
+) -> Result<(ProofAnswer, DlProof), EntailError> {
     let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset_recording(
         ontology,
@@ -5775,8 +5779,8 @@ fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
 /// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
 /// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
 /// [`try_ontology_identity`].
-fn try_input_digest(
-    ontology: &RdfDataset,
+fn try_input_digest<D: purrdf_core::DatasetView>(
+    ontology: &D,
     stop: Option<&dyn purrdf_core::StopSignal>,
 ) -> Result<[u8; 32], purrdf_core::CanonError> {
     let canonical = match stop {
@@ -5785,7 +5789,7 @@ fn try_input_digest(
             purrdf_core::CanonHash::Sha256,
             stop,
         )?,
-        None => purrdf_core::try_canonicalize(ontology)?,
+        None => purrdf_core::try_canonicalize_view(ontology, purrdf_core::CanonHash::Sha256)?,
     };
     let mut hash = purrdf_hash::blake3::Hasher::new();
     for chunk in canonical.nquads.as_bytes().chunks(64 * 1024) {
@@ -5830,7 +5834,10 @@ pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
 /// [`purrdf_core::CanonError::ReservedVocabulary`] if any term of `ontology` is an IRI in
 /// PurRDF's RDFC-1.0 reserved namespace; [`purrdf_core::CanonError::BudgetExceeded`] if the
 /// n-degree search's call/permutation budget is exhausted first.
-pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
+/// [`purrdf_core::CanonError::Read`] if the view refuses a source read.
+pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
+    ontology: &D,
+) -> Result<[u8; 32], purrdf_core::CanonError> {
     try_input_digest(ontology, None)
 }
 
@@ -5840,8 +5847,8 @@ pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_c
 /// # Errors
 /// The source/profile refusals of [`try_ontology_identity`], or
 /// [`purrdf_core::CanonError::Stopped`]. No partial digest is returned.
-pub fn try_ontology_identity_with_stop(
-    ontology: &RdfDataset,
+pub fn try_ontology_identity_with_stop<D: purrdf_core::DatasetView>(
+    ontology: &D,
     stop: &dyn purrdf_core::StopSignal,
 ) -> Result<[u8; 32], purrdf_core::CanonError> {
     try_input_digest(ontology, Some(stop))
