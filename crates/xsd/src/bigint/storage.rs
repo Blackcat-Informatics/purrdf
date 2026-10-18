@@ -130,6 +130,31 @@ impl Mag {
     }
 
     pub(super) fn resize(&mut self, length: usize, value: u64) {
+        if let Self::Heap(words) = self {
+            let shrinking = length < words.len();
+            // Initialize a native vector in bulk, preserving the inline
+            // transition that repeated pop performs when a value shrinks.
+            words.resize(length, value);
+            if shrinking && length <= 3 {
+                *self = Self::from_slice(words);
+            }
+            return;
+        }
+        if let Self::Inline {
+            words,
+            length: current,
+        } = self
+            && length <= 3
+        {
+            let previous = usize::from(current.get() - 1);
+            if length > previous {
+                words[previous..length].fill(value);
+            } else {
+                words[length..previous].fill(0);
+            }
+            *current = NonZeroU8::new(length as u8 + 1).expect("biased length is nonzero");
+            return;
+        }
         while self.len() > length {
             self.pop();
         }

@@ -1165,6 +1165,18 @@ fn assert_bounded(what: &str, cost: Cost, measurement: Measurement) {
     );
 }
 
+#[test]
+fn wide_gap_gcd_stays_within_its_work_and_physical_cost() {
+    let narrow: Integer = "9".repeat(200).parse().expect("integer");
+    let wide: Integer = format!("{}{}", "9".repeat(200), "0".repeat(1_000))
+        .parse()
+        .expect("integer");
+    let cost = wide.gcd_cost(&narrow);
+    let (result, measurement) = measured(|| wide.gcd(&narrow));
+    assert_eq!(result, narrow);
+    assert_bounded("wide-gap gcd", cost, measurement);
+}
+
 /// `1 × 10^-scale`: one digit of coefficient, `scale` fractional digits.
 fn tiny(scale: usize) -> Decimal {
     format!("0.{}1", "0".repeat(scale - 1))
@@ -1193,6 +1205,46 @@ fn a_lopsided_product_costs_what_it_is_charged() {
     let cost = half.mul_cost(&half);
     let (_, measurement) = measured(|| &half * &half);
     assert_bounded("10032 × 10032 limbs", cost, measurement);
+}
+
+/// The staged physical layout must include the live three-way evaluation and
+/// interpolation destinations, not just the final product.
+#[test]
+fn balanced_large_products_fit_their_admitted_peak() {
+    for (digits, limbs) in [
+        (2_429, 127),
+        (2_448, 128),
+        (2_468, 129),
+        (5_000, 260),
+        (9_827, 511),
+        (9_846, 512),
+        (9_866, 513),
+        (10_000, 520),
+        (19_691, 1023),
+        (19_711, 1024),
+        (19_730, 1025),
+        (40_000, 2077),
+    ] {
+        let a: Decimal = "7".repeat(digits).parse().expect("integer-valued decimal");
+        let b: Decimal = "3".repeat(digits).parse().expect("integer-valued decimal");
+        assert_eq!(a.limb_len(), limbs);
+        assert_eq!(b.limb_len(), limbs);
+        let mut admitted_peak = 0;
+        let (answer, measurement) = measured(|| {
+            a.try_mul_admitted(&b, &mut |layout| {
+                admitted_peak = admitted_peak.max(layout.required_bytes());
+                Ok(())
+            })
+        });
+        let product = answer.expect("sufficient admission");
+        assert_eq!(product.canonical_lexical().len(), digits * 2);
+        assert!(
+            usize::try_from(measurement.peak_working_bytes).expect("test-sized peak")
+                <= admitted_peak,
+            "{digits} digits: measured {measurement:?}, admitted {admitted_peak}"
+        );
+        assert_bounded("balanced Toom product", a.mul_cost(&b), measurement);
+    }
 }
 
 /// A decimal of one digit at a scale of millions renders, converts and compares at
