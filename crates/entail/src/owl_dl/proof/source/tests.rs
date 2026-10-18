@@ -839,6 +839,15 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
         let slice = observed.mutations.unwrap().normalized_slice(&ctx.kb);
         if derived_key {
             assert!(matches!(slice, Err(Error::MissingEffect)));
+            let values = ctx.kb.inputs.key_values.as_ref().unwrap().get(0).unwrap();
+            assert_eq!(values.len(), 1);
+            for read in values {
+                let left = ctx.kb.abox_roles[read.left];
+                let right = ctx.kb.abox_roles[read.right];
+                assert_ne!(left.0, right.0);
+                assert_eq!((left.1, left.2), (read.property, read.value));
+                assert_eq!((right.1, right.2), (read.property, read.value));
+            }
             assert!(matches!(
                 ctx.kb.inputs.get(Input::Equality(0)),
                 Some(Source::KeyInference { key: 0, .. })
@@ -954,6 +963,80 @@ fn actual_role_clash_resolves_both_endpoints_and_property() {
         }
     }
     assert_eq!(edges, 2);
+    let (_, journal, schema) = proof
+        .replay_clash_recording(
+            index,
+            &context,
+            crate::owl_dl::graph::changes::Journal::default(),
+        )
+        .unwrap();
+    let slice = journal
+        .unwrap()
+        .normalized_slice_with_schema(&context.kb, schema)
+        .unwrap();
+    assert!(
+        slice
+            .inputs()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .iter()
+            .any(|input| matches!(
+                input.input,
+                crate::owl_dl::input_source::Input::Asymmetric(_)
+            ))
+    );
+}
+
+#[test]
+fn checked_disjoint_role_clash_retains_only_its_original_constraint() {
+    use crate::owl_dl::{
+        graph::changes::Journal,
+        input_source::{Input, Source},
+    };
+    for nary in [false, true] {
+        let mut f = Fixture::default();
+        let p = f.name("p");
+        let q = f.name("q");
+        if nary {
+            let axiom = f.blank();
+            let kind = f.builder.intern_iri(owl::ALL_DISJOINT_PROPERTIES).unwrap();
+            let members = f.list(&[p, q]);
+            f.edge(axiom, rdf::TYPE, kind);
+            f.edge(axiom, owl::MEMBERS, members);
+        } else {
+            f.edge(p, owl::PROPERTY_DISJOINT_WITH, q);
+        }
+        let unused = f.name("unused");
+        let asymmetric = f.builder.intern_iri(owl::ASYMMETRIC_PROPERTY).unwrap();
+        f.edge(unused, rdf::TYPE, asymmetric);
+        let a = f.name("a");
+        let b = f.name("b");
+        f.builder.push_quad(a, p, b, None).unwrap();
+        f.builder.push_quad(a, q, b, None).unwrap();
+        let (proof, ctx) = checked_fixture(&f.freeze());
+        let (_, journal, schema) = proof
+            .replay_clash_recording(0, &ctx, Journal::default())
+            .unwrap();
+        let slice = journal
+            .unwrap()
+            .normalized_slice_with_schema(&ctx.kb, schema)
+            .unwrap();
+        let inputs = slice.inputs().collect::<Result<Vec<_>, _>>().unwrap();
+        let rules: Vec<_> = inputs
+            .iter()
+            .filter(|input| matches!(input.input, Input::DisjointRole(..) | Input::Asymmetric(_)))
+            .collect();
+        assert_eq!(rules.len(), 1);
+        assert!(matches!(rules[0].input, Input::DisjointRole(..)));
+        assert_eq!(
+            matches!(
+                rules[0].source,
+                Source::Anchor(crate::owl_dl::AxiomSource::Node { .. })
+            ),
+            nary
+        );
+        assert!(slice.syntax_roots().is_ok());
+    }
 }
 
 #[test]

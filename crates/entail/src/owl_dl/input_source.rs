@@ -119,6 +119,7 @@ impl std::fmt::Debug for Source {
 /// Missing entries are explicit missing provenance, including synthetic Kbs.
 #[derive(Default)]
 pub(crate) struct Inputs {
+    pub(crate) key_values: Option<super::key_values::Reads>,
     sources: Entries<Source>,
     syntax: Entries<std::num::NonZeroUsize>,
     pending: Vec<Input>,
@@ -134,6 +135,7 @@ impl std::fmt::Debug for Inputs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut value = f.debug_struct("Inputs");
         value
+            .field("key_values", &self.key_values)
             .field("sources", &self.sources)
             .field("syntax", &self.syntax)
             .field("pending", &self.pending)

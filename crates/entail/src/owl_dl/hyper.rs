@@ -2398,6 +2398,9 @@ impl<'a> Hyper<'a> {
         }
         if driver.g.selecting_reads() {
             use super::graph::changes::ReadFact;
+            if let Some(source) = driver.clauses.constraint_source(index) {
+                driver.g.observe_read(ReadFact::RoleConstraint(source));
+            }
             if let Some(program) = &driver.g.kb().role_program
                 && let Some(source) = driver.clauses.role_source(index, program)
             {

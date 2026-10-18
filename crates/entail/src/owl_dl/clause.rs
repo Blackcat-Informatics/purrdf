@@ -480,6 +480,8 @@ pub(crate) struct ClauseSet {
     /// actually carries are statements about that concept, valid over either domain.
     tbox_sources: Vec<Option<std::num::NonZeroUsize>>,
     role_clauses: std::ops::Range<usize>,
+    asymmetric_clauses: std::ops::Range<usize>,
+    disjoint_role_clauses: std::ops::Range<usize>,
     /// Number of original admitted schema guards appended logically to this
     /// compilation. Their bodies and sorted trigger directory remain in the Kb.
     schema_count: usize,
@@ -490,6 +492,38 @@ pub(crate) struct ClauseSet {
 }
 
 impl ClauseSet {
+    /// Resolve the original role constraint from its compiler-owned emission range.
+    /// The role keys are already in the emitted body; no second source table is needed.
+    pub(crate) fn constraint_source(&self, index: usize) -> Option<super::input_source::Input> {
+        use super::input_source::Input;
+        if self.asymmetric_clauses.contains(&index) {
+            let BodyAtom::Role {
+                role: Role::Named(property),
+                ..
+            } = self.clauses[index].body[0]
+            else {
+                unreachable!("an asymmetric clause starts with its original named role")
+            };
+            Some(Input::Asymmetric(property))
+        } else if self.disjoint_role_clauses.contains(&index) {
+            let [
+                BodyAtom::Role {
+                    role: Role::Named(left),
+                    ..
+                },
+                BodyAtom::Role {
+                    role: Role::Named(right),
+                    ..
+                },
+            ] = self.clauses[index].body.as_slice()
+            else {
+                unreachable!("a disjoint-role clause contains its two original named roles")
+            };
+            Some(Input::DisjointRole(*left, *right))
+        } else {
+            None
+        }
+    }
     pub(crate) fn role_source(
         &self,
         index: usize,
@@ -710,6 +744,8 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         role_first: Vec::new(),
         tbox_sources: Vec::new(),
         role_clauses: 0..0,
+        asymmetric_clauses: 0..0,
+        disjoint_role_clauses: 0..0,
         schema_count: kb.schema.guards.len(),
         reads: Vec::new(),
         transitive_readers: Vec::new(),
@@ -815,6 +851,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // The two role axioms that constrain EDGES rather than labels, so neither can be
     // internalized as a general concept inclusion and neither has a concept to trigger it.
     // Asymmetry with `y = x` is the self-loop case, which is how it subsumes irreflexivity.
+    let asymmetric_start = out.clauses.len();
     for &property in &kb.asymmetric {
         let role = Role::Named(property);
         out.push(DlClause {
@@ -833,6 +870,8 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             head: Vec::new(),
         });
     }
+    out.asymmetric_clauses = asymmetric_start..out.clauses.len();
+    let disjoint_start = out.clauses.len();
     for &(left, right) in &kb.disjoint_roles {
         // The pair is held in both orders so a lookup needs no normalization; one clause per
         // unordered pair is enough, because the body is symmetric in the two roles.
@@ -855,6 +894,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             head: Vec::new(),
         });
     }
+    out.disjoint_role_clauses = disjoint_start..out.clauses.len();
     // Resolve each role-first clause to the edge patterns that can satisfy its first atom.
     // Clauses are recorded in ascending index order, so every list stays ascending.
     for (role, index) in std::mem::take(&mut out.role_first) {

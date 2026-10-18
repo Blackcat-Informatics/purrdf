@@ -351,6 +351,10 @@ impl Builder {
         memory: &mut Memory<'_, Resident>,
     ) -> Result<(), Error> {
         match fact {
+            ReadFact::RoleConstraint(input) => {
+                memory.push(&mut self.rules, input)?;
+                Ok(())
+            }
             ReadFact::RoleClause(source) => {
                 memory.push(&mut self.role_clauses, source)?;
                 Ok(())

@@ -173,6 +173,45 @@ fn input_source_key_batches_rollback_refusal_and_stop_without_losing_prior_input
     ));
 }
 
+#[test]
+fn key_value_evidence_is_published_only_with_the_complete_equality_batch() {
+    let mut f = Fixture::default();
+    let class = f.name("Keyed");
+    let property = f.name("key");
+    let value = f.name("shared");
+    let members = f.list(&[property]);
+    f.edge(class, owl::HAS_KEY, members);
+    let left = f.instance("left", class);
+    let right = f.instance("right", class);
+    f.builder.push_quad(left, property, value, None).unwrap();
+    f.builder.push_quad(right, property, value, None).unwrap();
+    let input = f.freeze();
+    let mut kb = crate::owl_dl::parser::build_with_preparation(
+        &input,
+        None,
+        crate::reasoner::SchemaPreparationBudget::default(),
+    )
+    .unwrap();
+    kb.inputs.refusal = Some((0, StorageError::AdmissionFailed));
+    assert!(matches!(
+        kb.apply_keys(),
+        Err(crate::EntailError::Storage(StorageError::AdmissionFailed))
+    ));
+    assert_eq!(kb.same_as, []);
+    assert!(kb.inputs.key_values.is_none());
+    assert_eq!(kb.inputs.get(Input::Equality(0)), None);
+    kb.apply_keys().unwrap();
+    assert_eq!(kb.same_as.len(), 1);
+    assert_eq!(
+        kb.inputs.key_values.as_ref().unwrap().get(0).unwrap().len(),
+        1
+    );
+    assert!(matches!(
+        kb.inputs.get(Input::Equality(0)),
+        Some(Source::KeyInference { key: 0, .. })
+    ));
+}
+
 /// Compare real admitted buffers, not host memory or an elapsed-time estimate.
 #[test]
 fn input_source_ordinal_storage_uses_less_admitted_memory_than_a_sparse_index() {

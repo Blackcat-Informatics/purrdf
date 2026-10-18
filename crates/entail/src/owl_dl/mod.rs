@@ -43,6 +43,7 @@ use crate::interner::Interner;
 
 mod axiom_source;
 pub(crate) mod input_source;
+pub(crate) mod key_values;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
@@ -432,6 +433,17 @@ impl Kb {
             return Ok(());
         }
         self.finalize()?;
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+        let values = key_values::Index::new(
+            &self.abox_roles,
+            self.keys
+                .iter()
+                .flat_map(|(_, properties)| properties.iter().copied()),
+            self.stop.as_deref(),
+            &mut memory,
+        )?;
+        let mut reads = key_values::Reads::default();
         let named: Vec<u32> = self.individuals.iter().copied().collect();
         let mut forced: Vec<(usize, u32, u32)> = Vec::new();
         for (key, (class, properties)) in self.keys.iter().enumerate() {
@@ -444,15 +456,27 @@ impl Kb {
             }
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
-                    if properties
-                        .iter()
-                        .all(|&property| self.agrees_on(left, right, property))
-                    {
+                    let start = reads.values.len();
+                    let mut matches = true;
+                    for &property in properties {
+                        let Some(common) =
+                            values.common(left, right, property, self.stop.as_deref())?
+                        else {
+                            matches = false;
+                            break;
+                        };
+                        reads.push(common)?;
+                    }
+                    if matches {
+                        reads.finish(start)?;
                         forced.push((key, left, right));
+                    } else {
+                        reads.values.truncate(start);
                     }
                 }
             }
         }
+        values.release(&mut memory)?;
         let stop = self.stop.as_deref();
         self.inputs
             .record_key_equalities(self.same_as.len(), &forced, || {
@@ -462,28 +486,16 @@ impl Kb {
                     Ok(())
                 }
             })?;
+        assert!(
+            self.inputs.key_values.is_none(),
+            "key value evidence is published once with its equality batch"
+        );
+        reads.base = self.same_as.len();
+        self.inputs.key_values = Some(reads);
         self.same_as
             .extend(forced.into_iter().map(|(_, left, right)| (left, right)));
         self.keys_applied = true;
         Ok(())
-    }
-
-    /// Whether `left` and `right` share at least one asserted `property` value, and neither
-    /// is without one.
-    ///
-    /// A key property with no value on one of the two individuals does not identify them —
-    /// OWL 2 requires the key values to EXIST and to coincide — so an absent value answers
-    /// `false` rather than vacuously `true`.
-    fn agrees_on(&self, left: u32, right: u32, property: u32) -> bool {
-        let values = |individual: u32| -> BTreeSet<u32> {
-            self.abox_roles
-                .iter()
-                .filter(|&&(subject, predicate, _)| subject == individual && predicate == property)
-                .map(|&(_, _, object)| object)
-                .collect()
-        };
-        let left = values(left);
-        !left.is_empty() && values(right).intersection(&left).next().is_some()
     }
 
     /// The constructs this knowledge base could not fully handle.
