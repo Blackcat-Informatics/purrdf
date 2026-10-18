@@ -14,9 +14,10 @@
 //!
 //! * [`Cost::work`] is an upper bound on binary `u64` limb operations (one
 //!   multiply-add, compare or division step). Decimal parsing and rendering
-//!   include their quadratic base conversion; arithmetic uses the operand lengths
+//!   include their base conversion; recursive arithmetic uses operand lengths
 //!   for multiplication (Karatsuba stays below it from
-//!   [`crate::bigint::KARATSUBA_THRESHOLD`] limbs up); quotient length times
+//!   [`crate::bigint::KARATSUBA_THRESHOLD`] limbs up), with N log N work for
+//!   an exact transform; quotient length times
 //!   divisor length for division; quadratic in the result for powers.
 //! * [`Cost::bytes`] is an upper bound on the heap bytes of the value the
 //!   operation produces — the memory it mints and hands back.
@@ -203,13 +204,25 @@ pub fn integer_operation_layout(
             if result <= 3 {
                 return Ok(NumericOperationLayout::INLINE);
             }
+            if let Some(length) = crate::bigint::transform_product_len(la, lb) {
+                return NumericOperationLayout::words(
+                    length.checked_mul(2).ok_or(SizeOverflow)?,
+                    result,
+                );
+            }
             if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
                 return NumericOperationLayout::words(result, result);
             }
-            // Native Karatsuba's established eight-result working law. The
-            // fallible shared body retains exact-capacity destinations; the
-            // original numerical recursion and threshold are unchanged.
-            let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
+            // Two-way and three-way paths share the eight-result envelope.
+            // Beyond the field's supported root order, recursive descendants
+            // can still select transforms; sixteen results include their
+            // arrays and the parent's live operands.
+            let factor = if la.min(lb) >= crate::bigint::NTT_THRESHOLD {
+                16
+            } else {
+                8
+            };
+            let peak = result.checked_mul(factor).ok_or(SizeOverflow)?;
             // Recombination adds one explicit carry word to the output.
             let retained = result.checked_add(1).ok_or(SizeOverflow)?;
             NumericOperationLayout::words(peak, retained)
@@ -227,32 +240,68 @@ pub(crate) fn live_integer_bytes(
     })
 }
 
-fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
-    values.iter().try_fold(0_u64, |sum, value| {
-        sum.checked_add(*value)
-            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)
-    })
+const fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
+    let mut sum = 0_u64;
+    let mut at = 0;
+    while at < values.len() {
+        let Some(next) = sum.checked_add(values[at]) else {
+            return Err(crate::bigint::LimbScratchError::SizeOverflow);
+        };
+        sum = next;
+        at += 1;
+    }
+    Ok(sum)
 }
 
-fn owned_words(limbs: u64) -> u64 {
+const fn owned_words(limbs: u64) -> u64 {
     if limbs <= 3 { 0 } else { limbs }
 }
 
 // Mirrors the actual destination families of mag_div_rem, not saturated fuel.
 // The <=8-limb normalized branch uses stack scratch; larger division retains
 // normalized numerator/divisor and quotient before returning its remainder.
-fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
+const fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
+    if lb >= crate::bigint::DIVISION_BLOCK_THRESHOLD as u64
+        && la.saturating_sub(lb).saturating_add(1) >= lb
+    {
+        use crate::bigint::LimbScratchError::SizeOverflow;
+        let Some(n) = crate::bigint::normalized_divisor_limbs(lb) else {
+            return Err(SizeOverflow);
+        };
+        let Some(padded) = la.checked_add(n - lb) else {
+            return Err(SizeOverflow);
+        };
+        let Some(normalized) = padded.checked_add(1) else {
+            return Err(SizeOverflow);
+        };
+        let quotient = la - lb + 1;
+        // The top level retains normalized operands, the final quotient and
+        // one 2n block. Further live words are 9h plus product scratch, h=n/2: D3n2n
+        // holds one h-word estimate, a 3h-word assembled dividend, one h-word
+        // copied low divisor and multiplication's 16h-word peak (32h when
+        // transform-sized descendants are possible);
+        // D2n1n's second D3n2n retains its h-word first quotient and 3h-word
+        // second dividend. Recursive halves have a strictly smaller peak.
+        let factor = if n / 2 >= crate::bigint::NTT_THRESHOLD {
+            41
+        } else {
+            25
+        };
+        let Some(inner) = (n / 2).checked_mul(factor) else {
+            return Err(SizeOverflow);
+        };
+        let Some(block) = n.checked_mul(2) else {
+            return Err(SizeOverflow);
+        };
+        return checked_sum_words(&[normalized, n, quotient, block, inner]);
+    }
     if la <= 8 {
-        checked_sum_words(&[owned_words(la), owned_words(la.min(lb))])
+        checked_sum_words(&[owned_words(la), owned_words(if la < lb { la } else { lb })])
     } else {
-        checked_sum_words(&[
-            owned_words(
-                la.checked_add(1)
-                    .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?,
-            ),
-            owned_words(lb),
-            owned_words(la),
-        ])
+        let Some(normalized) = la.checked_add(1) else {
+            return Err(crate::bigint::LimbScratchError::SizeOverflow);
+        };
+        checked_sum_words(&[owned_words(normalized), owned_words(lb), owned_words(la)])
     }
 }
 
@@ -275,7 +324,18 @@ pub(crate) fn decimal_exact_initial_layout(
     lb: u64,
 ) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
     let (a, b, g) = (owned_words(la), owned_words(lb), owned_words(la.min(lb)));
-    let gcd = checked_sum_words(&[a, b, a, b, g])?;
+    let mut gcd = checked_sum_words(&[a, b, a, b, g])?;
+    let longer = la.max(lb);
+    let shorter = la.min(lb);
+    if shorter != 0 && longer >= shorter.saturating_mul(2) {
+        // The binary GCD's one wide-gap Euclidean step holds the original
+        // operands while normalized division owns its complete destinations.
+        gcd = gcd.max(checked_sum_words(&[
+            a,
+            b,
+            division_words(longer, shorter)?,
+        ])?);
+    }
     let reduce_a = checked_sum_words(&[a, b, g, division_words(la, la.min(lb))?])?;
     let reduce_b = checked_sum_words(&[a, b, g, a, division_words(lb, la.min(lb))?])?;
     let factor = checked_sum_words(&[a, b, b])?;
@@ -453,11 +513,17 @@ pub fn numeric_render_layout(
     let groups = digits.div_ceil(19);
     let group_words = if groups <= 3 { 0 } else { groups };
     let quotient_words = if limbs <= 3 { 0 } else { limbs };
-    // Native division retains old/new quotient destinations beside groups.
-    let words = quotient_words
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(group_words))
-        .ok_or(SizeOverflow)?;
+    // Ordinary rendering retains one quotient beside its groups. The tree
+    // includes cached powers, saved quotient/remainder owners and the existing
+    // recursive division/product scratch. Their simultaneous envelope is
+    // 32 group-width words plus the one output-group destination.
+    let words = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS {
+        group_words.checked_mul(33).ok_or(SizeOverflow)?
+    } else {
+        quotient_words
+            .checked_add(group_words)
+            .ok_or(SizeOverflow)?
+    };
     let temporary_bytes = std::alloc::Layout::array::<u64>(words)
         .map_err(|_| SizeOverflow)?
         .size();
@@ -531,8 +597,11 @@ fn invalid_parse_layout(error_code: Option<crate::ErrorCode>) -> NumericParseLay
     }
 }
 
-/// The two native decimal-chunk destinations. Each asks for previous len + 1;
-/// original and replacement buffers coexist. Three-limb magnitudes stay inline.
+/// The two native decimal-chunk destinations coexist on the Horner path.
+/// Beyond 256 complete 19-digit groups, the balanced reader also retains
+/// cached decimal powers, occupied blocks and recursive multiplication scratch;
+/// 32 times the checked result size bounds those simultaneous owners.
+/// Three-limb magnitudes stay inline.
 fn magnitude_parse_layout(
     digits: usize,
 ) -> Result<NumericParseLayout, crate::bigint::LimbScratchError> {
@@ -547,8 +616,9 @@ fn magnitude_parse_layout(
         .checked_add(1)
         .ok_or(SizeOverflow)?;
     let retained_bytes = words.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
+    let peak_factor = if digits >= 257 * 19 { 32 } else { 2 };
     let peak_bytes = retained_bytes
-        .checked_add(retained_bytes)
+        .checked_mul(peak_factor)
         .ok_or(SizeOverflow)?;
     Ok(NumericParseLayout {
         peak_bytes,
@@ -682,28 +752,95 @@ pub const fn render(limbs: u64, scale: u64) -> Cost {
     render_parts(limbs, digits, digits.saturating_add(scale))
 }
 
-// Display divides by 10^19, once per coefficient group, not once per
-// output digit. Each pass initializes its quotient and computes division and
-// remainder over at most `limbs` words. Linear terms cover the initial clone,
-// trimming and amortized group growth; fractional padding only costs text.
+// Ordinary output uses 10^19 leaves; large output splits by cached powers.
+// The tree's complete node counts are computed from widths, never the digits.
 const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
     let groups = digits.div_ceil(19);
-    let work = groups
-        .saturating_mul(limbs.saturating_mul(3).saturating_add(10))
-        .saturating_add(limbs)
+    let conversion = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS as u64 {
+        decimal_tree_render_work(groups)
+    } else {
+        groups
+            .saturating_mul(limbs.saturating_mul(3).saturating_add(10))
+            .saturating_add(limbs)
+    };
+    let work = conversion
         // Decimal formatting reads coefficient text before writing the final
         // padded text. Each is bounded by the final rendered length.
         .saturating_add(text.saturating_mul(2))
         .saturating_add(1);
-    // Coefficient/quotient copies and old/new group buffers can coexist.
+    // The quotient and old/new group buffers can coexist; this remains a
+    // conservative work-admission bound over the in-place native renderer.
     // Decimal formatting additionally holds its coefficient text, padded text
     // and destination string, including geometric spare string capacity.
-    let words = limbs
+    let ordinary_words = limbs
         .saturating_mul(3)
         .saturating_add(groups.saturating_mul(3));
+    let words = if groups > crate::bigint::DECIMAL_RENDER_TREE_START_GROUPS as u64 {
+        let tree_words = groups.saturating_mul(33);
+        if tree_words > ordinary_words {
+            tree_words
+        } else {
+            ordinary_words
+        }
+    } else {
+        ordinary_words
+    };
     Cost::new(
         work,
         limb_bytes(words).saturating_add(text.saturating_mul(6)),
+    )
+}
+
+/// Work of one tree split, using group widths as binary-limb upper bounds.
+/// B=10^19 lies between 2^63 and 2^64. The divisor for L groups therefore
+/// has floor(63L/64)+1..=L limbs. Clamp to the maximum of the existing
+/// quotient-length times divisor-length bound over that whole interval.
+const fn decimal_render_split_work(width: u64) -> u64 {
+    let lower = 1_u64 << (width - 1).ilog2();
+    let minimum = lower.saturating_sub(lower.div_ceil(64)).saturating_add(1);
+    let middle = width / 2;
+    let divisor = if middle < minimum {
+        minimum
+    } else if middle > lower {
+        lower
+    } else {
+        middle
+    };
+    div(width, divisor).work()
+}
+
+/// At most 64 width levels. Full subtrees occur floor(groups/width) times;
+/// each binary suffix contributes its one partial node at its highest bit.
+/// The old complete power-work certificate also bounds the cached squares.
+const fn decimal_tree_render_work(groups: u64) -> u64 {
+    let top = 1_u64 << (groups - 1).ilog2();
+    let power_work = if top > u32::MAX as u64 {
+        u64::MAX
+    } else {
+        pow(64 << 16, top as u32).work()
+    };
+    let mut work = power_work;
+    let mut width = top;
+    if groups > top {
+        work = work.saturating_add(decimal_render_split_work(groups));
+    }
+    while width > crate::bigint::DECIMAL_TREE_START_GROUPS as u64 {
+        work =
+            work.saturating_add((groups / width).saturating_mul(decimal_render_split_work(width)));
+        let tail = groups % width;
+        if tail > width / 2 && tail > crate::bigint::DECIMAL_TREE_START_GROUPS as u64 {
+            work = work.saturating_add(decimal_render_split_work(tail));
+        }
+        width /= 2;
+    }
+    // Each leaf has at most 256 groups/limbs, including its quotient copy,
+    // divisions, zero padding and output writes. Fraction placement is separate.
+    work.saturating_add(
+        groups.saturating_mul(
+            (crate::bigint::DECIMAL_TREE_START_GROUPS as u64)
+                .saturating_mul(3)
+                .saturating_add(16),
+        ),
     )
 }
 
@@ -746,18 +883,39 @@ pub(crate) const fn add(la: u64, lb: u64) -> Cost {
     Cost::new(result, limb_bytes(result))
 }
 
-/// `a × b`. Karatsuba's recursion holds its half-size sums and partial products
-/// beside the result along one path of the recursion — a geometric series under
-/// the top level's — so its working set is a constant multiple of the result's.
+/// Recursive products retain split operands and partial products geometrically.
+/// A selected transform uses three N log2 N butterfly passes, linear input,
+/// pointwise, inverse-scale and carry passes, and at most two N-word arrays.
 #[must_use]
 pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
+    if let Some(length) = crate::bigint::transform_product_len(la, lb) {
+        // Each butterfly uses two folded field products and modular add/sub;
+        // 64 operations per element/stage covers all three transforms and
+        // root powers at the minimum selected length. 128N covers the linear
+        // passes. The shared dispatch keeps N <= 2^32 and both inputs >=32768.
+        let work = length.saturating_mul(
+            (length.trailing_zeros() as u64)
+                .saturating_mul(64)
+                .saturating_add(128),
+        );
+        return Cost::new(work, limb_bytes(length.saturating_mul(2)));
+    }
     let result = la.saturating_add(lb);
+    let shorter = if la < lb { la } else { lb };
+    // Five child products and point/interpolation work fit this conservative
+    // linear allowance when the shorter input reaches the 1024-limb cutoff.
+    let linear = if shorter >= crate::bigint::TOOM3_THRESHOLD as u64 {
+        16
+    } else {
+        8
+    };
     let work = la
         .saturating_mul(lb)
-        .saturating_add(result.saturating_mul(8))
+        .saturating_add(result.saturating_mul(linear))
         .saturating_add(1);
-    let shorter = if la < lb { la } else { lb };
-    let working = if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
+    let working = if shorter >= crate::bigint::NTT_THRESHOLD {
+        16
+    } else if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
         8
     } else {
         2
@@ -776,13 +934,22 @@ pub(crate) const fn div(la: u64, lb: u64) -> Cost {
         .saturating_add(1);
     // Normalized division retains the dividend-sized remainder allocation
     // beside the quotient and normalized divisor, even after zero trimming.
+    let ordinary_bytes = limb_bytes(
+        la.saturating_mul(2)
+            .saturating_add(lb.saturating_mul(2))
+            .saturating_add(4),
+    );
+    let native_bytes = match division_words(la, lb) {
+        Ok(words) => limb_bytes(words),
+        Err(_) => u64::MAX,
+    };
     Cost::new(
         work,
-        limb_bytes(
-            la.saturating_mul(2)
-                .saturating_add(lb.saturating_mul(2))
-                .saturating_add(4),
-        ),
+        if native_bytes > ordinary_bytes {
+            native_bytes
+        } else {
+            ordinary_bytes
+        },
     )
 }
 
@@ -847,16 +1014,27 @@ pub(crate) const fn pow(log2_q16: u64, exp: u32) -> Cost {
     Cost::new(work, limb_bytes(result))
 }
 
-/// `gcd(a, b)` by Euclid's algorithm.
+/// `gcd(a, b)` by binary reduction with one initial wide-gap division.
 #[must_use]
 pub(crate) const fn gcd(la: u64, lb: u64) -> Cost {
     let longer = if la > lb { la } else { lb };
+    let shorter = if la < lb { la } else { lb };
     let work = la
         .saturating_add(1)
         .saturating_mul(lb.saturating_add(1))
         .saturating_mul(8)
         .saturating_add(longer.saturating_mul(64));
-    Cost::new(work, limb_bytes(longer.saturating_add(1)))
+    let scratch = if shorter != 0 && longer >= shorter.saturating_mul(2) {
+        // The initial division retains its normalized numerator, divisor and
+        // quotient/remainder alongside the original operands.
+        longer
+            .saturating_mul(3)
+            .saturating_add(shorter.saturating_mul(2))
+            .saturating_add(2)
+    } else {
+        longer.saturating_add(1)
+    };
+    Cost::new(work, limb_bytes(scratch))
 }
 
 /// `a × 10^digits`, including forming the binary power of ten and multiplying.

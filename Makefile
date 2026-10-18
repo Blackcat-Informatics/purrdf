@@ -833,6 +833,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_hand_values_are_reproduced_on_this_target \
 				the_transcript_digest_is_reproduced_on_this_target \
 				the_oracle_vectors_replay_on_this_target \
+				large_decimal_group_parse_replays_on_this_target \
+				large_binary_products_match_the_schoolbook_oracle \
+				large_binary_division_replays_exact_shift_equations \
+				wide_gap_gcd_replays_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test any_uri -- --exact \
 				lexical_mapping_preserves_everything_except_xml_whitespace \
