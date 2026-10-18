@@ -86,6 +86,8 @@ macro_rules! message_error {
 /// The `Type => { pattern => cause, ... }` form also accepts named fields and
 /// a struct containing a typed reason. Each pattern binds the original cause;
 /// both forms generate the same source implementation.
+/// A cause expression such as `cause.as_ref()` borrows the original error from
+/// a boxed owner without exposing the box as another source-chain layer.
 ///
 /// ```rust
 /// #[derive(Debug)]
@@ -112,7 +114,7 @@ macro_rules! error_source {
     ($type:ty { $($variant:ident),+ $(,)? }) => {
         $crate::error_source!($type => { $(Self::$variant(error) => error),+ });
     };
-    ($type:ty => { $($pattern:pat => $error:ident),+ $(,)? }) => {
+    ($type:ty => { $($pattern:pat => $error:expr),+ $(,)? }) => {
         impl ::core::error::Error for $type {
             fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
                 match self {
@@ -166,6 +168,7 @@ mod tests {
         enum Wrapper {
             Named { cause: Plain, label: &'static str },
             Tuple(Detailed),
+            Boxed(Box<Plain>),
             Local,
         }
         impl core::fmt::Display for Wrapper {
@@ -173,6 +176,7 @@ mod tests {
                 match self {
                     Self::Named { label, .. } => f.write_str(label),
                     Self::Tuple(error) => error.fmt(f),
+                    Self::Boxed(error) => error.fmt(f),
                     Self::Local => f.write_str("local"),
                 }
             }
@@ -180,6 +184,7 @@ mod tests {
         crate::error_source!(Wrapper => {
             Self::Named { cause, .. } => cause,
             Self::Tuple(cause) => cause,
+            Self::Boxed(cause) => cause.as_ref(),
         });
         use core::error::Error as _;
         let named = Wrapper::Named {
@@ -206,5 +211,15 @@ mod tests {
             "tuple"
         );
         assert!(Wrapper::Local.source().is_none());
+        let boxed = Wrapper::Boxed(Box::new(Plain::new("boxed original")));
+        assert_eq!(
+            boxed
+                .source()
+                .unwrap()
+                .downcast_ref::<Plain>()
+                .unwrap()
+                .to_string(),
+            "boxed original"
+        );
     }
 }

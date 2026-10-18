@@ -6,6 +6,9 @@
 //! Detached proof JSON is read by the workspace's one JSON reader,
 //! [`purrdf_lex::json`], under its default depth cap.
 
+mod hex_error;
+pub use hex_error::Hex32Error;
+
 use purrdf_hash::Domain;
 use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
@@ -704,7 +707,8 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
             let item = object(item, "peak")?;
             Ok(MmrPeak {
                 height: usize_field(item, "height")?,
-                hash: parse_hex_32(string_field(item, "hash")?)?,
+                hash: parse_hex_32(string_field(item, "hash")?)
+                    .map_err(|error| error.to_string())?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -720,15 +724,17 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
             Ok(ProofStep {
                 parent_height: usize_field(item, "parent_height")?,
                 side,
-                hash: parse_hex_32(string_field(item, "hash")?)?,
+                hash: parse_hex_32(string_field(item, "hash")?)
+                    .map_err(|error| error.to_string())?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(Proof {
         count: usize_field(entries, "count")?,
         leaf_index: usize_field(entries, "leaf_index")?,
-        frame_id: parse_hex_32(string_field(entries, "frame_id")?)?,
-        root: parse_hex_32(string_field(entries, "root")?)?,
+        frame_id: parse_hex_32(string_field(entries, "frame_id")?)
+            .map_err(|error| error.to_string())?,
+        root: parse_hex_32(string_field(entries, "root")?).map_err(|error| error.to_string())?,
         peak_index: usize_field(entries, "peak_index")?,
         peaks,
         path,
@@ -737,15 +743,13 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
 
 /// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix and
 /// digits of either case ([`purrdf_hash::hex::decode_32`]).
-pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
+pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, Hex32Error> {
     let trimmed = input.trim();
     let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
-        return Err("expected a 32-byte hex value".to_string());
+        return Err(Hex32Error::Length { actual: raw.len() });
     }
-    purrdf_hash::hex::decode_32(raw)
-        .map(Vec::from)
-        .ok_or_else(|| "hex value contains a non-hex character".to_string())
+    purrdf_hash::hex::decode(raw).map_err(Hex32Error::Digits)
 }
 
 fn is_header_item(item: &Value) -> bool {

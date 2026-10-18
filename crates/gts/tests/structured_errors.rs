@@ -838,7 +838,176 @@ fn memory_example_keeps_confidence_bits_and_original_io_cause() {
     ));
 }
 
+fn compaction_keeps_timestamp_and_authoring_causes() {
+    use purrdf_gts::compact::{CompactionParams, DictPlan, compact_streamable};
+    use purrdf_gts::{fixture::fixed_key, writer::Writer};
+    let source = Writer::new("purrdf.gts").into_bytes();
+    for (timestamp, expected) in [
+        ("2026-01-01T00:00:00+01:00", "gts-compact-timestamp-zone"),
+        ("2026-02-30T00:00:00Z", "gts-compact-timestamp-parse"),
+    ] {
+        let error = compact_streamable(
+            &source,
+            CompactionParams {
+                timestamp,
+                seal_original: false,
+                plan: DictPlan::undicted(),
+                content_digest: None,
+                packaging_signer: (fixed_key(99), "pack".into()),
+            },
+        )
+        .unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "gts-compact-timestamp");
+        assert!(matches!(fields.field("actual"), ErrorValue::Text(value) if value == timestamp));
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, expected);
+        if expected == "gts-compact-timestamp-zone" {
+            assert!(matches!(cause.field("minutes"), ErrorValue::Signed(60)));
+        } else {
+            // The datatype's original structured error remains traversable.
+            assert!(!cause.child("cause").events.is_empty());
+        }
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(
+            error.to_string(),
+            "rewrite timestamp must be a valid XSD dateTime with an explicit UTC timezone"
+        );
+    }
+    let mut plan = DictPlan::undicted();
+    plan.transform = vec!["unregistered".into()];
+    let error = compact_streamable(
+        &source,
+        CompactionParams {
+            timestamp: "2026-01-01T00:00:00Z",
+            seal_original: false,
+            plan,
+            content_digest: None,
+            packaging_signer: (fixed_key(99), "pack".into()),
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-compact-author-frame");
+    assert!(matches!(
+        fields.field("frame_type"),
+        ErrorValue::Code("terms")
+    ));
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "gts-writer-missing-codec");
+    assert!(matches!(
+        cause.field("name"),
+        ErrorValue::Text("unregistered")
+    ));
+    assert_eq!(
+        error.to_string(),
+        "cannot author the terms frame: writer catalog has no entry for codec 'unregistered'"
+    );
+    let mut gzip = encode_chain(&["gzip".into()], b"payload").unwrap();
+    gzip[3] |= 0xe0;
+    let source = refused_frame(purrdf_lex::cbor::Value::Bytes(gzip), vec![1_u8.into()]);
+    let error = compact_streamable(
+        &source,
+        CompactionParams {
+            timestamp: "2026-01-01T00:00:00Z",
+            seal_original: false,
+            plan: DictPlan::undicted(),
+            content_digest: None,
+            packaging_signer: (fixed_key(99), "pack".into()),
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-compact-segment");
+    let diagnostic = fields.child("cause");
+    assert_eq!(diagnostic.code, "gts-diagnostic");
+    let original = diagnostic.child("cause");
+    assert_eq!(original.code, "gts-payload-damaged");
+    let original = original
+        .child("detail")
+        .child("cause")
+        .child("detail")
+        .child("cause");
+    assert_eq!(original.code, "gzip-reserved-flags");
+    assert!(matches!(original.field("flags"), ErrorValue::Unsigned(flags) if flags & 0xe0 == 0xe0));
+}
+
+fn compaction_provenance_lists_and_signature_failures_keep_native_fields() {
+    use purrdf_gts::compact::{compaction_signature_roots, detached_signature_pairs};
+    use purrdf_gts::model::{Graph, Signature};
+    use purrdf_testkit::error_capture::Event;
+    let mut graph = Graph::default();
+    let heads = [vec![255; 32], vec![0; 32]];
+    let error = compaction_signature_roots(&graph, &heads).unwrap_err();
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "gts-compact-missing-provenance");
+    assert!(matches!(fields.events.as_slice(), [
+        Event::BeginList(Some("source_heads"), 2),
+        Event::Value(None, ErrorValue::Bytes(first)),
+        Event::Value(None, ErrorValue::Bytes(second)),
+        Event::EndList,
+    ] if *first == heads[1] && *second == heads[0]));
+    graph.signatures.push(Signature {
+        frame_id: vec![7; 32],
+        kid: None,
+        status: "unverified".into(),
+        cose: None,
+        packaging: false,
+    });
+    let error = detached_signature_pairs(&graph).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-compact-frame-missing-cose");
+    assert!(matches!(fields.field("frame_id"), ErrorValue::Bytes(bytes) if bytes == [7; 32]));
+    graph.signatures[0].cose = Some(Vec::new());
+    let error = detached_signature_pairs(&graph).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-compact-frame-cose");
+    assert_eq!(fields.child("cause").code, "gts-sign1-malformed");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_gts::cose::Sign1Error>()
+    );
+}
+
+fn compaction_identifier_decoders_retain_original_rejected_values() {
+    use purrdf_gts::{compact::base64url_decode, mmr::parse_hex_32};
+    let error = parse_hex_32("blake3:short").unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-hex32-length");
+    assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(5)));
+    let text = format!("{}g", "0".repeat(63));
+    let error = parse_hex_32(&text).unwrap_err();
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "hex-invalid-digit");
+    assert!(matches!(fields.field("offset"), ErrorValue::ByteCount(63)));
+    assert!(
+        matches!(fields.field("byte"), ErrorValue::Unsigned(value) if value == u128::from(b'g'))
+    );
+    assert_eq!(error.to_string(), "hex value contains a non-hex character");
+    let error = base64url_decode("a").unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-base64url-length");
+    assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(1)));
+    let error = base64url_decode("a=").unwrap_err();
+    assert_eq!(Capture::read(&error).code, "gts-base64url-padding");
+    let error = base64url_decode("a/").unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-base64url-alphabet");
+    assert!(
+        matches!(fields.field("byte"), ErrorValue::Unsigned(value) if value == u128::from(b'/'))
+    );
+    assert_eq!(base64url_decode("Y2F0").unwrap(), b"cat");
+    assert_eq!(parse_hex_32(&"aB".repeat(32)).unwrap(), [0xab; 32]);
+}
+
 purrdf_testkit::harness_main!(
+    compaction_keeps_timestamp_and_authoring_causes,
+    compaction_provenance_lists_and_signature_failures_keep_native_fields,
+    compaction_identifier_decoders_retain_original_rejected_values,
     memory_example_keeps_confidence_bits_and_original_io_cause,
     writer_catalog_and_frame_failures_keep_original_fields,
     append_and_header_failures_keep_native_values_and_sources,
