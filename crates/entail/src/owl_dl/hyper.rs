@@ -2425,6 +2425,10 @@ impl<'a> Hyper<'a> {
             }
             if driver.clauses.is_tbox(index) {
                 driver.g.observe_read(ReadFact::ObjectDomain(root));
+                match driver.clauses.tbox_source(index) {
+                    Some(source) => driver.g.observe_read(ReadFact::Tbox(source)),
+                    None => driver.g.observe_read(ReadFact::SchemaGuard(index)),
+                }
             }
         }
         // The proof supplies one complete binding. Read that binding through the

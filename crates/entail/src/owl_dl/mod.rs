@@ -73,6 +73,7 @@ pub(crate) mod query;
 pub(crate) mod roles;
 pub(crate) mod saturate;
 pub(crate) mod support;
+pub(crate) mod syntax;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
 ///
 /// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
@@ -109,6 +110,8 @@ pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept
 /// the honest shape rather than a state machine in disguise.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
+    pub(crate) syntax: syntax::Syntax,
+    pub(crate) query_syntax: syntax::Syntax,
     /// Source anchors and explicit native derivation owners for prepared inputs.
     pub(crate) inputs: input_source::Inputs,
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
@@ -301,6 +304,8 @@ impl Kb {
         let top = table.top();
         let bottom = table.bottom();
         Self {
+            syntax: syntax::Syntax::default(),
+            query_syntax: syntax::Syntax::query(),
             inputs: input_source::Inputs::default(),
             interner: Interner::default(),
             source_terms: 0,

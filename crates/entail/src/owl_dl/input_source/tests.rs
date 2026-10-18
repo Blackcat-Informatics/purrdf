@@ -199,7 +199,7 @@ fn input_source_ordinal_storage_uses_less_admitted_memory_than_a_sparse_index() 
     assert!(dense.live < memory.admitted_bytes());
     assert_eq!(
         dense.live,
-        dense.roles.capacity() * size_of::<Option<Source>>()
+        dense.sources.ordinals[1].capacity() * size_of::<Option<Source>>()
     );
     for index in 0..1000 {
         assert_eq!(

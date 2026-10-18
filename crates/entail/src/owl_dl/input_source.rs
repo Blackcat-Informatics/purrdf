@@ -24,6 +24,75 @@ pub(crate) enum Input {
     DisjointRole(u32, u32),
 }
 
+impl Input {
+    fn ordinal(self) -> Option<(usize, usize)> {
+        match self {
+            Self::Type(index) => Some((0, index)),
+            Self::Role(index) => Some((1, index)),
+            Self::Equality(index) => Some((2, index)),
+            Self::Distinct(index) => Some((3, index)),
+            Self::Key(index) => Some((4, index)),
+            _ => None,
+        }
+    }
+}
+
+/// Both input owners and their shared syntax references use the same dense door.
+struct Entries<T> {
+    ordinals: [Vec<Option<T>>; 5],
+    rules: OrderedTable<Input, T>,
+}
+
+impl<T> Default for Entries<T> {
+    fn default() -> Self {
+        Self {
+            ordinals: std::array::from_fn(|_| Vec::new()),
+            rules: OrderedTable::default(),
+        }
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Entries<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entries")
+            .field("ordinals", &self.ordinals)
+            .field("rule_count", &self.rules.len())
+            .finish()
+    }
+}
+
+impl<T> Entries<T> {
+    fn get(&self, input: Input) -> Option<&T> {
+        match input.ordinal() {
+            Some((family, index)) => self.ordinals[family].get(index)?.as_ref(),
+            None => self.rules.get(&input),
+        }
+    }
+
+    fn record(
+        &mut self,
+        input: Input,
+        value: T,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<(), StorageError> {
+        let Some((family, index)) = input.ordinal() else {
+            return self.rules.insert(input, value, memory).map(|_| ());
+        };
+        let rows = &mut self.ordinals[family];
+        let required = index.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        if required > rows.capacity() {
+            let capacity =
+                purrdf_lex::allocation::growth_capacity::<Option<T>>(rows.capacity(), required)?;
+            memory.reserve(rows, capacity)?;
+        }
+        if rows.len() < required {
+            rows.resize_with(required, || None);
+        }
+        rows[index] = Some(value);
+        Ok(())
+    }
+}
+
 /// Preserve the actual producer rather than interpreting every prepared row as RDF.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Source {
@@ -50,12 +119,11 @@ impl std::fmt::Debug for Source {
 /// Missing entries are explicit missing provenance, including synthetic Kbs.
 #[derive(Default)]
 pub(crate) struct Inputs {
-    types: Vec<Option<Source>>,
-    roles: Vec<Option<Source>>,
-    equalities: Vec<Option<Source>>,
-    distinct: Vec<Option<Source>>,
-    keys: Vec<Option<Source>>,
-    rules: OrderedTable<Input, Source>,
+    sources: Entries<Source>,
+    syntax: Entries<std::num::NonZeroUsize>,
+    pending: Vec<Input>,
+    active: bool,
+    complete: bool,
     storage: Resident,
     live: usize,
     #[cfg(test)]
@@ -66,12 +134,11 @@ impl std::fmt::Debug for Inputs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut value = f.debug_struct("Inputs");
         value
-            .field("types", &self.types)
-            .field("roles", &self.roles)
-            .field("equalities", &self.equalities)
-            .field("distinct", &self.distinct)
-            .field("keys", &self.keys)
-            .field("rule_count", &self.rules.len())
+            .field("sources", &self.sources)
+            .field("syntax", &self.syntax)
+            .field("pending", &self.pending)
+            .field("active", &self.active)
+            .field("complete", &self.complete)
             .field("storage", &self.storage)
             .field("live", &self.live);
         #[cfg(test)]
@@ -82,15 +149,59 @@ impl std::fmt::Debug for Inputs {
 
 impl Inputs {
     pub(crate) fn get(&self, input: Input) -> Option<Source> {
-        let (rows, index) = match input {
-            Input::Type(index) => (&self.types, index),
-            Input::Role(index) => (&self.roles, index),
-            Input::Equality(index) => (&self.equalities, index),
-            Input::Distinct(index) => (&self.distinct, index),
-            Input::Key(index) => (&self.keys, index),
-            _ => return self.rules.get(&input).copied(),
-        };
-        rows.get(index).copied().flatten()
+        self.sources.get(input).copied()
+    }
+
+    pub(crate) fn syntax(&self, input: Input) -> Option<super::syntax::Capture> {
+        use super::syntax::Capture;
+        if let Some(root) = self.syntax.get(input) {
+            return Some(Capture::Root(root.get() - 1));
+        }
+        (self.complete
+            && matches!(
+                self.get(input),
+                Some(Source::Anchor(_) | Source::LiteralValue(_))
+            ))
+        .then_some(Capture::Empty)
+    }
+
+    pub(crate) fn finish_parse(&mut self) {
+        assert!(!self.active, "input capture finished at an axiom boundary");
+        self.complete = true;
+    }
+
+    pub(crate) fn begin_scope(&mut self) {
+        assert!(!self.active, "parser input scopes are not nested");
+        self.pending.clear();
+        self.active = true;
+    }
+
+    pub(crate) fn end_scope(&mut self, root: Option<usize>) -> Result<(), StorageError> {
+        self.active = false;
+        if root.is_some() {
+            for &input in &self.pending {
+                assert!(
+                    self.syntax(input).is_none(),
+                    "one syntax owner per parsed input"
+                );
+            }
+        }
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = (|| {
+            if let Some(root) = root {
+                let root = std::num::NonZeroUsize::new(
+                    root.checked_add(1).ok_or(StorageError::SizeOverflow)?,
+                )
+                .expect("a syntax ordinal is one-based");
+                for &input in &self.pending {
+                    self.syntax.record(input, root, &mut memory)?;
+                }
+            }
+            Ok(())
+        })();
+        self.live = memory.admitted_bytes();
+        self.pending.clear();
+        result
     }
 
     /// A set-valued native rule retains its original first insertion owner.
@@ -110,37 +221,15 @@ impl Inputs {
             *remaining -= 1;
         }
         let mut memory = Memory::resume(&mut self.storage, self.live);
-        let result = match input {
-            Input::Type(index) => Self::row(&mut self.types, index, source, &mut memory),
-            Input::Role(index) => Self::row(&mut self.roles, index, source, &mut memory),
-            Input::Equality(index) => Self::row(&mut self.equalities, index, source, &mut memory),
-            Input::Distinct(index) => Self::row(&mut self.distinct, index, source, &mut memory),
-            Input::Key(index) => Self::row(&mut self.keys, index, source, &mut memory),
-            _ => self.rules.insert(input, source, &mut memory).map(|_| ()),
-        };
+        let result = (|| {
+            self.sources.record(input, source, &mut memory)?;
+            if self.active {
+                memory.push(&mut self.pending, input)?;
+            }
+            Ok(())
+        })();
         self.live = memory.admitted_bytes();
         result
-    }
-
-    fn row(
-        rows: &mut Vec<Option<Source>>,
-        index: usize,
-        source: Source,
-        memory: &mut Memory<'_, Resident>,
-    ) -> Result<(), StorageError> {
-        let required = index.checked_add(1).ok_or(StorageError::SizeOverflow)?;
-        if required > rows.capacity() {
-            let capacity = purrdf_lex::allocation::growth_capacity::<Option<Source>>(
-                rows.capacity(),
-                required,
-            )?;
-            memory.reserve(rows, capacity)?;
-        }
-        if rows.len() < required {
-            rows.resize(required, None);
-        }
-        rows[index] = Some(source);
-        Ok(())
     }
 
     /// Admit a complete derived-equality batch before changing semantic rows.
@@ -154,7 +243,7 @@ impl Inputs {
         start
             .checked_add(forced.len())
             .ok_or(StorageError::SizeOverflow)?;
-        let baseline = self.equalities.len();
+        let baseline = self.sources.ordinals[2].len();
         assert!(
             baseline <= start,
             "key publication appends equality provenance"
@@ -168,7 +257,7 @@ impl Inputs {
                 .map_err(crate::EntailError::from)
             });
             if let Err(original) = outcome {
-                self.equalities.truncate(baseline);
+                self.sources.ordinals[2].truncate(baseline);
                 return Err(original);
             }
         }

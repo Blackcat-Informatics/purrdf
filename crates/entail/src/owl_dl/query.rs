@@ -287,7 +287,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // table is a disjoint field, interned below). A class expression written in the QUERY
     // can meet a boundary just as one written in the data can, so the extractor's
     // boundaries join the knowledge base's.
-    let (raw_tasks, query_boundaries, definitions) =
+    let (raw_tasks, query_boundaries, definitions, mut query_syntax) =
         extract_tasks(&kb.interner, &mut kb.data_ranges, &q_index, &v, &resolved)?;
     // The same finite class equations used by RDF ontology extraction also
     // constrain query-written cycle cut points. They are internal concept
@@ -295,9 +295,13 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     let has_definitions = !definitions.is_empty();
     for (node, body) in definitions {
         let source = super::AxiomSource::QueryDefinition(node);
+        let start = kb.tbox.len();
         kb.push_gci_from(Concept::Named(node), body.clone(), source);
         kb.push_gci_from(body, Concept::Named(node), source);
+        let root = query_syntax.root(super::syntax::Kind::Expression(node));
+        query_syntax.bind_tbox(start, kb.tbox.len(), root)?;
     }
+    kb.query_syntax = query_syntax;
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);
     // A data range the query itself wrote lands in the knowledge base's own table, so one the
@@ -670,7 +674,12 @@ fn inject_roles(
 
 /// Scan the resolved query triples for class-expression / domain / range patterns,
 /// returning the raw tasks and the concepts they reference (in query order).
-type ExtractedTasks = (Vec<RawTask>, BTreeSet<Construct>, Vec<(u32, Concept)>);
+type ExtractedTasks = (
+    Vec<RawTask>,
+    BTreeSet<Construct>,
+    Vec<(u32, Concept)>,
+    super::syntax::Syntax,
+);
 
 fn extract_tasks(
     interner: &Interner,
@@ -732,7 +741,7 @@ fn extract_tasks(
         .iter()
         .map(|(&node, body)| (node, body.clone()))
         .collect();
-    Ok((tasks, boundaries, definitions))
+    Ok((tasks, boundaries, definitions, ce.into_syntax()?))
 }
 
 /// Intern each raw task's concepts into the concept table, yielding concept-id tasks.

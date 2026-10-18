@@ -1273,6 +1273,15 @@ impl RoleReader<'_> {
 
     /// The exact two object-property-expression forms of the OWL RDF mapping.
     pub(crate) fn role(&self, node: u32) -> Result<Role, RoleHierarchyError> {
+        self.role_observing(node, |_, _, _| Ok(()))
+    }
+
+    /// The same decoder, retaining only a selected anonymous inverse's real triple.
+    pub(crate) fn role_observing(
+        &self,
+        node: u32,
+        observe: impl Fn(u32, u32, u32) -> Result<(), StorageError>,
+    ) -> Result<Role, RoleHierarchyError> {
         self.poll()?;
         match self.interner.value(node) {
             TermValue::Iri(_) if !self.non_object(node) => Ok(Role::Named(node)),
@@ -1286,6 +1295,7 @@ impl RoleReader<'_> {
                         if matches!(self.interner.value(target), TermValue::Iri(_))
                             && !self.non_object(target) =>
                     {
+                        observe(node, self.vocab.inverse_of, target)?;
                         Ok(Role::Inv(target))
                     }
                     _ => Err(RoleHierarchyError::InvalidProperty { node }),

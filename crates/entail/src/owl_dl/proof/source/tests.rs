@@ -139,6 +139,15 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     assert!(journal.reads().iter().any(|read| matches!(read.owner,
         ReadOwner::Application { index, .. } if index == unrelated_step)));
     let selected = journal.normalized_slice(&ctx.kb).unwrap();
+    assert!(
+        matches!(
+            selected.syntax_roots(&ctx.kb),
+            Err(crate::owl_dl::graph::changes::slice::Error::MissingSchema(
+                _
+            ))
+        ),
+        "a multi-license bound guard is not an empty syntax success"
+    );
     let input_sources = selected
         .inputs(&ctx.kb)
         .collect::<Result<Vec<_>, _>>()
@@ -329,6 +338,22 @@ fn checked_clash_retains_selected_transitive_role_path() {
         record.input,
         crate::owl_dl::input_source::Input::Transitive(_)
     )));
+    let roots = slice.syntax_roots(&ctx.kb).unwrap();
+    let source_roots: Vec<_> = roots
+        .iter()
+        .filter_map(|&(space, root)| {
+            (space == crate::owl_dl::syntax::Space::Source).then_some(root)
+        })
+        .collect();
+    let nodes = ctx
+        .kb
+        .syntax
+        .selected(&source_roots, ctx.kb.stop.as_deref())
+        .unwrap();
+    assert!(nodes.iter().any(|&id| ctx.kb.syntax.nodes[id].reads.iter().any(|read| match read {
+        crate::owl_dl::syntax::Read::Triple(_, predicate, _) => matches!(ctx.kb.interner.value(*predicate), TermValue::Iri(iri) if iri == owl::ALL_VALUES_FROM),
+        crate::owl_dl::syntax::Read::Child(_) => false,
+    })));
     assert!(selected_inputs.iter().any(|record| matches!(
         record.input,
         crate::owl_dl::input_source::Input::Transitive(_)

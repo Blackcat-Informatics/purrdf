@@ -54,6 +54,8 @@ struct Dependency {
     transitive: Range<usize>,
     transitive_nodes: Range<usize>,
     rules: Range<usize>,
+    tbox: Range<usize>,
+    guards: Range<usize>,
     incomplete: bool,
 }
 
@@ -66,6 +68,8 @@ pub(crate) enum Error {
     MissingEffect,
     MissingClash,
     MissingInput(Input),
+    MissingSyntax,
+    MissingSchema(usize),
 }
 
 impl From<StorageError> for Error {
@@ -83,6 +87,8 @@ pub(crate) struct Slice {
     pub(crate) transitive: Vec<TransitiveRead>,
     pub(crate) transitive_nodes: Vec<TransitiveNode>,
     pub(crate) rules: Vec<Input>,
+    pub(crate) tbox: Vec<usize>,
+    guards: Vec<usize>,
 }
 
 /// One selected assertion or role-rule input and its original native source owner.
@@ -94,6 +100,56 @@ pub(crate) struct SelectedInput {
 }
 
 impl Slice {
+    /// Bind actual checked input/inclusion captures. Multi-license schema guards
+    /// still require their checked bound derivations, not an empty syntax set.
+    pub(crate) fn syntax_roots(
+        &self,
+        kb: &Kb,
+    ) -> Result<Vec<(crate::owl_dl::syntax::Space, usize)>, Error> {
+        use crate::owl_dl::syntax::Space;
+        if let Some(&guard) = self.guards.first() {
+            return Err(Error::MissingSchema(guard));
+        }
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut roots = Vec::new();
+        for input in self.inputs(kb) {
+            if let Some(root) = kb
+                .inputs
+                .syntax(input?.input)
+                .ok_or(Error::MissingSyntax)?
+                .root()
+            {
+                memory.push(&mut roots, (Space::Source, root))?;
+            }
+        }
+        let internalized = self
+            .causes
+            .iter()
+            .filter(|cause| cause.origin == Origin::Internalized)
+            .map(|cause| {
+                let at = kb
+                    .meta
+                    .iter()
+                    .position(|&concept| concept as usize == cause.index)
+                    .ok_or(Error::MissingSyntax)?;
+                kb.meta_sources.get(at).copied().ok_or(Error::MissingSyntax)
+            });
+        for index in self.tbox.iter().copied().map(Ok).chain(internalized) {
+            let index = index?;
+            let source = kb.tbox_sources.get(index).ok_or(Error::MissingSyntax)?;
+            let (space, capture) = match source {
+                AxiomSource::Unrecorded => return Err(Error::MissingSyntax),
+                AxiomSource::EmptyRole(_) => continue,
+                AxiomSource::QueryDefinition(_) => (Space::Query, kb.query_syntax.tbox_root(index)),
+                _ => (Space::Source, kb.syntax.tbox_root(index)),
+            };
+            if let Some(root) = capture.ok_or(Error::MissingSyntax)?.root() {
+                memory.push(&mut roots, (space, root))?;
+            }
+        }
+        Ok(roots)
+    }
     /// Bind selected assertions and native role-rule predecessors. Expression,
     /// query and effect licenses remain separate graph obligations.
     pub(crate) fn inputs<'a>(
@@ -138,6 +194,8 @@ struct Builder {
     transitive: Vec<TransitiveRead>,
     transitive_nodes: Vec<TransitiveNode>,
     rules: Vec<Input>,
+    tbox: Vec<usize>,
+    guards: Vec<usize>,
 }
 
 impl Builder {
@@ -210,6 +268,14 @@ impl Builder {
         memory: &mut Memory<'_, Resident>,
     ) -> Result<(), Error> {
         match fact {
+            ReadFact::Tbox(index) => {
+                memory.push(&mut self.tbox, index)?;
+                Ok(())
+            }
+            ReadFact::SchemaGuard(index) => {
+                memory.push(&mut self.guards, index)?;
+                Ok(())
+            }
             ReadFact::Node(node) | ReadFact::Top(node) => self.parent(Fact::Node(node), memory),
             ReadFact::ObjectDomain(node) => self.parent(Fact::Domain(node), memory),
             ReadFact::Label { node, concept } => self.parent(Fact::Label(node, concept), memory),
@@ -433,6 +499,8 @@ impl Builder {
                 transitive: 0..0,
                 transitive_nodes: 0..0,
                 rules: 0..0,
+                tbox: 0..0,
+                guards: 0..0,
                 incomplete,
             },
         )?;
@@ -484,6 +552,8 @@ impl Journal {
             let transitive_start = graph.transitive.len();
             let transitive_nodes_start = graph.transitive_nodes.len();
             let rules_start = graph.rules.len();
+            let tbox_start = graph.tbox.len();
+            let guards_start = graph.guards.len();
             let mut incomplete = false;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
@@ -513,6 +583,8 @@ impl Journal {
                     transitive: transitive_start..graph.transitive.len(),
                     transitive_nodes: transitive_nodes_start..graph.transitive_nodes.len(),
                     rules: rules_start..graph.rules.len(),
+                    tbox: tbox_start..graph.tbox.len(),
+                    guards: guards_start..graph.guards.len(),
                     incomplete,
                 },
             )?;
@@ -535,6 +607,8 @@ impl Journal {
             transitive: Vec::new(),
             transitive_nodes: Vec::new(),
             rules: Vec::new(),
+            tbox: Vec::new(),
+            guards: Vec::new(),
         };
         while let Some(id) = pending.pop() {
             if visited[id] {
@@ -572,6 +646,14 @@ impl Journal {
             memory.extend(
                 &mut result.rules,
                 graph.rules[node.rules.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.tbox,
+                graph.tbox[node.tbox.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.guards,
+                graph.guards[node.guards.clone()].iter().copied(),
             )?;
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;

@@ -33,6 +33,8 @@ pub(crate) enum ReadOwner {
 /// The native fact selected by a successful body predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadFact {
+    Tbox(usize),
+    SchemaGuard(usize),
     Node(usize),
     ObjectDomain(usize),
     Label {
