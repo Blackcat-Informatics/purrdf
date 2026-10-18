@@ -6,7 +6,7 @@
 use core::fmt;
 
 /// A malformed 32-byte hexadecimal identifier.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Hex32Error {
     /// The trimmed, unprefixed spelling is not 64 bytes long.

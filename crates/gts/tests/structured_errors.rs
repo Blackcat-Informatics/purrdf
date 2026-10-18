@@ -1004,7 +1004,155 @@ fn compaction_identifier_decoders_retain_original_rejected_values() {
     assert_eq!(parse_hex_32(&"aB".repeat(32)).unwrap(), [0xab; 32]);
 }
 
+fn proof_json_retains_rejected_values_without_formatting_or_number_rounding() {
+    use purrdf_gts::mmr::Proof;
+    let error =
+        Proof::from_json(r#"{"schema":{"n":18446744073709551616,"n":[false,null,"verbatim"]}}"#)
+            .unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-json-string");
+    assert!(matches!(fields.field("field"), ErrorValue::Code("schema")));
+    let actual = fields.child("actual");
+    assert_eq!(actual.code, "json-object");
+    let members = actual.records("members");
+    assert_eq!(members.len(), 2);
+    for member in &members {
+        assert!(matches!(member.field("name"), ErrorValue::Text("n")));
+    }
+    let number = members[0].child("value");
+    assert_eq!(number.code, "json-number");
+    assert!(matches!(
+        number.field("lexeme"),
+        ErrorValue::Text("18446744073709551616")
+    ));
+    let values = members[1].child("value").records("values");
+    assert_eq!(values[0].code, "json-boolean");
+    assert!(matches!(
+        values[0].field("value"),
+        ErrorValue::Boolean(false)
+    ));
+    assert_eq!(values[1].code, "json-null");
+    assert_eq!(values[2].code, "json-string");
+    assert!(matches!(
+        values[2].field("value"),
+        ErrorValue::Text("verbatim")
+    ));
+    let ErrorValue::Record(value) = fields.field("actual") else {
+        panic!("original value")
+    };
+    let events = Vec::with_capacity(10);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(value, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(captured.code, "json-object");
+
+    let nested = format!("{}0{}", "[".repeat(129), "]".repeat(129));
+    let error = Proof::from_json(&nested).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-json");
+    let original = fields.child("cause");
+    assert_eq!(original.child("kind").code, "json-depth-limit");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_lex::json::Error>()
+    );
+    let proof = purrdf_gts::mmr::prove(&[vec![7; 32]], 0).unwrap();
+    let text = proof
+        .to_json()
+        .replace("\"count\": 1,", "\"count\": 18446744073709551616,");
+    let error = Proof::from_json(&text).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-json-unsigned");
+    assert!(matches!(fields.field("field"), ErrorValue::Code("count")));
+    assert!(matches!(
+        fields.child("actual").field("lexeme"),
+        ErrorValue::Text("18446744073709551616")
+    ));
+}
+
+fn proof_verification_keeps_native_bounds_and_reconstructed_hashes() {
+    use purrdf_gts::mmr::{prove, verify_proof};
+    let proof = prove(&[vec![7; 32]], 0).unwrap();
+    verify_proof(&proof).unwrap();
+    let mut outside = proof.clone();
+    outside.count = usize::MAX;
+    outside.leaf_index = usize::MAX;
+    let error = verify_proof(&outside).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-leaf-range");
+    assert!(
+        matches!(fields.field("leaf_index"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    assert!(
+        matches!(fields.field("count"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    let mut changed = proof.clone();
+    changed.root[0] ^= 1;
+    let error = verify_proof(&changed).unwrap_err();
+    let expected = changed.root.clone();
+    drop(changed);
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-root-mismatch");
+    assert!(matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == proof.root));
+    assert!(matches!(fields.field("expected"), ErrorValue::Bytes(value) if value == expected));
+    assert_eq!(
+        error.to_string(),
+        "proof peaks do not reconstruct the declared root"
+    );
+    let mut changed = proof.clone();
+    changed.peaks[0].hash[0] ^= 1;
+    let error = verify_proof(&changed).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-peak-mismatch");
+    assert!(
+        matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == proof.peaks[0].hash)
+    );
+    assert!(
+        matches!(fields.field("expected"), ErrorValue::Bytes(value) if value == changed.peaks[0].hash)
+    );
+}
+
+fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
+    use purrdf_gts::{
+        mmr::{prove_file, verify_proof},
+        wire,
+        writer::Writer,
+    };
+    use purrdf_lex::{assoc, cbor::Value};
+    let mut writer = Writer::new("purrdf.gts");
+    let target = writer.add_blob(b"proof payload", None, None);
+    writer.add_index_with_mmr();
+    let bytes = writer.into_bytes();
+    let proof = prove_file(&bytes, &target).unwrap();
+    verify_proof(&proof).unwrap();
+    let (mut items, torn) = wire::iter_items(&bytes);
+    assert_eq!(torn, None);
+    let frame = items[1].1.as_map_mut().unwrap();
+    assoc::insert(frame, "id".into(), Value::Bytes(vec![9; 32]));
+    let corrupted: Vec<u8> = items
+        .into_iter()
+        .flat_map(|(_, item)| wire::canonical(&item))
+        .collect();
+    let error = prove_file(&corrupted, &target).unwrap_err();
+    drop(corrupted);
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-file-id-mismatch");
+    assert!(matches!(fields.field("item"), ErrorValue::Unsigned(1)));
+    assert!(matches!(fields.field("header"), ErrorValue::Boolean(false)));
+    assert!(matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == [9; 32]));
+    assert!(matches!(fields.field("expected"), ErrorValue::Bytes(value) if value == target));
+    assert_eq!(error.to_string(), "item 1 id mismatch");
+    let error = prove_file(&[], &[1]).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-proof-digest-length");
+    assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(1)));
+}
+
 purrdf_testkit::harness_main!(
+    proof_json_retains_rejected_values_without_formatting_or_number_rounding,
+    proof_verification_keeps_native_bounds_and_reconstructed_hashes,
+    file_proof_keeps_original_identity_faults_and_valid_proofs,
     compaction_keeps_timestamp_and_authoring_causes,
     compaction_provenance_lists_and_signature_failures_keep_native_fields,
     compaction_identifier_decoders_retain_original_rejected_values,

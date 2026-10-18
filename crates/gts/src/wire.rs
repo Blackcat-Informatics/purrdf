@@ -129,7 +129,7 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, HeaderError> 
 }
 
 /// A native refusal to interpret an item as a header map.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum HeaderError {
     /// A tag other than the optional self-describe tag.
