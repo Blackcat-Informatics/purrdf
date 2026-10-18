@@ -133,8 +133,7 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
             );
         }
     }
-    for (local, scalar, exponential) in [("unplus-2", "3", "3.0E0"), ("unminus-2", "-3", "-3.0E0")]
-    {
+    for (local, scalar, exponential) in [("unplus-2", "3", ""), ("unminus-2", "-3", "-3.0E0")] {
         let case = case("expr-ops", local);
         let run::RunOutcome::Eval {
             result: SparqlResult::Solutions {
@@ -167,12 +166,15 @@ fn arithmetic_values_types_and_source_bindings_have_independent_literal_expectat
                 .position(|kind| *kind == datatype)
                 .expect("source type");
             assert!(types.insert(rank));
-            // Unary plus returns its operand's spelling; unary minus computes a
-            // decimal, which carries its point.
+            // Unary plus is the identity (XPath `op:numeric-unary-plus`), so it
+            // returns its operand's own spelling at every rank: the source is
+            // `3`, and the approved `result-unplus-2.srx` spells the float `3`
+            // too. Unary minus computes a new number: a decimal carries its
+            // point and a float or double its exponent.
             let lexical = match rank {
+                _ if local == "unplus-2" => scalar.to_owned(),
                 0 => scalar.to_owned(),
-                1 if local == "unminus-2" => format!("{scalar}.0"),
-                1 => scalar.to_owned(),
+                1 => format!("{scalar}.0"),
                 _ => exponential.to_owned(),
             };
             assert_eq!(

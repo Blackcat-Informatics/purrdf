@@ -8042,8 +8042,8 @@ fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=1 digest=efe
 fuel 35..=64 x30 complete rows=1 digest=efe4c607843730b9 | fuel=35
 == w3c-sparql10/expr-ops <http://www.w3.org/2001/sw/DataAccess/tests/data-r2/expr-ops/manifest#add-literals> Add literal numbers with + and - prefixes
 boolean true
-metered complete fuel=5 scratch-bytes=898
-explain fuel=5 scratch-bytes=898
+metered complete fuel=5 scratch-bytes=825
+explain fuel=5 scratch-bytes=825
 node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -9094,16 +9094,16 @@ fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=1 digest=0e3
 fuel 17..=64 x48 complete rows=1 digest=0e3ff920cdf3f42b | fuel=17
 == w3c-sparql10/expr-ops <http://www.w3.org/2001/sw/DataAccess/tests/data-r2/expr-ops/manifest#unplus-2> Unary Plus with various datatype
 solutions vars=["v", "result"] rows=4 ordered=false
-| _:c14n0 <urn:purrdf:conformance:var:result> "3.0E0"^^<http://www.w3.org/2001/XMLSchema#double> .
+| _:c14n0 <urn:purrdf:conformance:var:result> "3"^^<http://www.w3.org/2001/XMLSchema#double> .
 | _:c14n0 <urn:purrdf:conformance:var:v> "3"^^<http://www.w3.org/2001/XMLSchema#double> .
-| _:c14n1 <urn:purrdf:conformance:var:result> "3.0E0"^^<http://www.w3.org/2001/XMLSchema#float> .
+| _:c14n1 <urn:purrdf:conformance:var:result> "3"^^<http://www.w3.org/2001/XMLSchema#float> .
 | _:c14n1 <urn:purrdf:conformance:var:v> "3"^^<http://www.w3.org/2001/XMLSchema#float> .
 | _:c14n2 <urn:purrdf:conformance:var:result> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n2 <urn:purrdf:conformance:var:v> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:result> "3"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n3 <urn:purrdf:conformance:var:v> "3"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=23 answer-rows=4 intermediate-cells=8 scratch-bytes=151
-explain fuel=23 answer-rows=4 intermediate-cells=8 scratch-bytes=151
+metered complete fuel=23 answer-rows=4 intermediate-cells=8
+explain fuel=23 answer-rows=4 intermediate-cells=8
 node 0 depth=0 Project rows=4 cells=8 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=8 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=4 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
@@ -9118,16 +9118,16 @@ fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=0 digest=34f
 fuel 11 tripped fuel-exhausted consumed=12 certain prefix=true rows=0 digest=34fc7549d700ac90 | fuel=12
 fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=1 digest=6e427ed03f8e214a | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=2 digest=17769ec850dc100a | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=3 digest=645b4d3835a3e38d | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=4 digest=26691222efad1e6e | fuel=23
-fuel 23..=64 x42 complete rows=4 digest=26691222efad1e6e | fuel=23
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=3 digest=0448670557b86908 | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=4 digest=7832739029dea2f4 | fuel=23
+fuel 23..=64 x42 complete rows=4 digest=7832739029dea2f4 | fuel=23
 == w3c-sparql10/graph <http://www.w3.org/2001/sw/DataAccess/tests/data-r2/graph/manifest#dawg-graph-01> graph-01
 solutions vars=["s", "p", "o"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:o> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .

@@ -704,8 +704,11 @@ way the matrix stays honest:
   computed `xsd:decimal` as `"4.0"`, `"3.0"`, `"42.0"` and `"00"`. The specifications leave
   the lexical form of a computed literal to the processor, so PurRDF computes a decimal
   with a point and a fractional digit (`4.0`), and `SECONDS` as the seconds part
-  of the lexical form of its argument (`00`); all six are graded term for term
-  against the approved result. A rule whose head
+  of the lexical form of its argument, exactly as written (`00`, and `05.500` for
+  `05.500`); all six are graded term for term
+  against the approved result. The SPARQL 1.1 `seconds-01` test expects `"1"`, `"2"`,
+  `"0"`, `"3"` for the fields `01`, `02`, `00`, `03` and is graded by value, so no
+  spelling of `SECONDS` satisfies both suites term for term. A rule whose head
   templates a triple term containing a variable is a run-once rule (SPARQL 1.2
   RL, "Elements of the Abstract Syntax"), so the stratification tests whose head feeds its own body through
   such a template (`stratification-bad-06` and `-07`) are refused as

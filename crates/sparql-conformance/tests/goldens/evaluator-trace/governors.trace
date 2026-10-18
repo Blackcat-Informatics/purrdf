@@ -2885,9 +2885,9 @@ fuel 1761 tripped budget fuel fuel-exhausted limit=K consumed=1762 certificate c
 fuel 1762 tripped budget fuel fuel-exhausted limit=K consumed=1763 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=ae538e297df62316 | fuel=1763 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 1763 complete rows=1 quads=0 digest=ae538e297df62316 | fuel=1763 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == temporal-exact-fuel-boundary cases/numeric-default.ttl cases/temporal-exact.rq none emits=0
-metered complete | fuel=700 answer-rows=1 intermediate-cells=2 scratch-bytes=430 remote-requests=0
+metered complete | fuel=621 answer-rows=1 intermediate-cells=2 scratch-bytes=430 remote-requests=0
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
-node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=80
+node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=612
 node 3 depth=3 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped budget fuel fuel-exhausted limit=K consumed=1 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=1 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
@@ -2900,7 +2900,6 @@ fuel 6..=537 x532 tripped budget fuel fuel-exhausted limit=K consumed=538 certif
 fuel 538..=616 x79 tripped budget fuel fuel-exhausted limit=K consumed=617 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=617 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 617 tripped budget fuel fuel-exhausted limit=K consumed=618 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=618 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 618 tripped budget fuel fuel-exhausted limit=K consumed=619 certificate certain positional-prefix=true budget-exhausted fuel rows=0 quads=0 digest=cea42839eb3663a4 | fuel=619 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
-fuel 619..=697 x79 tripped budget fuel fuel-exhausted limit=K consumed=698 certificate unknown barrier=Extend budget-exhausted fuel rows=0 quads=0 digest=cbf29ce484222325 | fuel=698 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
-fuel 698 tripped budget fuel fuel-exhausted limit=K consumed=699 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=699 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
-fuel 699 tripped budget fuel fuel-exhausted limit=K consumed=700 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=700 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
-fuel 700 complete rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=700 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 619 tripped budget fuel fuel-exhausted limit=K consumed=620 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=620 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 620 tripped budget fuel fuel-exhausted limit=K consumed=621 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=621 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
+fuel 621 complete rows=1 quads=0 digest=63d2be354ec0cb40 | fuel=621 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0

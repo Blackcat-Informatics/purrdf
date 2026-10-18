@@ -1194,6 +1194,17 @@ pub(crate) const fn render_shape(value: Shape) -> Cost {
     render_parts(value.limbs, value.digits, value.rendered_len())
 }
 
+/// [`render_shape`] for a spelling `extra` bytes longer than the canonical text:
+/// a computed whole decimal carries `.0`.
+#[must_use]
+pub(crate) const fn render_shape_spelled(value: Shape, extra: u64) -> Cost {
+    render_parts(
+        value.limbs,
+        value.digits,
+        value.rendered_len().saturating_add(extra),
+    )
+}
+
 /// Reading decimal digits converts only the coefficient, without fractional padding.
 pub(crate) const fn coefficient_conversion(value: Shape) -> Cost {
     if value.digits <= 38 {

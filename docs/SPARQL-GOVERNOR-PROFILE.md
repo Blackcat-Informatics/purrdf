@@ -549,7 +549,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n21\n'
+{ printf 'purrdf-sparql-governors\n22\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -558,7 +558,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# 4c26602af6053a49835e4570573614ae53e4191de57608e025b1af4221c96262
+# a1c8cc382893eba81e02ef816982aa52be2612bb1e1295d6a719bf0e1abef44b
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -643,7 +643,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f
+GOVERNOR_CORPUS_DIGEST = d8dba125e92664037fdc00ef736906cb04bdfd4345bbfb4c0e6958c50204c4ac
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -704,6 +704,7 @@ increment it. That restraint is what makes the number worth pinning.
 | **19** | The schedule is unchanged. Native structural reifier probes narrow bound triple components before emitting BGP candidates, removing unrelated candidate charges. Annotation predicate/object ranges reduce physical rows visited while preserving emitted candidates. Statement-row estimates participate in join planning. Remeasure fuel, scratch and intermediate cut points for statement queries; complete RDF answers retain their bag multiplicity. |
 | **20** | The schedule is unchanged. Snapshot-bound predicate/class counts, positional distinct domains and structural statement statistics guide dynamic-programming and greedy join ordering. Chronological stores distinguish conservative physical bounds from exact effective counts. Changed orders move candidate, intermediate and scratch charges; remeasure ceilings against representative queries even when complete answers are unchanged. |
 | **21** | The schedule is unchanged. A decimal an operator, function or aggregate computes is rendered with a decimal point and a fractional digit (`4.0`), and `SECONDS` returns the seconds field of the lexical form with its leading zero (`05.5`, `00`). The longer text moves scratch charges and pinned costs; remeasure scratch ceilings even when numeric values are unchanged. |
+| **22** | The schedule is unchanged. `SECONDS` copies the seconds field of its argument's lexical form as written (`05.500`) instead of rendering the parsed value, so it charges the bytes of that field and no decimal rendering work. Unary plus returns its operand term as written and charges nothing. The render charge of a computed whole decimal wider than the inline representation prices its `.0`, two bytes more than before. Remeasure fuel and scratch ceilings even when answers are unchanged. |
 
 Version **15** keeps the charge schedule unchanged. Evidence-bearing
 `EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative

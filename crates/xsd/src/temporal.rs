@@ -857,6 +857,21 @@ fn read_temporal_mode(
     })
 }
 
+/// The seconds field of a `dateTime` or `time` lexical form, exactly as written:
+/// `"2023-12-25T10:30:05.500"` is `05.500`, `"10:30:00.250Z"` is `00.250`. This is
+/// what SPARQL `SECONDS` returns ("the seconds part of the lexical form of arg"),
+/// so a trailing zero of the fraction and a leading zero of the field survive,
+/// which the parsed value no longer records. `None` when `lexical` is not shaped
+/// like a time of day (no `hh:mm:ss` tail once a timezone is split off); the
+/// caller has already parsed `lexical`, so for a valid form the field is the text
+/// after its last `:`.
+#[must_use]
+pub fn seconds_field_text(lexical: &str) -> Option<&str> {
+    let (body, _) = split_tz(XsdDatatype::DateTime, lexical, lexical).ok()?;
+    let (_, field) = body.rsplit_once(':')?;
+    crate::numeric::is_decimal_lexical(field).then_some(field)
+}
+
 /// Parse the existing resident dateTime surface.
 pub fn parse_datetime(lexical: &str) -> Result<DateTime, XsdError> {
     read_datetime_as(XsdDatatype::DateTime, lexical, true)

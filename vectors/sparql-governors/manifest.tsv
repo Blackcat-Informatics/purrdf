@@ -74,5 +74,5 @@ aggregate-custom-scratch-bytes-over-bound	cases/aggregate-custom-scratch.ttl	cas
 exists-inner-counters	cases/exists-inner-counters.ttl	cases/exists-inner-counters.rq	none	fuel=1000	n/a	complete
 numeric-default-fuel-boundary	cases/numeric-default.ttl	cases/numeric-default.rq	none	fuel=1763	boundary	complete
 numeric-default-fuel-over-bound	cases/numeric-default.ttl	cases/numeric-default.rq	none	fuel=1762	over-bound	budget-exhausted fuel
-temporal-exact-fuel-boundary	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=700	boundary	complete
-temporal-exact-fuel-over-bound	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=699	over-bound	budget-exhausted fuel
+temporal-exact-fuel-boundary	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=621	boundary	complete
+temporal-exact-fuel-over-bound	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=620	over-bound	budget-exhausted fuel

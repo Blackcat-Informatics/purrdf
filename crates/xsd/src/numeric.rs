@@ -452,7 +452,8 @@ pub fn numeric_to_float_cost(value: &XsdValue) -> crate::exact::Cost {
 }
 
 /// The cost of rendering `value`'s canonical lexical form
-/// ([`XsdValue::canonical_lexical`]) when its exact payload exceeds the inline
+/// ([`XsdValue::canonical_lexical`]; [`computed_numeric_render_cost`] prices the
+/// form an operation emits) when its exact payload exceeds the inline
 /// representation: every byte of the text, the leading zeros of a long
 /// fraction included, so a value whose coefficient is short but whose scale is
 /// vast is priced at the text it becomes. Wide temporal seconds use the same
@@ -472,6 +473,22 @@ pub fn numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
             crate::exact::Cost::new(base.work().saturating_mul(4), base.bytes())
         }
         _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// [`numeric_render_cost`] for the text an operation COMPUTES, which is what
+/// [`prepare_computed_numeric_text`] emits: a wide whole decimal is spelled with
+/// `.0`, two bytes past its canonical text, and is priced at those bytes. Every
+/// other value is spelled as its canonical form.
+#[must_use]
+pub fn computed_numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::Decimal(decimal)
+            if decimal.unscaled().as_i128().is_none() || decimal.scale() > 18 =>
+        {
+            decimal.computed_render_cost()
+        }
+        other => numeric_render_cost(other),
     }
 }
 
@@ -1161,23 +1178,6 @@ pub fn prepare_computed_numeric_text(
         },
         other => prepare_numeric_text(other, admit),
     }
-}
-
-/// Prepare the seconds of a calendar value as the seconds field of its lexical
-/// form, which is what SPARQL `SECONDS` returns: "the seconds part of the lexical
-/// form of arg", so zero seconds are `00` and a fraction is kept (`13.815`).
-/// # Errors
-/// As [`prepare_decimal_text`].
-pub fn prepare_seconds_field_text(
-    seconds: &crate::exact::Decimal,
-    admit: &mut impl FnMut(
-        crate::exact::cost::NumericOperationLayout,
-    ) -> Result<(), crate::bigint::LimbScratchError>,
-) -> Result<PreparedNumericText, crate::bigint::LimbScratchError> {
-    Ok(match prepare_decimal_text(seconds, admit)? {
-        PreparedNumericText::Decimal(text) => PreparedNumericText::Decimal(text.as_seconds_field()),
-        other => other,
-    })
 }
 
 /// Prepare a borrowed exact decimal through the same native renderer used by
@@ -2719,31 +2719,35 @@ mod tests {
         );
     }
 
-    /// The seconds field has at least two integer digits and keeps its fraction.
+    /// The render cost of a computed wide decimal prices the text it emits: a whole
+    /// value carries `.0`, two bytes past its canonical form, and the charge
+    /// follows. Neighbours: a wide fraction and a bounded value gain nothing.
     #[test]
-    fn the_seconds_field_has_two_integer_digits() {
-        for (lexical, field) in [
-            ("0", "00"),
-            ("5", "05"),
-            ("45", "45"),
-            ("13.815", "13.815"),
-            ("0.5", "00.5"),
-        ] {
-            let XsdValue::Decimal(seconds) =
-                crate::value::parse(lexical, XsdDatatype::Decimal).expect("decimal")
-            else {
-                unreachable!("a decimal parses to a decimal");
-            };
-            assert_eq!(
-                text(
-                    prepare_seconds_field_text(&seconds, &mut |_| Ok(()))
-                        .ok()
-                        .map(Some)
-                        .unwrap()
-                ),
-                field
-            );
-        }
+    fn computed_render_cost_prices_the_emitted_form() {
+        let decimal = |lexical: &str| crate::value::parse(lexical, XsdDatatype::Decimal).unwrap();
+        let whole = decimal(&format!("1{}", "0".repeat(60)));
+        let XsdValue::Decimal(inner) = &whole else {
+            unreachable!("a decimal parses to a decimal");
+        };
+        assert!(inner.unscaled().as_i128().is_none());
+        let canonical = whole.canonical_lexical().len();
+        let emitted = prepare_computed_numeric_text(&whole, &mut |_| Ok(())).unwrap();
+        assert_eq!(text(emitted).len(), canonical + 2);
+        let plain = numeric_render_cost(&whole);
+        let computed = computed_numeric_render_cost(&whole);
+        assert_eq!(computed.bytes() - plain.bytes(), 2 * 6);
+        assert!(computed.work() > plain.work());
+        // Neighbours.
+        let fraction = decimal(&format!("1{}.5", "0".repeat(60)));
+        assert_eq!(
+            computed_numeric_render_cost(&fraction),
+            numeric_render_cost(&fraction)
+        );
+        let small = decimal("4");
+        assert_eq!(
+            computed_numeric_render_cost(&small),
+            numeric_render_cost(&small)
+        );
     }
 
     #[test]

@@ -30,8 +30,6 @@ pub struct PreparedDecimalText {
     length: usize,
     /// Spell a whole-number value with a point and one fractional zero.
     point_required: bool,
-    /// Spell the integer part with at least two digits, as a calendar seconds field.
-    seconds_field: bool,
 }
 
 struct DecimalPointWriter<'a, W: fmt::Write + ?Sized> {
@@ -81,7 +79,6 @@ impl PreparedDecimalText {
             scale,
             length,
             point_required: false,
-            seconds_field: false,
         })
     }
 
@@ -94,17 +91,6 @@ impl PreparedDecimalText {
         if self.scale == 0 && !self.point_required {
             self.point_required = true;
             self.length += 2;
-        }
-        self
-    }
-
-    /// The same value spelled as the seconds field of a calendar lexical form:
-    /// the integer part has at least two digits (`00`, `05`, `13.815`).
-    #[must_use]
-    pub fn as_seconds_field(mut self) -> Self {
-        if !self.seconds_field && self.integer_digits() < 2 {
-            self.seconds_field = true;
-            self.length += 1;
         }
         self
     }
@@ -134,9 +120,6 @@ impl PreparedDecimalText {
     pub(crate) fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
         if self.digits.is_negative() {
             out.write_str("-")?;
-        }
-        if self.seconds_field {
-            out.write_str("0")?;
         }
         if self.scale == 0 {
             self.digits.write_unsigned(out)?;
@@ -1332,6 +1315,14 @@ impl Decimal {
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
         cost::decimal_to_float(self.shape())
+    }
+
+    /// The cost of rendering this value as a computed decimal
+    /// ([`PreparedDecimalText::with_required_point`]): [`Self::render_cost`] with
+    /// the two bytes of `.0` a whole value carries.
+    #[must_use]
+    pub fn computed_render_cost(&self) -> Cost {
+        cost::render_shape_spelled(self.shape(), if self.scale == 0 { 2 } else { 0 })
     }
 
     /// The cost of rendering [`Self::canonical_lexical`]: every byte of the text,
