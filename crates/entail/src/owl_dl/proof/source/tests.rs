@@ -393,6 +393,11 @@ fn checked_clash_retains_selected_compiled_role_path() {
     let chained = f.name("chained");
     let list = f.list(&[first, second]);
     f.edge(chained, owl::PROPERTY_CHAIN_AXIOM, list);
+    let unused = f.name("unusedChain");
+    let unused_first = f.name("unusedFirst");
+    let unused_second = f.name("unusedSecond");
+    let unused_list = f.list(&[unused_first, unused_second]);
+    f.edge(unused, owl::PROPERTY_CHAIN_AXIOM, unused_list);
     f.edge(chained, rdfs::RANGE, class);
     let from = f.name("from");
     let middle = f.name("middle");
@@ -443,6 +448,21 @@ fn checked_clash_retains_selected_compiled_role_path() {
             .unwrap();
         let transition = &machine.transitions[path.transition];
         assert_eq!((transition.from, transition.to), (path.from.1, path.to.1));
+    }
+    let inputs = slice.role_inputs().unwrap();
+    assert_eq!(inputs.len(), 1, "the unused chain is not a causal source");
+    let program = ctx.kb.role_program.as_ref().unwrap();
+    let source = program.source.sources.get(inputs[0]).unwrap();
+    assert!(
+        matches!(ctx.kb.interner.value(source.anchor.0), TermValue::Iri(iri) if iri == "https://example.org/chained")
+    );
+    assert!(
+        matches!(ctx.kb.interner.value(source.anchor.1), TermValue::Iri(iri) if iri == owl::PROPERTY_CHAIN_AXIOM)
+    );
+    let reads = &program.source.sources.reads[source.reads.clone()];
+    assert_eq!(reads.len(), 4);
+    for predicate in [rdf::FIRST, rdf::REST] {
+        assert_eq!(reads.iter().filter(|&&(_, p, _)| matches!(ctx.kb.interner.value(p), TermValue::Iri(iri) if iri == predicate)).count(), 2);
     }
 }
 

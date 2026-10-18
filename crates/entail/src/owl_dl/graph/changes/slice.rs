@@ -73,6 +73,7 @@ pub(crate) enum Error {
     MissingSchema(usize),
     UnexpectedSchema,
     Stopped,
+    RoleLicence(crate::owl_dl::roles::LicenceError),
 }
 
 impl From<StorageError> for Error {
@@ -123,6 +124,24 @@ pub(crate) struct SelectedInput {
 }
 
 impl Slice<'_> {
+    pub(crate) fn role_inputs(&self) -> Result<Vec<crate::owl_dl::roles::source::Input>, Error> {
+        let Some(program) = &self.kb.role_program else {
+            return if self.paths.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Err(Error::MissingPath)
+            };
+        };
+        let mut storage = Resident;
+        let mut memory = Memory::new(&mut storage);
+        program
+            .path_inputs(
+                self.paths.iter().map(|step| (step.role, step.transition)),
+                self.kb.stop.as_deref(),
+                &mut memory,
+            )
+            .map_err(Error::RoleLicence)
+    }
     /// Bind actual checked input/inclusion captures. Multi-license schema guards
     /// still require their checked bound derivations, not an empty syntax set.
     pub(crate) fn syntax_roots(&self) -> Result<Vec<(crate::owl_dl::syntax::Space, usize)>, Error> {

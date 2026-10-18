@@ -16,6 +16,11 @@ use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use crate::interner::Interner;
 use crate::owl_dl::concept::{ConceptTable, Decomp, Role};
 use crate::owl_dl::parser::{TripleIndex, Vocab};
+mod licence;
+pub(crate) mod source;
+#[cfg(test)]
+pub(crate) use licence::Error as LicenceError;
+use licence::Licence;
 
 /// Original term Debug script with fallible native scratch and its first cause.
 /// The output destination is admitted separately by `Memory::format`.
@@ -250,6 +255,7 @@ pub(crate) struct Chain {
 /// Source RBox syntax, retained in the same admission as the eventual automata.
 #[derive(Debug, Default)]
 pub(crate) struct Hierarchy {
+    pub(crate) sources: source::Sources,
     /// Ordered, authored complex inclusions, before equivalent-role normalization.
     pub(crate) chains: Vec<Chain>,
     /// Simple inclusions, including both directions of equivalence and inverses.
@@ -477,10 +483,12 @@ impl Hierarchy {
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         let Self {
+            sources,
             mut chains,
             inclusions,
             reflexive,
         } = self;
+        sources.release(memory)?;
         while let Some(chain) = chains.pop() {
             memory.release_vec(chain.body)?;
         }
@@ -716,6 +724,7 @@ pub(crate) struct Transition {
     pub(crate) from: usize,
     pub(crate) to: usize,
     pub(crate) letter: Option<Role>,
+    pub(crate) licence: usize,
 }
 
 /// One finite role-language machine. States are local dense indices; the final
@@ -726,6 +735,7 @@ pub(crate) struct Automaton {
     pub(crate) initial: usize,
     pub(crate) accepting: usize,
     pub(crate) transitions: Vec<Transition>,
+    pub(crate) licences: Vec<Licence>,
 }
 
 impl Automaton {
@@ -735,6 +745,7 @@ impl Automaton {
             initial: 0,
             accepting: 1,
             transitions: Vec::new(),
+            licences: Vec::new(),
         }
     }
 
@@ -747,14 +758,33 @@ impl Automaton {
         Ok(state)
     }
 
+    fn licence<S: Admission + ?Sized>(
+        &mut self,
+        licence: Licence,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<usize, StorageError> {
+        let id = self.licences.len();
+        memory.push(&mut self.licences, licence)?;
+        Ok(id)
+    }
+
     fn transition<S: Admission + ?Sized>(
         &mut self,
         from: usize,
         to: usize,
         letter: Option<Role>,
+        licence: usize,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
-        memory.push(&mut self.transitions, Transition { from, to, letter })
+        memory.push(
+            &mut self.transitions,
+            Transition {
+                from,
+                to,
+                letter,
+                licence,
+            },
+        )
     }
 
     /// Add exactly this word between the supplied continuation states. Every
@@ -764,10 +794,11 @@ impl Automaton {
         from: usize,
         to: usize,
         word: &[Role],
+        licence: usize,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         if word.is_empty() {
-            return self.transition(from, to, None, memory);
+            return self.transition(from, to, None, licence, memory);
         }
         let mut previous = from;
         for (index, &role) in word.iter().enumerate() {
@@ -776,7 +807,7 @@ impl Automaton {
             } else {
                 self.state()?
             };
-            self.transition(previous, next, Some(role), memory)?;
+            self.transition(previous, next, Some(role), licence, memory)?;
             previous = next;
         }
         Ok(())
@@ -789,6 +820,7 @@ impl Automaton {
         &mut self,
         edge: Transition,
         lower: &Self,
+        role: Role,
         stop: Option<&dyn StopSignal>,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), RoleHierarchyError> {
@@ -803,23 +835,40 @@ impl Automaton {
             .and_then(|n| n.checked_add(2))
             .ok_or(StorageError::SizeOverflow)?;
         memory.reserve(&mut self.transitions, required)?;
-        for transition in &lower.transitions {
+        for (index, transition) in lower.transitions.iter().enumerate() {
             poll(stop)?;
+            let inherited = self.licence(
+                Licence::Lower {
+                    role,
+                    transition: index,
+                },
+                memory,
+            )?;
+            let licence = self.licence(
+                Licence::Join {
+                    first: edge.licence,
+                    second: inherited,
+                },
+                memory,
+            )?;
             self.transitions.push(Transition {
                 from: offset + transition.from,
                 to: offset + transition.to,
                 letter: transition.letter,
+                licence,
             });
         }
         self.transitions.push(Transition {
             from: edge.from,
             to: offset + lower.initial,
             letter: None,
+            licence: edge.licence,
         });
         self.transitions.push(Transition {
             from: offset + lower.accepting,
             to: edge.to,
             letter: None,
+            licence: edge.licence,
         });
         Ok(())
     }
@@ -829,6 +878,7 @@ impl Automaton {
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
+        memory.release_vec(self.licences)?;
         memory.release_vec(self.transitions)
     }
 }
@@ -1168,17 +1218,40 @@ impl Hierarchy {
         }
         for &sub in &order.roles {
             if order.includes(sub, head) {
-                machine.transition(machine.initial, machine.accepting, Some(sub), memory)?;
+                let licence = machine.licence(Licence::Inclusion { sub, sup: head }, memory)?;
+                machine.transition(
+                    machine.initial,
+                    machine.accepting,
+                    Some(sub),
+                    licence,
+                    memory,
+                )?;
             }
         }
-        if self
+        if let Some(&role) = self
             .reflexive
             .iter()
-            .any(|&role| order.includes(role, head))
+            .find(|&&role| order.includes(role, head))
         {
-            machine.transition(machine.initial, machine.accepting, None, memory)?;
+            let source =
+                machine.licence(Licence::Source(source::Input::Reflexive(role)), memory)?;
+            let inclusion = machine.licence(
+                Licence::Inclusion {
+                    sub: role,
+                    sup: head,
+                },
+                memory,
+            )?;
+            let licence = machine.licence(
+                Licence::Join {
+                    first: source,
+                    second: inclusion,
+                },
+                memory,
+            )?;
+            machine.transition(machine.initial, machine.accepting, None, licence, memory)?;
         }
-        for chain in &self.chains {
+        for (ordinal, chain) in self.chains.iter().enumerate() {
             if Some(chain.head) == top {
                 continue;
             }
@@ -1192,12 +1265,44 @@ impl Hierarchy {
                 if representatives[order.position(signed)] != root {
                     continue;
                 }
+                let source =
+                    machine.licence(Licence::Source(source::Input::Chain(ordinal)), memory)?;
+                let inclusion = machine.licence(
+                    Licence::Inclusion {
+                        sub: signed,
+                        sup: head,
+                    },
+                    memory,
+                )?;
+                // The quotient's recursive continuations also read head words
+                // as signed words, so retain both directions of equivalence.
+                let reverse = machine.licence(
+                    Licence::Inclusion {
+                        sub: head,
+                        sup: signed,
+                    },
+                    memory,
+                )?;
+                let equivalence = machine.licence(
+                    Licence::Join {
+                        first: inclusion,
+                        second: reverse,
+                    },
+                    memory,
+                )?;
+                let licence = machine.licence(
+                    Licence::Join {
+                        first: source,
+                        second: equivalence,
+                    },
+                    memory,
+                )?;
                 if inverse {
                     let body = memory.collect(chain.body.iter().rev().map(|r| r.inverse()))?;
-                    machine.inclusion(signed, &body, memory)?;
+                    machine.inclusion(signed, &body, licence, memory)?;
                     memory.release_vec(body)?;
                 } else {
-                    machine.inclusion(signed, &chain.body, memory)?;
+                    machine.inclusion(signed, &chain.body, licence, memory)?;
                 }
             }
         }
@@ -1213,6 +1318,7 @@ impl Hierarchy {
                 machine.substitute(
                     edge,
                     lower.machine(letter).expect("ready lower role"),
+                    letter,
                     stop,
                     memory,
                 )?;
@@ -1220,8 +1326,10 @@ impl Hierarchy {
         }
         machine
             .transitions
-            .sort_unstable_by_key(|e| (e.from, e.letter, e.to));
-        machine.transitions.dedup();
+            .sort_unstable_by_key(|e| (e.from, e.letter, e.to, e.licence));
+        machine
+            .transitions
+            .dedup_by_key(|e| (e.from, e.letter, e.to));
         Ok(machine)
     }
 }
@@ -1234,16 +1342,23 @@ impl Automaton {
         &mut self,
         head: Role,
         body: &[Role],
+        licence: usize,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         if body == [head, head] {
-            self.transition(self.accepting, self.initial, None, memory)
+            self.transition(self.accepting, self.initial, None, licence, memory)
         } else if body.first() == Some(&head) {
-            self.word(self.accepting, self.accepting, &body[1..], memory)
+            self.word(self.accepting, self.accepting, &body[1..], licence, memory)
         } else if body.last() == Some(&head) {
-            self.word(self.initial, self.initial, &body[..body.len() - 1], memory)
+            self.word(
+                self.initial,
+                self.initial,
+                &body[..body.len() - 1],
+                licence,
+                memory,
+            )
         } else {
-            self.word(self.initial, self.accepting, body, memory)
+            self.word(self.initial, self.accepting, body, licence, memory)
         }
     }
 }
@@ -1272,15 +1387,11 @@ impl RoleReader<'_> {
     }
 
     /// The exact two object-property-expression forms of the OWL RDF mapping.
-    pub(crate) fn role(&self, node: u32) -> Result<Role, RoleHierarchyError> {
-        self.role_observing(node, |_, _, _| Ok(()))
-    }
-
     /// The same decoder, retaining only a selected anonymous inverse's real triple.
     pub(crate) fn role_observing(
         &self,
         node: u32,
-        observe: impl Fn(u32, u32, u32) -> Result<(), StorageError>,
+        mut observe: impl FnMut(u32, u32, u32) -> Result<(), StorageError>,
     ) -> Result<Role, RoleHierarchyError> {
         self.poll()?;
         match self.interner.value(node) {
@@ -1316,8 +1427,21 @@ impl RoleReader<'_> {
                 self.poll()?;
                 if let Some(lists) = self.vocab.property_chain.and_then(|p| predicates.get(&p)) {
                     for &list in lists {
-                        let chain = self.chain(subject, list, memory)?;
+                        let start = out.sources.reads.len();
+                        let chain = self.chain(subject, list, memory, &mut out.sources.reads)?;
+                        let ordinal = out.chains.len();
                         memory.push(&mut out.chains, chain)?;
+                        out.sources.publish(
+                            &[source::Input::Chain(ordinal)],
+                            (
+                                subject,
+                                self.vocab.property_chain.expect("selected chain predicate"),
+                                list,
+                            ),
+                            0..0,
+                            start,
+                            memory,
+                        )?;
                     }
                 }
                 for (predicate, equivalent, inverse) in [
@@ -1336,13 +1460,16 @@ impl RoleReader<'_> {
                     if !inverse && self.non_object(subject) {
                         continue;
                     }
-                    let sub = self.role(subject)?;
+                    let shared_start = out.sources.reads.len();
+                    let sub = self.role_reading(subject, &mut out.sources.reads, memory)?;
+                    let shared = shared_start..out.sources.reads.len();
                     for &object in objects {
                         self.poll()?;
                         if !inverse && self.non_object(object) {
                             continue;
                         }
-                        let mut sup = self.role(object)?;
+                        let start = out.sources.reads.len();
+                        let mut sup = self.role_reading(object, &mut out.sources.reads, memory)?;
                         if inverse {
                             sup = sup.inverse();
                         }
@@ -1350,22 +1477,66 @@ impl RoleReader<'_> {
                         if equivalent {
                             add_inclusion(&mut out.inclusions, sup, sub, memory)?;
                         }
+                        let inputs = [
+                            source::Input::Inclusion(sub, sup),
+                            source::Input::Inclusion(sub.inverse(), sup.inverse()),
+                            source::Input::Inclusion(sup, sub),
+                            source::Input::Inclusion(sup.inverse(), sub.inverse()),
+                        ];
+                        out.sources.publish(
+                            &inputs[..if equivalent { 4 } else { 2 }],
+                            (subject, predicate, object),
+                            shared.clone(),
+                            start,
+                            memory,
+                        )?;
                     }
                 }
                 if let Some(types) = predicates.get(&self.vocab.ty) {
                     if types.contains(&self.vocab.transitive) {
-                        let head = self.role(subject)?;
+                        let start = out.sources.reads.len();
+                        let head = self.role_reading(subject, &mut out.sources.reads, memory)?;
                         let body = memory.collect([head, head])?;
+                        let ordinal = out.chains.len();
                         memory.push(&mut out.chains, Chain { head, body })?;
+                        out.sources.publish(
+                            &[source::Input::Chain(ordinal)],
+                            (subject, self.vocab.ty, self.vocab.transitive),
+                            0..0,
+                            start,
+                            memory,
+                        )?;
                     }
                     if types.contains(&self.vocab.symmetric) {
-                        let role = self.role(subject)?;
+                        let start = out.sources.reads.len();
+                        let role = self.role_reading(subject, &mut out.sources.reads, memory)?;
                         add_inclusion(&mut out.inclusions, role, role.inverse(), memory)?;
+                        out.sources.publish(
+                            &[
+                                source::Input::Inclusion(role, role.inverse()),
+                                source::Input::Inclusion(role.inverse(), role),
+                            ],
+                            (subject, self.vocab.ty, self.vocab.symmetric),
+                            0..0,
+                            start,
+                            memory,
+                        )?;
                     }
                     if types.contains(&self.vocab.reflexive) {
-                        let role = self.role(subject)?;
+                        let start = out.sources.reads.len();
+                        let role = self.role_reading(subject, &mut out.sources.reads, memory)?;
                         memory.push(&mut out.reflexive, role)?;
                         memory.push(&mut out.reflexive, role.inverse())?;
+                        out.sources.publish(
+                            &[
+                                source::Input::Reflexive(role),
+                                source::Input::Reflexive(role.inverse()),
+                            ],
+                            (subject, self.vocab.ty, self.vocab.reflexive),
+                            0..0,
+                            start,
+                            memory,
+                        )?;
                     }
                 }
             }
@@ -1378,23 +1549,46 @@ impl RoleReader<'_> {
     }
 
     /// Map the original strict list iterator directly into the admitted role array.
-    pub(crate) fn chain<S: Admission + ?Sized>(
+    fn role_reading<S: Admission + ?Sized>(
+        &self,
+        node: u32,
+        reads: &mut Vec<source::Triple>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Role, RoleHierarchyError> {
+        self.role_observing(node, |s, p, o| memory.push(reads, (s, p, o)))
+    }
+
+    fn chain<S: Admission + ?Sized>(
         &self,
         head: u32,
         list: u32,
         memory: &mut Memory<'_, S>,
+        reads: &mut Vec<source::Triple>,
     ) -> Result<Chain, RoleHierarchyError> {
-        memory.try_scope(|memory| {
-            let role = self.role(head)?;
+        // The hierarchy owns this transaction, including the shared read buffer.
+        // Do not refund a child scope while that parent's grown buffer is alive.
+        {
+            let role = self.role_reading(head, reads, memory)?;
+            let first_read = std::cell::Cell::new(None);
+            let rest_read = std::cell::Cell::new(None);
             let objects = |cell: u32, predicate: u32| {
-                SoleObject::of(
+                let selected = SoleObject::of(
                     self.index
                         .get(&cell)
                         .and_then(|predicates| predicates.get(&predicate))
                         .into_iter()
                         .flatten()
                         .copied(),
-                )
+                );
+                if let SoleObject::One(object) = selected {
+                    let slot = if predicate == self.vocab.first {
+                        &first_read
+                    } else {
+                        &rest_read
+                    };
+                    slot.set(Some((cell, predicate, object)));
+                }
+                selected
             };
             let members = RdfListWalk::new(
                 list,
@@ -1409,13 +1603,17 @@ impl RoleReader<'_> {
                     node: error.node,
                     kind: error.kind,
                 })?;
-                memory.push(&mut body, self.role(member)?)?;
+                for read in [first_read.take(), rest_read.take()].into_iter().flatten() {
+                    memory.push(reads, read)?;
+                }
+                let member = self.role_reading(member, reads, memory)?;
+                memory.push(&mut body, member)?;
             }
             if body.len() < 2 {
                 return Err(RoleHierarchyError::ShortChain { head });
             }
             Ok(Chain { head: role, body })
-        })
+        }
     }
 }
 
@@ -1659,6 +1857,64 @@ mod tests {
             self.live = bytes;
             self.peak = self.peak.max(bytes);
             Ok(())
+        }
+    }
+
+    #[test]
+    fn every_hierarchy_source_growth_refusal_releases_the_original_scratch() {
+        use crate::owl_dl::parser::index_insert;
+        use purrdf_iri::vocab::owl;
+        let mut interner = Interner::default();
+        let mut vocab = Vocab::intern(&mut interner);
+        vocab.property_chain = Some(interner.intern_iri(owl::PROPERTY_CHAIN_AXIOM));
+        let p = interner.intern_iri("https://example.org/p");
+        let q = interner.intern_iri("https://example.org/q");
+        let r = interner.intern_iri("https://example.org/r");
+        let first = interner.intern_iri("https://example.org/list1");
+        let second = interner.intern_iri("https://example.org/list2");
+        let mut index = TripleIndex::new();
+        for (s, p, o) in [
+            (r, vocab.property_chain.unwrap(), first),
+            (first, vocab.first, p),
+            (first, vocab.rest, second),
+            (second, vocab.first, q),
+            (second, vocab.rest, vocab.nil),
+            (p, vocab.sub_prop, q),
+        ] {
+            index_insert(&mut index, s, p, o);
+        }
+        let reader = RoleReader {
+            index: &index,
+            interner: &interner,
+            vocab: &vocab,
+            stop: None,
+        };
+        let mut healthy = Account::default();
+        {
+            let mut memory = Memory::new(&mut healthy);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let hierarchy = reader.hierarchy(&mut memory).unwrap();
+            let measured = window.close();
+            assert_eq!(
+                measured.retained_bytes,
+                i64::try_from(memory.admitted_bytes()).unwrap()
+            );
+            hierarchy.release(&mut memory).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+        assert_eq!(healthy.live, 0);
+        for growth in 1..=healthy.grows {
+            let mut account = Account {
+                refuse: Some(growth),
+                ..Account::default()
+            };
+            let mut memory = Memory::new(&mut account);
+            assert!(matches!(
+                reader.hierarchy(&mut memory),
+                Err(RoleHierarchyError::Storage(StorageError::AdmissionFailed))
+            ));
+            assert_eq!(memory.admitted_bytes(), 0, "growth {growth}");
+            assert_eq!(account.live, 0, "growth {growth}");
         }
     }
 
