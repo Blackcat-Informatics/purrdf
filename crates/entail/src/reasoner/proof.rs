@@ -855,6 +855,11 @@ impl ServiceProof {
     pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
             .map_err(DlProofError::Canonicalization)?;
+        self.binds_identity(expected, question)
+    }
+
+    /// Bind the same proof fields to the consumer's independently computed input identity.
+    fn binds_identity(&self, expected: [u8; 32], question: &Question) -> Result<(), DlProofError> {
         if expected != self.input {
             return Err(DlProofError::InputMismatch {
                 expected: purrdf_hash::hex::encode(&expected),
@@ -1006,11 +1011,37 @@ impl ServiceProof {
         ontology: &RdfDataset,
         question: &Question,
         certificate: Option<&DlCertificate>,
-        ctx: &DlProofContext,
+        ctx: &DlProofContext<'_>,
     ) -> Result<ServiceReplay, DlProofError> {
         self.binds(ontology, question)?;
+        self.verify_prepared(question, certificate, ctx)
+    }
+
+    /// Verify against the consumer's immutable, already prepared source context.
+    ///
+    /// The context supplies the source identity computed by its consumer-owned
+    /// constructor; the requested question remains caller-supplied. Both owning
+    /// and borrowed contexts use the same source binding, trust-base checks and
+    /// native replay as [`Self::verify`]. This form reuses the checked source
+    /// identity instead of canonicalizing the complete ontology again per proof.
+    /// Prepare the requested question before constructing the context, as for
+    /// [`crate::reasoner::Reasoner::borrowed_proof_context`].
+    ///
+    /// `certificate` retains the exact requirements of [`Self::verify`], including
+    /// operational receipts and services that issue no DL certificate.
+    ///
+    /// # Errors
+    /// Any [`DlProofError`], including a different prepared input, question or
+    /// calculus, invalid claims, receipts or replay, and caller cancellation.
+    pub fn verify_prepared(
+        &self,
+        question: &Question,
+        certificate: Option<&DlCertificate>,
+        ctx: &DlProofContext<'_>,
+    ) -> Result<ServiceReplay, DlProofError> {
+        self.binds_identity(ctx.input(), question)?;
         let mut checks = CheckReport::new();
-        // The input identity and the question are the consumer's own recomputations.
+        // The identity was computed by consumer preparation; both bindings are checked here.
         checks.attest(2);
         self.check_claims(&mut checks)?;
         self.check_receipt(certificate, &mut checks)?;
@@ -2383,7 +2414,7 @@ mod tests {
 
     /// A checking context built the way a CONSUMER builds one: from their own copy of the data
     /// and their own copy of the question, with nothing the producer shipped.
-    fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
+    fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext<'static> {
         let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
         checker
             .prepare(question)
@@ -3968,11 +3999,11 @@ mod tests {
             ),
             (
                 "instance-retrieval",
-                "06f904105e4067b818e7dda54feadc97710f7a29804c297f0eae1ef360706940",
+                "a832aa53d7e7489326a9e33566c69523bbb8246aac0dbcfa7af6819f6f513fbe",
             ),
             (
                 "axiom-entailment",
-                "679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879",
+                "bada3584baaee90a558f429add646d9d6dfc59eaffbf2dc889ecb71ffcbeff1a",
             ),
             (
                 "classification",
@@ -3980,7 +4011,7 @@ mod tests {
             ),
             (
                 "realization",
-                "163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76",
+                "edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e",
             ),
             (
                 "module-extraction",

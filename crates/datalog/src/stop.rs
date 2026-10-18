@@ -42,30 +42,8 @@
 //! make a run irreproducible if this crate read one — so the signal arrives as a trait
 //! object and this crate only ever asks it a yes/no question.
 
-use core::fmt::Debug;
-
-/// A caller-owned, latching stop request polled at a fixpoint's round boundary.
-///
-/// See the [module documentation](self) for the contract every implementation is bound by
-/// (latching, cheap, data-independent) and for why a stop signal is admitted where a
-/// caller-supplied budget is refused.
-///
-/// `Send + Sync` because a host builds one signal and shares it across whatever threads it
-/// runs work on; `Debug` because it is reachable from types this crate derives `Debug` for.
-pub trait StopSignal: Send + Sync + Debug {
-    /// Whether the caller has asked this run to stop. Latching: see the trait
-    /// documentation.
-    fn stopped(&self) -> bool;
-}
-
-/// Poll `stop`, treating "no signal at all" as "not stopped".
-///
-/// The one place `Option<&dyn StopSignal>` is read, so an ungoverned run pays exactly one
-/// null check per round and every governed one polls through the same expression.
-#[inline]
-pub(crate) fn is_stopped(stop: Option<&dyn StopSignal>) -> bool {
-    stop.is_some_and(StopSignal::stopped)
-}
+pub use purrdf_core::StopSignal;
+pub(crate) use purrdf_core::governor::is_stopped;
 
 #[cfg(test)]
 mod tests {

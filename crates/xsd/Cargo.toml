@@ -58,6 +58,10 @@ harness = false
 name = "certified_numerical"
 harness = false
 
+[[test]]
+name = "any_uri"
+harness = false
+
 [[bench]]
 name = "lexical"
 harness = false

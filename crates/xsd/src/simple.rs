@@ -1,15 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The simple (non-numeric, non-temporal) XSD value spaces: `boolean` and `string`.
+//! Simple XSD values: `boolean`, `string` and whitespace-collapsed `anyURI`.
 //!
-//! `xsd:string`'s value space is its lexical space, so it has no dedicated parser
-//! (the [`crate::parse`] entry maps it straight to [`crate::XsdValue::String`]).
+//! String admission preserves valid lexical bytes. Both text primitives validate
+//! the same XML character domain before creating an owned value.
 
 use purrdf_lex::scan::in_runs;
 
 use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
+
+/// Borrow an XSD string lexical unchanged after checking XML 1.1 `Char`.
+///
+/// XSD 1.1 §1.3 permits selecting either XML character domain. Native text
+/// datatypes select XML 1.1, including its restricted control characters.
+///
+/// # Errors
+/// Refuses a non-XML character without allocating diagnostic or value storage.
+pub fn read_xml_string(s: &str) -> Result<&str, &'static str> {
+    if s.chars().all(purrdf_lex::terminals::is_xml11_char) {
+        Ok(s)
+    } else {
+        Err("expected XML characters")
+    }
+}
+
+/// Validate the XSD 1.1 Part 2 §3.3.17 lexical space and borrow its collapsed
+/// value. Empty and relative references are valid; URI syntax, percent escapes,
+/// case and Unicode normalization are deliberately not rewritten.
+///
+/// # Errors
+/// Refuses a character outside XML 1.1 `Char` before creating an owned value.
+pub fn read_any_uri(s: &str) -> Result<CollapsedWhitespace<'_>, &'static str> {
+    read_xml_string(s).map(CollapsedWhitespace)
+}
 
 /// `xsd:boolean`: lexical space is `true | false | 1 | 0`; canonical is `true|false`.
 /// Read the Boolean lexical space without copying a refused lexical.

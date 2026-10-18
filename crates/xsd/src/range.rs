@@ -33,6 +33,7 @@
 //! | double | `xsd:double` | as float, at double width |
 //! | boolean | `xsd:boolean` | the two-element set |
 //! | string | `xsd:string` | length-selected, length in CHARACTERS |
+//! | URI | `xsd:anyURI` | disjoint from string; collapsed character lengths |
 //! | hex / base64 | `xsd:hexBinary`, `xsd:base64Binary` | length-selected, length in OCTETS |
 //! | one space each | `dateTime` (its zoned `dateTimeStamp` subset and timezone-less remainder), `date`, `time`, the `duration` family, and the five Gregorian types | listed sets and their complements |
 //! | two term-identified spaces | `rdf:langString`, `rdf:dirLangString` | disjoint infinite sets; finite members are normalized identities supplied by the consumer |
@@ -41,7 +42,7 @@
 //! `xsd:yearMonthDuration` value spaces overlap at the zero duration.
 //!
 //! Beyond those spaces lies the **remainder**: the values of datatypes this module does
-//! not model (`owl:real`, `owl:rational`, `xsd:anyURI`, a
+//! not model (`owl:real`, `owl:rational`, a
 //! user-defined datatype). [`DataRange::Any`] holds the remainder, a modelled
 //! [`DataRange::Datatype`] does not, and [`DataRange::Opaque`] leaves it — and every
 //! modelled space — unknown, because an unmodelled value space may overlap a modelled
@@ -721,6 +722,8 @@ enum Space {
 enum TextSpace {
     /// `xsd:string` — length in characters.
     String,
+    /// `xsd:anyURI` — collapsed length in characters, disjoint from strings.
+    AnyUri,
     /// `xsd:hexBinary` — length in octets.
     HexBinary,
     /// `xsd:base64Binary` — length in octets.
@@ -754,8 +757,9 @@ enum TemporalSpace {
 }
 
 /// The length-selected spaces, in [`Extent::text`] order.
-const TEXT_SPACES: [TextSpace; 3] = [
+const TEXT_SPACES: [TextSpace; 4] = [
     TextSpace::String,
+    TextSpace::AnyUri,
     TextSpace::HexBinary,
     TextSpace::Base64Binary,
 ];
@@ -783,6 +787,7 @@ impl TextSpace {
     fn kind(self) -> LengthKind {
         match self {
             Self::String => LengthKind::Characters,
+            Self::AnyUri => LengthKind::CollapsedCharacters,
             Self::HexBinary | Self::Base64Binary => LengthKind::Octets,
         }
     }
@@ -827,6 +832,7 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
         D::Double => Space::Double,
         D::Boolean => Space::Boolean,
         D::String => Space::Text(TextSpace::String),
+        D::AnyUri => Space::Text(TextSpace::AnyUri),
         D::HexBinary => Space::Text(TextSpace::HexBinary),
         D::Base64Binary => Space::Text(TextSpace::Base64Binary),
         D::DateTime | D::DateTimeStamp => Space::Temporal(TemporalSpace::DateTime),
@@ -1953,15 +1959,25 @@ impl Algebra for BoolSet {
 enum LengthKind {
     /// Unicode scalar values (`xsd:string`).
     Characters,
+    /// XML character strings after the fixed whitespace collapse facet.
+    CollapsedCharacters,
     /// Octets (`xsd:hexBinary`, `xsd:base64Binary`).
     Octets,
 }
 
-/// A lower bound on how many characters the `xsd:string` value space admits at one
-/// position: the XML 1.0 `Char` production allows at least this many code points
-/// (`#x9`, `#xA`, `#xD`, `[#x20-#xD7FF]`, `[#xE000-#xFFFD]`, `[#x10000-#x10FFFF]`).
-/// Only ever used to LOWER-bound a count.
-const STRING_ALPHABET_FLOOR: u64 = 3 + 55_264 + 8_190 + 1_048_576;
+/// The selected XML 1.1 `Char` alphabet size used by the native text spaces,
+/// derived from the same terminal ranges as admission.
+/// It also supplies a lower bound when counting only one admitted length.
+const STRING_ALPHABET_FLOOR: u64 = {
+    let ranges = purrdf_lex::terminals::xml11_char_ranges();
+    let mut count = 0;
+    let mut index = 0;
+    while index < ranges.len() {
+        count += (ranges[index].1 - ranges[index].0 + 1) as u64;
+        index += 1;
+    }
+    count
+};
 
 /// The alphabet of one octet.
 const OCTET_ALPHABET: u64 = 256;
@@ -2079,11 +2095,16 @@ impl LengthSet {
                 return Ok(Cardinality::Exactly(0));
             };
             Ok(match self.kind {
-                LengthKind::Characters => {
+                LengthKind::Characters | LengthKind::CollapsedCharacters => {
                     if maximum == 0 {
                         Cardinality::Exactly(1)
                     } else {
-                        Cardinality::AtLeast(saturating_pow(STRING_ALPHABET_FLOOR, maximum))
+                        // Every string over non-whitespace XML characters is a
+                        // distinct collapsed value. Ignoring strings containing
+                        // internal spaces only lowers this cardinality bound.
+                        let alphabet = STRING_ALPHABET_FLOOR
+                            - u64::from(self.kind == LengthKind::CollapsedCharacters) * 4;
+                        Cardinality::AtLeast(saturating_pow(alphabet, maximum))
                     }
                 }
                 LengthKind::Octets => {
@@ -2118,24 +2139,44 @@ impl LengthSet {
     /// The length of a value in this space's unit, or `None` for a value from another
     /// space (which the caller's routing prevents).
     fn length_of(value: &XsdValue) -> Option<u64> {
-        let n = match value {
-            XsdValue::String(s) => s.chars().count(),
-            XsdValue::Binary { bytes, .. } => bytes.len(),
-            _ => return None,
-        };
-        Some(u64::try_from(n).unwrap_or(u64::MAX))
+        value
+            .facet_length()
+            .map(|n| u64::try_from(n).unwrap_or(u64::MAX))
     }
 
     /// Whether the space holds more than `n` values of length `length`.
     ///
-    /// Deliberately generous for characters: one character position admits over a
-    /// million values, so only a length-0 string can be exhausted by a finite exception
-    /// list. Over-reporting here can only withhold an `Empty` answer, never invent one.
+    /// Count only up to `n + 1`: even a positive character length has a finite
+    /// alphabet, so a finite exception set can exhaust it. Saturation above the
+    /// queried count preserves the exact comparison without a length-sized loop.
     fn holds_more_than(&self, length: u64, n: usize) -> bool {
-        match self.kind {
-            LengthKind::Characters => length > 0 || n < 1,
-            LengthKind::Octets => u128::from(saturating_pow(OCTET_ALPHABET, length)) > n as u128,
+        let cap = n as u128 + 1;
+        let alphabet = u128::from(match self.kind {
+            LengthKind::Characters => STRING_ALPHABET_FLOOR,
+            LengthKind::CollapsedCharacters => STRING_ALPHABET_FLOOR - 4,
+            LengthKind::Octets => OCTET_ALPHABET,
+        });
+        let mut nonspace = 1_u128;
+        let mut space = 0_u128;
+        for position in 0..length {
+            if nonspace >= cap {
+                return true;
+            }
+            let next = nonspace
+                .saturating_add(space)
+                .saturating_mul(alphabet)
+                .min(cap);
+            // Collapsed values have neither leading/trailing nor adjacent XML
+            // spaces. A space can follow any nonempty nonspace-ending prefix;
+            // only nonspace-ending values contribute to the final count.
+            space = if self.kind == LengthKind::CollapsedCharacters && position > 0 {
+                nonspace
+            } else {
+                0
+            };
+            nonspace = next;
         }
+        nonspace >= cap
     }
 
     /// The greatest admitted length, or `None` when the set admits none.
@@ -2618,7 +2659,7 @@ struct Extent {
     /// The `xsd:boolean` space.
     boolean: SpaceSet<BoolSet>,
     /// The length-selected spaces, in [`TEXT_SPACES`] order.
-    text: [SpaceSet<LengthSet>; 3],
+    text: [SpaceSet<LengthSet>; 4],
     /// The temporal spaces, in [`TEMPORAL_SPACES`] order.
     temporal: [SpaceSet<ListedSet<XsdValue>>; 10],
     /// The two disjoint, infinite RDF language-string spaces.
@@ -3442,6 +3483,43 @@ mod tests {
     }
 
     // ── The length-selected shape ─────────────────────────────────────────────────
+
+    #[test]
+    fn finite_character_spaces_can_be_exhausted_and_large_lengths_stay_bounded() {
+        let xml_characters = (0..=0x10_ffff)
+            .filter_map(char::from_u32)
+            .filter(|value| purrdf_lex::terminals::is_xml11_char(*value))
+            .count();
+        assert_eq!(xml_characters, 1_112_061);
+        assert_eq!(xml_characters as u64, STRING_ALPHABET_FLOOR);
+        let xml = xml_characters as u128;
+        let uri = xml - 4;
+        // Three-character collapsed values are either NNN or N-space-N.
+        for (kind, length, count) in [
+            (LengthKind::Characters, 0, 1),
+            (LengthKind::Characters, 1, xml),
+            (LengthKind::Characters, 2, xml * xml),
+            (LengthKind::CollapsedCharacters, 0, 1),
+            (LengthKind::CollapsedCharacters, 1, uri),
+            (LengthKind::CollapsedCharacters, 2, uri * uri),
+            (
+                LengthKind::CollapsedCharacters,
+                3,
+                uri * uri * uri + uri * uri,
+            ),
+            (LengthKind::Octets, 1, 256),
+            (LengthKind::Octets, 8, 1_u128 << 64),
+        ] {
+            let set = LengthSet::empty(kind);
+            if let Ok(count) = usize::try_from(count) {
+                assert!(set.holds_more_than(length, count - 1));
+                assert!(!set.holds_more_than(length, count));
+            } else {
+                assert!(set.holds_more_than(length, usize::MAX));
+            }
+            assert!(set.holds_more_than(u64::MAX, usize::MAX));
+        }
+    }
 
     #[test]
     fn length_set_complement_swaps_lengths_and_the_two_finite_lists() {

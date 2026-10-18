@@ -742,6 +742,27 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
+				all_shared_dl_proof_vectors_match_the_current_native_boundary \
+				imported_closure_proofs_check_against_the_consumers_native_snapshot \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test current_clash_support -- --exact \
+				current_clash_preserves_named_and_scoped_blank_source_identity \
+				current_clash_preserves_public_service_certificate_and_verification \
+				current_clash_replays_generated_existential_witnesses \
+				current_clash_checks_fresh_refutation_assumptions_without_a_source_name \
+				current_clash_replays_equality_before_observing_role_premises \
+				current_clash_borrows_the_independent_prepared_consumer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test recorded_stop -- --exact \
+				recorded_stop_preserves_complete_decisions_and_proof_identity \
+				recorded_stop_refuses_before_identity_preparation \
+				recorded_stop_retains_the_signal_after_identity \
+				recorded_stop_covers_identity_digest_streaming \
+				recorded_stop_reports_cancelled_search_without_a_semantic_verdict \
+				recorded_stop_preserves_preparation_budget_selection \
+				recorded_stop_covers_every_preparation_poll \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-rdf --test turtle_chains -- --exact \
 				blank_chains_at_one_hundred_thousand blank_chains_at_one_million \
 				exact_guard_neighbors_and_permuted_interning cycles_shared_and_quoted_blanks_preserve_statements \
@@ -749,6 +770,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
 				universal_obligations_clash_after_recursive_paths_and_blocking \
@@ -802,11 +824,19 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				the_transcript_digest_is_reproduced_on_this_target \
 				the_oracle_vectors_replay_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test any_uri -- --exact \
+				lexical_mapping_preserves_everything_except_xml_whitespace \
+				primitive_identity_is_disjoint_and_unordered \
+				ranges_use_collapsed_character_lengths_and_primitive_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
+				borrowed_value_equality_matches_the_query_operator_on_this_target \
+				any_uri_casts_keep_their_primitive_domain_on_this_target \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target \
 				scoped_text_bound_candidates_retain_unknown_membership \
 				scoped_text_depth_preserves_original_unknown_rows_and_scores \
 				scoped_text_preserves_original_constraint_failure \

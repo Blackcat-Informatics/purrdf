@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The v4 extension, only for a prepared clash. Other proof bytes remain v3.
+//! Prepared-bound laws and the shared current-support wire grammar.
 
 use super::{
     DlProofError, Ground, NodeRef, ProofGround, ProofRole, Reader, SchemaClashEvidence,
@@ -43,27 +43,26 @@ pub(super) fn encode_schema_clash(out: &mut Vec<u8>, evidence: &SchemaClashEvide
         encode_role(out, ProofRole::of(step.from));
         encode_role(out, ProofRole::of(step.to));
     }
-    encode_frame(out, &evidence.frame);
-    out.extend_from_slice(&(evidence.support.len() as u64).to_le_bytes());
-    for application in &evidence.support {
-        out.extend_from_slice(&(application.clause as u64).to_le_bytes());
-        encode_frame(out, &application.frame);
-        out.push(u8::from(application.branch.is_some()));
-        if let Some((branch, ordinal)) = application.branch {
-            out.extend_from_slice(&(branch as u64).to_le_bytes());
-            out.extend_from_slice(&(ordinal as u64).to_le_bytes());
-        }
-        out.extend_from_slice(&(application.head.len() as u64).to_le_bytes());
-        for atom in &application.head {
-            let mapped = atom.map(&mut |&node| {
-                NodeRef::Anonymous(u32::try_from(node).expect("native graph identities fit u32"))
-            });
-            encode_ground(out, &ProofGround::of(&mapped));
-        }
+}
+
+pub(super) fn encode_application(out: &mut Vec<u8>, application: &Application) {
+    out.extend_from_slice(&(application.clause as u64).to_le_bytes());
+    encode_frame(out, &application.frame);
+    out.push(u8::from(application.branch.is_some()));
+    if let Some((branch, ordinal)) = application.branch {
+        out.extend_from_slice(&(branch as u64).to_le_bytes());
+        out.extend_from_slice(&(ordinal as u64).to_le_bytes());
+    }
+    out.extend_from_slice(&(application.head.len() as u64).to_le_bytes());
+    for atom in &application.head {
+        let mapped = atom.map(&mut |&node| {
+            NodeRef::Anonymous(u32::try_from(node).expect("native graph identities fit u32"))
+        });
+        encode_ground(out, &ProofGround::of(&mapped));
     }
 }
 
-fn encode_frame(out: &mut Vec<u8>, frame: &[usize]) {
+pub(super) fn encode_frame(out: &mut Vec<u8>, frame: &[usize]) {
     out.extend_from_slice(&(frame.len() as u64).to_le_bytes());
     for &node in frame {
         out.extend_from_slice(&(node as u64).to_le_bytes());
@@ -107,7 +106,7 @@ fn decode_steps(reader: &mut Reader<'_>) -> Result<Vec<SchemaStep>, DlProofError
     Ok(steps)
 }
 
-fn decode_frame(reader: &mut Reader<'_>) -> Result<Vec<usize>, DlProofError> {
+pub(super) fn decode_frame(reader: &mut Reader<'_>) -> Result<Vec<usize>, DlProofError> {
     let mut frame = Vec::new();
     for _ in 0..reader.length()? {
         frame.push(reader.length()?);
@@ -148,31 +147,26 @@ pub(super) fn decode_schema_clash(
         qualifier,
         roles,
     };
+    Ok(SchemaClashEvidence { bounds })
+}
+
+pub(super) fn decode_application(reader: &mut Reader<'_>) -> Result<Application, DlProofError> {
+    let clause = reader.length()?;
     let frame = decode_frame(reader)?;
-    let mut support = Vec::new();
+    let branch = if reader.flag()? {
+        Some((reader.length()?, reader.length()?))
+    } else {
+        None
+    };
+    let mut head = Vec::new();
     for _ in 0..reader.length()? {
-        let clause = reader.length()?;
-        let frame = decode_frame(reader)?;
-        let branch = if reader.flag()? {
-            Some((reader.length()?, reader.length()?))
-        } else {
-            None
-        };
-        let mut head = Vec::new();
-        for _ in 0..reader.length()? {
-            head.push(native_ground(&reader.ground()?)?);
-        }
-        support.push(Application {
-            clause,
-            frame,
-            branch,
-            head,
-        });
+        head.push(native_ground(&reader.ground()?)?);
     }
-    Ok(SchemaClashEvidence {
-        bounds,
-        support,
+    Ok(Application {
+        clause,
         frame,
+        branch,
+        head,
     })
 }
 

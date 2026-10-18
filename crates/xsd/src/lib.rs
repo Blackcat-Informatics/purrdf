@@ -73,7 +73,8 @@
 //!   `short`/`byte`, the `unsigned*` family, and `nonNegative`/`positive`/
 //!   `nonPositive`/`negativeInteger`, each range-checked), `decimal`, `float`,
 //!   `double`;
-//! * `boolean`, `string`;
+//! * `boolean`, `string`, and the distinct, unordered `anyURI` primitive with
+//!   fixed XML whitespace collapse;
 //! * temporal: `dateTime`/`date`/`time`, `duration` + `dayTimeDuration`/
 //!   `yearMonthDuration`, and the gregorian family `gYear`/`gMonth`/`gDay`/
 //!   `gYearMonth`/`gMonthDay` (tz-indeterminate partial order);
