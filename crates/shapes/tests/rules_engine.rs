@@ -576,6 +576,105 @@ fn an_undefined_entailment_regime_still_signals_a_failure() {
         .expect("the declared neighbour loads");
 }
 
+/// SHACL 1.2 Inference Rules: "Rule sets can use the property sh:includesRuleSet to
+/// (transitively) include other rule sets", and `sh:includesRuleSet` has
+/// `rdfs:range sh:RuleSet`. An include of an IRI that is not a declared rule set is a
+/// failure of the shapes graph itself, found at load whichever regimes it names: with
+/// no entailment, with an unrelated rule set, and beside `sh:RulesEntailment` (which
+/// executes the default rule set and never walks includes). Neighbours: an include of a
+/// declared set loads; an include of an IRI that only carries `sh:hasRule` (typed
+/// nothing) is refused like a missing one.
+#[test]
+fn an_undeclared_rule_set_include_is_refused_at_load_under_every_regime() {
+    let dangling =
+        "ex:Broken a sh:RuleSet ; sh:hasRule ex:FullName ; sh:includesRuleSet ex:Missing";
+    for entailment in [
+        "<http://example.org/shapes> rdfs:label \"none\"",
+        "<http://example.org/shapes> sh:entailment ex:Names",
+        "<http://example.org/shapes> sh:entailment sh:RulesEntailment",
+        "<http://example.org/shapes> sh:entailment sh:RulesEntailment, ex:Names",
+        "<http://example.org/shapes> sh:entailment ex:Broken",
+    ] {
+        let error = conforms_under(&format!("{entailment} . {dangling}"))
+            .expect_err("an undeclared include is refused at load");
+        assert!(
+            error.contains("Missing") && error.contains("not a declared rule set"),
+            "{entailment}: {error}"
+        );
+    }
+    let declared = "ex:Fine a sh:RuleSet ; sh:includesRuleSet ex:Names";
+    for entailment in [
+        "<http://example.org/shapes> sh:entailment sh:RulesEntailment",
+        "<http://example.org/shapes> sh:entailment ex:Fine",
+    ] {
+        conforms_under(&format!("{entailment} . {declared}"))
+            .unwrap_or_else(|error| panic!("{entailment}: a declared include loads: {error}"));
+    }
+    let untyped =
+        "ex:Plain sh:hasRule ex:Greeting . ex:Fine a sh:RuleSet ; sh:includesRuleSet ex:Plain";
+    let error = conforms_under(&format!(
+        "<http://example.org/shapes> sh:entailment sh:RulesEntailment . {untyped}"
+    ))
+    .expect_err("an untyped IRI is not a declared rule set");
+    assert!(error.contains("Plain"), "{error}");
+}
+
+/// Include cycles are allowed: the include relation is transitive, so the closure is a
+/// set and a cycle is a set that reaches itself. The cyclic pair executes the rules of
+/// both members from either entry (the greeting reads the name the other derives).
+/// Neighbour: the acyclic set naming only one of them leaves the greeting unmet.
+#[test]
+fn rule_set_include_cycles_resolve_to_their_closure() {
+    let cycle = "ex:A a sh:RuleSet ; sh:hasRule ex:FullName ; sh:includesRuleSet ex:B .
+                 ex:B a sh:RuleSet ; sh:hasRule ex:Greeting ; sh:includesRuleSet ex:A";
+    for entry in ["ex:A", "ex:B"] {
+        assert_eq!(
+            conforms_under(&format!(
+                "<http://example.org/shapes> sh:entailment {entry} . {cycle}"
+            )),
+            Ok(true),
+            "{entry}"
+        );
+    }
+    assert_eq!(
+        conforms_under("<http://example.org/shapes> sh:entailment ex:Names"),
+        Ok(false),
+        "the acyclic neighbour reaches only its own rule"
+    );
+}
+
+/// One definition of "rule set": a SHACL instance of `sh:RuleSet`. `sh:hasRule` has
+/// `rdfs:domain sh:RuleSet`, but SHACL does no RDFS inference, so an untyped subject of
+/// `sh:hasRule` is not a rule set to either reader: it is not an `sh:entailment` value
+/// and not a rule set the rules engine can be asked for. Neighbour: the typed twin is
+/// both. The untyped subject still loads (its member is a global rule).
+#[test]
+fn an_untyped_subject_of_has_rule_is_not_a_rule_set_to_either_reader() {
+    let untyped = "ex:Plain sh:hasRule ex:FullName";
+    conforms_under(&format!(
+        "<http://example.org/shapes> rdfs:label \"none\" . {untyped}"
+    ))
+    .expect("an untyped subject of sh:hasRule loads");
+    let error = conforms_under(&format!(
+        "<http://example.org/shapes> sh:entailment ex:Plain . {untyped}"
+    ))
+    .expect_err("an untyped subject is not a supported regime");
+    assert!(error.contains("sh:RuleSet"), "{error}");
+    let loaded = shapes(&rule_set_graph(&format!(
+        "<http://example.org/shapes> rdfs:label \"none\" . {untyped}"
+    )))
+    .expect("loads");
+    let options = |name: &str| {
+        RuleOptions::default().with_rule_set(NamedNode::from(format!("{EX}{name}").as_str()))
+    };
+    let alice = data(r#"ex:Alice a ex:Person ; ex:first "Alice" ; ex:last "Smith" ."#);
+    let error = infer(&alice, &loaded, &options("Plain"))
+        .expect_err("the rules engine does not know the untyped subject as a rule set")
+        .to_string();
+    assert!(error.contains("not declared"), "{error}");
+    infer(&alice, &loaded, &options("Names")).expect("the typed neighbour is a rule set");
+}
+
 /// Rule nodes are checked against the census: an unknown SHACL term, and a known one
 /// that belongs on a shape, are refused on a rule; a non-validating term is not.
 #[test]

@@ -245,11 +245,18 @@ impl Parser<'_> {
         out
     }
 
-    /// Parse every rule set, in IRI order.
+    /// Parse every rule set, in IRI order, and resolve each one's include closure.
     ///
     /// SHACL 1.2 Inference Rules: "All SHACL instances of sh:RuleSet have an IRI. Rule sets
     /// can have values for sh:hasRule and those values are rules. The values of
-    /// sh:includesRuleSet at a rule set are IRIs."
+    /// sh:includesRuleSet at a rule set are IRIs." A rule set is a SHACL instance of
+    /// `sh:RuleSet` and nothing else: `sh:hasRule` and `sh:includesRuleSet` declare
+    /// `rdfs:domain sh:RuleSet`, but SHACL does no RDFS inference, so an untyped subject
+    /// of either is not a rule set (the members of its `sh:hasRule` are still global
+    /// rules). [`Self::parse_entailment`] reads "rule set" by the same test.
+    /// `sh:includesRuleSet` has `rdfs:range sh:RuleSet`, so an included IRI that is not a
+    /// declared rule set is refused here, at load, whichever regimes the shapes graph
+    /// names; include cycles are allowed, the closure being a set.
     fn parse_rule_sets(&self) -> Result<Vec<RuleSetDeclaration>, String> {
         let mut nodes: Vec<Term> = Vec::new();
         let mut instances = ShaclInstances::new(self.data);
@@ -258,11 +265,6 @@ impl Parser<'_> {
             if crate::data::resolve_id(self.data, &subject)
                 .is_some_and(|node| instances.is_instance(node, class))
             {
-                nodes.push(subject);
-            }
-        }
-        for predicate in [sh::HAS_RULE, sh::INCLUDES_RULE_SET] {
-            for (subject, _, _) in self.quads_with(None, Some(predicate), None) {
                 nodes.push(subject);
             }
         }
@@ -295,6 +297,20 @@ impl Parser<'_> {
                 includes,
                 processors: self.processors_of(&node)?,
             });
+        }
+        for set in &sets {
+            for include in &set.includes {
+                if !sets.iter().any(|known| known.id == *include) {
+                    return Err(format!(
+                        "rule set {} includes {} through sh:includesRuleSet, which is not a \
+                         declared rule set (no SHACL instance of sh:RuleSet of that IRI); \
+                         declare it with `{} a sh:RuleSet`",
+                        Term::NamedNode(set.id.clone()),
+                        Term::NamedNode(include.clone()),
+                        Term::NamedNode(include.clone())
+                    ));
+                }
+            }
         }
         Ok(sets)
     }

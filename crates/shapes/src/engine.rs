@@ -2950,7 +2950,10 @@ impl PreparedValidator {
     /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
     /// must run [`Self::validate`]. It is reported rather than silently
     /// under-approximated because a short answer here is indistinguishable from a
-    /// clean bill of health.
+    /// clean bill of health. A shapes graph that declares `sh:entailment` answers
+    /// the same, with the reason `"rules entailment"`: the entailed dataset a rule
+    /// derives from replaces the bound snapshot, and a change to any triple a rule
+    /// reads can derive or retract a triple anywhere.
     ///
     /// # Errors
     ///
@@ -2981,6 +2984,15 @@ impl PreparedValidator {
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, String> {
+        // The rules entailment regime replaces the bound data with the entailed dataset
+        // (`entailed_for_validation`), which carries no mutation snapshot, and a rule
+        // derives triples from any read the rules make, so no bounded superset exists:
+        // the opaque-construct route, with the true reason.
+        if self.shapes.rules.entailment || !self.shapes.rules.entailment_rule_sets.is_empty() {
+            return Ok(FocusExpansion::Everything {
+                reason: "rules entailment",
+            });
+        }
         let core = self.data.core_view();
         let bound = core.delta_source().ok_or_else(|| {
             "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
@@ -8103,6 +8115,77 @@ mod tests {
                 .to_ntriples()
                 .expect("authored report emits"),
             "the fallback must BE the full validation, not a short answer wearing its name",
+        );
+    }
+
+    /// **A shapes graph that declares `sh:entailment` answers `Everything` with the
+    /// reason "rules entailment", not a false "not bound" diagnosis.**
+    ///
+    /// The entailed dataset replaces the bound snapshot, so the binding carries no
+    /// delta source; the expansion must not blame the caller's binding. Both regimes
+    /// (`sh:RulesEntailment` and a rule set, which the default law reads as the editor's draft does) are
+    /// executed, beside the neighbour without a declaration, which stays bounded.
+    #[test]
+    fn a_declared_entailment_answers_everything_with_its_reason() {
+        let rules = "ex:R a sh:TripleRule ; sh:subject ex:n1 ; sh:predicate ex:p ; sh:object ex:o .
+             ex:Shape sh:rule ex:R .";
+        for (name, declaration) in [
+            (
+                "rules entailment",
+                "ex:G sh:entailment sh:RulesEntailment .",
+            ),
+            (
+                "rule set",
+                "ex:G sh:entailment ex:RS . ex:RS a sh:RuleSet ; sh:hasRule ex:R .",
+            ),
+        ] {
+            let shapes = Arc::new(load_shapes_ttl(&format!(
+                "{PREFIXES}
+                    ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                        sh:property [ sh:path ex:absent ; sh:minCount 1 ] .
+                    {rules} {declaration}"
+            )));
+            let (snapshot, validator) = change_fixture(shapes);
+            let expansion = validator
+                .affected_focus_node_ids(&snapshot)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                matches!(
+                    expansion,
+                    FocusExpansion::Everything {
+                        reason: "rules entailment"
+                    }
+                ),
+                "{name}: {expansion:?}"
+            );
+            let validation = validate_change(&validator, &snapshot)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                validation.scope,
+                ChangeScope::Everything {
+                    reason: "rules entailment"
+                },
+                "{name}"
+            );
+            assert_eq!(
+                validation.report.to_ntriples().expect("report emits"),
+                validator
+                    .validate()
+                    .expect("the full validation succeeds")
+                    .to_ntriples()
+                    .expect("report emits"),
+                "{name}: the fallback is the full validation"
+            );
+        }
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        assert_eq!(
+            validator
+                .affected_focus_node_ids(&snapshot)
+                .expect("the neighbour expands")
+                .ids()
+                .map(<[FocusId]>::len),
+            Some(1),
+            "a shapes graph that declares no entailment stays bounded"
         );
     }
 
