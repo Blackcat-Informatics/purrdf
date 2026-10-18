@@ -16,6 +16,9 @@
 //! violates, so the OBSERVABLE is which instances are reported: the active ones.
 //! Each treatment sits beside a control whose outcome differs from it.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 
 const PREFIXES: &str = "
@@ -91,13 +94,6 @@ fn failure(data: &str, shapes: &str) -> String {
     validate_graphs(data, shapes, None)
         .expect_err("the validation must fail")
         .to_string()
-}
-
-fn refused_at_load(shapes: &str) -> String {
-    match parse_shapes(shapes, None) {
-        Ok(_) => panic!("the shapes graph must be refused:\n{shapes}"),
-        Err(error) => error.to_string(),
-    }
 }
 
 fn iri(name: &str) -> String {
@@ -204,9 +200,9 @@ fn an_expression_that_does_not_yield_one_boolean_is_a_failure() {
 #[test]
 fn a_constant_value_that_is_no_boolean_is_refused_at_load() {
     for value in ["ex:Other", "\"yes\"", "[]"] {
-        let error = refused_at_load(&node_shape(value));
+        let error = turtle::refusal_text("", &node_shape(value));
         assert!(error.contains("sh:deactivated"), "{value}: {error}");
-        let error = refused_at_load(&property_shape(value));
+        let error = turtle::refusal_text("", &property_shape(value));
         assert!(error.contains("sh:deactivated"), "{value}: {error}");
     }
     for value in ["true", "false"] {

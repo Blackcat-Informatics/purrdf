@@ -21,6 +21,9 @@
 //! to: `target#` reports exactly one violation, and every other binding reports
 //! none. Each treatment sits beside a control whose report differs from it.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 use purrdf_shapes::{ShapesError, ShapesImportError};
 
@@ -83,13 +86,6 @@ fn target_violation() -> Vec<String> {
     vec![format!("<{TARGET}Value>")]
 }
 
-fn load_error(shapes: &str) -> String {
-    match parse_shapes(shapes, None) {
-        Ok(_) => panic!("the shapes graph must be refused:\n{shapes}"),
-        Err(error) => error.to_string(),
-    }
-}
-
 // ── A PREFIX inside a query literal stays in that query ─────────────────────────
 
 /// The regression: a `PREFIX` line inside ONE constraint's query literal was read
@@ -111,7 +107,7 @@ SELECT $this ?value WHERE {{ $this ex:property ?value . FILTER (?value = t:Nothi
 "#,
         shape("")
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(
         error.contains("unparsable sh:select") && error.contains("undeclared prefix \"t\""),
         "ex:C1 names an undeclared prefix: {error}"
@@ -181,7 +177,7 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
         shape("sh:prefixes ex:Decls ;"),
         declare_t(TARGET)
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(error.contains("undeclared prefix \"t\""), "{error}");
 }
 
@@ -269,12 +265,12 @@ fn the_prefixes_path_reaches_declarations_on_each_hop() {
 
     // Neighbours: a declaration the path does not reach leaves its label unbound.
     let only_shapes = format!("ex:Shapes sh:declare {} .\n", declare_t(TARGET));
-    assert!(load_error(&graph(&only_shapes)).contains("undeclared prefix \"o\""));
+    assert!(turtle::refusal_text("", &graph(&only_shapes)).contains("undeclared prefix \"o\""));
     let only_base = format!(
         "ex:Base sh:declare {} .\n",
         r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
     );
-    assert!(load_error(&graph(&only_base)).contains("undeclared prefix \"t\""));
+    assert!(turtle::refusal_text("", &graph(&only_base)).contains("undeclared prefix \"t\""));
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────
@@ -302,7 +298,7 @@ fn a_conflicting_prefix_is_refused_and_an_agreeing_one_loads() {
         )
     };
     for build in [&explicit as &dyn Fn(&str) -> String, &implicit] {
-        let error = load_error(&build(OTHER));
+        let error = turtle::refusal_text("", &build(OTHER));
         assert!(
             error.contains("ill-formed")
                 && error.contains("\"t\"")
@@ -364,13 +360,13 @@ fn a_malformed_reached_declaration_is_refused() {
             "{PREFIXES}{}\nex:P sh:declare {declaration} .\n",
             shape("sh:prefixes ex:P ;")
         );
-        let error = load_error(&shapes);
+        let error = turtle::refusal_text("", &shapes);
         assert!(
             error.contains("ill-formed") && error.contains(expected),
             "{declaration}: {error}"
         );
     }
-    let error = load_error(&format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
+    let error = turtle::refusal_text("", &format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
     assert!(error.contains("not an IRI or a blank node"), "{error}");
 }
 

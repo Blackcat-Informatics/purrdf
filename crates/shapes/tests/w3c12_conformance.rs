@@ -572,9 +572,8 @@ fn run(case: &Case12) -> Result<(), String> {
 
 /// Entries the engine fails against their UNAMENDED expectation because the
 /// specification text contradicts that expectation: `(test id, the clause and the
-/// observable difference)`. The Working Group is asked about each; until it
-/// answers, the entry is graded, reported `earl:failed` with this rationale as its
-/// `earl:info`, and counted under its own scoreboard label. An entry that starts to
+/// observable difference)`. Such an entry is graded, reported `earl:failed` with
+/// this rationale as its `earl:info`, and counted under its own scoreboard label. An entry that starts to
 /// pass is refused (`XPASS`), as is an id no discovered entry has. Empty today:
 /// every approved entry passes.
 const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
@@ -647,15 +646,6 @@ fn scope_entries(graded: &[Graded]) -> Vec<w3c_earl::Entry<'_>> {
             rationale: spec.get(g.id.as_str()).copied(),
         })
         .collect()
-}
-
-/// The report for `graded`, naming `commit` as the PurRDF build.
-fn earl_report_of(graded: &[Graded], commit: &str) -> purrdf_conformance_kit::outcome::Report {
-    w3c_earl::report(&SUITE, commit, &scope_entries(graded))
-}
-
-fn earl_report(commit: &str) -> purrdf_conformance_kit::outcome::Report {
-    earl_report_of(graded(), commit)
 }
 
 /// Per-section and per-type counts.
@@ -765,8 +755,10 @@ fn scoreboard() -> Scoreboard {
 /// report) and one line per claimed class.
 fn scope_lines() -> Vec<String> {
     let board = scoreboard();
-    let mut lines =
-        vec![earl_report(w3c_earl::SAMPLE_COMMIT).scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL)];
+    let mut lines = vec![
+        w3c_earl::report(&SUITE, w3c_earl::SAMPLE_COMMIT, &scope_entries(graded()))
+            .scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL),
+    ];
     for class in W3C12_CLAIMED_CLASSES {
         let (passed, total) = board.classes.get(class).copied().unwrap_or_default();
         let name = class
@@ -1972,11 +1964,6 @@ fn validator_001_passes_in_both_suites_with_no_import_supplied() {
 
 // ── EARL ──────────────────────────────────────────────────────────────────────
 
-/// The in-memory report for the sample commit, serialized.
-fn earl_bytes_for_sample() -> Vec<u8> {
-    w3c_earl::earl_bytes(&earl_report(w3c_earl::SAMPLE_COMMIT)).expect("the report renders")
-}
-
 /// The entries of `SPEC_CONTRADICTED` are graded against the unamended expectation
 /// and fail it: the count is pinned, each id is a discovered approved SHACL-root
 /// entry, and each is reported failed. An entry that passes, and an unknown id, are
@@ -2062,7 +2049,7 @@ fn w3c12_earl_support_behaviour() {
 /// IRI, and the page's class rule giving every entry a claimed class.
 #[test]
 fn w3c12_earl_keys_equal_wg_page_keys() {
-    let bytes = earl_bytes_for_sample();
+    let bytes = w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()));
     let written = w3c_earl::assertions_by_key(&bytes).expect("the report parses");
     assert_eq!(
         written.len(),
@@ -2107,7 +2094,9 @@ fn w3c12_earl_keys_equal_wg_page_keys() {
 /// otherwise, and nothing but those two outcomes.
 #[test]
 fn w3c12_earl_outcomes_equal_the_unamended_grades() {
-    let written = w3c_earl::assertions_by_key(&earl_bytes_for_sample()).expect("parses");
+    let written =
+        w3c_earl::assertions_by_key(&w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())))
+            .expect("parses");
     for g in graded().iter().filter(|g| in_earl_scope(g.root, g.status)) {
         let outcome = &written[&g.id].outcome;
         assert_eq!(
@@ -2137,7 +2126,7 @@ fn w3c12_earl_outcomes_equal_the_unamended_grades() {
 #[test]
 fn w3c12_earl_subject_and_assertor_are_exact() {
     w3c_earl::check_descriptions(
-        &earl_bytes_for_sample(),
+        &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         w3c_earl::SAMPLE_COMMIT,
         "4cd469867a1cc6d2fff80e8a40723b26c695d67a",
     )
@@ -2148,8 +2137,11 @@ fn w3c12_earl_subject_and_assertor_are_exact() {
 /// datatype) appears anywhere in the report.
 #[test]
 fn w3c12_earl_is_deterministic_and_carries_no_date() {
-    let first = earl_bytes_for_sample();
-    assert_eq!(first, earl_bytes_for_sample());
+    let first = w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()));
+    assert_eq!(
+        first,
+        w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()))
+    );
     let text = String::from_utf8(first.clone()).expect("UTF-8");
     assert!(!text.contains("dateTime") && !text.contains("XMLSchema#date"));
     for predicate in w3c_earl::predicates(&first).expect("parses") {
@@ -2196,8 +2188,7 @@ fn w3c12_proposed_entries_are_excluded_from_earl() {
             Some(Status12::Approved),
         ),
     ];
-    let bytes =
-        w3c_earl::earl_bytes(&earl_report_of(&set, w3c_earl::SAMPLE_COMMIT)).expect("renders");
+    let bytes = w3c_earl::sample_bytes(&SUITE, &scope_entries(&set));
     let written = w3c_earl::assertions_by_key(&bytes).expect("parses");
     assert_eq!(
         written.keys().collect::<Vec<_>>(),
@@ -2215,7 +2206,7 @@ fn earl_agrees_with_scoreboard() {
     let board = scoreboard();
     assert_eq!(board.scope.len(), W3C12_SHACL_ROOT_APPROVED);
     w3c_earl::check_agreement_and_mutations(
-        &earl_bytes_for_sample(),
+        &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         &printed,
         SCOPE_LABEL,
         SCOPE_FAILED_LABEL,
@@ -2271,7 +2262,12 @@ fn w3c12_earl_report_is_written_when_configured() {
         }
         Ok(Some(config)) => config,
     };
-    let bytes = w3c_earl::earl_bytes(&earl_report(&config.commit)).expect("the report renders");
+    let bytes = w3c_earl::earl_bytes(&w3c_earl::report(
+        &SUITE,
+        &config.commit,
+        &scope_entries(graded()),
+    ))
+    .expect("the report renders");
     w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT)
         .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)

@@ -325,6 +325,12 @@ pub fn report(suite: &Suite, purrdf_commit: &str, entries: &[Entry<'_>]) -> Repo
 
 // ── Serializing and writing ───────────────────────────────────────────────────
 
+/// The report of `entries` for the sample commit, serialized: what a harness
+/// compares against, without writing a file.
+pub fn sample_bytes(suite: &Suite, entries: &[Entry<'_>]) -> Vec<u8> {
+    earl_bytes(&report(suite, SAMPLE_COMMIT, entries)).expect("the report renders")
+}
+
 /// The report as sorted N-Triples, one statement per line. N-Triples is valid
 /// Turtle, and the reports page lists `*.ttl`.
 pub fn earl_bytes(report: &Report) -> Result<Vec<u8>, String> {

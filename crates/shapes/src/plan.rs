@@ -405,6 +405,21 @@ impl LoweredShapes {
         })
     }
 
+    /// [`plan`](Self::plan) for a shape evaluated against its own focus nodes: the
+    /// walk's own class catalog and the empty target index, which is what every
+    /// caller that resolves its focus nodes itself passes.
+    ///
+    /// # Errors
+    /// As [`plan`](Self::plan).
+    pub(crate) fn untargeted_plan<'a>(
+        &'a self,
+        shape: &'a Shape,
+        position: usize,
+        binding: &'a DatasetBinding,
+    ) -> Result<ShapePlan<'a>, String> {
+        self.plan(shape, position, binding, self.classes(), self.no_targets())
+    }
+
     /// The empty target index nested plans carry.
     #[inline]
     pub(crate) fn no_targets(&self) -> &PreparedTargets {

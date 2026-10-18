@@ -1796,7 +1796,7 @@ pub(crate) fn expected_derived_triples(
         let binding = lowered.bind(data.core_view(), lowered.classes());
         let focus_nodes =
             resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
-        let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;
+        let plan = lowered.untargeted_plan(shape, 0, &binding)?;
         for (ps, property_plan) in plan.properties()? {
             if !derives_expected(ps, expected) {
                 continue;
@@ -1888,26 +1888,23 @@ impl<'a> RulePlan<'a> {
         })
     }
 
+    /// The plan of `shape`, the `position`-th shape this rule lowered.
+    fn plan_at<'b>(
+        &'b self,
+        shape: &'b Shape,
+        position: usize,
+    ) -> Result<crate::plan::ShapePlan<'b>, String> {
+        self.lowered.untargeted_plan(shape, position, &self.binding)
+    }
+
     /// The plan of the rule's own shape.
     fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, String> {
-        self.lowered.plan(
-            self.shape,
-            0,
-            &self.binding,
-            self.lowered.classes(),
-            self.lowered.no_targets(),
-        )
+        self.plan_at(self.shape, 0)
     }
 
     /// The plan of the `position`-th `sh:condition` shape.
     fn condition(&self, position: usize) -> Result<crate::plan::ShapePlan<'_>, String> {
-        self.lowered.plan(
-            &self.conditions[position],
-            position + 1,
-            &self.binding,
-            self.lowered.classes(),
-            self.lowered.no_targets(),
-        )
+        self.plan_at(&self.conditions[position], position + 1)
     }
 }
 

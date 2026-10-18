@@ -191,49 +191,46 @@ impl Description {
     }
 }
 
-/// The `earl:subject` of a report: the implementation under test.
+/// Marks a [`Described`] as the `earl:subject` of a report.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubjectDescription(Description);
+pub struct SubjectRole;
 
-impl SubjectDescription {
-    /// Describe the subject `iri` by its classes and `(predicate, term)` pairs.
+/// Marks a [`Described`] as the `earl:assertedBy` of a report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertorRole;
+
+/// A described resource in the `Role` it plays in a report. The role is a type
+/// marker only, so a subject can never stand where an assertor is expected, and
+/// both roles share this one constructor and accessor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Described<Role>(Description, std::marker::PhantomData<Role>);
+
+impl<Role> Described<Role> {
+    /// Describe the resource `iri` by its classes and `(predicate, term)` pairs.
     #[must_use]
     pub fn new(
         iri: impl Into<String>,
         types: Vec<String>,
         properties: Vec<(String, DescriptionTerm)>,
     ) -> Self {
-        Self(Description::new(iri, types, properties))
+        Self(
+            Description::new(iri, types, properties),
+            std::marker::PhantomData,
+        )
     }
 
-    /// The subject IRI.
+    /// The resource IRI.
     #[must_use]
     pub fn iri(&self) -> &str {
         &self.0.iri
     }
 }
+
+/// The `earl:subject` of a report: the implementation under test.
+pub type SubjectDescription = Described<SubjectRole>;
 
 /// The `earl:assertedBy` of a report: who stands behind the assertions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssertorDescription(Description);
-
-impl AssertorDescription {
-    /// Describe the assertor `iri` by its classes and `(predicate, term)` pairs.
-    #[must_use]
-    pub fn new(
-        iri: impl Into<String>,
-        types: Vec<String>,
-        properties: Vec<(String, DescriptionTerm)>,
-    ) -> Self {
-        Self(Description::new(iri, types, properties))
-    }
-
-    /// The assertor IRI.
-    #[must_use]
-    pub fn iri(&self) -> &str {
-        &self.0.iri
-    }
-}
+pub type AssertorDescription = Described<AssertorRole>;
 
 /// One record of a [`Report`], with the optional `earl:info` text of its result.
 #[derive(Debug, Clone, PartialEq, Eq)]

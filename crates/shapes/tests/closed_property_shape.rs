@@ -14,8 +14,12 @@
 //! `sh:focusNode` stays the property shape's focus node. Each refusal is set
 //! beside a neighbour that conforms.
 
+#[path = "support/roles.rs"]
+mod roles;
 #[path = "support/turtle.rs"]
 mod turtle;
+
+use roles::role_iris;
 
 use purrdf_shapes::ShapesImports;
 use purrdf_shapes::engine::ValidationOptions;
@@ -217,10 +221,6 @@ fn by_types_on_a_property_shape_collects_through_the_value_nodes_types() {
 }
 
 const META: &str = "http://example.org/ns/meta#";
-
-fn role_iris(roles: &[purrdf_shapes::term::NamedNode]) -> Vec<String> {
-    roles.iter().map(|role| role.as_str().to_owned()).collect()
-}
 
 /// The property shape's `sh:closed` result under `profile`, with a box-role
 /// vocabulary configured.

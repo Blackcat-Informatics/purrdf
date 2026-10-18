@@ -1067,13 +1067,7 @@ impl<'a> OneShotLowering<'a> {
     /// Returns an error when the lowering and the shape it lowered disagree,
     /// which is a defect in this crate rather than in any input.
     fn plan(&self) -> Result<ShapePlan<'_>, String> {
-        self.lowered.plan(
-            self.shape,
-            0,
-            &self.binding,
-            self.lowered.classes(),
-            self.lowered.no_targets(),
-        )
+        self.lowered.untargeted_plan(self.shape, 0, &self.binding)
     }
 }
 

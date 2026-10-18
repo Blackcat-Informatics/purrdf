@@ -118,10 +118,13 @@
 
 #[path = "support/measured.rs"]
 mod measured;
+#[path = "support/roles.rs"]
+mod roles;
 
 use std::sync::Arc;
 
 use measured::{assert_parallel_path_is_reachable, measure, measure_lock};
+use roles::role_iris;
 
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -201,12 +204,6 @@ fn meta(local: &str) -> String {
 /// The fixture's vocabulary.
 fn vocabulary() -> BoxRoleVocab {
     BoxRoleVocab::for_namespace(META)
-}
-
-/// A role vector as plain strings, for content comparison against an expected
-/// list that a reader can check by eye.
-fn role_iris(roles: &[NamedNode]) -> Vec<String> {
-    roles.iter().map(|role| role.as_str().to_owned()).collect()
 }
 
 /// The measured fixture: one dataset, two bindings differing only in whether a

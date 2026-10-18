@@ -162,14 +162,6 @@ fn scope_entries(graded: &[Graded]) -> Vec<w3c_earl::Entry<'_>> {
         .collect()
 }
 
-fn earl_report_of(graded: &[Graded], commit: &str) -> purrdf_conformance_kit::outcome::Report {
-    w3c_earl::report(&SUITE, commit, &scope_entries(graded))
-}
-
-fn earl_report(commit: &str) -> purrdf_conformance_kit::outcome::Report {
-    earl_report_of(graded(), commit)
-}
-
 /// The scoreboard's own tally, computed from the ledger match arms alone.
 #[derive(Default)]
 struct Scoreboard {
@@ -251,7 +243,8 @@ fn scoreboard() -> Scoreboard {
 
 /// The EARL-scope line, as printed: a projection of the report.
 fn scope_line() -> String {
-    earl_report(w3c_earl::SAMPLE_COMMIT).scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL)
+    w3c_earl::report(&SUITE, w3c_earl::SAMPLE_COMMIT, &scope_entries(graded()))
+        .scoreboard_line(SCOPE_LABEL, SCOPE_FAILED_LABEL)
 }
 
 // ── The harness ───────────────────────────────────────────────────────────────
@@ -325,11 +318,6 @@ fn w3c_shacl_proposed_unincluded_files() {
 }
 
 // ── EARL ──────────────────────────────────────────────────────────────────────
-
-/// The in-memory report for the sample commit, serialized.
-fn earl_bytes_for_sample() -> Vec<u8> {
-    w3c_earl::earl_bytes(&earl_report(w3c_earl::SAMPLE_COMMIT)).expect("the report renders")
-}
 
 /// The vendored commit is the one the suite's README pins, in full.
 #[test]
@@ -405,7 +393,9 @@ fn w3c_2017_subset_is_the_vendored_entries() {
 /// includes are absent; each outcome is the unamended grade.
 #[test]
 fn w3c_2017_earl_covers_the_subset_and_nothing_else() {
-    let written = w3c_earl::assertions_by_key(&earl_bytes_for_sample()).expect("parses");
+    let written =
+        w3c_earl::assertions_by_key(&w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())))
+            .expect("parses");
     assert_eq!(written.len(), W3C_SUBSET_CASES);
     assert!(
         written
@@ -495,7 +485,7 @@ fn w3c_2017_earl_matches_wg_inventory() {
     // The report as the writer builds it, parsed back: any parse error fails. A
     // second assertion about one test is a parse error in `assertions`, so each
     // test occurs exactly once.
-    let bytes = earl_bytes_for_sample();
+    let bytes = w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()));
     let statements = w3c_earl::statements(&bytes).expect("the report parses");
     let assertions = w3c_earl::assertions(&statements).expect("the assertions parse");
     let asserted: BTreeSet<&str> = assertions.keys().map(String::as_str).collect();
@@ -544,7 +534,7 @@ fn w3c_2017_earl_matches_wg_inventory() {
 #[test]
 fn w3c_2017_earl_subject_and_assertor_are_exact() {
     w3c_earl::check_descriptions(
-        &earl_bytes_for_sample(),
+        &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         w3c_earl::SAMPLE_COMMIT,
         "08adb3776709a014bc3062ede793c36275b22446",
     )
@@ -554,8 +544,11 @@ fn w3c_2017_earl_subject_and_assertor_are_exact() {
 /// Two in-memory generations are byte-identical, sorted, and carry no date or time.
 #[test]
 fn w3c_2017_earl_is_deterministic_and_carries_no_date() {
-    let first = earl_bytes_for_sample();
-    assert_eq!(first, earl_bytes_for_sample());
+    let first = w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()));
+    assert_eq!(
+        first,
+        w3c_earl::sample_bytes(&SUITE, &scope_entries(graded()))
+    );
     let text = String::from_utf8(first.clone()).expect("UTF-8");
     assert!(!text.contains("dateTime") && !text.contains("XMLSchema#date"));
     for predicate in w3c_earl::predicates(&first).expect("parses") {
@@ -580,7 +573,7 @@ fn earl_agrees_with_scoreboard() {
     let board = scoreboard();
     assert_eq!(board.scope.len(), W3C_SUBSET_CASES);
     w3c_earl::check_agreement_and_mutations(
-        &earl_bytes_for_sample(),
+        &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         &scope_line(),
         SCOPE_LABEL,
         SCOPE_FAILED_LABEL,
@@ -603,7 +596,12 @@ fn w3c_2017_earl_report_is_written_when_configured() {
         }
         Ok(Some(config)) => config,
     };
-    let bytes = w3c_earl::earl_bytes(&earl_report(&config.commit)).expect("the report renders");
+    let bytes = w3c_earl::earl_bytes(&w3c_earl::report(
+        &SUITE,
+        &config.commit,
+        &scope_entries(graded()),
+    ))
+    .expect("the report renders");
     w3c_earl::check_descriptions(&bytes, &config.commit, W3C_SUITE_COMMIT)
         .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)

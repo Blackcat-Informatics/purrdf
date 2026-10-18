@@ -109,7 +109,7 @@ pub(crate) fn where_targets(
     let lowered = crate::plan::lower_shapes(std::iter::once(shape));
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
     binding.set_conformance_disallows(disallows);
-    let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;
+    let plan = lowered.untargeted_plan(shape, 0, &binding)?;
     data.prepare_class_membership();
     let narrowed = narrowing(data, shape, disallows, 0);
     let candidates: &[TermId] = match &narrowed {
