@@ -47,10 +47,10 @@ $ purrdf shacl pack --shapes shapes.ttl --out shapes.purrshp
 shacl product bytes 4213
 ```
 
-`--shapes` must be a **path**, not `-`. A product records the base its shapes
-graph was parsed under, and standard input has no retrieval IRI to derive one
-from; passing `--shapes -` is a usage error telling you to give a path or name
-the base with `--base`. When `--base` is omitted, the document's own `file://`
+`--shapes` names a **path**, or `-` for standard input when an explicit `--base`
+is supplied. A product records the base its shapes graph was parsed under, and
+standard input has no retrieval IRI to derive one from; passing `--shapes -`
+without `--base` is a usage error. For a path with no explicit `--base`, the document's own `file://`
 retrieval IRI is derived — the same base `validate --shapes` parses it under, so
 packing and direct validation cannot disagree about what a relative reference
 resolves to.
@@ -690,7 +690,7 @@ I re-packed it?"
 
 ## The refusal dimensions
 
-Every refusal carries one of twenty stable kebab-case labels, printed to stderr
+Every refusal carries one of twenty-two stable kebab-case labels, printed to stderr
 as `shacl dimension <label>`. **The dimension is what you branch on; the message
 is what you read.** Matching on message text is not supported.
 
@@ -698,7 +698,7 @@ The dimensions are checked from the outside of the container inward, and the
 first one that fails is the one reported — so the label always names the
 outermost unmet precondition rather than a downstream symptom of it.
 
-The twenty split into two groups by **which verb can report them**, and the split
+The twenty-two split into two groups by **which verb can report them**, and the split
 is not a taxonomy: it is the cost decision this codec is built around. A restore
 is the common path and must not canonicalize a shapes graph's blank nodes;
 certification is the cold path that does. A dimension only one of the two can
@@ -770,7 +770,7 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 
 | Command | Does | Exit `0` | Exit `1` | Exit `2` |
 | --- | --- | --- | --- | --- |
-| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE] [--box-role-vocab NS]` | parse, prepare, write the product | product written | the shapes did not parse, the graph declares something a product cannot carry, or an `owl:imports` is unresolved | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
+| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE] [--box-role-vocab NS]` | parse, prepare, write the product | product written | the shapes did not parse, the graph declares something a product cannot carry, or an `owl:imports` is unresolved | bad flags, `--shapes -` without `--base`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
 | `purrdf shacl diff A B` | compare two products' declared identities, without admitting either | the two identities are identical | the two identities differ (the `diff` lines are still printed, on stdout) | bad flags, or both `A` and `B` naming standard input |

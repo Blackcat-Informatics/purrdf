@@ -343,7 +343,7 @@ fn write_all_to(py: Python<'_>, output: &Bound<'_, PyAny>, bytes: &[u8]) -> PyRe
 // ── Pure-Rust cores (PyO3-free, exercised through the pytest suite) ─────────────
 
 /// Parse RDF bytes into owned quads via the native codec with no blank-node
-/// renaming. Routes through [`parse_dataset`](crate::parse_dataset) → IR → the flat
+/// renaming. Routes through [`parse_dataset`] → IR → the flat
 /// quad un-fold ([`flat_rdf_quads_from_dataset`]) so the `rdf:reifies` / annotation
 /// rows of the RDF 1.2 statement layer reappear in the quad stream exactly as a flat
 /// parse would yield them. Private-use language tags such as `@x-purrdf-*` are valid

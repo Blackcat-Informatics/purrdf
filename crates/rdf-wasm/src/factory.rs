@@ -144,8 +144,8 @@ impl DataFactory {
     }
 
     /// `directionalLiteral(value, language, direction)` → an RDF-1.2 base-direction
-    /// literal (`direction` is `"ltr"` or `"rtl"`). The deliberate extension to stock
-    /// RDF/JS — no incumbent library carries base direction.
+    /// literal (`direction` is `"ltr"` or `"rtl"`). An explicit RDF 1.2 extension
+    /// alongside the standard RDF/JS term constructors.
     ///
     /// # Errors
     ///

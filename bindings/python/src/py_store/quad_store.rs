@@ -140,14 +140,14 @@ impl PyQuadStore {
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
     ///
     /// Engine configuration (unset = engine defaults, see
-    /// [`build_engine`](super::query::build_engine)): `extension_namespaces`
+    /// [`build_engine`]): `extension_namespaces`
     /// enables the closed extension-function set under the caller's namespaces
     /// (OFF by default); `property_fn_namespaces` does the same for property-function
     /// PREFIX recognition; `standpoint_predicates` is the `(according_to,
     /// sharpens)` predicate table `heldIn` requires.
     ///
     /// `relations` / `relations_from_graph` / `path_relations` register host relations
-    /// for THIS call (see [`collect_relations`](super::query::collect_relations)):
+    /// for THIS call (see [`collect_relations`]):
     /// `{iri: (subject_arity, object_arity, rows)}` supplies the table as Python
     /// data, `{iri: (head, subject_arity, object_arity)}` reads it out of this
     /// store's own default graph as an `rdf:List` of `rdf:List`s, and
@@ -288,7 +288,7 @@ impl PyQuadStore {
     /// `ValueError`, including a cap of zero.
     ///
     /// A tripped governor is an **outcome, not an exception** — see
-    /// [`materialize_outcome`](super::query::materialize_outcome). The one stop cause
+    /// [`materialize_outcome`]. The one stop cause
     /// that does raise is a `KeyboardInterrupt`: this call polls the interpreter's
     /// pending-signal flag while the GIL is released, so Ctrl-C stops the query instead
     /// of being noticed only once it has finished.

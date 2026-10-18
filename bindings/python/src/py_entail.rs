@@ -685,7 +685,7 @@ const fn python_limits(
     }
 }
 
-/// Borrow a Python-supplied import table as the boundary's [`ImportList`] — or, for the
+/// Borrow a Python-supplied import table as [`purrdf_validate::regime::ImportList`] — or, for the
 /// SHACL module's shapes-graph functions, its `ShapesImportList`, which has the same shape.
 ///
 /// Every service that takes `imports` takes it as a `Sequence[tuple[str, str]]`, which PyO3

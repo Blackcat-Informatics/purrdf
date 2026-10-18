@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Conformance & Testing
 
-Every PurRDF engine is gated by its official test suite. The suites are
+PurRDF checks its engines against standards suites and first-party corpora. The suites are
 vendored and **byte-frozen** in-repo — never hand-edited, SHA-256-verified on
 every `make check` so a silent content edit fails the build. The full, live
 scoreboard is
