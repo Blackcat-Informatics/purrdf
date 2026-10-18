@@ -73,7 +73,7 @@ external = []
 
 [[crate]]
 name = "purrdf-events"
-deps = []
+deps = ["purrdf-hash"]
 external = []
 
 [[crate]]

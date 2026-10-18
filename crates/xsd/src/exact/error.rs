@@ -89,6 +89,21 @@ pub enum ExactError {
     ScaleOverflow,
 }
 
+impl purrdf_hash::error::StructuredError for ExactError {
+    purrdf_hash::error_visit! {
+        InvalidLexical { kind, lexical, reason } => "exact-invalid-lexical" {
+            "kind" => Code(kind.name()), "lexical" => Text(lexical), "reason" => Text(reason),
+        },
+        DivisionByZero => "exact-division-by-zero" {},
+        NotFinite => "exact-not-finite" {},
+        OutOfRange { target, reason } => "exact-out-of-range" {
+            "target" => Code(target.name()), "reason" => Text(reason),
+        },
+        NonTerminating => "exact-non-terminating" {},
+        ScaleOverflow => "exact-scale-overflow" {},
+    }
+}
+
 impl ExactError {
     /// The XPath F&O 3.1 error code a query surface reports for this refusal.
     #[must_use]
@@ -162,6 +177,16 @@ pub enum ExactParseError {
     Storage(crate::bigint::LimbScratchError),
 }
 
+impl purrdf_hash::error::StructuredError for ExactParseError {
+    purrdf_hash::error_visit! {
+        InvalidLexical { kind, reason } => "exact-parse-invalid-lexical" {
+            "kind" => Code(kind.name()), "reason" => Text(reason),
+        },
+        ScaleOverflow => "exact-parse-scale-overflow" {},
+        Storage(error) => "exact-parse-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl ExactParseError {
     /// Value-space F&O code; physical storage refusal has none.
     #[must_use]
@@ -207,6 +232,13 @@ pub enum ExactOperationError {
     Value(ExactError),
     /// Checked native destination/allocation refusal.
     Storage(crate::bigint::LimbScratchError),
+}
+
+impl purrdf_hash::error::StructuredError for ExactOperationError {
+    purrdf_hash::error_visit! {
+        Value(error) => "exact-operation-value" { "cause" => Cause(error) },
+        Storage(error) => "exact-operation-storage" { "cause" => Cause(error) },
+    }
 }
 
 impl ExactOperationError {

@@ -51,6 +51,26 @@ pub enum LimbScratchError {
     AllocationFailed,
 }
 
+impl purrdf_hash::error::StructuredError for LimbScratchError {
+    purrdf_hash::error_visit! {
+        Destinations { required, admitted } => "limb-scratch-destinations" {
+            "required" => Unsigned(*required as u128), "admitted" => Unsigned(*admitted as u128),
+        },
+        Capacity { required_limbs, admitted_limbs } => "limb-scratch-capacity" {
+            "required_limbs" => Unsigned(*required_limbs as u128),
+            "admitted_limbs" => Unsigned(*admitted_limbs as u128),
+        },
+        Exhausted { destinations } => "limb-scratch-exhausted" { "destinations" => Unsigned(*destinations as u128) },
+        Retained { held_destinations, destinations } => "limb-scratch-retained" {
+            "held_destinations" => Unsigned(*held_destinations as u128),
+            "destinations" => Unsigned(*destinations as u128),
+        },
+        SizeOverflow => "limb-scratch-size-overflow" {},
+        Storage(error) => "limb-scratch-storage" { "cause" => Cause(error) },
+        AllocationFailed => "limb-scratch-allocation-failed" {},
+    }
+}
+
 impl fmt::Display for LimbScratchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

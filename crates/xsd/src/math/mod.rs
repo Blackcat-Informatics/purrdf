@@ -126,6 +126,23 @@ pub enum MathError {
     Environment(environment::FloatEnvironmentError),
 }
 
+impl purrdf_hash::error::StructuredError for MathError {
+    purrdf_hash::error_visit! {
+        Domain(reason) => "math-domain" { "reason" => Text(reason) },
+        PrecisionExhausted => "math-precision-exhausted" {},
+        WorkExhausted => "math-work-exhausted" {},
+        WorkspaceExhausted => "math-workspace-exhausted" {},
+        Storage(error) => "math-storage" { "cause" => Cause(error) },
+        LimbScratch(error) => "math-limb-scratch" { "cause" => Cause(error) },
+        TaylorScratch(error) => "math-taylor-scratch" { "cause" => Cause(error) },
+        Binary64Range => "math-binary64-range" {},
+        Cancelled => "math-cancelled" {},
+        ConvergenceExhausted { iterations } => "math-convergence-exhausted" { "iterations" => Unsigned(u128::from(*iterations)) },
+        AmbiguousRoots { roots } => "math-ambiguous-roots" { "roots" => Unsigned(*roots as u128) },
+        Environment(error) => "math-environment" { "cause" => Cause(error) },
+    }
+}
+
 impl fmt::Display for MathError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
