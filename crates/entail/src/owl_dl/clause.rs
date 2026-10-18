@@ -471,14 +471,17 @@ pub(crate) struct ClauseSet {
     by_edge: BTreeMap<(u32, bool), Vec<usize>>,
     /// Role-first clauses awaiting [`Self::by_edge`] until the role axioms resolve them.
     role_first: Vec<(Role, usize)>,
-    /// Whether each clause is TBox-DERIVED, by clause index.
+    /// Original inclusion ordinal of each TBox-derived clause, by clause index.
     ///
     /// A TBox clause is scoped to the OBJECT domain: a general concept inclusion quantifies
     /// over `owl:Thing`, and a literal value is not in it, so firing one at a node of `Δ_D`
     /// would derive a consequence the ontology does not state. The concept-structure clauses
-    /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
+    /// carry no such source — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
-    tbox: Vec<bool>,
+    tbox_sources: Vec<Option<std::num::NonZeroUsize>>,
+    role_clauses: std::ops::Range<usize>,
+    asymmetric_clauses: std::ops::Range<usize>,
+    disjoint_role_clauses: std::ops::Range<usize>,
     /// Number of original admitted schema guards appended logically to this
     /// compilation. Their bodies and sorted trigger directory remain in the Kb.
     schema_count: usize,
@@ -489,6 +492,48 @@ pub(crate) struct ClauseSet {
 }
 
 impl ClauseSet {
+    /// Resolve the original role constraint from its compiler-owned emission range.
+    /// The role keys are already in the emitted body; no second source table is needed.
+    pub(crate) fn constraint_source(&self, index: usize) -> Option<super::input_source::Input> {
+        use super::input_source::Input;
+        if self.asymmetric_clauses.contains(&index) {
+            let BodyAtom::Role {
+                role: Role::Named(property),
+                ..
+            } = self.clauses[index].body[0]
+            else {
+                unreachable!("an asymmetric clause starts with its original named role")
+            };
+            Some(Input::Asymmetric(property))
+        } else if self.disjoint_role_clauses.contains(&index) {
+            let [
+                BodyAtom::Role {
+                    role: Role::Named(left),
+                    ..
+                },
+                BodyAtom::Role {
+                    role: Role::Named(right),
+                    ..
+                },
+            ] = self.clauses[index].body.as_slice()
+            else {
+                unreachable!("a disjoint-role clause contains its two original named roles")
+            };
+            Some(Input::DisjointRole(*left, *right))
+        } else {
+            None
+        }
+    }
+    pub(crate) fn role_source(
+        &self,
+        index: usize,
+        program: &super::roles::RoleProgram,
+    ) -> Option<super::roles::RoleClause> {
+        self.role_clauses
+            .contains(&index)
+            .then(|| program.clause_source(index - self.role_clauses.start))
+            .flatten()
+    }
     /// The clause at `index`.
     pub(crate) fn schema_class(
         &self,
@@ -625,7 +670,7 @@ impl ClauseSet {
     /// Whether the clause at `index` is TBox-derived, and so scoped to the object domain.
     pub(crate) fn is_tbox(&self, index: usize) -> bool {
         if index < self.clauses.len() {
-            self.tbox[index]
+            self.tbox_sources[index].is_some()
         } else {
             assert!(
                 index < self.count(),
@@ -635,18 +680,28 @@ impl ClauseSet {
         }
     }
 
-    /// Record one clause, indexing it by its trigger.
-    fn push(&mut self, clause: DlClause) {
-        self.record(clause, false);
+    /// Original normalized inclusion behind an absorbed clause. Logical schema
+    /// guards can have several inclusion licenses and have no single ordinal here.
+    pub(crate) fn tbox_source(&self, index: usize) -> Option<usize> {
+        self.tbox_sources
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|source| source.get() - 1)
     }
 
-    /// Record one TBox-derived clause — see [`ClauseSet::tbox`].
-    fn push_tbox(&mut self, clause: DlClause) {
-        self.record(clause, true);
+    /// Record one clause, indexing it by its trigger.
+    fn push(&mut self, clause: DlClause) {
+        self.record(clause, None);
+    }
+
+    /// Record one TBox-derived clause — see [`ClauseSet::tbox_sources`].
+    fn push_tbox(&mut self, clause: DlClause, source: usize) {
+        self.record(clause, Some(source));
     }
 
     /// Record one clause, indexing it by its trigger and noting its provenance.
-    fn record(&mut self, clause: DlClause, tbox: bool) {
+    fn record(&mut self, clause: DlClause, source: Option<usize>) {
         let index = self.clauses.len();
         match (clause.trigger(), clause.first_role()) {
             (Some(concept), _) => self.by_trigger.entry(concept).or_default().push(index),
@@ -654,7 +709,12 @@ impl ClauseSet {
             (None, None) => self.untriggered.push(index),
         }
         self.clauses.push(clause);
-        self.tbox.push(tbox);
+        // An inclusion ordinal is below its allocated Vec length, so adding one
+        // cannot overflow. The niche keeps each provenance slot one native word.
+        self.tbox_sources.push(source.map(|source| {
+            std::num::NonZeroUsize::new(source + 1)
+                .expect("an allocated inclusion ordinal plus one is nonzero")
+        }));
     }
 
     /// Record `body → head` where the body opens with the trigger concept `trigger` on
@@ -682,7 +742,10 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         untriggered: Vec::new(),
         by_edge: BTreeMap::new(),
         role_first: Vec::new(),
-        tbox: Vec::new(),
+        tbox_sources: Vec::new(),
+        role_clauses: 0..0,
+        asymmetric_clauses: 0..0,
+        disjoint_role_clauses: 0..0,
         schema_count: kb.schema.guards.len(),
         reads: Vec::new(),
         transitive_readers: Vec::new(),
@@ -709,6 +772,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // Universal restrictions over regular role languages use a finite closure
     // of internal state labels. These labels travel with blocking signatures;
     // no completion edge or RDF name stands in for an automaton continuation.
+    let role_start = out.clauses.len();
     if let Some(program) = &kb.role_program {
         for obligation in &program.obligations {
             let machine = &program.machines[obligation.machine];
@@ -751,11 +815,12 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             }
         }
     }
+    out.role_clauses = role_start..out.clauses.len();
     // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
     // inclusion's guard, so emission is a translation and not a second place the encoding is
     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
     // general concept inclusion quantifies over `owl:Thing`, and no literal value is in it.
-    for clause in &kb.absorbed {
+    for (ordinal, clause) in kb.absorbed.iter().enumerate() {
         // ATOMIC-HEAD invariant: a [`GuardedClause`] head is ONE concept id on ONE variable
         // (see its doc), so its translation is ONE disjunct of ONE atom — never a case split
         // of this clause's own. A `⊔` reached by way of an absorbed head still branches, but
@@ -775,14 +840,18 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             (1, 1),
             "an absorbed TBox clause's head must be one concept on one variable"
         );
-        out.push_tbox(DlClause {
-            body: clause.body.clone(),
-            head,
-        });
+        out.push_tbox(
+            DlClause {
+                body: clause.body.clone(),
+                head,
+            },
+            kb.absorbed_sources[ordinal],
+        );
     }
     // The two role axioms that constrain EDGES rather than labels, so neither can be
     // internalized as a general concept inclusion and neither has a concept to trigger it.
     // Asymmetry with `y = x` is the self-loop case, which is how it subsumes irreflexivity.
+    let asymmetric_start = out.clauses.len();
     for &property in &kb.asymmetric {
         let role = Role::Named(property);
         out.push(DlClause {
@@ -801,6 +870,8 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             head: Vec::new(),
         });
     }
+    out.asymmetric_clauses = asymmetric_start..out.clauses.len();
+    let disjoint_start = out.clauses.len();
     for &(left, right) in &kb.disjoint_roles {
         // The pair is held in both orders so a lookup needs no normalization; one clause per
         // unordered pair is enough, because the body is symmetric in the two roles.
@@ -823,6 +894,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             head: Vec::new(),
         });
     }
+    out.disjoint_role_clauses = disjoint_start..out.clauses.len();
     // Resolve each role-first clause to the edge patterns that can satisfy its first atom.
     // Clauses are recorded in ascending index order, so every list stays ascending.
     for (role, index) in std::mem::take(&mut out.role_first) {

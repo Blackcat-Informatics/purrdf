@@ -5055,6 +5055,7 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
     if cases.is_empty() {
         return Err("the DL proof golden vector artifact holds no cases".to_owned());
     }
+    let mut causal_checked = false;
     for case in &cases {
         let produced = prove_to_string(
             case.input(),
@@ -5088,6 +5089,13 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
         if checked != case.check() {
             return Err(differs("check", case.check(), &checked));
         }
+        if case.name() == "recursive-nominal-introduction" {
+            check_recursive_causal_vector(case, &produced)?;
+            causal_checked = true;
+        }
+    }
+    if !causal_checked {
+        return Err("the DL proof golden artifact is missing its causal NI case".to_owned());
     }
     for service in PROOF_SERVICE_NAMES {
         if !cases.iter().any(|case| case.service() == service) {
@@ -5095,6 +5103,56 @@ pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
                 "the DL proof golden vector artifact no longer covers service \"{service}\""
             ));
         }
+    }
+    Ok(())
+}
+
+/// Exercise causal capture through the existing packaged-WASM golden entry.
+/// The consumer prepares the original source but never repeats the producer search.
+fn check_recursive_causal_vector(
+    case: &DlProofVector,
+    produced: &ReasoningAnswer,
+) -> Result<(), String> {
+    use purrdf_entail::proof_source::{
+        ResolvedNode,
+        causal::{CausalMutation, CausalObservation},
+    };
+    let proof = decode_dl_proof(produced.proof_document())?;
+    let certificate = parse_dl_certificate(produced.certificate())?;
+    let mut consumer = ReasonerSession::open_with_proofs(case.input(), 0, 0)?;
+    let context = consumer
+        .kb()?
+        .borrowed_proof_context()
+        .map_err(|error| format!("causal vector consumer: {error}"))?;
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(&certificate), &context)
+        .map_err(|error| format!("causal vector replay: {error}"))?;
+    let mut nested = false;
+    for (_, refutation) in checked.refutations() {
+        if !refutation.replay().is_closed() {
+            return Err("causal vector has an unclosed refutation".to_owned());
+        }
+        for clash in refutation.clashes() {
+            for step in clash.steps() {
+                if let CausalObservation::Effect {
+                    mutation:
+                        CausalMutation::Node {
+                            node,
+                            reserved: true,
+                            ..
+                        },
+                    ..
+                } = step.observation()
+                {
+                    nested |= node.reserved_identity().is_some_and(|identity| {
+                        matches!(identity.origin(), ResolvedNode::Reserved(_))
+                    });
+                }
+            }
+        }
+    }
+    if !nested {
+        return Err("causal vector lost its original nested reserved descriptor".to_owned());
     }
     Ok(())
 }

@@ -66,6 +66,8 @@
 //! propagates — rather than a stack overflow, which is not a refusal at all: the process
 //! aborts, nothing unwinds, and a host embedding this library dies with it.
 
+use super::syntax::{Kind as SyntaxKind, Syntax};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::collections::{SoleObject, walk_rdf_list};
@@ -81,6 +83,7 @@ use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Concept, ConceptTable, Decomp, Role};
 use crate::owl_dl::constructs::{Support, support_of};
 use crate::owl_dl::data::{self, DataRangeTable, LiteralValue};
+use crate::owl_dl::input_source::{Input, Inputs, Source};
 use crate::report::Construct;
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_ALLDISJOINTCLASSES, OWL_ALLDISJOINTPROPERTIES, OWL_ALLVALUESFROM,
@@ -373,15 +376,28 @@ pub(crate) fn index_list(
     v: &Vocab,
     head: u32,
 ) -> Result<Vec<u32>, ListError<u32>> {
+    index_list_observing(index, v, head, |_, _, _| {})
+}
+
+fn index_list_observing(
+    index: &TripleIndex,
+    v: &Vocab,
+    head: u32,
+    observe: impl Fn(u32, u32, u32),
+) -> Result<Vec<u32>, ListError<u32>> {
     let objects = |cell: u32, predicate: u32| {
-        SoleObject::of(
+        let selected = SoleObject::of(
             index
                 .get(&cell)
                 .and_then(|preds| preds.get(&predicate))
                 .into_iter()
                 .flatten()
                 .copied(),
-        )
+        );
+        if let SoleObject::One(object) = selected {
+            observe(cell, predicate, object);
+        }
+        selected
     };
     walk_rdf_list(
         head,
@@ -404,6 +420,7 @@ pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
 /// concept-interning [`ConceptTable`] is *not* needed here (extraction returns a
 /// [`Concept`] tree; interning is the caller's concern).
 pub(crate) struct CeExtractor<'a> {
+    syntax: RefCell<Syntax>,
     index: &'a TripleIndex,
     interner: &'a Interner,
     v: &'a Vocab,
@@ -441,7 +458,9 @@ impl<'a> CeExtractor<'a> {
         v: &'a Vocab,
         ranges: &'a mut DataRangeTable,
     ) -> Self {
-        Self::new_until(index, interner, v, ranges, None)
+        let mut ce = Self::new_until(index, interner, v, ranges, None);
+        ce.syntax = RefCell::new(Syntax::query());
+        ce
     }
 
     /// Build an extractor that polls `stop` while traversing class expressions and RDF
@@ -454,6 +473,7 @@ impl<'a> CeExtractor<'a> {
         stop: Option<&'a dyn StopSignal>,
     ) -> Self {
         Self {
+            syntax: RefCell::new(Syntax::default()),
             index,
             interner,
             v,
@@ -470,7 +490,41 @@ impl<'a> CeExtractor<'a> {
 
     /// Refuse promptly when the governed caller has cancelled reverse mapping.
     fn poll(&self) -> Result<(), EntailError> {
+        if let Some(original) = self.syntax.borrow().refusal {
+            return Err(EntailError::Storage(original));
+        }
         poll(self.stop)
+    }
+
+    pub(crate) fn into_syntax(self) -> Result<Syntax, EntailError> {
+        self.poll()?;
+        let syntax = self.syntax.into_inner();
+        if !syntax.complete() {
+            return Err(EntailError::Parse(
+                "native syntax capture did not complete".to_owned(),
+            ));
+        }
+        Ok(syntax)
+    }
+
+    fn source_scope<T>(
+        &mut self,
+        acc: &mut Accums,
+        body: impl FnOnce(&mut Self, &mut Accums) -> Result<T, EntailError>,
+    ) -> Result<T, EntailError> {
+        self.poll()?;
+        acc.inputs.begin_scope();
+        self.syntax.borrow_mut().begin_axiom();
+        let start = acc.tbox.len();
+        let result = body(self, acc);
+        self.poll()?;
+        let value = result?;
+        let root = self.syntax.borrow_mut().end_axiom()?;
+        acc.inputs.end_scope(root)?;
+        self.syntax
+            .borrow_mut()
+            .bind_tbox(start, acc.tbox.len(), root)?;
+        Ok(value)
     }
 
     /// The boundaries raised so far.
@@ -492,6 +546,16 @@ impl<'a> CeExtractor<'a> {
     /// carries one of the class-expression-defining predicates or is typed
     /// `owl:Restriction`. A plain named class returns `false`.
     pub(crate) fn is_class_expression(&self, node: u32) -> bool {
+        let token = self
+            .syntax
+            .borrow_mut()
+            .enter(SyntaxKind::Recognition(node));
+        let result = self.is_class_expression_inner(node);
+        self.syntax.borrow_mut().leave(token, true);
+        result
+    }
+
+    fn is_class_expression_inner(&self, node: u32) -> bool {
         for p in [
             self.v.intersection,
             self.v.union,
@@ -513,6 +577,18 @@ impl<'a> CeExtractor<'a> {
     /// [`EntailError::Parse`] on a malformed class-expression graph or one nesting
     /// past [`MAX_EXPRESSION_DEPTH`]. Finite cycles are exact defining equations.
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
+        self.poll()?;
+        let recursive = self.in_progress.contains(&node);
+        let token = self.syntax.borrow_mut().enter(SyntaxKind::Expression(node));
+        let result = self.expr_inner(node);
+        self.syntax
+            .borrow_mut()
+            .leave(token, result.is_ok() && !recursive);
+        self.poll()?;
+        result
+    }
+
+    fn expr_inner(&mut self, node: u32) -> Result<Concept, EntailError> {
         self.poll()?;
         if let Some(c) = self.expr_cache.get(&node) {
             return Ok(c.clone());
@@ -670,6 +746,14 @@ impl<'a> CeExtractor<'a> {
     /// [`EntailError::Parse`] on a malformed collection in a data-range position, on a cyclic
     /// data range, and on one nesting past [`MAX_EXPRESSION_DEPTH`].
     fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+        let token = self.syntax.borrow_mut().enter(SyntaxKind::Range(node));
+        let result = self.data_range_scoped(node, path);
+        self.syntax.borrow_mut().leave(token, result.is_ok());
+        self.poll()?;
+        result
+    }
+
+    fn data_range_scoped(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         self.poll()?;
         if path.contains(&node) {
             return Err(EntailError::Parse("cyclic OWL data range".to_owned()));
@@ -819,6 +903,7 @@ impl<'a> CeExtractor<'a> {
                 let Some(&value) = objects.first() else {
                     return Ok(None);
                 };
+                self.syntax.borrow_mut().triple(cell, *predicate, value);
                 match self.facet(slot, value) {
                     Some(facet) => out.push(facet),
                     None => return Ok(None),
@@ -1005,15 +1090,19 @@ impl<'a> CeExtractor<'a> {
 
     /// The role denoted by property node `r` (`Inv` for an anonymous inverse).
     fn role_of(&self, r: u32) -> Result<Role, EntailError> {
+        let token = self.syntax.borrow_mut().enter(SyntaxKind::Role(r));
+        let result = self.role_scoped(r);
+        self.syntax.borrow_mut().leave(token, result.is_ok());
+        self.poll()?;
+        result
+    }
+
+    fn role_scoped(&self, r: u32) -> Result<Role, EntailError> {
         // A named data property remains a data-restriction operand. Anonymous
         // object inverses share the RBox's exact two-form decoder; a missing or
         // repeated inverse target cannot silently become a fresh named role.
         if matches!(self.interner.value(r), TermValue::Iri(_))
-            && self
-                .index
-                .get(&r)
-                .and_then(|p| p.get(&self.v.ty))
-                .is_some_and(|types| types.contains(&self.v.datatype_property))
+            && self.is_typed(r, self.v.datatype_property)
         {
             return Ok(Role::Named(r));
         }
@@ -1023,7 +1112,10 @@ impl<'a> CeExtractor<'a> {
             vocab: self.v,
             stop: self.stop,
         }
-        .role(r)
+        .role_observing(r, |s, p, o| {
+            self.syntax.borrow_mut().triple(s, p, o);
+            self.syntax.borrow().refusal.map_or(Ok(()), Err)
+        })
         .map_err(|error| EntailError::from(error.with_source(self.interner)))
     }
 
@@ -1070,8 +1162,15 @@ impl<'a> CeExtractor<'a> {
     /// Walk an RDF list to its member node ids ([`index_list`]).
     pub(crate) fn node_list(&self, head: u32) -> Result<Vec<u32>, EntailError> {
         self.poll()?;
-        index_list(self.index, self.v, head)
-            .map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
+        let token = self.syntax.borrow_mut().enter(SyntaxKind::List(head));
+        let result = index_list_observing(self.index, self.v, head, |cell, p, o| {
+            self.syntax
+                .borrow_mut()
+                .list_read(cell, p, o, self.v.rest, self.v.nil);
+        });
+        self.syntax.borrow_mut().leave(token, result.is_ok());
+        self.poll()?;
+        result.map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
     }
 
     /// Walk an RDF list of class expressions.
@@ -1082,15 +1181,22 @@ impl<'a> CeExtractor<'a> {
 
     /// The first object of `(s, p, ·)`, if any.
     fn get(&self, s: u32, p: u32) -> Option<u32> {
-        self.index.get(&s)?.get(&p)?.first().copied()
+        let object = self.index.get(&s)?.get(&p)?.first().copied()?;
+        self.syntax.borrow_mut().triple(s, p, object);
+        Some(object)
     }
 
     /// Whether `s rdf:type o` is asserted.
     fn is_typed(&self, s: u32, o: u32) -> bool {
-        self.index
+        let holds = self
+            .index
             .get(&s)
             .and_then(|m| m.get(&self.v.ty))
-            .is_some_and(|os| os.contains(&o))
+            .is_some_and(|os| os.contains(&o));
+        if holds {
+            self.syntax.borrow_mut().triple(s, self.v.ty, o);
+        }
+        holds
     }
 }
 
@@ -1185,6 +1291,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
 
         let mut acc = Accums::default();
         let mut ranges = DataRangeTable::default();
+        let syntax;
         {
             let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
             // The n-ary axioms are stated as a node carrying a list or a reification, so they
@@ -1193,7 +1300,13 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                 ce.poll()?;
                 for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
                     ce.poll()?;
-                    axiom_node(&mut ce, &mut table, &mut acc, &v, node, axiom_class)?;
+                    acc.source = super::AxiomSource::Node {
+                        node,
+                        kind: Some(axiom_class),
+                    };
+                    ce.source_scope(&mut acc, |ce, acc| {
+                        axiom_node(ce, &mut table, acc, &v, node, axiom_class)
+                    })?;
                 }
                 // A negative property assertion is identified by its VOCABULARY, not by its
                 // typing: OWL 2's RDF-Based Semantics states the axiom over any node carrying
@@ -1205,17 +1318,29 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                         .get(&v.ty)
                         .is_some_and(|types| types.contains(&v.negative_property_assertion))
                 {
-                    negative_assertion(&ce, &mut table, &mut acc, &v, node)?;
+                    acc.source = super::AxiomSource::Node { node, kind: None };
+                    ce.source_scope(&mut acc, |ce, acc| {
+                        negative_assertion(ce, &mut table, acc, &v, node)
+                    })?;
                 }
             }
             for &spo in &triples {
                 ce.poll()?;
-                axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
+                acc.source = super::AxiomSource::Triple(spo.0, spo.1, spo.2);
+                ce.source_scope(&mut acc, |ce, acc| {
+                    axiom(ce, &mut table, acc, &v, &interner, spo)
+                })?;
             }
             for (&node, body) in ce.definitions() {
                 ce.poll()?;
+                acc.source = super::AxiomSource::RecursiveDefinition(node);
+                let start = acc.tbox.len();
                 gci(&mut table, &mut acc, Concept::Named(node), body.clone());
                 gci(&mut table, &mut acc, body.clone(), Concept::Named(node));
+                let root = ce.syntax.borrow().root(SyntaxKind::Expression(node));
+                ce.syntax
+                    .borrow_mut()
+                    .bind_tbox(start, acc.tbox.len(), root)?;
             }
             acc.boundaries.extend(ce.boundaries().iter().copied());
             // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
@@ -1241,6 +1366,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                     break;
                 }
             }
+            syntax = ce.into_syntax()?;
         }
 
         {
@@ -1289,6 +1415,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         // Every literal that reaches the knowledge base carries its VALUE into the completion
         // graph, and the literals' value classes decide which of them are one element of the data
         // domain and which are provably different ones.
+        let authored_types = acc.abox_types.len();
         let literal_class = register_literals(
             &interner,
             &mut table,
@@ -1298,6 +1425,14 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             &mut acc.boundaries,
             stop,
         )?;
+        for index in authored_types..acc.abox_types.len() {
+            poll(stop)?;
+            acc.inputs.record(
+                Input::Type(index),
+                Source::LiteralValue(acc.abox_types[index].0),
+            )?;
+        }
+        acc.inputs.finish_parse();
         // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
         // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
         // procedure cannot drift apart.
@@ -1308,12 +1443,16 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         poll(stop)?;
         let source_terms = u32::try_from(interner.len()).expect("term count fits u32");
         let mut kb = Kb {
+            syntax,
+            query_syntax: Syntax::query(),
+            inputs: acc.inputs,
             interner,
             source_terms,
             table,
             schema: super::bounds::Preparation::default(),
             schema_budget: budget,
             keys_applied: false,
+            key_proofs: super::key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
             #[cfg(test)]
@@ -1323,11 +1462,14 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             top,
             bottom,
             tbox: acc.tbox,
+            tbox_sources: acc.tbox_sources,
             // Both TBox encodings are DERIVED, not accumulated: `Kb::encode_until` below
             // clausifies the whole inclusion list at once, which is what lets absorption split
             // an axiom against inclusions the scan had not yet reached.
             meta: Vec::new(),
+            meta_sources: Vec::new(),
             absorbed: Vec::new(),
+            absorbed_sources: Vec::new(),
             // Derived with them, and from them: the generating closure reads the absorbed table.
             generating: Vec::new(),
             inverses: acc.inverses,
@@ -1358,7 +1500,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             #[cfg(test)]
             full_rematch: false,
         };
+        let builtin_start = kb.tbox.len();
         constrain_bottom_roles(&mut kb, triples.iter().copied().flat_map(<[_; 3]>::from));
+        kb.syntax.bind_tbox(builtin_start, kb.tbox.len(), None)?;
         kb.encode_until(|| poll(stop))?;
         Ok(kb)
     })
@@ -1381,8 +1525,7 @@ pub(crate) fn constrain_bottom_roles(kb: &mut Kb, terms: impl IntoIterator<Item 
             .table
             .intern(Concept::All(Role::Named(role), Box::new(Concept::Bottom)));
         if !kb.tbox.contains(&(kb.top, filler)) {
-            kb.tbox.push((kb.top, filler));
-            kb.encoded = false;
+            kb.push_gci_ids_from(kb.top, filler, super::AxiomSource::EmptyRole(role));
             changed = true;
         }
     }
@@ -1537,7 +1680,10 @@ fn subrole_satisfies(
 /// The knowledge-base accumulators filled while scanning axioms.
 #[derive(Default)]
 struct Accums {
+    inputs: Inputs,
     tbox: Vec<(u32, u32)>,
+    tbox_sources: Vec<super::AxiomSource>,
+    source: super::AxiomSource,
     inverses: BTreeMap<u32, BTreeSet<u32>>,
     role_sub: BTreeMap<u32, BTreeSet<u32>>,
     abox_types: Vec<(u32, u32)>,
@@ -1592,6 +1738,10 @@ fn axiom_node(
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
+                    acc.inputs.record(
+                        Input::Distinct(acc.different_from.len()),
+                        Source::Anchor(acc.source),
+                    )?;
                     acc.different_from.push((left, right));
                 }
             }
@@ -1625,8 +1775,14 @@ fn axiom_node(
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
-                    acc.disjoint_roles.insert((left, right));
-                    acc.disjoint_roles.insert((right, left));
+                    for pair in [(left, right), (right, left)] {
+                        if acc.disjoint_roles.insert(pair) {
+                            acc.inputs.record(
+                                Input::DisjointRole(pair.0, pair.1),
+                                Source::Anchor(acc.source),
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -1670,6 +1826,10 @@ fn negative_assertion(
         Box::new(Concept::Not(Box::new(Concept::Nominal(vec![target])))),
     );
     let cid = table.intern(concept);
+    acc.inputs.record(
+        Input::Type(acc.abox_types.len()),
+        Source::Anchor(acc.source),
+    )?;
     acc.abox_types.push((source, cid));
     acc.individuals.insert(source);
     Ok(())
@@ -1720,33 +1880,61 @@ fn axiom(
             Concept::All(Role::Named(s), Box::new(d)),
         );
     } else if p == v.inverse_of {
-        acc.inverses.entry(s).or_default().insert(o);
-        acc.inverses.entry(o).or_default().insert(s);
+        for (left, right) in [(s, o), (o, s)] {
+            if acc.inverses.entry(left).or_default().insert(right) {
+                acc.inputs
+                    .record(Input::Inverse(left, right), Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.equiv_prop {
-        acc.role_sub.entry(s).or_default().insert(o);
-        acc.role_sub.entry(o).or_default().insert(s);
+        for (sup, sub) in [(s, o), (o, s)] {
+            if acc.role_sub.entry(sup).or_default().insert(sub) {
+                acc.inputs
+                    .record(Input::SubRole { sub, sup }, Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.sub_prop {
         // s ⊑ o : `o` has sub-role `s`.
-        acc.role_sub.entry(o).or_default().insert(s);
+        if acc.role_sub.entry(o).or_default().insert(s) {
+            acc.inputs.record(
+                Input::SubRole { sub: s, sup: o },
+                Source::Anchor(acc.source),
+            )?;
+        }
     } else if p == v.property_disjoint_with {
-        acc.disjoint_roles.insert((s, o));
-        acc.disjoint_roles.insert((o, s));
+        for (left, right) in [(s, o), (o, s)] {
+            if acc.disjoint_roles.insert((left, right)) {
+                acc.inputs
+                    .record(Input::DisjointRole(left, right), Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.has_key {
         let class = ce.expr(s)?;
         let cid = table.intern(class);
-        acc.keys.push((cid, ce.node_list(o)?));
+        let properties = ce.node_list(o)?;
+        acc.inputs
+            .record(Input::Key(acc.keys.len()), Source::Anchor(acc.source))?;
+        acc.keys.push((cid, properties));
     } else if p == v.same_as {
+        acc.inputs.record(
+            Input::Equality(acc.same_as.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.same_as.push((s, o));
         acc.name(interner, s);
         acc.name(interner, o);
     } else if p == v.different_from {
+        acc.inputs.record(
+            Input::Distinct(acc.different_from.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.different_from.push((s, o));
         acc.name(interner, s);
         acc.name(interner, o);
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
-        role_or_boundary(acc, interner, v, s, p, o);
+        role_or_boundary(acc, interner, v, s, p, o)?;
     }
     Ok(())
 }
@@ -1797,17 +1985,28 @@ fn disjoint_union(
 ///   own scaffolding — an `owl:withRestrictions` list cell — in the ABox as an individual;
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
-fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
+fn role_or_boundary(
+    acc: &mut Accums,
+    interner: &Interner,
+    v: &Vocab,
+    s: u32,
+    p: u32,
+    o: u32,
+) -> Result<(), EntailError> {
     if bottom_role_index(interner, p).is_some()
         || matches!(interner.value(p), TermValue::Iri(iri) if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
     {
+        acc.inputs.record(
+            Input::Role(acc.abox_roles.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);
-        return;
+        return Ok(());
     }
     if v.facets.iter().any(|&(facet, _)| facet == p) {
-        return;
+        return Ok(());
     }
     let iri = match interner.value(p) {
         TermValue::Iri(iri) => iri.clone(),
@@ -1815,7 +2014,7 @@ fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p:
         // but reading it as user vocabulary would be the wrong answer if it ever did.
         _ => {
             acc.boundaries.insert(Construct::UnrecognizedTerm);
-            return;
+            return Ok(());
         }
     };
     match support_of(&iri) {
@@ -1824,11 +2023,16 @@ fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p:
             acc.boundaries.insert(construct);
         }
         None => {
+            acc.inputs.record(
+                Input::Role(acc.abox_roles.len()),
+                Source::Anchor(acc.source),
+            )?;
             acc.abox_roles.push((s, p, o));
             acc.name(interner, s);
             acc.name(interner, o);
         }
     }
+    Ok(())
 }
 
 /// Handle `s rdf:type o`.
@@ -1864,15 +2068,24 @@ fn type_assertion(
     }
     if o == v.symmetric {
         // r ≡ r⁻: the role is its own inverse, so the role closure reaches both directions.
-        acc.inverses.entry(s).or_default().insert(s);
+        if acc.inverses.entry(s).or_default().insert(s) {
+            acc.inputs
+                .record(Input::Inverse(s, s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.transitive {
-        acc.transitive.insert(s);
+        if acc.transitive.insert(s) {
+            acc.inputs
+                .record(Input::Transitive(s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.asymmetric {
-        acc.asymmetric.insert(s);
+        if acc.asymmetric.insert(s) {
+            acc.inputs
+                .record(Input::Asymmetric(s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.reflexive {
@@ -1921,6 +2134,10 @@ fn type_assertion(
     // An instance-typing assertion `s : C` for a (possibly anonymous) class C.
     let c = ce.expr(o)?;
     let cid = table.intern(c);
+    acc.inputs.record(
+        Input::Type(acc.abox_types.len()),
+        Source::Anchor(acc.source),
+    )?;
     acc.abox_types.push((s, cid));
     acc.individuals.insert(s);
     Ok(())
@@ -1937,6 +2154,7 @@ fn gci(table: &mut ConceptTable, acc: &mut Accums, sub: Concept, sup: Concept) {
     let sub_id = table.intern(sub);
     let sup_id = table.intern(sup);
     acc.tbox.push((sub_id, sup_id));
+    acc.tbox_sources.push(acc.source);
 }
 
 /// Build a nominal from `owl:oneOf` ids: a singleton stays `{a}`; a larger set is the
@@ -1950,6 +2168,34 @@ fn one_of(ids: Vec<u32>) -> Concept {
 
 #[cfg(test)]
 mod tests {
+    /// A getter may return its native value, but failed recording latches the
+    /// original cause and every complete extraction/publication must refuse it.
+    #[test]
+    fn syntax_getter_refusal_cannot_publish_a_partial_expression() {
+        use super::{CeExtractor, TripleIndex, Vocab, index_insert};
+        use crate::interner::Interner;
+        use crate::owl_dl::{data::DataRangeTable, syntax::Kind};
+        use purrdf_lex::allocation::StorageError;
+        let mut interner = Interner::default();
+        let vocab = Vocab::intern(&mut interner);
+        let class = interner.intern_iri("https://example.org/Expression");
+        let operand = interner.intern_iri("https://example.org/Operand");
+        let mut index = TripleIndex::new();
+        index_insert(&mut index, class, vocab.complement, operand);
+        let mut ranges = DataRangeTable::default();
+        let mut ce = CeExtractor::new(&index, &interner, &vocab, &mut ranges);
+        ce.syntax.get_mut().enter(Kind::Expression(class));
+        ce.syntax.get_mut().injected_refusal = Some(StorageError::AllocationFailed);
+        assert_eq!(ce.get(class, vocab.complement), Some(operand));
+        assert!(matches!(
+            ce.expr(class),
+            Err(EntailError::Storage(StorageError::AllocationFailed))
+        ));
+        assert!(matches!(
+            ce.into_syntax(),
+            Err(EntailError::Storage(StorageError::AllocationFailed))
+        ));
+    }
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
     use super::build_until;

@@ -644,6 +644,8 @@ source on every run.
 | `b"purrdf-owl-dl-proof-v3"` | `PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v4"` | `SCHEMA_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v5"` | `CURRENT_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-owl-dl-proof-v6"` | `MERGE_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-owl-dl-proof-v7"` | `INTRODUCTION_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-retrieval/scoped-fused-row/v1"` | `(inline)` | `crates/retrieval/src/scope.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
