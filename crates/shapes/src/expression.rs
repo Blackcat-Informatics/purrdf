@@ -791,13 +791,25 @@ impl SparqlCallForm {
     /// # Errors
     ///
     /// Returns `Err(String)` when `arity` cannot satisfy the form (an operator
-    /// applied to the wrong number of operands). A keyword call's arity is the
-    /// SPARQL grammar's business, and the parse of the rendered text — which the
-    /// shapes parser performs at load — is what reports it.
+    /// applied to the wrong number of operands, or a keyword function called with a
+    /// count its grammar production does not admit).
     pub fn render(self, iri: &str, arity: usize) -> Result<String, String> {
         let arg = |i: usize| format!("?a{i}");
         match self {
             Self::Call(keyword) => {
+                if let Some((min, max)) = purrdf_sparql_algebra::builtin_keyword_arity(keyword)
+                    && (arity < min || max.is_some_and(|max| arity > max))
+                {
+                    let expected = match max {
+                        Some(max) if max == min => format!("exactly {min}"),
+                        Some(max) => format!("{min} to {max}"),
+                        None => format!("at least {min}"),
+                    };
+                    return Err(format!(
+                        "<{iri}> is the SPARQL `{keyword}` function and takes {expected} \
+                         argument(s), got {arity}"
+                    ));
+                }
                 let args: Vec<String> = (0..arity).map(arg).collect();
                 Ok(format!("{keyword}({})", args.join(", ")))
             }

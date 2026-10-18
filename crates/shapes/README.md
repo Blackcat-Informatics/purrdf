@@ -141,8 +141,10 @@ whether or not a shape uses the component.
 
 **Conformance.** The whole W3C `shacl12-test-suite` (592 tests: 213
 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 209 SPARQL 1.2 RL
-tests) runs, and of the 591 an upstream manifest lists, 591 pass as approved,
-with an empty expected-failure ledger:
+tests) runs, and of the 591 an upstream manifest lists, 590 pass as approved,
+with an empty expected-failure ledger; the one other, `node-expr/shnex-sparql/hasLang-example`,
+is reported failed because it calls `sparql:hasLang` with two arguments where the SPARQL 1.2
+grammar's `hasLANG` takes one:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture

@@ -60,6 +60,24 @@ pub const W3C12_SUITE_COMMIT: &str = "4cd469867a1cc6d2fff80e8a40723b26c695d67a";
 /// report. Bump only on a deliberate re-vendor.
 pub const W3C12_SHACL_ROOT_APPROVED: usize = 382;
 
+/// Entries the engine fails against their UNAMENDED expectation because the
+/// specification text contradicts that expectation: `(test id, the clause and the
+/// observable difference)`. Such an entry is graded, reported `earl:failed` with
+/// this rationale as its `earl:info`, and counted under its own scoreboard label. An entry that starts to
+/// pass is refused (`XPASS`), as is an id no discovered entry has.
+pub const SPEC_CONTRADICTED: &[(&str, &str)] = &[(
+    "node-expr/shnex-sparql/hasLang-example",
+    "SPARQL 1.2 Query, Grammar, rule [141] BuiltInCall: 'hasLANG' '(' Expression ')' takes \
+     exactly one argument (the function table, section 17.4.2.10, lists one parameter, `term`). \
+     The approved test evaluates `[ sparql:hasLang ( \"hello\"@en \"en\" ) ]`, two arguments, and \
+     expects `true`; a processor that applies the grammar's arity refuses the call and cannot \
+     produce that result.",
+)];
+
+/// [`SPEC_CONTRADICTED`] pinned by count, so an entry cannot be added or dropped
+/// without this number moving with it.
+pub const SPEC_CONTRADICTED_COUNT: usize = 1;
+
 /// The conformance classes the SHACL root's entries use, which an implementation
 /// reporting on the root claims. Spelled through `purrdf_iri::vocab::sht`.
 pub const W3C12_CLAIMED_CLASSES: [&str; 6] = [

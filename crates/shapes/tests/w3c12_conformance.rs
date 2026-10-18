@@ -82,9 +82,10 @@ use purrdf_shapes::{ShaclProfile, apply_rules, engine, shapes, sparql, text_inge
 use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
 use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
-    Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SrlCase, SrlKind, Status12,
-    W3C12_CLAIMED_CLASSES, W3C12_SHACL_ROOT_APPROVED, W3C12_SUITE_COMMIT, W3C12_TOTAL_CASES,
-    default_conformance_class, in_earl_scope, shacl12_cases,
+    Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SPEC_CONTRADICTED,
+    SPEC_CONTRADICTED_COUNT, SrlCase, SrlKind, Status12, W3C12_CLAIMED_CLASSES,
+    W3C12_SHACL_ROOT_APPROVED, W3C12_SUITE_COMMIT, W3C12_TOTAL_CASES, default_conformance_class,
+    in_earl_scope, shacl12_cases,
 };
 use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_file};
 
@@ -572,18 +573,6 @@ fn run(case: &Case12) -> Result<(), String> {
 }
 
 // ── Grading, once ─────────────────────────────────────────────────────────────
-
-/// Entries the engine fails against their UNAMENDED expectation because the
-/// specification text contradicts that expectation: `(test id, the clause and the
-/// observable difference)`. Such an entry is graded, reported `earl:failed` with
-/// this rationale as its `earl:info`, and counted under its own scoreboard label. An entry that starts to
-/// pass is refused (`XPASS`), as is an id no discovered entry has. Empty today:
-/// every approved entry passes.
-const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
-
-/// [`SPEC_CONTRADICTED`] pinned by count, so an entry cannot be added or dropped
-/// without this number moving with it.
-const SPEC_CONTRADICTED_COUNT: usize = 0;
 
 /// This suite's report: its file, the full commit of the vendored suite, and the
 /// profile each record carries.

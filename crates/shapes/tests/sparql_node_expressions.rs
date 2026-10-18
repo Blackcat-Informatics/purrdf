@@ -503,6 +503,35 @@ fn a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error() {
     assert!(err.contains("exactly 2 arguments"), "got: {err}");
 }
 
+/// A keyword function is held to the count its grammar production fixes, as an
+/// operator is: `sparql:abs` takes one argument and `sparql:substr` two or three, so
+/// the wrong counts are load errors and the right ones evaluate.
+#[test]
+fn a_sparql_ns_keyword_function_with_the_wrong_arity_is_a_load_error() {
+    for (call, wrong) in [
+        ("sparql:abs ( 1 2 )", "exactly 1"),
+        ("sparql:abs ()", "exactly 1"),
+        ("sparql:substr ( \"abc\" )", "2 to 3"),
+        ("sparql:substr ( \"abc\" 1 1 1 )", "2 to 3"),
+        ("sparql:rand ( 1 )", "exactly 0"),
+    ] {
+        let err = turtle::load_error(
+            PREFIXES,
+            &format!("ex:S a sh:NodeShape ; sh:expression [ {call} ] ."),
+        );
+        assert!(err.contains(wrong), "{call}: got: {err}");
+    }
+    for call in [
+        "sparql:abs ( -1 )",
+        "sparql:substr ( \"abc\" 2 )",
+        "sparql:substr ( \"abc\" 2 1 )",
+        "sparql:concat ( \"a\" \"b\" \"c\" )",
+    ] {
+        let shapes = format!("ex:S a sh:NodeShape ; sh:expression [ {call} ] .");
+        assert_eq!(outputs("ex:a ex:p ex:b .", &shapes, "a").len(), 1, "{call}");
+    }
+}
+
 // ── The list-free one-argument call form ────────────────────────────────────────
 
 /// SHACL 1.2 Node Expressions gives a function call's object THREE forms, and the

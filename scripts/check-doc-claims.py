@@ -3230,6 +3230,7 @@ def load_shacl12_category_pins() -> dict[str, int]:
     for key, name, path in (
         ("unlisted", "W3C12_UNLISTED_ENTRIES", _SHACL12_HARNESS),
         ("delta", "UNLISTED_FILE_DELTAS_COUNT", _SHACL12_HARNESS),
+        ("spec", "SPEC_CONTRADICTED_COUNT", _SHACL12_CORPUS),
     ):
         text = _read(path)
         rel = path.relative_to(_REPO)
@@ -3247,7 +3248,8 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     generated matrix row; the unlisted files' figure from their own row; the
     per-family sizes from the harness's discovery pins. The sources are
     cross-checked — approved plus unlisted must be the discovered total, and the
-    XFail/Skip column must be empty (the XFAIL ledger is empty) — so they cannot
+    XFail/Skip column must equal the pinned SPEC_CONTRADICTED count (the XFAIL
+    ledger is empty) — so they cannot
     drift apart behind prose that quotes one of them.
     """
     passed, xskip = matrix[_SHACL12_ROW]
@@ -3267,10 +3269,10 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             f"harness pins {cats['unlisted']} unlisted entries, but {pins} pin "
             f"{counts['total']} discovered tests"
         )
-    if xskip != 0:
+    if xskip != cats["spec"]:
         raise SystemExit(
             f"check-doc-claims: the matrix row {_SHACL12_ROW!r} has {xskip} in XFail/Skip "
-            "but the XFAIL ledger and SPEC_CONTRADICTED are empty"
+            f"but the XFAIL ledger is empty and SPEC_CONTRADICTED pins {cats['spec']}"
         )
     if unlisted_passed != cats["unlisted"]:
         raise SystemExit(
@@ -3282,7 +3284,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
         Claim(
             "the W3C SHACL 1.2 count in the book's SHACL chapter",
             _BOOK_SHACL,
-            _flow(r"suite passes as approved \((?P<passed>\d+)/(?P<total>\d+)\)"),
+            _flow(r"1\.2 suite passes as approved \((?P<passed>\d+)/(?P<total>\d+)[,)]"),
             {"passed": passed, "total": listed},
             mat,
         ),
@@ -3313,7 +3315,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _BOOK_SHACL,
             r"W3C12 TOTAL: passed (?P<passed>\d+), spec-contradicted (?P<spec>\d+), "
             r"xfailed (?P<xfailed>\d+), ledger (?P<ledger>\d+)",
-            {"passed": passed, "spec": 0, "xfailed": 0, "ledger": 0},
+            {"passed": passed, "spec": cats["spec"], "xfailed": 0, "ledger": 0},
             f"{mat}; {catsrc}",
         ),
         Claim(
@@ -3337,7 +3339,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
                 r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, (?P<infer>\d+) `sht:Infer` "
                 r"and (?P<srl>\d+) SPARQL 1.2 RL tests\) runs, and of the "
                 r"(?P<listed>\d+) an upstream manifest lists, (?P<passed>\d+) pass as "
-                r"approved, with an empty expected-failure ledger"
+                r"approved,\s+with an empty expected-failure ledger"
             ),
             {
                 "total": counts["total"],
@@ -3367,12 +3369,14 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _README,
             r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · "
-            r"(?P<ledgered>\d+) ledgered; (?P<unlisted>\d+) unlisted vendored files "
+            r"(?P<ledgered>\d+) ledgered expected failures, (?P<spec>\d+) "
+            r"spec-contradicted \(`hasLang-example`\); (?P<unlisted>\d+) unlisted vendored files "
             r"graded apart \|",
             {
                 "passed": passed,
                 "total": listed,
                 "ledgered": 0,
+                "spec": cats["spec"],
                 "unlisted": cats["unlisted"],
             },
             f"{mat}; {catsrc}",
@@ -3383,7 +3387,9 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             r"\| SHACL 1\.2 \| W3C `shacl12-test-suite`, `vectors/shacl12/tests/` \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass as approved · "
             r"(?P<ledgered>\d+) "
-            r"ledgered, of the (?P<listed>\d+) an upstream manifest lists; "
+            r"ledgered expected failures, (?P<spec>\d+) spec-contradicted "
+            r"\(`node-expr/shnex-sparql/hasLang-example`\), "
+            r"of the (?P<listed>\d+) an upstream manifest lists; "
             r"(?P<discovered>\d+) discovered: "
             r"(?P<validate>\d+) `sht:Validate`, (?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, "
             r"(?P<infer>\d+) `sht:Infer`, (?P<srl>\d+) SPARQL 1\.2 RL \|",
@@ -3391,6 +3397,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
                 "passed": passed,
                 "total": listed,
                 "ledgered": 0,
+                "spec": cats["spec"],
                 "listed": listed,
                 "discovered": counts["total"],
                 **families,

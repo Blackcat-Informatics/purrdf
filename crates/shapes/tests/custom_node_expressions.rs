@@ -1256,3 +1256,72 @@ fn a_declared_sparql_builtin_is_callable_from_sparql_expr() {
     let report = validate(INCOME_DATA, shapes).expect("validation runs");
     assert!(report.conforms, "{:?}", report.results);
 }
+
+/// A call that cannot be an evaluation failure is not turned into one: SHACL 1.2 SPARQL
+/// Extensions §7.3 makes the result of a call an error "if the evaluation produces an
+/// evaluation failure", and an evaluation failure is a property of the argument values
+/// (a type error, a missing node). A call with the wrong NUMBER of arguments fails the
+/// same way for every value, so it is a defect of the query as written, known when the
+/// query is built, and fails the query, for a built-in operator and for a custom
+/// function alike; a value error of the same function is the call's SPARQL error,
+/// unbound. Each refusal is set beside the call that is valid and the value error.
+#[test]
+fn a_call_of_the_wrong_arity_fails_the_query_while_a_value_error_leaves_it_unbound() {
+    let attempt = |shapes: &str, call: &str| {
+        let shapes = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
+        let data = data_of("ex:a ex:n 1 .");
+        let functions = purrdf_shapes::sparql::bind_in_current_env(&shapes.functions)
+            .expect("the fixture's bodies parse and admit");
+        NativeSparqlEngine::new()
+            .query_with_options_view(
+                &data,
+                SparqlRequest {
+                    query: &format!(
+                        "PREFIX ex: <http://example.org/ns#>\n\
+                         SELECT ?v WHERE {{ BIND ({call} AS ?v) }}"
+                    ),
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions::new()
+                    .with_functions(&functions)
+                    .with_focus_graph(Some(&data)),
+            )
+            .map(|result| match result {
+                SparqlResult::Solutions { rows, .. } => rows[0][0].is_some(),
+                _ => panic!("expected solutions"),
+            })
+            .map_err(|error| error.to_string())
+    };
+    let add = "<http://www.w3.org/ns/sparql#add>";
+    let declared = "sparql:add a sh:ListParameterExpressionFunction .";
+    // Built-in: valid, value error, wrong arity (both directions).
+    assert_eq!(attempt(declared, &format!("{add}(1, 2)")), Ok(true));
+    assert_eq!(attempt(declared, &format!("{add}(1, \"x\")")), Ok(false));
+    for call in [format!("{add}(1)"), format!("{add}(1, 2, 3)")] {
+        let error = attempt(declared, &call).expect_err("the wrong arity fails the query");
+        assert!(
+            error.contains("takes exactly 2 arguments"),
+            "{call}: {error}"
+        );
+    }
+    // A keyword built-in: the same split.
+    let abs = "<http://www.w3.org/ns/sparql#abs>";
+    let declared_abs = "sparql:abs a sh:ListParameterExpressionFunction .";
+    assert_eq!(attempt(declared_abs, &format!("{abs}(-1)")), Ok(true));
+    for call in [format!("{abs}()"), format!("{abs}(1, 2)")] {
+        assert!(
+            attempt(declared_abs, &call).is_err(),
+            "{call} fails the query"
+        );
+    }
+    // Custom function: valid, value error, wrong arity.
+    assert_eq!(attempt(INCOME_TOTAL_FN, "ex:incomeTotal(ex:a)"), Ok(true));
+    assert_eq!(
+        attempt(INCOME_TOTAL_FN, "ex:incomeTotal(?unbound)"),
+        Ok(false)
+    );
+    let error = attempt(INCOME_TOTAL_FN, "ex:incomeTotal(ex:a, ex:b)")
+        .expect_err("the wrong arity fails the query");
+    assert!(error.contains("expects exactly 1 argument"), "{error}");
+}

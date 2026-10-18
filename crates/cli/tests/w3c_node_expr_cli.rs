@@ -30,7 +30,9 @@ use purrdf_shapes::term::Term;
 
 use shacl_corpora::file_iri;
 use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
-use shacl_corpora::shacl12::{Body, NodeExprCase, shacl12_cases, shacl12_root};
+use shacl_corpora::shacl12::{
+    Body, NodeExprCase, SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, shacl12_cases, shacl12_root,
+};
 
 const MF_ACTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
 const SHT_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#nodeExpr";
@@ -124,17 +126,28 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         "every sht:EvalNodeExpr entry is one an upstream manifest lists"
     );
 
+    // The entries the specification text contradicts are the shapes harness's own table
+    // (`shacl12::SPEC_CONTRADICTED`, one home): graded here against the unamended
+    // expectation too, and an entry of it that passes is refused.
+    let spec_ids: Vec<&str> = SPEC_CONTRADICTED.iter().map(|(id, _)| *id).collect();
     let mut passed = 0usize;
+    let mut contradicted = 0usize;
     let mut errors: Vec<String> = Vec::new();
     for (id, tc) in &node_expr {
         let entry_iri = format!("{root_iri}/{id}");
-        match run_case(&entry_iri, tc) {
-            Ok(()) => passed += 1,
-            Err(e) => errors.push(format!("FAIL [{id}]: {e}")),
+        let graded = run_case(&entry_iri, tc);
+        match (graded, spec_ids.contains(id)) {
+            (Ok(()), false) => passed += 1,
+            (Err(_), true) => contradicted += 1,
+            (Err(e), false) => errors.push(format!("FAIL [{id}]: {e}")),
+            (Ok(()), true) => errors.push(format!(
+                "XPASS [{id}]: passes; remove it from SPEC_CONTRADICTED"
+            )),
         }
     }
     println!(
-        "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, failed {}",
+        "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, \
+         spec-contradicted {contradicted}, failed {}",
         errors.len()
     );
     assert!(
@@ -143,7 +156,20 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         errors.len(),
         errors.join("\n\n")
     );
-    assert_eq!(passed, NODE_EXPR_CASES, "every entry is a pass");
+    assert_eq!(
+        contradicted,
+        spec_ids
+            .iter()
+            .filter(|id| node_expr.iter().any(|(case, _)| case == *id))
+            .count(),
+        "every spec-contradicted node-expression entry fails unamended"
+    );
+    assert!(contradicted <= SPEC_CONTRADICTED_COUNT);
+    assert_eq!(
+        passed + contradicted,
+        NODE_EXPR_CASES,
+        "every other entry is a pass"
+    );
 }
 
 /// The selector's refusal through the binary, beside its valid neighbour: the entry's
@@ -201,4 +227,69 @@ fn an_entry_walk_that_reaches_nothing_is_refused() {
         stderr.contains("step 3") && stderr.contains("reaches 0 values"),
         "{stderr}"
     );
+}
+
+/// The spec-contradicted `hasLang-example` calls `sparql:hasLang` with two arguments and
+/// the binary refuses it (exit 1, naming the count); the neighbouring one-argument call
+/// evaluates to `true`.
+#[test]
+fn a_two_argument_has_lang_is_refused_and_the_one_argument_neighbour_evaluates() {
+    let root = shacl12_root();
+    let source = root.join("node-expr/shnex-sparql/hasLang.ttl");
+    let text = std::fs::read_to_string(&source).expect("the vendored file reads");
+    let one = text.replace("( \"hello\"@en \"en\" )", "( \"hello\"@en )");
+    assert_ne!(one, text, "the fixture carries the two-argument call");
+    let dir = std::env::temp_dir().join(format!("purrdf-has-lang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let run = |file: &std::path::Path| {
+        let base = file_iri(file);
+        let entry = format!("{}/hasLang-example", file_iri(file.parent().expect("dir")));
+        let file = file.to_str().expect("UTF-8 path");
+        Command::new(env!("CARGO_BIN_EXE_purrdf"))
+            .args([
+                "node-expr",
+                "--shapes",
+                file,
+                "--shapes-base",
+                &base,
+                "--expr-at",
+                &entry,
+                "--expr-via",
+                MF_ACTION,
+                "--expr-via",
+                SHT_NODE_EXPR,
+                "--focus",
+                "http://example.org/ns#nowhere",
+                "--base",
+                &base,
+                file,
+            ])
+            .output()
+            .expect("spawn purrdf")
+    };
+    let two_file = dir.join("two.ttl");
+    std::fs::write(&two_file, &text).expect("write");
+    let two = run(&two_file);
+    assert_eq!(
+        two.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&two.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&two.stderr).contains("takes exactly 1 argument"),
+        "{}",
+        String::from_utf8_lossy(&two.stderr)
+    );
+    let one_file = dir.join("one.ttl");
+    std::fs::write(&one_file, &one).expect("write");
+    let one = run(&one_file);
+    assert_eq!(
+        one.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&one.stderr)
+    );
+    assert!(String::from_utf8_lossy(&one.stdout).contains("true"));
+    std::fs::remove_dir_all(&dir).ok();
 }

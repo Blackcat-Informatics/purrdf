@@ -61,7 +61,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 262 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 591 | 0 | 0 | 0 | GREEN |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 590 | 1 | 0 | 0 | GREEN |
 | SHACL 1.2 unlisted vendored files | W3C shacl12-test-suite files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | Community SHACL dated profiles (REC 2017 / WD 2026) | community-proposed corpus, agent-reviewed | 115 | 0 | 0 | 0 | GREEN |
@@ -122,7 +122,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** pass as approved · 0 ledgered |
-| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **591 / 591** pass as approved · 0 ledgered, of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
+| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **590 / 591** pass as approved · 0 ledgered expected failures, 1 spec-contradicted (`node-expr/shnex-sparql/hasLang-example`), of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
 | SHACL 1.2 unlisted vendored files | the 1 files of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
 | Community SHACL dated profiles | `corpora/community/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
@@ -680,12 +680,18 @@ way the matrix stays honest:
 
 - **SHACL 1.2** — the harness discovers all **592** entries of the vendored W3C
   `shacl12-test-suite`. Of the **591** an upstream manifest lists, it passes
-  **591 / 591** as approved, with an empty expected-failure ledger. The 592 are 213
+  **590 / 591** as approved, with an empty expected-failure ledger. The 592 are 213
   `sht:Validate` (graded like the SHACL 1.0 suite), 143
   `sht:EvalNodeExpr` (output compared term for term, in order unless the entry
   sets `sht:ignoreOrder`), 27 `sht:Infer` (inferred graph compared by RDFC-1.0
   isomorphism) and 209 SPARQL 1.2 RL tests across seven test types, each
-  negative test required to fail at the stage its type names. Discovery
+  negative test required to fail at the stage its type names. The one approved entry that
+  does not pass, `node-expr/shnex-sparql/hasLang-example`, is reported failed with its
+  rationale: the SPARQL 1.2 Query grammar's production `'hasLANG' '(' Expression ')'`
+  takes exactly one argument, and the test evaluates `[ sparql:hasLang ( "hello"@en "en" ) ]`
+  with two and expects `true`, which a processor applying the grammar's arity cannot
+  produce; PurRDF refuses the two-argument call like every other wrong-arity call.
+  Discovery
   refuses to lose a test: an unknown test type, an unreached manifest, an
   unlisted test node or a duplicate id stops the run. The `sht:Validate` entries and the
   rule cases run under the dated `shacl-ed-2026-10-16` profile, the editor's drafts of the
@@ -694,7 +700,15 @@ way the matrix stays honest:
   expression as `sh:deactivated` on a SPARQL-based or `sh:expression` constraint, the
   `owl:versionIRI` steps of the `sh:prefixes` path, the refusal of a blank node as a
   custom SPARQL function argument, and rule sets as `sh:entailment` values. The working
-  draft law refuses or ignores those four, each with a tested neighbour. One vendored file
+  draft law refuses or ignores those four, each with a tested neighbour. A rule set is a
+  SHACL instance of `sh:RuleSet` and nothing else: an IRI typed `sh:RuleSet`, whether it is
+  declared by `sh:entailment`, by `RuleOptions::with_rule_set` or by `sh:includesRuleSet`.
+  An untyped subject of `sh:hasRule` or `sh:includesRuleSet` is not a rule set (SHACL does
+  no RDFS inference from their `rdfs:domain`), and an `sh:includesRuleSet` value that is
+  not a declared rule set is refused when the shapes graph loads, not when the rules run.
+  A shapes graph that declares `sh:RulesEntailment` or a rule set as `sh:entailment`
+  answers `validate_change` with the whole graph and the reason `rules entailment`, since
+  a derivation can create or retract a triple anywhere. One vendored file
   that no upstream manifest includes (`inference-rules/rdfs/rdfs1.ttl`) is
   graded exactly as written by a test of its own and reported apart from the
   approved suite, never counted among its passes. `core/property/reifierShape-001` and `-002` are
