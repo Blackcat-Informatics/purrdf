@@ -2294,7 +2294,10 @@ mod tests {
         assert_eq!(bound, 1, "?m is bound");
         let view = unsafe { view.assume_init() };
         let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
-        assert_eq!(lexical, "2", "MEDIAN of the entailed {{1, 2, 3}} is 2");
+        assert_eq!(
+            lexical, "2.0",
+            "MEDIAN of the entailed {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe {
             purrdf_buffer_free(report);
@@ -2473,7 +2476,10 @@ mod tests {
         assert_eq!(bound, 1, "?m is bound");
         let view = unsafe { view.assume_init() };
         let lexical = unsafe { view.lexical.as_str() }.expect("UTF-8 lexical form");
-        assert_eq!(lexical, "2", "MEDIAN of {{1, 2, 3}} is 2");
+        assert_eq!(
+            lexical, "2.0",
+            "MEDIAN of {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe {
             purrdf_rowcursor_free(rows);
@@ -2594,7 +2600,10 @@ mod tests {
         let TermValue::Literal { lexical_form, .. } = cell else {
             panic!("?m must be a literal, got {cell:?}");
         };
-        assert_eq!(lexical_form, "2");
+        assert_eq!(
+            lexical_form, "2.0",
+            "the stored MEDIAN of {{1, 2, 3}} is the computed decimal 2.0"
+        );
 
         unsafe { purrdf_dataset_free(dataset) };
     }
