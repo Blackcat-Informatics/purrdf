@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RdfDataset,
-    RdfDatasetBuilder, RdfStoreCapabilities, SparqlRequest, StopCause, TermId, TermValue,
-    TrippedGovernor, ViewOperationStatus, WorkspaceReservation,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, SparqlEngine, SparqlRequest, SparqlResult,
+    StopCause, TermId, TermValue, TrippedGovernor, ViewOperationStatus, WorkspaceReservation,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
-    GovernedEvidence, GovernorState, NativeSparqlEngine, PreparedQuery, QueryGovernors,
-    QueryOptions, RetainedQueryExplanation, ShaclPrebinding, StopSignal,
+    GovernedEvidence, GovernorState, NativeSparqlEngine, PartialAnswers, PreparedQuery,
+    QueryGovernors, QueryOptions, RetainedQueryExplanation, ShaclPrebinding, StopSignal,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,9 @@ struct SourceState {
     last_checkpoint: Mutex<Receipt>,
     growth_attempts: AtomicUsize,
     owned_bytes: AtomicU64,
+    peak_owned_bytes: AtomicU64,
+    term_bound: u64,
+    live_limit: u64,
     final_checkpoint: AtomicUsize,
 }
 impl SourceState {
@@ -128,6 +131,9 @@ impl Source {
                 last_checkpoint: Mutex::new(Receipt::default()),
                 growth_attempts: AtomicUsize::new(0),
                 owned_bytes: AtomicU64::new(0),
+                peak_owned_bytes: AtomicU64::new(0),
+                term_bound: 256,
+                live_limit: u64::MAX,
                 final_checkpoint: AtomicUsize::new(0),
             }),
         }
@@ -169,7 +175,7 @@ impl Drop for Reservation<'_> {
 /// This provider owns its state, and admits its concrete erased box before
 /// construction. The fixed box charge cannot be removed by resize(0).
 struct OwnedReservation {
-    source: Source,
+    source: Arc<SourceState>,
     bytes: u64,
     control: u64,
 }
@@ -194,12 +200,17 @@ impl WorkspaceReservation for OwnedReservation {
             .checked_add(self.control)
             .ok_or(RefusedRead::Workspace)?;
         if next >= previous {
-            self.source
+            let prior = self
+                .source
                 .owned_bytes
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
                     live.checked_add(next - previous)
+                        .filter(|bytes| *bytes <= self.source.live_limit)
                 })
                 .map_err(|_| RefusedRead::Workspace)?;
+            self.source
+                .peak_owned_bytes
+                .fetch_max(prior + (next - previous), Ordering::Relaxed);
         } else {
             self.source
                 .owned_bytes
@@ -240,11 +251,11 @@ impl DatasetView for Source {
                 | RefusalSite::Lookup
                 | RefusalSite::BoundedHealthy
         )
-        .then_some(u64::MAX)
+        .then_some(self.live_limit)
     }
     /// Supplies the finite term bound required to price this one-row fixture.
     fn max_owned_term_bytes(&self) -> Option<u64> {
-        Some(256)
+        Some(self.term_bound)
     }
     /// Tracks reporting and execution owners and injects direct or sticky refusals.
     fn reserve_workspace(
@@ -305,16 +316,20 @@ impl DatasetView for Source {
             let control =
                 u64::try_from(size_of::<OwnedReservation>()).map_err(|_| RefusedRead::Workspace)?;
             let total = bytes.checked_add(control).ok_or(RefusedRead::Workspace)?;
-            self.owned_bytes
+            let prior = self
+                .owned_bytes
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
                     live.checked_add(total)
+                        .filter(|bytes| *bytes <= self.live_limit)
                 })
                 .map_err(|_| RefusedRead::Workspace)?;
+            self.peak_owned_bytes
+                .fetch_max(prior + total, Ordering::Relaxed);
             self.reporting_guards.fetch_add(1, Ordering::Relaxed);
             // A failed native box factory drops this original reservation and
             // refunds the admission; no owned output or guard was published.
             let reservation = OwnedReservation {
-                source: self.clone(),
+                source: self.state.clone(),
                 bytes,
                 control,
             };
@@ -947,6 +962,121 @@ fn assert_complete_query<V: ViewReceipt>(
     drop(solutions);
     source.assert_released();
 }
+/// A conservative certificate must not price each output cell at its maximum.
+fn materialization_source() -> Source {
+    let mut source = Source::at(RefusalSite::BoundedHealthy);
+    let state = Arc::get_mut(&mut source.state).expect("new source has one owner");
+    state.term_bound = 128_256;
+    state.live_limit = 8 * 1024 * 1024;
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    for index in 0..512 {
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s/{index}"))
+            .unwrap();
+        let mut object = builder
+            .intern_iri(&format!("http://example.org/o/{index}"))
+            .unwrap();
+        if index == 1 {
+            object = builder
+                .intern_literal(RdfLiteral::language_tagged("x".repeat(4096), "en"))
+                .unwrap();
+        } else if index == 2 {
+            object = builder.intern_triple(subject, predicate, object).unwrap();
+            object = builder.intern_triple(subject, predicate, object).unwrap();
+        } else if matches!(index, 3 | 4) {
+            object = builder
+                .intern_literal(RdfLiteral::simple("repeated short literal"))
+                .unwrap();
+        }
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    source.resident = builder.freeze().unwrap();
+    source
+}
+
+/// Materialization preserves complete RDF values and the original retained owner.
+fn materialized_existing_cells_use_actual_payload_admission() {
+    for query in [
+        "SELECT ?s ?p ?o WHERE { ?s ?p ?o }",
+        "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o",
+        "SELECT ?s ?p ?o (STR(?s) AS ?computed) WHERE { ?s ?p ?o }",
+    ] {
+        let source = materialization_source();
+        let SparqlResult::Solutions {
+            variables: expected_variables,
+            rows: expected_rows,
+            ..
+        } = NativeSparqlEngine::new()
+            .query(&source.resident, request(query))
+            .expect("resident oracle")
+        else {
+            panic!("the oracle query is SELECT");
+        };
+        let engine = NativeSparqlEngine::new();
+        let answer = engine
+            .query_governed_fallible_view(
+                &source,
+                request(query),
+                QueryOptions::EMPTY,
+                &QueryGovernors::METERED,
+            )
+            .expect("short cells fit actual admission despite a conservative view certificate");
+        let (variables, rows) = answer.result.solutions().expect("complete SELECT");
+        assert_eq!(variables, expected_variables);
+        assert_eq!(rows, expected_rows);
+        assert_eq!(rows.len(), 512);
+        assert!(source.peak_owned_bytes.load(Ordering::Relaxed) <= source.live_limit);
+        let state = source.state.clone();
+        let resident = Arc::downgrade(&source.resident);
+        drop(engine);
+        drop(source);
+        assert!(
+            resident.upgrade().is_none(),
+            "the source dataset is destroyed"
+        );
+        let clone = answer.result.clone();
+        drop(answer);
+        assert_eq!(clone.solutions().unwrap().1, expected_rows);
+        assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+        drop(clone);
+        state.assert_released();
+    }
+}
+
+/// Certified partial rows retain their payload after the source context ends.
+fn partial_materialized_cells_keep_actual_payload_admission() {
+    let source = materialization_source();
+    let engine = NativeSparqlEngine::new();
+    let error = engine
+        .query_governed_fallible_view(
+            &source,
+            request("SELECT ?s ?p ?o WHERE { ?s ?p ?o }"),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_max_answers(7),
+        )
+        .expect_err("the answer governor stops a positive query");
+    let FallibleSparqlError::BudgetExhausted {
+        partial: PartialAnswers::Certain(partial),
+        ..
+    } = error
+    else {
+        panic!("the result must retain a certified lower bound");
+    };
+    let state = source.state.clone();
+    let resident = Arc::downgrade(&source.resident);
+    drop(source);
+    drop(engine);
+    assert!(
+        resident.upgrade().is_none(),
+        "the source dataset is destroyed"
+    );
+    assert_eq!(partial.result().solutions().unwrap().1.len(), 7);
+    assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+    drop(partial);
+    state.assert_released();
+}
+
 /// Successful query routes retain workspace through publication for bounded and unbounded views.
 fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
@@ -1773,6 +1903,8 @@ fn public_explain_projection_holds_real_execution_permit_through_final_read() {
 }
 
 purrdf_testkit::harness_main!(
+    materialized_existing_cells_use_actual_payload_admission,
+    partial_materialized_cells_keep_actual_payload_admission,
     public_explain_projection_holds_real_execution_permit_through_final_read,
     typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures,
     preexisting_source_failure_outranks_parse_and_empty_pattern_success,
