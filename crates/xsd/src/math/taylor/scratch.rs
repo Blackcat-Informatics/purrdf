@@ -19,6 +19,14 @@ pub enum TaylorScratchError {
     /// Checked native layout, physical allocator or original admission refusal.
     Storage(StorageError),
 }
+impl purrdf_hash::error::StructuredError for TaylorScratchError {
+    purrdf_hash::error_visit! {
+        InUse => "taylor-scratch-in-use" {},
+        InvalidInitializer => "taylor-scratch-invalid-initializer" {},
+        Storage(error) => "taylor-scratch-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl fmt::Display for TaylorScratchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

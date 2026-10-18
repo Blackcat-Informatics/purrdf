@@ -78,6 +78,13 @@ pub enum LeapSecond {
     AnyDay,
 }
 
+impl purrdf_hash::error::StructuredError for LeapSecond {
+    purrdf_hash::error_visit! {
+        MonthEnd => "rfc3339-leap-month-end" {},
+        AnyDay => "rfc3339-leap-any-day" {},
+    }
+}
+
 /// Why a text is not RFC 3339, and where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseError {
@@ -132,6 +139,29 @@ pub enum ParseErrorKind {
         /// The first byte after it.
         found: u8,
     },
+}
+
+impl purrdf_hash::error::StructuredError for ParseErrorKind {
+    purrdf_hash::error_visit! {
+        EndOfInput { expected } => "rfc3339-end-of-input" { "expected" => Text(expected) },
+        Unexpected { expected, found } => "rfc3339-unexpected" {
+            "expected" => Text(expected), "found" => Unsigned(u128::from(*found)),
+        },
+        OutOfRange { field, value, min, max } => "rfc3339-out-of-range" {
+            "field" => Code(field), "value" => Unsigned(u128::from(*value)),
+            "min" => Unsigned(u128::from(*min)), "max" => Unsigned(u128::from(*max)),
+        },
+        LeapSecond(policy) => "rfc3339-leap-second" { "policy" => Record(policy) },
+        Trailing { found } => "rfc3339-trailing" { "found" => Unsigned(u128::from(*found)) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ParseError {
+    purrdf_hash::error_visit! {
+        @record self { at, kind } => "rfc3339-parse" {
+            "at" => ByteCount(self.at as u128), "kind" => Cause(&self.kind),
+        }
+    }
 }
 
 impl fmt::Display for ParseError {

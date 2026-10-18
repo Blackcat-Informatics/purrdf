@@ -175,6 +175,13 @@ pub enum DecimalTextError {
     Storage(purrdf_lex::allocation::StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for DecimalTextError {
+    purrdf_hash::error_visit! {
+        Numeric(error) => "decimal-text-numeric" { "cause" => Cause(error) },
+        Storage(error) => "decimal-text-storage" { "cause" => Cause(error) },
+    }
+}
+
 impl fmt::Display for DecimalTextError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -73,7 +73,7 @@ external = []
 
 [[crate]]
 name = "purrdf-events"
-deps = []
+deps = ["purrdf-hash"]
 external = []
 
 [[crate]]
@@ -193,6 +193,7 @@ deps = [
     "purrdf-core",
     "purrdf-iri",
     "purrdf-lex",
+    "purrdf-stack",
     "purrdf-xsd",
 ]
 

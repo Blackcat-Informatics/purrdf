@@ -16,8 +16,8 @@ and datasets.
 
 `DataFactory` covers the standard RDF/JS term constructors — `namedNode`,
 `blankNode`, `literal(value, languageOrDatatype?)`, `variable`,
-`defaultGraph`, `quad`, `fromTerm`, `fromQuad` — plus the deliberate RDF 1.2
-extensions no incumbent RDF/JS library carries:
+`defaultGraph`, `quad`, `fromTerm`, `fromQuad` — plus explicit RDF 1.2
+extensions:
 
 ```js
 import { ready, DataFactory } from "@blackcatinformatics/purrdf";
@@ -45,6 +45,8 @@ const rtl = f.directionalLiteral("مرحبا", "ar", "rtl");
 serialization through the native codecs:
 
 ```js
+import { Dataset } from "@blackcatinformatics/purrdf";
+
 const ds = Dataset.parse("<https://ex/s> <https://ex/p> <https://ex/o> .", "ntriples");
 for (const quad of ds.match(null, f.namedNode("https://ex/p"), null)) {
   console.log(quad.subject.value);
@@ -52,8 +54,9 @@ for (const quad of ds.match(null, f.namedNode("https://ex/p"), null)) {
 const trig = ds.serialize("trig");
 ```
 
-Accepted format names: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`, or
-their media types. Because these are the native codecs, output is
+Accepted format names: `turtle`, `ntriples`, `nquads`, `trig`, `rdfxml`,
+`trix`, `hextuples`, `jsonld`, `yamlld`, or their media types.
+Because these are the native codecs, output is
 byte-deterministic and identical to what the Rust, Python, and C surfaces
 emit ([Codecs & Determinism](../concepts/codecs.md)).
 
@@ -102,8 +105,8 @@ The package speaks the async RDF/JS Stream/Sink protocol over the
 
 ## Scope notes
 
-- The engine is **in-memory**; there is no persistent store in the wasm
-  build. SPARQL runs over the in-memory dataset. The synchronous methods
+- The package's `Dataset` **holds data in memory**; these SPARQL methods
+  query that resident dataset. The synchronous methods
   install no `SERVICE` or `LOAD` source, so there a remote `SERVICE` or `LOAD`
   fails explicitly unless written `SILENT`; the asynchronous twins reach
   remote endpoints only through the handlers the host passes them (see

@@ -42,8 +42,18 @@ Properties that fall out of this design:
 The container engine (`purrdf-gts`) owns the wire-format machinery — reader,
 writer, fold, verify, COSE, trust policy:
 
-```rust,ignore
+```rust
 use purrdf::gts::reader;
+use purrdf::gts::{model::{Graph, Term}, writer::Writer};
+
+let mut source = Graph::default();
+source.terms.extend([
+    Term::iri("https://example.org/alice"),
+    Term::iri("https://example.org/knows"),
+    Term::iri("https://example.org/bob"),
+]);
+source.quads.push((0, 1, 2, None));
+let bytes = Writer::deterministic(&source, "example-profile")?.into_bytes();
 
 // Fold GTS bytes into the container graph model, verifying the BLAKE3 chain.
 let graph = reader::read(&bytes, /* allow_segments */ true, /* expected_head */ None);
@@ -51,6 +61,11 @@ let graph = reader::read(&bytes, /* allow_segments */ true, /* expected_head */ 
 // The fold is total: quads, reifiers, annotations, and blobs are all rows,
 // and anything undecodable is preserved as an opaque node plus a diagnostic.
 println!("{} quads, {} blobs", graph.quads.len(), graph.blobs.len());
+assert_eq!(graph.quads.len(), 1);
+assert!(graph.blobs.is_empty());
+assert!(graph.diagnostics.is_empty());
+assert_eq!(bytes, Writer::deterministic(&graph, "example-profile")?.into_bytes());
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 The writer authors frames and produces **byte-deterministic single-segment
@@ -93,11 +108,12 @@ CLI, Python, wasm or C:
   `verify_file_with_keyring` for rotation; other algorithms, encrypted keys
   and v5/v6 packets are rejected, and there is no keyring or revocation store.
 
-Where it stops, stated plainly: the `files`/tar profile, the nested
-GTS-in-blob reader, the trust-`policy` layer and the deterministic ULID helper
-have no direct tests in this repository — their oracle is upstream in
-`gmeow-gts` — and the whole stack is exercised here only through the frozen
-vectors and the compaction and certification test files.
+Native unit tests cover file media-type mapping and tar/PAX serialization and
+parsing. Frozen vectors and compaction/certification fixtures exercise additional
+paths. These checks cover their stated cases; they do not establish complete
+coverage of the files profile, nested GTS-in-blob reader, trust policies or ULID
+behavior. The upstream `gmeow-gts` specification and frozen vectors remain the
+format authority.
 
 ## Conformance vectors
 

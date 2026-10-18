@@ -34,7 +34,7 @@ framework reads or emits belongs to the **caller's** vocabulary: a
 `SliceVocab` is caller-constructed (it has no `Default`) and threaded through
 every public entry point.
 
-```rust,ignore
+```rust,no_run
 use std::path::Path;
 use purrdf::slice::{SliceCatalog, SliceVocab};
 
@@ -42,7 +42,7 @@ use purrdf::slice::{SliceCatalog, SliceVocab};
 let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
 assert_eq!(vocab.slice_class(), "https://example.org/vocab/Slice");
 
-// Discover every slice under the repository root from its manifest.ttl.
+// Discover each manifest.ttl below the caller's slices directory.
 let catalog = SliceCatalog::discover(Path::new("slices"), vocab)
     .expect("slices discovered");
 for slice in catalog.records() {

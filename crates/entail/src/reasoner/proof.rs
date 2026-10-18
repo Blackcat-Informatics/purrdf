@@ -65,7 +65,7 @@
 //! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
 
 use purrdf_core::TermBox;
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::convert::Infallible;
@@ -97,6 +97,7 @@ use crate::report::Construct;
 const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
 const PREPARATION_SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v3");
 
+pub mod causal;
 mod current;
 
 /// Wire kind for [`TermValue::Iri`].
@@ -852,7 +853,11 @@ impl ServiceProof {
     /// [`DlProofError::Canonicalization`] if `ontology` — wholly caller-supplied — refuses
     /// canonicalization; otherwise [`DlProofError::InputMismatch`] or
     /// [`DlProofError::WrongQuestion`].
-    pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
+    pub fn binds<D: DatasetView>(
+        &self,
+        ontology: &D,
+        question: &Question,
+    ) -> Result<(), DlProofError> {
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
             .map_err(DlProofError::Canonicalization)?;
         self.binds_identity(expected, question)
@@ -1006,9 +1011,9 @@ impl ServiceProof {
     /// # Errors
     ///
     /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
-    pub fn verify(
+    pub fn verify<D: DatasetView>(
         &self,
-        ontology: &RdfDataset,
+        ontology: &D,
         question: &Question,
         certificate: Option<&DlCertificate>,
         ctx: &DlProofContext<'_>,
@@ -1039,6 +1044,17 @@ impl ServiceProof {
         certificate: Option<&DlCertificate>,
         ctx: &DlProofContext<'_>,
     ) -> Result<ServiceReplay, DlProofError> {
+        self.verify_prepared_inner(question, certificate, ctx, None)
+    }
+
+    /// One native verification loop, with requested causal capture in that same replay.
+    fn verify_prepared_inner(
+        &self,
+        question: &Question,
+        certificate: Option<&DlCertificate>,
+        ctx: &DlProofContext<'_>,
+        mut causal: Option<&mut causal::Captures>,
+    ) -> Result<ServiceReplay, DlProofError> {
         self.binds_identity(ctx.input(), question)?;
         let mut checks = CheckReport::new();
         // The identity was computed by consumer preparation; both bindings are checked here.
@@ -1048,6 +1064,14 @@ impl ServiceProof {
         let mut replayed = 0_usize;
         for (index, run) in self.runs.iter().enumerate() {
             let Some(proof) = run.proof.as_ref() else {
+                if causal.is_some() {
+                    return Err(causal::unavailable(
+                        index,
+                        None,
+                        crate::owl_dl::proof::source::causal::CausalSupportKind::Recording,
+                        "the selected run has no recorded native proof".to_owned(),
+                    ));
+                }
                 // A run past the recording ceiling is accounted for but not traced. Never
                 // presented as checked.
                 checks.leave(1);
@@ -1062,10 +1086,15 @@ impl ServiceProof {
                     ),
                 });
             }
-            if proof
-                .clashes()
-                .iter()
-                .any(|step| step.schema_evidence().is_some())
+            if causal.is_some()
+                || proof
+                    .merges()
+                    .iter()
+                    .any(crate::owl_dl::proof::MergeStep::has_current_support)
+                || proof
+                    .clashes()
+                    .iter()
+                    .any(|step| step.schema_evidence().is_some())
             {
                 current::check_run(self, index, ctx)?;
             }
@@ -1077,16 +1106,32 @@ impl ServiceProof {
                         roles: &run.assumptions.roles,
                         fresh_types: &run.assumptions.fresh_types,
                     };
-                    checks.absorb(
-                        proof
-                            .replay_refutation_assuming(ctx, &assumptions)?
-                            .checks(),
-                    );
+                    if let Some(causal) = causal.as_deref_mut() {
+                        let (replay, capture) = proof
+                            .replay_refutation_recording(ctx, &assumptions)
+                            .map_err(|error| causal::run_error(index, error))?;
+                        checks.absorb(replay.checks());
+                        causal.push(index, replay, capture)?;
+                    } else {
+                        checks.absorb(
+                            proof
+                                .replay_refutation_assuming(ctx, &assumptions)?
+                                .checks(),
+                        );
+                    }
                 }
                 ProofAnswer::Consistent => {
                     checks.absorb(proof.replay_completion(ctx)?.checks());
                 }
                 ProofAnswer::Undecided => {
+                    if causal.is_some() {
+                        return Err(causal::unavailable(
+                            index,
+                            None,
+                            crate::owl_dl::proof::source::causal::CausalSupportKind::Undecided,
+                            "the selected run is undecided".to_owned(),
+                        ));
+                    }
                     let assumptions = Assumptions {
                         include_abox: run.assumptions.include_abox,
                         types: &run.assumptions.types,
@@ -2358,7 +2403,7 @@ pub(crate) fn refutation_claim(subject: ClaimSubject, answer: Verdict, runs: &[u
 mod tests {
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::*;
     use crate::EntailError;

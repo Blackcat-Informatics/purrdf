@@ -22,16 +22,16 @@ All three are re-exported under `purrdf::sparql`.
 
 ## A first query
 
-```rust,ignore
+```rust
 use purrdf::{RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf::sparql::NativeSparqlEngine;
 
 // A tiny dataset in interned TermId space.
 let mut b = RdfDatasetBuilder::new();
-let cat = b.intern_iri("https://example.org/cat");
-let says = b.intern_iri("https://example.org/says");
-let meow = b.intern_literal(RdfLiteral::simple("meow"));
-b.push_quad(cat, says, meow, None);
+let cat = b.intern_iri("https://example.org/cat").expect("subject");
+let says = b.intern_iri("https://example.org/says").expect("predicate");
+let meow = b.intern_literal(RdfLiteral::simple("meow")).expect("object");
+b.push_quad(cat, says, meow, None).expect("quad");
 let ds = b.freeze().expect("freeze");
 
 // Evaluate through the SparqlEngine seam; parsed plans are memoized.
@@ -171,8 +171,7 @@ value is computed on an arbitrary-precision representation, and the answer is th
 same. `+`, `-` and `*` are exact: `"170141183460469231731687303715884105727"^^xsd:integer + 1`
 is `170141183460469231731687303715884105728`, and `0.1 * 0.1 * 0.1` is `0.001`.
 
-Three results are rounded, as XPath and XQuery Functions and Operators 3.1
-allows:
+Division and numeric casts use these precision rules:
 
 - **Division.** F&O leaves the precision of a decimal quotient to the
   implementation. By default PurRDF keeps every digit of a terminating quotient,
@@ -182,9 +181,9 @@ allows:
   precision with `QueryOptions::with_division` in Rust, `--division` in the
   command line, or the division setting of the C, WebAssembly and Python
   bindings. The setting is written `exact`, `N` (N digits, truncated toward zero),
-  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every quotient that
-  ends is exact, and one that does not end, such as `1 / 3`, is an error like
-  `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
+  `N:ROUNDING` (for example `5:half-even`) or `exact-or-N[:ROUNDING]`. Under `exact` every terminating quotient
+  is exact. A non-terminating quotient, such as `1 / 3`, is an expression error
+  (`err:FOAR0002`) and leaves the result unbound. `AVG` divides under
   the same setting.
 - **To `xsd:float` or `xsd:double`.** The value is rounded once, to the nearest
   value, ties to even, from its exact value at any size.
@@ -477,8 +476,8 @@ SELECT ?next WHERE {
 
 ### Result datatype
 
-A `+`/`-` between two durations, or between a duration and an instant/Gregorian
-value, resolves its result's datatype from the operands' **declared tags**,
+A `+`/`-` between two durations resolves its result's datatype from the operands'
+**declared tags**,
 never from the computed component values: the result is `dayTimeDuration` iff
 every duration operand declares `dayTimeDuration`, `yearMonthDuration` iff
 every duration operand declares `yearMonthDuration`, and the general
@@ -500,8 +499,8 @@ SELECT ?zero WHERE {
 inspects the (zero) result rather than the (matching) declared tags would
 reach the same answer here, which is exactly why the second case is needed.
 Conversely, a sum whose *components* look exactly like a pure
-`yearMonthDuration` still widens to the general type the moment either
-operand's declared tag is the general one:
+`yearMonthDuration` still widens to the general type whenever the operands'
+declared tags do not name the same duration subtype:
 
 ```sparql
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -668,7 +667,7 @@ implemented in Apache Jena 4.7.0, which this section follows. `LATERAL` adds one
 production to `GroupGraphPatternSub`, positioned alongside `OPTIONAL`/`MINUS`/
 `GRAPH` and left-associative the same way:
 
-```
+```text
 GroupGraphPatternSub ::= ... | 'LATERAL' GroupGraphPattern
 ```
 
@@ -724,7 +723,7 @@ SELECT * WHERE {
 }
 ```
 
-```
+```text
 # Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
 # the left-hand triple pattern, and BIND tries to give it a NEW value at the
 # LATERAL right-hand side's own scope level.
@@ -962,7 +961,7 @@ expression inside it — no special correlation channel is invented for it.
 ### Existential Normal Form
 
 Exactly one bit per row is observed under `EXISTS`: whether the inner
-pattern's evaluation is empty. Four rewrite laws replace a node with
+pattern's evaluation is empty. The following rewrite laws replace a node with
 something provably emptiness-equivalent but cheaper, applied wherever they
 appear at the top of the inner (never inside a `Join`/`Filter`/`Extend`/
 `Graph`/`Minus` operand, which read more than emptiness from their child):
@@ -1079,7 +1078,7 @@ SELECT ?s WHERE {
 }
 ```
 
-```
+```text
 # Illegal — refused with a typed ParseError naming ?o: ?o is already bound by
 # the row FILTER EXISTS is testing, and BIND tries to give it a NEW value at
 # the EXISTS body's own scope level.
@@ -1095,7 +1094,7 @@ makes `EXISTS`'s substitution semantics defensible at every site — SPARQL
 
 ## SHA-3 hashing (SEP-0008)
 
-SPARQL 1.1 §17.4.4 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
+SPARQL 1.1 §17.4.6 ships five hash built-ins — `MD5`, `SHA1`, `SHA256`,
 `SHA384`, `SHA512`. `purrdf` adds the four SHA-3 (FIPS 202 Keccak) functions
 [SEP-0008](https://github.com/w3c/sparql-dev/blob/main/SEP/SEP-0008/sep-0008.md)
 proposes, on exactly the same call convention. SEP-0008 is a proposal, **not
@@ -1176,7 +1175,7 @@ own built-in list, or a `FunctionCall ::= iri ArgList` whose `iri` is an
 `SHA3_256(?o)` spelling fails for the same reason. The failure is therefore
 loud and immediate rather than a quietly unbound column.
 
-The portable substitute is one of the SPARQL 1.1 §17.4.4 hashes. `SHA256` takes
+The portable substitute is one of the SPARQL 1.1 §17.4.6 hashes. `SHA256` takes
 the same single argument and returns the same lowercase-hex `xsd:string`, so
 swapping the name is the whole edit — it changes the digest, and nothing else
 about the query. Reach for the SHA-3 names when you control the engine and want
@@ -1637,9 +1636,10 @@ ABI, whose egress is the dataset itself, reports the loss as a count instead:
 
 A result carrying only default-graph statements is untouched everywhere: every
 SPARQL 1.1 `CONSTRUCT` and every `DESCRIBE` serializes to Turtle exactly as
-before. A **mixed** result is refused as a whole rather than half-emitted,
-because emitting the default-graph half would report a partial answer as a
-complete one.
+before. CLI, Python and WebAssembly refuse a **mixed** result as a whole when
+explicitly asked for a single-graph syntax, because emitting the default-graph
+half would report a partial answer as a complete one. The C ABI reports the
+discarded row count instead, as described above.
 
 ## The `VERSION` declaration
 
@@ -1750,15 +1750,16 @@ declared state bound) and `AggregateAccumulator` (the per-invocation fold:
 folds in source order, `finish` to the group's answer) — and is registered
 into an `AggregateRegistry` under an IRI of the caller's choosing:
 
-```rust,ignore
+```rust
 use std::sync::Arc;
 use purrdf::sparql::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
     ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
 };
-use purrdf::{SparqlRequest, TermValue};
+use purrdf::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf::xsd::datatype::XSD_INTEGER;
 
-/// A running total over one numeric argument — `example.org`'s own
+/// A checked nonnegative-integer total (at most i64::MAX) — `example.org`'s own
 /// `AGG(<https://example.org/agg#total>, ?x)`.
 struct TotalAccumulator {
     sum: i64,
@@ -1766,11 +1767,19 @@ struct TotalAccumulator {
 
 impl AggregateAccumulator for TotalAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
-        if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
-            && let Ok(n) = lexical_form.parse::<i64>()
-        {
-            self.sum += n;
+        let [TermValue::Literal { lexical_form, datatype, .. }] = args else {
+            return Err(EvalError::function("total requires one xsd:integer"));
+        };
+        if datatype != XSD_INTEGER {
+            return Err(EvalError::function("total requires one xsd:integer"));
         }
+        let n = lexical_form.parse::<i64>()
+            .map_err(|_| EvalError::function("total requires a signed-64-bit integer"))?;
+        if n < 0 {
+            return Err(EvalError::function("total requires a nonnegative integer"));
+        }
+        self.sum = self.sum.checked_add(n)
+            .ok_or_else(|| EvalError::function("total overflow"))?;
         Ok(())
     }
 
@@ -1788,7 +1797,8 @@ impl AggregateAccumulator for TotalAccumulator {
                 "combine received a partial accumulator of a different concrete type",
             )
         })?;
-        self.sum += other.sum;
+        self.sum = self.sum.checked_add(other.sum)
+            .ok_or_else(|| EvalError::function("total overflow"))?;
         Ok(())
     }
 
@@ -1799,7 +1809,7 @@ impl AggregateAccumulator for TotalAccumulator {
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
         Ok(Some(TermValue::typed_literal(
             self.sum.to_string(),
-            "http://www.w3.org/2001/XMLSchema#integer",
+            XSD_INTEGER,
         )))
     }
 }
@@ -1831,18 +1841,23 @@ registry.register(
 );
 // The environment a query text is read in: `AGG(<iri>, …)` is admitted against
 // this registry.
-let env = ExtensionEnv::over_aggregates(registry)?;
+let env = ExtensionEnv::over_aggregates(registry).expect("aggregate environment");
 
+let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
 let engine = NativeSparqlEngine::new();
 let result = engine.query_with_options_view(
     &ds,
     SparqlRequest {
-        query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { ?s <https://example.org/n> ?x }",
+        query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) WHERE { VALUES ?x { 1 2 3 } }",
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::new().with_env(&env),
-)?;
+    QueryOptions::EMPTY.with_env(&env),
+).expect("custom total");
+let SparqlResult::Solutions { rows, .. } = result else {
+    panic!("SELECT result");
+};
+assert_eq!(rows, vec![vec![Some(TermValue::typed_literal("6", XSD_INTEGER))]]);
 ```
 
 An `AGG(<iri>, …)` call to an unregistered IRI, with the wrong argument
@@ -1895,9 +1910,12 @@ given group shape spends identical fuel to a built-in one. See
 `agg_fn` seam, closed (no caller extension point) and reached through **one**
 call: `AggregateRegistry::register_statistical_aggregates`:
 
-```rust,ignore
+```rust
+use purrdf::sparql::AggregateRegistry;
+
 let mut registry = AggregateRegistry::default();
 registry.register_statistical_aggregates("https://example.org/agg#");
+assert_eq!(registry.len(), 10);
 // Now reachable: AGG(<https://example.org/agg#MEDIAN>, ?x), …STDDEV…, …TOPK…
 ```
 

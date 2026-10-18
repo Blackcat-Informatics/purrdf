@@ -2253,13 +2253,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// # What the ledger sees
     ///
-    /// A successful charge is recorded against the current node; the one charge that
-    /// *crosses* a ceiling is not. That is a deliberate, stated one-unit difference rather
-    /// than an approximation: it keeps the recording free of any read-modify-write race
-    /// with a concurrent trip, and it is exactly zero on the path the ledger is actually
-    /// installed for — EXPLAIN runs under
-    /// [`QueryGovernors::METERED`](crate::governor::QueryGovernors::METERED), where no
-    /// ceiling is reachable and therefore no charge is ever refused.
+    /// The charge's atomic increment is recorded against the current node, including
+    /// the charge that crosses a ceiling. A later sticky refusal adds nothing. Recording
+    /// at the increment avoids attributing another worker's concurrent consumption.
     #[inline]
     pub(crate) fn charge(
         &self,
@@ -2281,14 +2277,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 {
                     return Err(tripped);
                 }
-                let result = state.charge_point_if_engaged(point);
-                if result.is_ok()
-                    && self.ledger.is_some()
-                    && state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
-                {
-                    self.note_fuel(point, point.cost());
+                if self.ledger.is_some() {
+                    state.charge_fuel_observed(point.cost(), false, |units| {
+                        self.note_fuel(point, units);
+                    })
+                } else {
+                    state.charge_point_if_engaged(point)
                 }
-                result
             }
         }
     }
@@ -2337,14 +2332,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 {
                     return Err(tripped);
                 }
-                let result = state.charge_if_engaged(purrdf_core::ResourceDimension::Fuel, units);
-                if result.is_ok()
-                    && self.ledger.is_some()
-                    && state.is_engaged_in(purrdf_core::ResourceDimension::Fuel)
-                {
-                    self.note_fuel(point, units);
+                if self.ledger.is_some() {
+                    state.charge_fuel_observed(units, false, |charged| {
+                        self.note_fuel(point, charged);
+                    })
+                } else {
+                    state.charge_if_engaged(purrdf_core::ResourceDimension::Fuel, units)
                 }
-                result
             }
         }
     }
@@ -2627,25 +2621,32 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn charge_committed_rows(&self, count: usize) -> Option<TrippedGovernor> {
         let state = self.governors.as_ref()?;
         if !state.is_engaged_in(purrdf_core::ResourceDimension::Fuel) {
+            self.note_rows(count);
             return None;
         }
         let point = crate::governor::ChargePoint::CommittedOutputRow;
         for charged in 0..count {
-            if let Err(tripped) = state.charge_point_if_engaged(point) {
+            let result = if self.ledger.is_some() {
+                state.charge_fuel_observed(point.cost(), false, |units| {
+                    self.note_fuel(point, units);
+                })
+            } else {
+                state.charge_point_if_engaged(point)
+            };
+            if let Err(tripped) = result {
                 // Stop at the first refusal rather than charging the remaining rows into
                 // a ceiling that is already crossed: the trip is latched and write-once,
                 // so further charges could only inflate the reported consumption past the
                 // point the execution actually stopped.
-                self.note_rows(charged, point);
+                self.note_rows(charged);
                 return Some(tripped);
             }
         }
-        self.note_rows(count, point);
+        self.note_rows(count);
         None
     }
 
-    /// Record `count` committed output rows against the current node's ledger line: the
-    /// fuel those rows cost, always, and the row count itself only when
+    /// Record `count` committed output rows against the current node's ledger line only when
     /// [`Self::ledger_counts_rows`] says this node's own output is the ledger node's true
     /// output.
     ///
@@ -2658,16 +2659,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// different nodes' outputs beside an estimate that predicts only one of them — see
     /// [`crate::expr::SubstitutionSource`]'s doc.
     #[inline]
-    fn note_rows(&self, count: usize, point: crate::governor::ChargePoint) {
-        if let Some(ledger) = self.ledger.as_ref() {
-            if self.ledger_counts_rows {
-                ledger.record_rows(self.ledger_node, count as u64);
-            }
-            ledger.record_fuel(
-                self.ledger_node,
-                point,
-                point.cost().saturating_mul(count as u64),
-            );
+    fn note_rows(&self, count: usize) {
+        if self.ledger_counts_rows
+            && let Some(ledger) = self.ledger.as_ref()
+        {
+            ledger.record_rows(self.ledger_node, count as u64);
         }
     }
 

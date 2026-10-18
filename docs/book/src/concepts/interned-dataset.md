@@ -11,9 +11,10 @@ owned by the ring-fenced
 
 ## Terms are interned once
 
-Every term — IRI, blank node, literal, triple term — is stored **once** in a
-string arena and addressed by a copyable `TermId` (a niche-optimized
-`NonZeroU32`). Quads are rows of four `TermId`s. That makes term equality a
+Every term — IRI, blank node, literal, triple term — is interned **once** and
+addressed by a copyable `TermId` (a niche-optimized `NonZeroU32`). Textual
+payloads use the string arena; triple terms retain their component IDs.
+Quads are rows of four `TermId`s. That makes term equality a
 single integer compare, keeps quads at a fixed small size, and means a term
 that appears in a million quads costs its bytes exactly once.
 
@@ -24,8 +25,8 @@ Hot maps use the fixed-key `FixedHasher` — deterministic hashing is part of th
 
 The IR has a strict two-phase life cycle:
 
-```rust,ignore
-use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+```rust
+use purrdf::{RdfDatasetBuilder, RdfLiteral};
 
 // Intern terms once; quads are rows of copyable TermIds.
 let mut b = RdfDatasetBuilder::new();
@@ -37,6 +38,7 @@ b.push_quad(cat, says, meow, None)?;
 // Freeze into the immutable, indexed dataset the engines evaluate over.
 let ds = b.freeze().expect("well-formed dataset");
 assert_eq!(ds.quad_count(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 `RdfDatasetBuilder` is the mutable ingestion phase: intern terms, push quads,
@@ -76,11 +78,12 @@ with distinct graph-free identities.
 
 ## Copy-on-write mutation
 
-"Immutable" does not mean "static". Mutation happens through a copy-on-write
-delta over a frozen base: edits accumulate in a lightweight overlay, and the
-result freezes into a new dataset without copying the untouched base rows or
-re-interning shared terms. SPARQL UPDATE and the C ABI's mutable
-`PurrdfGraph` handle both ride this path.
+"Immutable" does not mean "static". `MutableDataset` accumulates edits in a
+copy-on-write delta over a frozen base. Its `snapshot_view()` shares the
+unchanged base rows, terms and indexes. Its `freeze()` instead compacts the
+effective dataset into a new frozen dataset, re-interning surviving terms and
+rebuilding dense IDs. SPARQL UPDATE and the C ABI's mutable `PurrdfGraph` handle
+both use this mutation layer.
 
 ## What else lives in the kernel
 

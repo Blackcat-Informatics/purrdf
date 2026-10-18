@@ -134,6 +134,9 @@
 
 pub use purrdf_rdf::*;
 
+/// Borrowed typed error inspection, available without a sub-crate dependency.
+pub use purrdf_lex::error;
+
 pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;

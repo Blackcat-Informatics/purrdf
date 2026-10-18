@@ -15,18 +15,21 @@ live in
 
 ## Fast by construction
 
-The engine-level speed comes from the IR design
-([The Interned Dataset IR](../concepts/interned-dataset.md)): every term
-stored once in a string arena addressed by copyable `NonZeroU32` ids,
-fixed-key `FixedHasher` everywhere hot, frozen `Box<[QuadRow]>` quad tables with
-lazy ordinal permutation indexes (~4 bytes/quad per axis), and evaluation in
-`TermId` space so solution comparison is an integer compare.
+The resident `RdfDataset` IR ([The Interned Dataset IR](../concepts/interned-dataset.md))
+interns lexical text in a string arena and stores triple terms as component IDs.
+Its copyable `TermId` uses `NonZeroU32`; the separate global address space uses
+`NonZeroU64` in `GlobalTermId`. Hot maps use the fixed-key `FixedHasher`.
+Frozen quad rows have lazy ordinal permutation indexes (four bytes per quad for
+each populated permutation). The explicit graph-free `TripleDataset` has
+three-component rows and separate reifier and annotation tables. Evaluation
+works over interned IDs.
 
-Crucially, the *layout itself* was chosen by benchmark: the
-`crates/rdf-core/benches/ir_layout.rs` bench suite measures
-array-of-structs vs. struct-of-arrays vs. predicate-adjacency layouts on
-allocation counts, high-water memory, and end-to-end latency — and the
-shipped layout is whichever wins.
+Layout comparisons live in `crates/rdf-core/benches/ir_layout.rs`. The suite
+compares the resident quad-row store with structure-of-arrays and
+predicate-adjacency alternatives over the same frozen quads, reporting
+allocation counts, high-water memory and end-to-end latency. It also reports
+the graph-free carrier's physical row tables and populated ordinal indexes.
+Each result applies to its measured source, workload and host.
 
 ## The two benchmark layers
 

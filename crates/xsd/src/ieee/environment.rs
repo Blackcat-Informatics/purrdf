@@ -107,6 +107,18 @@ pub enum FloatEnvironmentEvidence {
     },
 }
 
+impl purrdf_hash::error::StructuredError for FloatEnvironmentEvidence {
+    purrdf_hash::error_visit! {
+        Register { name, bits } => "float-environment-register" {
+            "name" => Code(name), "bits" => Unsigned(u128::from(*bits)),
+        },
+        Probe { operation, expected, observed } => "float-environment-probe" {
+            "operation" => Text(operation),
+            "expected" => Float64Bits(*expected), "observed" => Float64Bits(*observed),
+        },
+    }
+}
+
 impl fmt::Display for FloatEnvironmentEvidence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -150,6 +162,15 @@ pub enum FloatEnvironmentError {
         /// What showed it.
         evidence: FloatEnvironmentEvidence,
     },
+}
+
+impl purrdf_hash::error::StructuredError for FloatEnvironmentError {
+    purrdf_hash::error_visit! {
+        TrapsEnabled { evidence } => "float-environment-traps-enabled" { "evidence" => Record(evidence) },
+        FlushToZero { evidence } => "float-environment-flush-to-zero" { "evidence" => Record(evidence) },
+        RoundingMode { evidence } => "float-environment-rounding-mode" { "evidence" => Record(evidence) },
+        DoubleRounding { evidence } => "float-environment-double-rounding" { "evidence" => Record(evidence) },
+    }
 }
 
 impl fmt::Display for FloatEnvironmentError {

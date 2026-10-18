@@ -202,8 +202,9 @@ SHACL 1.2 Core §6.2 says "owl:imports in the data graph is not enacted", and
 its note asks a data graph that means an import to be typed `owl:Ontology` as
 well. The data graph's own `owl:imports` are never read at all. `purrdf shapes
 lint` lists every `owl:imports` that is data under `unanchored-imports`. The
-same rule decides entailment's imports, and the node set it reads is the one
-the implicit SPARQL prefixes below are collected from.
+same rule decides entailment's imports. Import anchors and the implicit SPARQL
+prefix sources below share one graph-role classifier, with different selections:
+a data-graph role supplies prefixes without making its `owl:imports` an import.
 
 SHACL-SPARQL's prefix path is such data. A query collects its prefixes along
 `sh:prefixes/owl:imports*/sh:declare` within the shapes graph, and the W3C test
@@ -308,7 +309,7 @@ table in its own spelling:
 
 | Host | Import table | Refusal |
 |---|---|---|
-| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, `link_data_graph`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry \| UnresolvedLink \| UnheldLink \| InvalidLink)` |
+| Rust | a `ShapesImports` (`from_turtle`, `insert`, `declare_loaded`, `link_data_graph`) passed to `parse_shapes_with_config`, `from_dataset_with_base`, `validate_graphs_with_options`, `lint::lint` or `FreeExpression`; the `purrdf-validate` boundary takes `(IRI, Turtle)` pairs | `ShapesError::Imports(ShapesImportError::Unresolved \| Unreached \| InvalidEntry \| UnresolvedLink \| UnheldLink \| InvalidLink \| IncompatibleVersions)` |
 | CLI | `--import IRI=FILE`, repeatable | exit 1 for an unresolved import; exit 2 for a pair nothing imports or a malformed pair |
 | Python | `imports=[(iri, turtle), ...]` on `validate`, `entail`, `apply_rules`, `eval_node_expr`, `lint_shapes`, `pack_product` and `Shapes(...)` | `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and `.iris` |
 | WebAssembly | trailing `importIris`, `importDocuments` arrays on every `shacl*` function that takes a shapes graph | `ShaclImportError` with `kind`, `iris` and `message` |
@@ -318,9 +319,9 @@ Each imported document is Turtle, parsed with its ontology IRI as its base. The
 kind is `unresolved-import`, `unreached-import` (a table entry neither an import
 nor a data-graph link names — refused on every host, because its shapes would
 be read and never applied) or `invalid-import` (a key that is not an absolute
-IRI, a key named twice, or a document that does not parse); the three
-`*-shapes-graph-link` kinds below belong to the data graph's links. Branch on
-the kind, not on the message.
+IRI, a key named twice, or a document that does not parse). Conflicting versions
+use `incompatible-import-versions`; the three `*-shapes-graph-link` kinds above
+belong to the data graph's links. Branch on the kind, not on the message.
 
 ```python
 import purrdf
@@ -380,8 +381,9 @@ header before it is compiled. The header follows SHACL 1.2 SPARQL Extensions,
 - **A query without `sh:prefixes`** uses every `sh:declare` of every SHACL
   instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or
   `sh:RulesGraph` in the shapes graph. A subclass of one of those classes
-  counts too. These are the same nodes the `owl:imports` rule reads: one
-  classifier decides both.
+  counts too. Prefix collection and import resolution share one graph-role
+  classifier; a node whose only role is `sh:DataGraph` supplies implicit prefixes
+  but is not an import anchor.
 - **Two different namespaces for one prefix** in the declarations a query
   reaches make the shapes graph ill-formed. The load fails, and the error names
   the prefix and both namespaces. The same prefix declared twice with the same
@@ -1227,7 +1229,7 @@ maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
 - The **term-generating round limit** bounds the evaluation rounds that infer a
   term the graph did not already hold. The default is 16384 rounds. A counter
   stepping to 10,000 completes. A counter with no bound infers one new term per
-  round and is refused in well under a second.
+  round and remains subject to this limit.
 - The **generated-term budget** bounds the terms inferred beyond the input's.
   The default is `max(65536, 4 × N)`, where `N` is the number of distinct terms
   in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
@@ -1278,15 +1280,14 @@ rebuilt. The inferred triples, their blank-node labels and their proofs are the
 same as running every focus node every iteration. What changes is the cost: a
 shape rule that mints a new focus node every iteration pays for one run per
 iteration, not one per focus node so far, so a rule that never stops is
-refused within a few seconds by a term limit — the round limit when its new
+refused by a term limit — the round limit when its new
 terms stay short, the fixed 16 MiB term-arena ceiling when each is longer than
 the last — and never by the join-step limit.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph
 access) runs as rule elements. An iteration then costs only what is new, instead
-of a pass over the whole evaluation graph, and infers the same triples. This is
-why a 10,000-step countdown completes in well under a second. A `BIND` variable
+of a pass over the whole evaluation graph, and infers the same triples. A `BIND` variable
 must appear in every template triple, and a template must have no blank node.
 Otherwise the rule runs as a producer over the whole graph, as before.
 
@@ -1543,8 +1544,9 @@ the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen
 `RdfDataset`, built straight from the report's own terms rather than through a
 `to_ntriples()` → `parse_dataset()` round-trip. The direct path carries every
 RDF 1.2 term the report holds (a triple-term focus node included). Rendering
-the report in any syntax is then `serialize_dataset(&report.to_dataset(), …)`,
-which is exactly what `purrdf validate --format` does.
+the report in any syntax requires handling the `to_dataset()` result, then
+passing the returned dataset to `serialize_dataset`. This is what
+`purrdf validate --format` does.
 
 A report carries blank nodes from two graphs: a focus node, a value and an
 annotation value come from the data graph, and a source shape from the shapes

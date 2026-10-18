@@ -45,6 +45,17 @@ pub enum CrockfordError {
     Overflow,
 }
 
+impl purrdf_hash::error::StructuredError for CrockfordError {
+    purrdf_hash::error_visit! {
+        Length { found } => "crockford-length" { "found" => ByteCount(*found as u128) },
+        Digit { offset, byte } => "crockford-digit" {
+            "offset" => ByteCount(*offset as u128),
+            "byte" => Unsigned(u128::from(*byte)),
+        },
+        Overflow => "crockford-overflow" {},
+    }
+}
+
 impl fmt::Display for CrockfordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {

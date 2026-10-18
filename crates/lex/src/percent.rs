@@ -275,6 +275,15 @@ pub enum PercentError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for PercentError {
+    purrdf_hash::error_visit! {
+        Malformed { offset } => "percent-malformed" { "offset" => ByteCount(*offset as u128) },
+        NotUtf8 { valid_up_to } => "percent-invalid-utf8" {
+            "valid_up_to" => ByteCount(*valid_up_to as u128),
+        },
+    }
+}
+
 impl core::fmt::Display for PercentError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

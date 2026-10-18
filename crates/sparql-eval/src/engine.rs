@@ -58,6 +58,14 @@ use crate::{CacheLimits, CacheStats};
 
 mod prepared_fallible;
 
+/// The prepared request and the original measuring account shared by EXPLAIN entries.
+#[derive(Clone, Copy)]
+struct ExplanationExecution<'a> {
+    prepared: &'a PreparedQuery,
+    substitutions: Prebindings<'a>,
+    state: &'a crate::workspace::SharedWorkspace<GovernorState>,
+}
+
 /// A reusable key buffer retains its original array's admission. Replacement
 /// uses the current invocation's capability while the old array remains alive.
 #[derive(Debug, Default)]
@@ -2633,19 +2641,7 @@ impl NativeSparqlEngine {
         // Built before the preflight so that a view that failed on the way in still
         // reports a (zeroed, honest) governor receipt beside its root cause.
         let reporting = reserve_governed_reporting(dataset, governors)?;
-        let state = crate::workspace::SharedWorkspace::new_admitted(
-            GovernorState::with_workspace(governors, reporting.capability()),
-            &reporting.capability(),
-        )
-        .map_err(|error| {
-            let failure = reporting.failure().map_or_else(
-                || bounded_workspace::AdmissionError::from(error),
-                bounded_workspace::AdmissionError::Operational,
-            );
-            let zero = GovernorState::new(governors).evidence();
-            fallible_admission_failure(dataset, failure)
-                .map_evidence(|view| GovernedEvidence::new(view, zero))
-        })?;
+        let state = admit_governor_state(dataset, governors, &reporting.execution())?;
         prepared_fallible::preflight_governed_fallible_view(dataset, &state)?;
         let admitted = AdmittedSubstitutions::requested_admitted(
             request.substitutions,
@@ -3339,12 +3335,10 @@ impl NativeSparqlEngine {
     /// is the non-explain twin that already requires this for [`SparqlEngine::query`]'s
     /// extension seams.
     ///
-    /// `options.prebinding` and `options.bnode_mint_prefix` are accepted for shape
-    /// parity with [`QueryOptions`] but have no observable effect here: EXPLAIN neither
-    /// applies a SHACL pre-binding substitution nor mints blank nodes into a caller-
-    /// visible result the receipt reports on. `options.remote` IS honoured: EXPLAIN
-    /// evaluates the query to measure it, so a `SERVICE` clause is forwarded to the
-    /// request's source exactly as the evaluation it explains would forward it.
+    /// The measuring run applies the original query context options, including
+    /// blank minting and a `SERVICE` source. This text-only convenience supplies
+    /// no substitutions; use [`Self::explain_governed_fallible_view`] to measure
+    /// typed request bindings and caller-selected ceilings together.
     ///
     /// # Errors
     ///
@@ -3444,7 +3438,7 @@ impl NativeSparqlEngine {
 
     /// [`Self::explain_query_fallible_view`] with the same registries and request
     /// source as [`Self::explain_query_with_options`]. The resident EXPLAIN option
-    /// semantics apply, including its inert prebinding and blank-mint options.
+    /// semantics apply to the same native measuring context.
     ///
     /// Operational reads are sequential, even without a live memory ceiling, so
     /// request order and failure evidence are deterministic. Resident `Infallible`
@@ -3506,21 +3500,101 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
-        preflight_fallible_view(dataset)?;
-        let reporting = reserve_fallible_reporting(dataset)?;
-        let prepared = match self.prepare_for_admitted(
-            query_text,
-            base_iri,
+        let governors = match stop {
+            Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
+            None => QueryGovernors::METERED,
+        };
+        self.explain_governed_fallible_view(
+            dataset,
+            SparqlRequest {
+                query: query_text,
+                base_iri,
+                substitutions: &[],
+            },
+            options,
+            &governors,
+        )
+        .map(|(explanation, evidence)| (explanation, evidence.view))
+        .map_err(|error| error.map_evidence(|evidence| evidence.view))
+    }
+
+    /// Measure the same admitted request and ceilings as
+    /// [`Self::query_governed_fallible_view`] over the caller's captured view.
+    ///
+    /// Typed substitutions use the native preparation and substitution owners.
+    /// The ledger describes the substituted query actually measured. Numeric
+    /// ceilings, including zero, and caller cancellation reach that execution
+    /// unchanged. A healthy stopped or forecast-refused run returns its measured
+    /// explanation with the actual governor trip; it does not certify complete
+    /// query answers. Both success and failure carry the original view and
+    /// governor receipts. The retained explanation owns its native buffers after
+    /// the source and invocation context are destroyed.
+    ///
+    /// # Errors
+    /// Preserves typed operational refusal ahead of query diagnostics or stops.
+    /// No explanation is published after an operationally failed read or a failed
+    /// final checkpoint. Allocation and control refusals retain their native forms.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the failure carries the original operational and governor receipts"
+    )]
+    pub fn explain_governed_fallible_view<'d, D>(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
+        governors: &QueryGovernors,
+    ) -> FallibleScopedResult<
+        crate::RetainedQueryExplanation,
+        D::Error,
+        GovernedEvidence<D::Evidence>,
+    >
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        preflight_fallible_view(dataset).map_err(|error| {
+            error.map_evidence(|view| {
+                GovernedEvidence::new(view, GovernorState::new(governors).evidence())
+            })
+        })?;
+        let reporting = reserve_governed_reporting(dataset, governors)?;
+        let state = admit_governor_state(dataset, governors, &reporting.execution())?;
+        let admitted = AdmittedSubstitutions::requested_admitted(
+            request.substitutions,
+            options.declared_prebound,
+            &reporting.capability(),
+        )
+        .map_err(|error| {
+            let failure = reporting.failure().map_or_else(
+                || bounded_workspace::AdmissionError::from(error),
+                bounded_workspace::AdmissionError::Operational,
+            );
+            fallible_admission_failure(dataset, failure)
+                .map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+        })?;
+        let prepared = match self.prepare_request_admitted(
+            request.query,
+            request.base_iri,
             options.env,
+            &admitted.parameters,
             options.geo,
             &reporting.capability(),
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
-                return finish_fallible_read(dataset, Err(error), Some(&reporting.execution()));
+                return finish_fallible_read(dataset, Err(error), Some(&reporting.execution()))
+                    .map(|(explanation, view)| {
+                        (explanation, GovernedEvidence::new(view, state.evidence()))
+                    })
+                    .map_err(|error| {
+                        error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                    });
             }
         };
-        let workspace = reserve_fallible_execution(dataset, reporting.execution())?;
+        let workspace =
+            reserve_fallible_execution(dataset, reporting.execution()).map_err(|error| {
+                error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+            })?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
             .options(dataset, options)
@@ -3529,15 +3603,24 @@ impl NativeSparqlEngine {
                     dataset,
                     bounded_workspace::AdmissionError::Query(diagnostic),
                 )
+                .map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
             })?;
-        let measured = self.explain_prepared(
-            dataset,
-            &prepared,
-            options,
-            stop,
-            Sequencing::for_view::<D>(),
-            &workspace,
-        );
+        let measured = admitted
+            .parameters
+            .check_admitted(&prepared, options, &workspace.capability())
+            .and_then(|()| {
+                self.explain_prepared(
+                    dataset,
+                    ExplanationExecution {
+                        prepared: &prepared,
+                        substitutions: Prebindings::Owned(admitted.values),
+                        state: &state,
+                    },
+                    options,
+                    Sequencing::for_view::<D>(),
+                    &workspace,
+                )
+            });
         let measured = measured.and_then(|explanation| {
             // Every surviving metadata buffer already carries its original owner.
             // Publication adds only its concrete immutable shared control.
@@ -3552,12 +3635,18 @@ impl NativeSparqlEngine {
             return Err(fallible_admission_failure(
                 dataset,
                 bounded_workspace::AdmissionError::Operational(error),
-            ));
+            )
+            .map_evidence(|view| GovernedEvidence::new(view, state.evidence())));
         }
-        publication.finish(
-            finish_fallible_read(dataset, measured, Some(&workspace)),
-            |error| matches!(error, FallibleSparqlError::Query { .. }),
-        )
+        publication
+            .finish(
+                finish_fallible_read(dataset, measured, Some(&workspace)),
+                |error| matches!(error, FallibleSparqlError::Query { .. }),
+            )
+            .map(|(explanation, view)| (explanation, GovernedEvidence::new(view, state.evidence())))
+            .map_err(|error| {
+                error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+            })
     }
 
     /// The resident diagnostic projection of the shared admitted measuring body.
@@ -3596,11 +3685,28 @@ impl NativeSparqlEngine {
                     return (Err(error.into_diagnostic().into()), Some((reporting, None)));
                 }
             };
+            let governors = match stop {
+                Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
+                None => QueryGovernors::METERED,
+            };
+            let capability = execution.capability();
+            let state = match crate::workspace::SharedWorkspace::new_admitted(
+                GovernorState::with_workspace(&governors, capability.clone()),
+                &capability,
+            ) {
+                Ok(state) => state,
+                Err(error) => {
+                    return (Err(error.into()), Some((reporting, Some(execution))));
+                }
+            };
             let measured = self.explain_prepared(
                 dataset,
-                &prepared,
+                ExplanationExecution {
+                    prepared: &prepared,
+                    substitutions: Prebindings::Owned(&[]),
+                    state: &state,
+                },
                 options,
-                stop,
                 Sequencing::Free,
                 &execution,
             );
@@ -3613,17 +3719,35 @@ impl NativeSparqlEngine {
     fn explain_prepared<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
-        prepared: &PreparedQuery,
+        execution: ExplanationExecution<'_>,
         options: QueryOptions<'d>,
-        stop: Option<Arc<dyn crate::governor::StopSignal>>,
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<QueryExplanation, EvaluationFailure> {
+        let ExplanationExecution {
+            prepared,
+            substitutions,
+            state,
+        } = execution;
         let capability = workspace.capability();
         let relations = options.property_functions();
         let aggregates = options.aggregates();
-        let survey =
+        let mut survey =
             self.survey_plan_admitted(dataset, &prepared.query, relations, true, workspace)?;
+        // Direct governed execution admits the un-substituted shape first. Keep
+        // that same verdict, then number the actual rewritten measuring tree.
+        let refused = record_plan_refusal(state, survey.peak_cells()).is_some();
+        let substituted = (!refused && !substitutions.is_empty())
+            .then(|| runtime_substitution(&prepared.query, substitutions, &capability))
+            .transpose()?;
+        let (query, plan) = substituted
+            .as_ref()
+            .map_or((&prepared.query, Some(&prepared.plan)), |substituted| {
+                (&substituted.query, None)
+            });
+        if substituted.is_some() {
+            survey = self.survey_plan_admitted(dataset, query, relations, true, workspace)?;
+        }
         // All immutable metadata and the terminal ledger destination exist before
         // measuring. A sticky operational refusal requires no snapshot allocation.
         let profile = crate::ProfileIdentity::current_admitted(&capability)?;
@@ -3631,35 +3755,17 @@ impl NativeSparqlEngine {
         let registered_aggregates = aggregates.describe_admitted(&capability)?;
         let (ledger, publication) =
             ChargeLedger::for_plan_admitted(survey.shape(), &survey.estimates, &capability)?;
-        let governors = match stop {
-            Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
-            None => QueryGovernors::METERED,
-        };
-        let state = crate::workspace::SharedWorkspace::new_admitted(
-            GovernorState::with_workspace(&governors, capability.clone()),
-            &capability,
-        )?;
         let mut ctx = self
-            .eval_ctx(dataset, workspace)?
-            .with_governor_owner(state.clone())
-            .with_charge_ledger(ledger)
-            .with_user_functions(options.functions)
-            .with_user_function_admission(options.user_function_admission)
-            .with_property_functions(relations)
-            .with_shapes(options.env.shapes())
-            .with_aggregates(aggregates)
-            .with_division_policy(options.division)
-            .with_geo_profile(options.geo);
+            .governed_ctx(dataset, (*state).clone(), options, workspace)?
+            .with_charge_ledger(ledger);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
-        ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
-        if let Some(source) = options.remote {
-            ctx = ctx.with_remote(source);
-        }
         // Every worker reports to this original admitted owner. Installing it
         // before any fork prevents a worker-local report from being lost.
         ctx.shape_state.ensure_reports(&capability)?;
-        evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), &mut ctx)
-            .map_err(EvaluationFailure::Evaluation)?;
+        if !refused {
+            evaluate_query_evaluated_over(query, plan, &mut ctx)
+                .map_err(EvaluationFailure::Evaluation)?;
+        }
         let shapes = ctx.shape_state.take_reports(&capability)?;
         Ok(QueryExplanation::from_admitted(
             profile,
@@ -3762,23 +3868,12 @@ impl NativeSparqlEngine {
         if !state.is_engaged_in(dimension) {
             return None;
         }
-        let limit = state.limits().get(dimension);
         let estimate = match self.survey_plan_admitted(dataset, query, relations, false, workspace)
         {
             Ok(survey) => survey.peak_cells(),
             Err(error) => return Some(Err(EvaluationFailure::Evaluation(error))),
         };
-        if estimate <= limit {
-            return None;
-        }
-        // Latched through the same door an evaluator-side trip uses, so a stop signal that
-        // was already firing outranks the refusal exactly as `resolve_precedence` says it
-        // should, and the evidence reports one governor rather than two.
-        let tripped = state.record_trip(purrdf_core::TrippedGovernor::Refused {
-            dimension,
-            limit,
-            estimate,
-        });
+        let tripped = record_plan_refusal(state, estimate)?;
         let result = match empty_result_for(query, &workspace.capability()) {
             Ok(result) => result,
             Err(error) => return Some(Err(error.into())),
@@ -5532,11 +5627,58 @@ where
     }
 }
 
+/// The one forecast verdict, shared by query execution and measured EXPLAIN.
+fn record_plan_refusal(
+    state: &GovernorState,
+    estimate: u64,
+) -> Option<purrdf_core::TrippedGovernor> {
+    let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+    if !state.is_engaged_in(dimension) {
+        return None;
+    }
+    let limit = state.limits().get(dimension);
+    if estimate <= limit {
+        return None;
+    }
+    // The original trip door gives an already-fired stop its defined precedence.
+    Some(state.record_trip(purrdf_core::TrippedGovernor::Refused {
+        dimension,
+        limit,
+        estimate,
+    }))
+}
+
 /// The combined root-cause and zero-consumption receipt at reporting admission.
 type GovernedReadFailure<D> = FallibleSparqlError<
     <D as FallibleDatasetView>::Error,
     GovernedEvidence<<D as FallibleDatasetView>::Evidence>,
 >;
+
+/// Construct the original governed owner while preserving its first typed refusal.
+#[allow(
+    clippy::result_large_err,
+    reason = "the failure carries the original operational and governor receipts"
+)]
+fn admit_governor_state<D: FallibleDatasetView + Sync>(
+    dataset: &D,
+    governors: &QueryGovernors,
+    workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<crate::workspace::SharedWorkspace<GovernorState>, GovernedReadFailure<D>> {
+    let capability = workspace.capability();
+    crate::workspace::SharedWorkspace::new_admitted(
+        GovernorState::with_workspace(governors, capability.clone()),
+        &capability,
+    )
+    .map_err(|error| {
+        let failure = workspace.take_failure().map_or_else(
+            || bounded_workspace::AdmissionError::from(error),
+            bounded_workspace::AdmissionError::Operational,
+        );
+        fallible_admission_failure(dataset, failure).map_evidence(|view| {
+            GovernedEvidence::new(view, GovernorState::new(governors).evidence())
+        })
+    })
+}
 
 #[allow(
     clippy::result_large_err,

@@ -540,6 +540,14 @@ impl ConceptTable {
         self.neg[id as usize]
     }
 
+    /// Whether the sealed calculus includes a nonempty nominal concept. NI is
+    /// inapplicable in the nominal-free fragment, even if the ABox names roots.
+    pub(crate) fn has_nominals(&self) -> bool {
+        self.decomp.iter().any(|concept| {
+            matches!(concept, Decomp::Nominal(members) | Decomp::NegNominal(members) if !members.is_empty())
+        })
+    }
+
     /// How many concepts are interned — the exclusive upper bound of the valid ids.
     ///
     /// Read by the normalization pass that turns the whole table into a rule table: the

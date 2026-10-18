@@ -746,17 +746,29 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_completion -- --exact \
+				governed_explain_matches_bound_query_receipts_and_original_ownership \
+				governed_explain_preserves_remote_refusal_and_zero_request_limit \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
 				all_shared_dl_proof_vectors_match_the_current_native_boundary \
 				imported_closure_proofs_check_against_the_consumers_native_snapshot \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test current_clash_support -- --exact \
+				public_dataset_views_preserve_source_identity_and_causal_verification \
 				current_clash_preserves_named_and_scoped_blank_source_identity \
 				current_clash_preserves_public_service_certificate_and_verification \
 				current_clash_replays_generated_existential_witnesses \
 				current_clash_checks_fresh_refutation_assumptions_without_a_source_name \
 				current_clash_replays_equality_before_observing_role_premises \
 				current_clash_borrows_the_independent_prepared_consumer \
+				public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs \
+				public_causal_service_binds_the_requested_question_and_query_assumptions \
+				public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip \
+				public_causal_service_checks_reserved_birth_and_generative_trigger \
+				public_causal_service_checks_nested_reserved_origin \
+				public_causal_service_preserves_literal_metadata_in_key_support \
+				public_causal_service_checks_inverse_transitive_path_licenses \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test recorded_stop -- --exact \
 				recorded_stop_preserves_complete_decisions_and_proof_identity \

@@ -746,7 +746,8 @@ class _QuadStore:
     # `away-from-zero`, `floor`, `ceiling`, `half-even`,
     # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
     # `"exact-or-18:half-even"`. Under `"exact"` a quotient with no finite decimal expansion
-    # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
+    # is an expression error (`err:FOAR0002`), leaving a projected cell unbound or
+    # available to COALESCE. Governed evidence counts that absorbed error. An unreadable policy
     # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
     # entailment and prepared entry point takes it.
     def query(
@@ -1397,6 +1398,9 @@ _InputTermRow = tuple[
     tuple[int, int, int] | None,
 ]
 
+# The existing native sentinel selecting every graph; None selects the default graph.
+GTS_ALL_SCOPE: str
+
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
     # RDF 1.2 base direction ("ltr"/"rtl"), positionally parallel to `terms`.
@@ -1520,7 +1524,8 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
-    # Canonical (RDFC-1.0) flat N-Quads — the readable surface of a frozen
+    # Canonical flat N-Quads under the shipped RDF 1.2 profile (RDFC-1.0 on its
+    # RDF 1.1 subset) — the readable surface of a frozen
     # dataset, and the same serializer the shared string boundary uses. N-Triples
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is
@@ -2169,7 +2174,7 @@ class entail:
         max_join_steps: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
-    # document in, canonical (RDFC-1.0) N-Quads plus the rendered report out,
+    # document in, canonical flat N-Quads under the shipped profile plus the report out,
     # under the same two evaluation limits.
     @staticmethod
     def materialize_nt(

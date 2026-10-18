@@ -27,7 +27,11 @@ routes that share nodes.
 ![Ordinary RDF graph with shared resources](../assets/visualization/purrdf-viz2-ordinary-shared-compact.svg)
 
 <details>
-<summary>Exact statement incidence view</summary>
+<summary>
+
+### Exact statement incidence view
+
+</summary>
 
 [Open exact SVG](../assets/visualization/purrdf-viz2-ordinary-shared-incidence.svg)
 
@@ -36,7 +40,11 @@ routes that share nodes.
 </details>
 
 <details>
-<summary>Statement table</summary>
+<summary>
+
+### Statement table
+
+</summary>
 
 [Open table SVG](../assets/visualization/purrdf-viz2-ordinary-shared-table.svg)
 
@@ -55,7 +63,11 @@ confidence, timestamps, and directional language literals.
 ![Asserted RDF statements with reifiers and annotations](../assets/visualization/purrdf-viz2-asserted-reified-compact.svg)
 
 <details>
-<summary>Exact statement incidence view</summary>
+<summary>
+
+### Exact statement incidence view
+
+</summary>
 
 [Open exact SVG](../assets/visualization/purrdf-viz2-asserted-reified-incidence.svg)
 
@@ -64,7 +76,11 @@ confidence, timestamps, and directional language literals.
 </details>
 
 <details>
-<summary>Statement table</summary>
+<summary>
+
+### Statement table
+
+</summary>
 
 [Open table SVG](../assets/visualization/purrdf-viz2-asserted-reified-table.svg)
 
@@ -83,7 +99,11 @@ reify.
 ![Quoted-only RDF triple terms and their reifiers](../assets/visualization/purrdf-viz2-quoted-only-compact.svg)
 
 <details>
-<summary>Quoted-only exact view and table</summary>
+<summary>
+
+### Quoted-only exact view and table
+
+</summary>
 
 [Open exact SVG](../assets/visualization/purrdf-viz2-quoted-only-incidence.svg) ·
 [Open table SVG](../assets/visualization/purrdf-viz2-quoted-only-table.svg)
@@ -103,7 +123,11 @@ them as ordinary RDF 1.2.
 ![Nested triple terms with RDF dialect diagnostics](../assets/visualization/purrdf-viz2-nested-dialect-compact.svg)
 
 <details>
-<summary>Nested exact view and table</summary>
+<summary>
+
+### Nested exact view and table
+
+</summary>
 
 [Open exact SVG](../assets/visualization/purrdf-viz2-nested-dialect-incidence.svg) ·
 [Open table SVG](../assets/visualization/purrdf-viz2-nested-dialect-table.svg)
@@ -125,7 +149,11 @@ traceable through a dense connected dataset.
 ![Dense RDF exact statement incidence graph](../assets/visualization/purrdf-viz2-dense-connected-incidence.svg)
 
 <details>
-<summary>Dense compact view and table</summary>
+<summary>
+
+### Dense compact view and table
+
+</summary>
 
 [Open compact SVG](../assets/visualization/purrdf-viz2-dense-connected-compact.svg) ·
 [Open table SVG](../assets/visualization/purrdf-viz2-dense-connected-table.svg)

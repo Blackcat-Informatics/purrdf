@@ -786,7 +786,7 @@ impl<'a> Tableau<'a> {
         // Horrocks & Sattler Figure 2, condition (1): `x` is a NOMINAL node — a NAMED or
         // generated nominal, NOT merely a structurally-unblocked root (an anonymous `fresh_types`
         // witness is a root but no nominal, and must not trigger the rule).
-        let origin = self.g.nominal_id(st, x)?;
+        let origin = self.g.nominal_id(st, x)?.clone();
         if nmax == 0 {
             return None;
         }

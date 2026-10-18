@@ -1864,7 +1864,7 @@ mod tests {
     #[test]
     fn the_golden_proof_bytes_survive_the_c_abi() {
         let cases = purrdf_validate::regime::dl_proof_golden_vectors().expect("the artifact");
-        let schema_cases = [
+        let additional_cases = [
             "schema-preparation-empty-consistency",
             "schema-preparation-empty-class",
             "schema-preparation-asserted",
@@ -1874,18 +1874,19 @@ mod tests {
             "schema-preparation-data-extent",
             "schema-preparation-data-containment",
             "schema-preparation-union-neighbor",
+            "recursive-nominal-introduction",
         ];
         assert_eq!(
             cases.len(),
-            PROOF_SERVICE_NAMES.len() + schema_cases.len(),
-            "the original service cases and every prepared-schema case",
+            PROOF_SERVICE_NAMES.len() + additional_cases.len(),
+            "the original service, prepared-schema and recursive NI cases",
         );
         assert!(
             cases
                 .iter()
                 .map(purrdf_validate::regime::DlProofVector::name)
-                .eq(PROOF_SERVICE_NAMES.into_iter().chain(schema_cases)),
-            "the original service prefix and all nine named schema cases stay present",
+                .eq(PROOF_SERVICE_NAMES.into_iter().chain(additional_cases)),
+            "the original service prefix and every named additional case stay present",
         );
         for case in &cases {
             let document = CString::new(case.input()).expect("no NUL");

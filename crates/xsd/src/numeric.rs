@@ -860,6 +860,13 @@ pub(crate) enum NumericReadError {
     OutOfRange(&'static str),
 }
 
+impl purrdf_hash::error::StructuredError for NumericReadError {
+    purrdf_hash::error_visit! {
+        Invalid => "numeric-read-invalid" {},
+        OutOfRange(reason) => "numeric-read-out-of-range" { "reason" => Text(reason) },
+    }
+}
+
 #[cfg(test)]
 impl NumericReadError {
     pub(crate) fn owned(self, datatype: XsdDatatype, lexical: &str) -> XsdError {
@@ -1000,6 +1007,15 @@ pub enum NumericRenderError {
         /// Bytes available without growing the caller's destination.
         available_bytes: usize,
     },
+}
+
+impl purrdf_hash::error::StructuredError for NumericRenderError {
+    purrdf_hash::error_visit! {
+        DestinationTooSmall { required_bytes, available_bytes } => "numeric-render-destination" {
+            "required_bytes" => ByteCount(*required_bytes as u128),
+            "available_bytes" => ByteCount(*available_bytes as u128),
+        }
+    }
 }
 
 /// Inline shortest IEEE text, already normalized to its XSD canonical spelling.
@@ -1831,6 +1847,13 @@ pub enum NumericOperationError {
     Value(XsdError),
     /// Checked physical layout or allocator refusal.
     Storage(crate::bigint::LimbScratchError),
+}
+
+impl purrdf_hash::error::StructuredError for NumericOperationError {
+    purrdf_hash::error_visit! {
+        Value(error) => "numeric-operation-value" { "cause" => Cause(error) },
+        Storage(error) => "numeric-operation-storage" { "cause" => Cause(error) },
+    }
 }
 
 purrdf_lex::variant_from!(NumericOperationError { Value(XsdError) });

@@ -160,6 +160,22 @@ impl Display for HexError {
 
 impl core::error::Error for HexError {}
 
+impl crate::error::StructuredError for HexError {
+    crate::error_visit! {
+        OddLength { len } => "hex-odd-length" {
+            "len" => ByteCount(*len as u128),
+        },
+        InvalidDigit { offset, byte } => "hex-invalid-digit" {
+            "offset" => ByteCount(*offset as u128),
+            "byte" => Unsigned(u128::from(*byte)),
+        },
+        OutputTooShort { needed, available } => "hex-output-too-short" {
+            "needed" => ByteCount(*needed as u128),
+            "available" => ByteCount(*available as u128),
+        },
+    }
+}
+
 // --- Rendering ---------------------------------------------------------------
 
 /// The digit of nibble `n` (`0..16`), as comparisons only.

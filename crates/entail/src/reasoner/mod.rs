@@ -93,7 +93,7 @@ pub use crate::owl_dl::bounds::{
 
 use std::collections::BTreeSet;
 
-use purrdf_core::{RdfDataset, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
@@ -136,7 +136,11 @@ use classify::{Subsumptions, subsumes};
 use proof::{ClaimBasis as Basis, refutation_claim};
 use realize::is_instance;
 
-/// The OWL 2 Direct-Semantics reasoning services over one dataset.
+/// The OWL 2 Direct-Semantics reasoning services prepared directly from a dataset view.
+///
+/// Preparation reads the caller's view without first materializing a concrete RDF
+/// dataset. The resulting knowledge base owns its decoded reasoning state; the
+/// source view does not need to outlive construction.
 ///
 /// See the [module docs](self) for the service list, the certificate discipline, and why
 /// three of the six take `&mut self`.
@@ -255,9 +259,11 @@ impl Reasoner {
     /// # Errors
     ///
     /// [`EntailError::Parse`] on a malformed OWL class-expression graph;
+    /// [`EntailError::SourceRead`] when the view refuses a term or a completed
+    /// source read. No reasoner is published from an incomplete source prefix.
     /// [`EntailError::Build`] or [`EntailError::Unsatisfiable`] if applying an
     /// `owl:hasKey` axiom exhausts the tableau or finds the ontology already unsatisfiable.
-    pub fn new(ds: &RdfDataset) -> Result<Self, EntailError> {
+    pub fn new<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
         Self::build(ds, None)
     }
 
@@ -277,13 +283,13 @@ impl Reasoner {
     ///
     /// # Errors
     ///
-    /// The same three [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
+    /// The failures [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
     /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
     /// so this comes back as a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same
     /// input.
-    pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
+    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
         Self::recorded(ds, SchemaPreparationBudget::default(), None)
     }
 
@@ -291,8 +297,8 @@ impl Reasoner {
     /// A refused preparation is observable and every service remains undecided.
     /// # Errors
     /// The same source/ontology failures as [`Self::new`].
-    pub fn with_preparation_budget(
-        ds: &RdfDataset,
+    pub fn with_preparation_budget<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
     ) -> Result<Self, EntailError> {
         Self::build_with_preparation(ds, None, budget, None)
@@ -301,8 +307,8 @@ impl Reasoner {
     /// Record proofs with the same before-preparation resource policy.
     /// # Errors
     /// The source/ontology and canonicalization failures of [`Self::with_proofs`].
-    pub fn with_proofs_and_preparation_budget(
-        ds: &RdfDataset,
+    pub fn with_proofs_and_preparation_budget<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
     ) -> Result<Self, EntailError> {
         Self::recorded(ds, budget, None)
@@ -318,16 +324,16 @@ impl Reasoner {
     /// The source/profile failures of [`Self::with_proofs`], or
     /// [`EntailError::Stopped`] if preparation is cancelled. A later stopped
     /// search reports its actual undecided result and stop receipt.
-    pub fn with_proofs_and_stop(
-        ds: &RdfDataset,
+    pub fn with_proofs_and_stop<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
     ) -> Result<Self, EntailError> {
         Self::recorded(ds, budget, Some(stop))
     }
 
-    fn recorded(
-        ds: &RdfDataset,
+    fn recorded<D: DatasetView>(
+        ds: &D,
         budget: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
     ) -> Result<Self, EntailError> {
@@ -345,8 +351,8 @@ impl Reasoner {
     /// Retain a caller's stop signal at the original parser and decision boundaries.
     /// # Errors
     /// Source/ontology failures or [`EntailError::Stopped`] during construction.
-    pub fn with_stop(
-        ds: &RdfDataset,
+    pub fn with_stop<D: DatasetView>(
+        ds: &D,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
     ) -> Result<Self, EntailError> {
         Self::build_with_preparation(ds, None, SchemaPreparationBudget::default(), Some(stop))
@@ -400,17 +406,17 @@ impl Reasoner {
     }
 
     /// The shared body of the two constructors: `input` present is recording on.
-    fn build(ds: &RdfDataset, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
+    fn build<D: DatasetView>(ds: &D, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
         Self::build_with_preparation(ds, input, SchemaPreparationBudget::default(), None)
     }
 
-    fn build_with_preparation(
-        ds: &RdfDataset,
+    fn build_with_preparation<D: DatasetView>(
+        ds: &D,
         input: Option<[u8; 32]>,
         preparation: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
     ) -> Result<Self, EntailError> {
-        let mut kb = Kb::from_dataset_with_preparation(ds, stop, preparation)?;
+        let mut kb = Kb::from_dataset_recording(ds, stop, preparation, input)?;
         let signal = kb.stop.clone();
         let mut poll = || {
             if purrdf_core::governor::is_stopped(signal.as_deref()) {

@@ -1,6 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
+
+English | [简体中文](purrdf-embedding-knn.zh-Hans.md)
 # PurRDF embedding kNN: determinism, guards, and what a search costs
 
 The PURREMB layer in `purrdf-core` stores RDF-1.2-addressable vectors, a declared
@@ -170,9 +172,11 @@ and query semantics stay native.
 
 ### The limit of the claim, stated
 
-Cosine self-distance is **not exactly zero**. `dot(v, v)` and `|v| · |v|` are two
-different roundings of the same real number, so their quotient is one ULP off `1`
-and `1 - quotient` is one ULP off `0` — in practice slightly negative. That is a
+Cosine self-distance is **not guaranteed to be exactly zero**. `dot(v, v)` and
+`|v| · |v|` use different binary64 roundings of the same real number. Their
+quotient can differ slightly from `1`, so `1 - quotient` retains a small
+residual that may be negative. Its scale comes from rounding near one, not
+from ULPs at zero. That is a
 property of the definition PURREMB states, not a defect in the kernel, and the tests
 assert what the surface actually needs (a vector ranks strictly ahead of every other
 direction) rather than a zero that is not there.
