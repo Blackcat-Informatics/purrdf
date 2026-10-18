@@ -6,8 +6,9 @@
 //! replayer) uses to push a dataset *into* a *sink* (an IR builder, a serializer)
 //! WITHOUT either side knowing the other's concrete types.
 //!
-//! This crate has **zero dependencies** on purpose. It is the contract that both the
-//! IR engine (`purrdf-core`) and the GTS container (`purrdf-gts`) depend ON — so a
+//! This crate depends only on the zero-dependency shared root. It is the contract
+//! that both the IR engine (`purrdf-core`) and the GTS container (`purrdf-gts`)
+//! depend ON — so a
 //! pure parse→serialize path that touches only these traits stays under the
 //! workspace `MIT OR Apache-2.0 OR MulanPSL-2.0` license. Its value types ([`EventTerm`],
 //! [`EventQuad`], …) are therefore **self-contained**:
@@ -463,6 +464,40 @@ pub enum EventError {
     /// Any other protocol failure, carried as a message (e.g. a sink-specific freeze
     /// failure surfaced through the seam).
     Message(String),
+}
+
+impl purrdf_hash::error::StructuredError for EventError {
+    purrdf_hash::error_visit! {
+        Capacity { space, attempted, limit } => "event-capacity" {
+            "space" => Code(space),
+            "attempted" => Unsigned(*attempted),
+            "limit" => Unsigned(*limit),
+        },
+        StorageSizeOverflow => "event-storage-size-overflow" {},
+        StorageAllocationFailed => "event-storage-allocation-failed" {},
+        StorageAdmissionFailed => "event-storage-admission-failed" {},
+        StorageFormattingFailed => "event-storage-formatting-failed" {},
+        RedeclaredId { id, scope } => "event-redeclared-id" {
+            "id" => Unsigned(u128::from(id.0)),
+            "scope" => Unsigned(u128::from(scope.0)),
+        },
+        ClosedScope { scope } => "event-closed-scope" {
+            "scope" => Unsigned(u128::from(scope.0)),
+        },
+        Unresolved { id } => "event-unresolved" {
+            "id" => Unsigned(u128::from(id.0)),
+        },
+        NestingDepthExceeded { id } => "event-nesting-depth-exceeded" {
+            "id" => Unsigned(u128::from(id.0)),
+        },
+        CyclicTerm { id } => "event-cyclic-term" {
+            "id" => Unsigned(u128::from(id.0)),
+        },
+        IdSpaceExhausted => "event-id-space-exhausted" {},
+        Message(message) => "event-message" {
+            "message" => Message(message),
+        },
+    }
 }
 
 impl EventError {

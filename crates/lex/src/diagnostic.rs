@@ -23,6 +23,16 @@ pub enum DiagnosticValue {
 
 crate::resident_clone!(DiagnosticValue);
 
+impl purrdf_hash::error::StructuredError for DiagnosticValue {
+    purrdf_hash::error_visit! {
+        Text(value) => "diagnostic-text" { "value" => Text(value) },
+        Unsigned(value) => "diagnostic-unsigned" { "value" => Unsigned(u128::from(*value)) },
+        Signed(value) => "diagnostic-signed" { "value" => Signed(i128::from(*value)) },
+        Boolean(value) => "diagnostic-boolean" { "value" => Boolean(*value) },
+        Character(value) => "diagnostic-character" { "value" => Character(*value) },
+    }
+}
+
 impl DiagnosticValue {
     /// Copy immutable typed presentation data through original physical admission.
     /// The caller retains this memory with the returned payload.
@@ -83,6 +93,15 @@ pub struct DiagnosticParameter {
 }
 
 crate::resident_clone!(DiagnosticParameter);
+
+impl purrdf_hash::error::StructuredError for DiagnosticParameter {
+    purrdf_hash::error_visit! {
+        @record self { name, value } => "diagnostic-parameter" {
+            "name" => Text(&self.name),
+            "value" => Record(&self.value),
+        }
+    }
+}
 
 impl DiagnosticParameter {
     /// Copy the original name and typed value after each allocation is admitted.
@@ -188,6 +207,19 @@ impl fmt::Display for DiagnosticPresentationError {
 
 impl std::error::Error for DiagnosticPresentationError {}
 
+impl purrdf_hash::error::StructuredError for DiagnosticPresentationError {
+    purrdf_hash::error_visit! {
+        Storage(error) => "diagnostic-storage" { "cause" => Cause(error) },
+        EmptyIdentity => "diagnostic-empty-identity" {},
+        InvalidParameter(name) => "diagnostic-invalid-parameter" { "name" => Text(name) },
+        DuplicateParameter(name) => "diagnostic-duplicate-parameter" { "name" => Text(name) },
+        InvalidTemplate => "diagnostic-invalid-template" {},
+        MissingParameter(name) => "diagnostic-missing-parameter" { "name" => Text(name) },
+        UnusedParameter(name) => "diagnostic-unused-parameter" { "name" => Text(name) },
+        NestedDetail => "diagnostic-nested-detail" {},
+    }
+}
+
 crate::variant_from!(DiagnosticPresentationError { Storage(crate::allocation::StorageError) });
 
 /// Validated, extensible presentation data. Its identity is distinct from a code:
@@ -201,6 +233,22 @@ pub struct DiagnosticPresentation {
 }
 
 crate::resident_clone!(DiagnosticPresentation);
+
+impl purrdf_hash::error::StructuredError for DiagnosticPresentation {
+    purrdf_hash::error_visit! {
+        @record self { message_id, parameters, english, detail } => "diagnostic-presentation" {
+            "message_id" => Code(&self.message_id),
+            "parameters" => List(self.parameters.iter().map(|parameter| {
+                purrdf_hash::error::ErrorValue::Record(parameter)
+            })),
+            "english" => Text(&self.english),
+            "detail" => Value(self.detail.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |detail| purrdf_hash::error::ErrorValue::Record(detail),
+            )),
+        }
+    }
+}
 
 impl DiagnosticPresentation {
     /// Copy the validated identity, typed arguments and verbatim English.

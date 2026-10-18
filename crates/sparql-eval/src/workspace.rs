@@ -608,6 +608,8 @@ trait GrowthAdmission: std::fmt::Debug + Send + Sync {
 
 trait AllocationOwner: std::fmt::Debug + Send + Sync {
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError>;
+    /// Transfer an existing child grant; this admits no new payload bytes.
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError>;
 }
 
 /// Immutable report records retain the actual arrays and each record's native
@@ -1256,6 +1258,9 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
         self[0].resize(bytes)
     }
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self[0].transfer_to_publication(bytes)
+    }
 }
 
 /// Shared execution admission lent to native producers and nested evaluation.
@@ -1466,6 +1471,17 @@ impl WorkspaceTerm {
     pub(crate) fn into_parts(self) -> (purrdf_core::TermValue, WorkspaceAllocation) {
         (self.value, self.allocation)
     }
+    /// Move the actual payload grant into the original query publication owner.
+    /// The enclosing value stays admitted through every fallible step; only its
+    /// now-unused per-value control is released when this carrier is destroyed.
+    pub(crate) fn retain_for_publication(
+        mut self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<purrdf_core::TermValue, EvalError> {
+        let bytes = self.layout(workspace)?.bytes;
+        self.allocation.transfer_to_publication(bytes)?;
+        Ok(self.value)
+    }
     /// Move a resident term out while refusing to detach any native admission.
     ///
     /// # Errors
@@ -1551,6 +1567,11 @@ impl WorkspaceTerm {
 }
 
 impl WorkspaceAllocation {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self.owner
+            .as_mut()
+            .map_or(Ok(()), |owner| owner.transfer_to_publication(bytes))
+    }
     /// Whether a live operational account owns this allocation grant.
     #[must_use]
     pub const fn is_bounded(&self) -> bool {
@@ -2251,6 +2272,35 @@ impl<E: Clone> std::fmt::Debug for WorkspaceCharge<E> {
 }
 
 impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for WorkspaceCharge<E> {
+    fn transfer_to_publication(&mut self, bytes: u64) -> Result<(), EvalError> {
+        let remaining = self
+            .bytes
+            .checked_sub(bytes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Some(account) = &self.workspace.account {
+            let mut account = lock(account);
+            if account.failed {
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let base = account
+                .base
+                .checked_add(bytes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let children = account
+                .children
+                .checked_sub(bytes)
+                .expect("a publication retains only its originally admitted payload");
+            // The total reservation is unchanged: transfer, never recharge.
+            // Drop still refunds this charge's remaining concrete owner layout.
+            account.base = base;
+            account.children = children;
+        } else if let Some(native) = &mut self.native {
+            native.transfer_to_publication(bytes)?;
+        }
+        self.bytes = remaining;
+        Ok(())
+    }
+
     fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
         let bytes = bytes
             .checked_add(
@@ -2597,6 +2647,26 @@ pub(crate) mod owned_row_regressions {
         drop(cursor);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_term_publication_moves_admission_without_a_second_payload_charge() {
+        let (workspace, ledger, base) = account(2048);
+        let capability = workspace.capability();
+        let value = purrdf_core::TermValue::Iri(format!("http://example.org/{}", "x".repeat(1024)));
+        let owned = capability.clone_term(&value).expect("one admitted payload");
+        let bytes = owned.layout(&capability).unwrap().bytes;
+        let published = owned
+            .retain_for_publication(&capability)
+            .expect("transfer fits without admitting a second copy");
+        assert_eq!(published, value);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base + bytes);
+        drop(published);
+        workspace.set_base(0).unwrap();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
         drop(workspace);
         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
@@ -4892,7 +4962,7 @@ pub(crate) mod owned_row_regressions {
     }
 
     #[test]
-    fn native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
+    fn native_term_materialization_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
         let subject = builder.intern_iri("http://example.org/s").unwrap();
         let predicate = builder.intern_iri("http://example.org/p").unwrap();
@@ -4911,7 +4981,7 @@ pub(crate) mod owned_row_regressions {
             let capability = workspace.capability();
             let scratch = crate::scratch::ScratchInterner::default();
             let error = scratch
-                .try_owned_value_of(
+                .try_value_of_admitted(
                     dataset.as_ref(),
                     crate::scratch::SolutionTerm::Existing(root),
                     &capability,
@@ -4936,8 +5006,94 @@ pub(crate) mod owned_row_regressions {
         }
     }
 
+    /// Inject an allocator refusal after an originally admitted partial cell.
+    /// The ordinary lookup succeeds, so using the old unadmitted copy path
+    /// would incorrectly publish a value instead of the native refusal.
     #[test]
-    fn native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum() {
+    fn materialization_preserves_allocator_refusal_and_refunds_partial_cell() {
+        struct AllocationFault;
+        impl purrdf_core::DatasetView for AllocationFault {
+            type Id = TermId;
+            type ReadError = std::convert::Infallible;
+            type TermGuard<'a> = purrdf_core::TermRef<'a>;
+            type ProbePlan = ();
+            fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+                std::iter::empty()
+            }
+            fn resolve(&self, _: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+                Ok(purrdf_core::TermRef::Iri("http://example.org/original"))
+            }
+            fn term_id_by_value(
+                &self,
+                _: &purrdf_core::TermValue,
+            ) -> Result<Option<TermId>, Self::ReadError> {
+                Ok(None)
+            }
+            fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+                purrdf_core::RdfStoreCapabilities::default()
+            }
+            fn term_count(&self) -> u64 {
+                1
+            }
+            fn max_owned_term_bytes(&self) -> Option<u64> {
+                Some(1024)
+            }
+            fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+            fn quads_for_pattern_with_plan(
+                &self,
+                (): &(),
+                _: Option<TermId>,
+                _: Option<TermId>,
+                _: Option<TermId>,
+                _: purrdf_core::GraphMatch,
+            ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+                std::iter::empty()
+            }
+            fn term_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, E>(
+                &self,
+                _: TermId,
+                memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+                _: impl Fn(purrdf_core::TermLookupError<Self::ReadError>) -> E,
+                storage_error: impl Fn(
+                    purrdf_lex::allocation::StorageError,
+                    &mut purrdf_lex::allocation::Memory<'_, S>,
+                ) -> E,
+            ) -> Result<purrdf_core::TermValue, E> {
+                let partial = memory
+                    .string("http://example.org/original")
+                    .map_err(|error| storage_error(error, memory))?;
+                let error = storage_error(
+                    purrdf_lex::allocation::StorageError::AllocationFailed,
+                    memory,
+                );
+                memory
+                    .release_string(partial)
+                    .map_err(|error| storage_error(error, memory))?;
+                Err(error)
+            }
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let root = builder.intern_iri("http://example.org/original").unwrap();
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let error = crate::scratch::ScratchInterner::default()
+            .try_value_of_admitted(
+                &AllocationFault,
+                crate::scratch::SolutionTerm::Existing(root),
+                &capability,
+                |error| match error {},
+            )
+            .expect_err("an allocation failure cannot publish a cell");
+        assert!(matches!(error, EvalError::AllocationFailed { .. }));
+        assert!(workspace.take_failure().is_none());
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn materialization_keeps_original_datatype_read_failure_without_a_view_maximum() {
         let mut builder = purrdf_core::RdfDatasetBuilder::new();
         let subject = builder.intern_iri("http://example.org/s").unwrap();
         let predicate = builder.intern_iri("http://example.org/p").unwrap();
@@ -4960,7 +5116,7 @@ pub(crate) mod owned_row_regressions {
         assert!(purrdf_core::DatasetView::max_owned_term_bytes(&view).is_none());
         let scratch = crate::scratch::ScratchInterner::default();
         let error = scratch
-            .try_owned_value_of(
+            .try_value_of_admitted(
                 &view,
                 crate::scratch::SolutionTerm::Existing(root),
                 &capability,

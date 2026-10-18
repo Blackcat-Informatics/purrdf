@@ -1127,56 +1127,8 @@ impl ScratchInterner {
                 .try_value_of(dataset, term)
                 .map_err(crate::EvalError::source_read);
         }
-        let (payload, temporary) = match term {
-            SolutionTerm::Existing(_) => {
-                let bytes =
-                    dataset
-                        .max_owned_term_bytes()
-                        .ok_or(crate::EvalError::WorkspaceUnpriced(
-                            "a view without an owned term certificate",
-                        ))?;
-                // Every non-root node owns one TermValue box. This remains a
-                // safe node bound when a provider omits inline root storage.
-                let nodes = usize::try_from(bytes / size_of::<TermValue>() as u64)
-                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
-                    .checked_add(1)
-                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
-                (
-                    bytes,
-                    purrdf_core::ir::fold_workspace_bound::<D::Id, TermValue>(nodes),
-                )
-            }
-            SolutionTerm::Computed(id) => {
-                let layout = crate::retained::term_layout(self.computed_value(id), workspace)?;
-                (layout.bytes, TermValue::clone_workspace_bound(layout.nodes))
-            }
-        };
-        let temporary = temporary.ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
-        let _temporary = workspace.charge(
-            u64::try_from(temporary).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
-        )?;
-        workspace.retain(payload)?;
-        match term {
-            SolutionTerm::Existing(id) => dataset.term_value_with_storage(
-                id,
-                |error| match error {
-                    purrdf_core::TermLookupError::Read(error) => source_error(error),
-                    purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
-                        crate::NativeDiagnosticKind::Internal,
-                        "foreign dataset term id",
-                        workspace,
-                    ),
-                },
-                |_| crate::EvalError::AllocationFailed {
-                    construct: "materialized dataset term",
-                },
-            ),
-            SolutionTerm::Computed(id) => self.computed_value(id).try_clone().map_err(|_| {
-                crate::EvalError::AllocationFailed {
-                    construct: "materialized computed term",
-                }
-            }),
-        }
+        self.try_owned_value_of(dataset, term, workspace, source_error)?
+            .retain_for_publication(workspace)
     }
 
     /// Borrow the computed value behind a [`ScratchId`] (no clone) — the hot-path

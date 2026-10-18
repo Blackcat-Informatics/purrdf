@@ -92,7 +92,7 @@ mod reader;
 
 pub use decode::decode;
 pub use dom::{Document, ExpandedName, NameQuery, Namespace, Node, NodeId, NodeType};
-pub use error::{XmlError, XmlErrorKind};
+pub use error::{XmlError, XmlErrorKind, XmlNamespaceError};
 pub use reader::{
     Attribute, DEFAULT_MAX_DEPTH, DEFAULT_MAX_ENTITY_EXPANSION, Declaration, Dtd, EndTag, Event,
     NamespaceDecl, Options, QName, Reader, StartTag, XML_NAMESPACE, XMLNS_NAMESPACE,

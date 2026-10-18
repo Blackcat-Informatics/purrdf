@@ -106,6 +106,7 @@ pub mod blake3;
 pub mod crc32;
 pub mod dispatch;
 mod domain;
+pub mod error;
 pub mod fixed;
 pub mod fnv;
 pub mod frame;
