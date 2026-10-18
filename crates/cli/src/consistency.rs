@@ -60,7 +60,7 @@
 use std::path::Path;
 
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
-use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, check_dl_proof};
+use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer};
 
 use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
@@ -181,14 +181,7 @@ pub(crate) fn run(
         rendered.push_str(answer.proof_document());
     }
     if let Some(path) = options.check_proof {
-        // A proof binds the ontology it was produced over, and with an import table that is
-        // the merge rather than the input as written.
-        let reasoned = if table.is_empty() {
-            document
-        } else {
-            session.premise_nquads().map_err(CliError::Runtime)?
-        };
-        rendered.push_str(&check_supplied_proof(path, &reasoned, &answer)?);
+        rendered.push_str(&check_supplied_proof(path, &session, &answer)?);
     }
     sink::write_out("-", rendered.as_bytes())?;
 
@@ -220,20 +213,20 @@ pub(crate) fn run(
 /// left the exit code at zero would be a check a script could not act on.
 fn check_supplied_proof(
     path: &Path,
-    document: &str,
+    session: &ReasonerSession,
     answer: &ReasoningAnswer,
 ) -> Result<String, CliError> {
     let proof = std::fs::read_to_string(path)
         .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))?;
-    check_dl_proof(
-        document,
-        "consistency",
-        "",
-        answer.answer(),
-        answer.certificate(),
-        &proof,
-    )
-    .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
+    session
+        .check_proof(
+            "consistency",
+            "",
+            answer.answer(),
+            answer.certificate(),
+            &proof,
+        )
+        .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
 }
 
 /// Read `options.input` through the CLI's own format resolution and re-serialize it as

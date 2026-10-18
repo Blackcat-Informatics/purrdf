@@ -88,6 +88,11 @@ pub(crate) struct DataRangeTable {
 }
 
 impl DataRangeTable {
+    /// Borrow the original native range AST without reinterpreting its value space.
+    pub(crate) fn range(&self, id: u32) -> &DataRange {
+        &self.ranges[id as usize].range
+    }
+
     /// Whether the knowledge base holds no data range at all.
     ///
     /// The tableau's concrete-domain clash rule is skipped wholesale when this holds, so an

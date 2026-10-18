@@ -38,7 +38,7 @@ interfaces retain native pre-binding rules.
 For a literal, zero-change `import rdflib`, install the opt-in extra:
 
 ```sh
-pip install purrdf[rdflib]
+pip install "purrdf[rdflib]"
 ```
 
 This pulls in the separate `purrdf-rdflib` distribution, whose top-level

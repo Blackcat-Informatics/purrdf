@@ -407,11 +407,11 @@ claiming an inverse.
 
 ## Rust archive API
 
-```rust,ignore
+```rust
 use purrdf::{
     LiftProfile, LpgConfig, LpgExecutionLimits, LpgScope, ProjectionConfig,
     ProjectionLimits, ProjectionProfile, lift_archive, parse_dataset,
-    project_archive,
+    project_archive, datasets_isomorphic,
 };
 
 let dataset = parse_dataset(
@@ -430,6 +430,8 @@ let config = ProjectionConfig::LpgCsv(LpgConfig::new(
 let package = project_archive(dataset.as_ref(), ProjectionProfile::LpgCsv, &config)?;
 let lifted = lift_archive(&package.archive, LiftProfile::LpgCsv, &config)?;
 assert_eq!(lifted.dataset.quad_count(), 1);
+assert!(datasets_isomorphic(&dataset, &lifted.dataset));
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 `ProjectionArchive` contains the profile, USTAR bytes, and loss ledger.

@@ -170,8 +170,12 @@ pub(crate) enum Encoding {
 pub(crate) struct Absorption {
     /// The guarded clauses, in derivation order.
     pub(crate) clauses: Vec<GuardedClause>,
+    /// Original TBox ordinal of each guarded clause, before any splitting.
+    pub(crate) clause_sources: Vec<usize>,
     /// The internalized remainder: meta-concept ids seeded into every abstract node's label.
     pub(crate) meta: Vec<u32>,
+    /// Original TBox ordinal of each internalized concept.
+    pub(crate) meta_sources: Vec<usize>,
 }
 
 /// Clausify `tbox` under `encoding`, interning whatever concepts the dispositions derive.
@@ -195,16 +199,16 @@ pub(crate) fn absorb<E>(
     let mut out = Absorption::default();
     match encoding {
         Encoding::Absorbing => {
-            for (sub, sup) in rewrite(table, tbox, top, bottom, &mut poll)? {
+            for (sub, sup, source) in rewrite(table, tbox, top, bottom, &mut poll)? {
                 poll()?;
-                dispose(table, &mut out, sub, sup, top);
+                dispose(table, &mut out, sub, sup, top, source);
             }
         }
         #[cfg(test)]
         Encoding::Internalizing => {
-            for &(sub, sup) in tbox {
+            for (source, &(sub, sup)) in tbox.iter().enumerate() {
                 poll()?;
-                internalize(table, &mut out, sub, sup, top);
+                internalize(table, &mut out, sub, sup, top, source);
             }
         }
     }
@@ -224,7 +228,7 @@ fn rewrite<E>(
     top: u32,
     bottom: u32,
     poll: &mut impl FnMut() -> Result<(), E>,
-) -> Result<Vec<(u32, u32)>, E> {
+) -> Result<Vec<(u32, u32, usize)>, E> {
     /// Which rewrite one inclusion admits.
     enum Split {
         /// The consequent is a `⊓`: one inclusion per conjunct.
@@ -237,9 +241,13 @@ fn rewrite<E>(
         None,
     }
 
-    let mut pending: VecDeque<(u32, u32)> = tbox.iter().copied().collect();
-    let mut out: Vec<(u32, u32)> = Vec::new();
-    while let Some((sub, sup)) = pending.pop_front() {
+    let mut pending: VecDeque<_> = tbox
+        .iter()
+        .enumerate()
+        .map(|(source, &(sub, sup))| (sub, sup, source))
+        .collect();
+    let mut out = Vec::new();
+    while let Some((sub, sup, source)) = pending.pop_front() {
         poll()?;
         // Valid in every interpretation, so it constrains no completion graph.
         if sub == bottom || sup == top || sub == sup {
@@ -257,21 +265,21 @@ fn rewrite<E>(
         match split {
             Split::Consequent(conjuncts) => {
                 for conjunct in conjuncts {
-                    pending.push_back((sub, conjunct));
+                    pending.push_back((sub, conjunct, source));
                 }
             }
             Split::Antecedent(disjuncts) => {
                 for disjunct in disjuncts {
-                    pending.push_back((disjunct, sup));
+                    pending.push_back((disjunct, sup, source));
                 }
             }
             Split::Members(members) => {
                 for member in members {
                     let singleton = table.intern(Concept::Nominal(vec![member]));
-                    pending.push_back((singleton, sup));
+                    pending.push_back((singleton, sup, source));
                 }
             }
-            Split::None => out.push((sub, sup)),
+            Split::None => out.push((sub, sup, source)),
         }
     }
     Ok(out)
@@ -279,7 +287,14 @@ fn rewrite<E>(
 
 /// Dispose of one rewritten inclusion: a guarded clause where the antecedent is faithful, the
 /// internalized disjunction where it is not.
-fn dispose(table: &mut ConceptTable, out: &mut Absorption, sub: u32, sup: u32, top: u32) {
+fn dispose(
+    table: &mut ConceptTable,
+    out: &mut Absorption,
+    sub: u32,
+    sup: u32,
+    top: u32,
+    source: usize,
+) {
     // `rdfs:range`: `⊤ ⊑ ∀r.C` becomes the edge clause, so the universal never enters a label
     // and never widens a blocking signature. Blocking then blocks strictly more, which
     // withholds work and never a derivation — see the blocking notes in
@@ -301,10 +316,11 @@ fn dispose(table: &mut ConceptTable, out: &mut Absorption, sub: u32, sup: u32, t
             head_var: 1,
             head: filler,
         });
+        out.clause_sources.push(source);
         return;
     }
     let Some((tree, residue)) = guard_of(table, sub) else {
-        internalize(table, out, sub, sup, top);
+        internalize(table, out, sub, sup, top, source);
         return;
     };
     let head = if residue.is_empty() {
@@ -313,12 +329,13 @@ fn dispose(table: &mut ConceptTable, out: &mut Absorption, sub: u32, sup: u32, t
         // PARTIAL absorption: `C₁ ⊓ C₂ ⊑ D` is `C₁ ⊑ D ⊔ ¬C₂`, so the conjuncts no guard
         // covers move to the consequent negated.
         let Some(head) = residual(table, sup, &residue) else {
-            internalize(table, out, sub, sup, top);
+            internalize(table, out, sub, sup, top, source);
             return;
         };
         head
     };
     out.clauses.push(emit(&tree, head));
+    out.clause_sources.push(source);
 }
 
 /// Record `nnf(¬sub ⊔ sup)` as an internalized meta-concept.
@@ -326,13 +343,21 @@ fn dispose(table: &mut ConceptTable, out: &mut Absorption, sub: u32, sup: u32, t
 /// A meta-concept that normalizes to `⊤` constrains nothing, and seeding `⊤` into every label
 /// would put an id in every blocking signature for an axiom that says nothing, so it is
 /// dropped rather than recorded.
-fn internalize(table: &mut ConceptTable, out: &mut Absorption, sub: u32, sup: u32, top: u32) {
+fn internalize(
+    table: &mut ConceptTable,
+    out: &mut Absorption,
+    sub: u32,
+    sup: u32,
+    top: u32,
+    source: usize,
+) {
     let antecedent = table.concept(sub).clone();
     let consequent = table.concept(sup).clone();
     let meta = Concept::Or(vec![Concept::Not(Box::new(antecedent)), consequent]);
     let id = table.intern(meta);
     if id != top {
         out.meta.push(id);
+        out.meta_sources.push(source);
     }
 }
 
@@ -890,5 +915,37 @@ mod tests {
         .expect("infallible");
         assert_eq!(out.clauses, [] as [_; 0]);
         assert_eq!(out.meta.len(), 1);
+    }
+
+    /// Both native encodings retain pre-rewrite ordinals, including nominal splitting.
+    #[test]
+    fn normalization_origins_survive_nominal_member_splits_and_internalization() {
+        let mut table = ConceptTable::default();
+        let top = table.top();
+        let bottom = table.bottom();
+        let sub = table.intern(Concept::Nominal(vec![A, B]));
+        let sup = table.intern(Concept::Named(C));
+        table.finalize();
+        let tbox = [(top, top), (sub, sup)];
+        let absorbed = absorb(&mut table, &tbox, top, bottom, Encoding::Absorbing, || {
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .unwrap();
+        assert_eq!(absorbed.clauses.len(), 2);
+        assert_eq!(absorbed.clause_sources, [1, 1]);
+        assert_eq!(absorbed.meta_sources, []);
+        let internalized = absorb(
+            &mut table,
+            &tbox,
+            top,
+            bottom,
+            Encoding::Internalizing,
+            || Ok::<(), std::convert::Infallible>(()),
+        )
+        .unwrap();
+        assert_eq!(internalized.clauses, [] as [_; 0]);
+        assert_eq!(internalized.clause_sources, [] as [_; 0]);
+        assert_eq!(internalized.meta.len(), 1);
+        assert_eq!(internalized.meta_sources, [1]);
     }
 }

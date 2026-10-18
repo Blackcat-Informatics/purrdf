@@ -169,30 +169,37 @@ impl PyGtsFoldView {
         self.inner.curie(iri)
     }
 
+    #[pyo3(signature = (scope=None))]
     fn quads(&self, scope: Option<String>) -> Vec<(usize, usize, usize, Option<usize>)> {
         self.inner.quads(scope.as_deref())
     }
 
+    #[pyo3(signature = (class_iri, scope=None))]
     fn subjects_by_type(&self, class_iri: &str, scope: Option<String>) -> Vec<usize> {
         self.inner.subjects_by_type(class_iri, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, scope=None))]
     fn objects(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> Vec<usize> {
         self.inner.objects(s_tid, p_iri, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, scope=None))]
     fn value(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> Option<usize> {
         self.inner.value(s_tid, p_iri, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, scope=None))]
     fn predicate_objects(&self, s_tid: usize, scope: Option<String>) -> Vec<(usize, usize)> {
         self.inner.predicate_objects(s_tid, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, o_tid, scope=None))]
     fn has(&self, s_tid: usize, p_iri: &str, o_tid: usize, scope: Option<String>) -> bool {
         self.inner.has(s_tid, p_iri, o_tid, scope.as_deref())
     }
 
+    #[pyo3(signature = (head_tid, scope=None))]
     fn rdf_list(&self, head_tid: usize, scope: Option<String>) -> Vec<usize> {
         self.inner.rdf_list(head_tid, scope.as_deref())
     }
@@ -219,10 +226,12 @@ impl PyGtsFoldView {
         self.inner.available_languages().into_iter().collect()
     }
 
+    #[pyo3(signature = (s_tid, p_iri, scope=None))]
     fn public_text(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> String {
         self.inner.public_text(s_tid, p_iri, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, scope=None))]
     fn public_literal(
         &self,
         s_tid: usize,
@@ -232,6 +241,7 @@ impl PyGtsFoldView {
         self.inner.public_literal(s_tid, p_iri, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, requested, scope=None))]
     fn public_literal_with_fallback(
         &self,
         s_tid: usize,
@@ -243,6 +253,7 @@ impl PyGtsFoldView {
             .public_literal_with_fallback(s_tid, p_iri, &requested, scope.as_deref())
     }
 
+    #[pyo3(signature = (s_tid, p_iri, requested, scope=None))]
     fn public_text_with_fallback(
         &self,
         s_tid: usize,
@@ -256,6 +267,7 @@ impl PyGtsFoldView {
         (text, fallback)
     }
 
+    #[pyo3(signature = (s_tid, p_iri, requested, scope=None))]
     fn public_texts(
         &self,
         s_tid: usize,

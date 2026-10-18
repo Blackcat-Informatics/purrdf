@@ -1,6 +1,8 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
+
+English | [简体中文](README.zh-Hans.md)
 # purrdf-cdt
 
 Native SPARQL **composite datatypes** (SEP-0009: `cdt:List` and `cdt:Map`) for
@@ -21,7 +23,7 @@ What it gives you:
 
 * `parse_list` / `parse_map` / `parse_cdt` — the SEP-0009 lexical grammar,
   scanned **iteratively** under two published resource bounds, element count
-  (`MAX_ELEMENTS`, every nesting level one element) and total bytes
+  (`MAX_ELEMENTS`, one shared count across all nesting levels; nested containers and their members count separately) and total bytes
   (`MAX_LEXICAL_BYTES`). No recursive descent anywhere, so a hostile
   lexical form yields a typed error carrying a byte offset instead of an
   uncatchable stack-overflow abort.

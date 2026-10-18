@@ -75,7 +75,7 @@ fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, S
 /// the parsed base graph, hard-fail `validate()` it, and return the artifact bytes
 /// as content-addressed [`BlobRow`]s to embed.
 ///
-/// One [`UnitId`] per slice (metadata = slice IRI + name), one content-addressed
+/// One [`purrdf_core::provenance::UnitId`] per slice (metadata = slice IRI + name), one content-addressed
 /// `ArtifactRecord` per ontology artifact, every blob inserted into the bundle's
 /// `ContentStore`. The producer emits a SINGLE `snapshot` frame, so every unit is
 /// associated with that one snapshot segment (segment 0) — set-valued and never
@@ -429,7 +429,7 @@ fn from_json_ld(
 /// with its `rdf:about` / `rdf:resource` references spelled against it (RDF/XML's
 /// registry row can express a base).
 ///
-/// The statement layer is [`StatementLayer::Emit`], which is what this function already
+/// The statement layer is [`crate::StatementLayer::Emit`], which is what this function already
 /// did. RDF/XML's emitter really can render a reifier binding — as
 /// `rdf:parseType="Triple"` — so the fidelity answer keeps those rows; `Project` would
 /// have thinned the document to buy the `xml:base`, which is the trade this surface

@@ -3,6 +3,8 @@
 
 # `purrdf-rdfc12` — RDF 1.2 Canonicalization Profile
 
+English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
+
 **Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 2 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
@@ -190,7 +192,7 @@ differs.
 
 `rdf:reifies` here is the RDF 1.2 vocabulary's OWN reification predicate
 (`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a PurRDF sentinel — the
-flat presentation never mints or reads a `urn:purrdf:rdfc:` IRI, and **no reserved
+flat presentation never emits a `urn:purrdf:rdfc:` IRI, and **no reserved
 namespace IRI ever participates in a flat canonical document**. A reifier row is
 written in the graph it was DECLARED in; an annotation row is written in its OWN
 graph slot, independently of the reifier it annotates (§3.2). A row whose exact
@@ -383,8 +385,8 @@ budget to discover it.
 
 ## 6. Bounds (normative)
 
-The n-degree search is NP-hard in the worst case: a pathologically symmetric blank
-graph can force unbounded permutation backtracking. Complexity poisoning must
+The n-degree search has a combinatorial worst case: a pathologically symmetric blank
+graph can require prohibitively many permutation steps. Complexity poisoning must
 **refuse, not hang**.
 
 A fixed call/permutation budget of **1 000 000** bounds the search, exported as

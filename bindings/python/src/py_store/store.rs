@@ -106,7 +106,7 @@ impl PyStore {
         result
     }
 
-    /// Alias of [`load`] — bulk loading is not a different semantics, so the
+    /// Alias of [`Self::load`] — bulk loading is not a different semantics, so the
     /// in-memory store path is identical.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn bulk_load(
@@ -196,7 +196,7 @@ impl PyStore {
     ///
     /// `parameters` names the variables `run` will bind, without the `?`/`$` sigil.
     /// Each is pre-bound exactly as a `substitutions` entry is on
-    /// [`query`](Self::query), so a parameter stays projectable and reaches inside
+    /// [`query`](PyQuadStore::query), so a parameter stays projectable and reaches inside
     /// `OPTIONAL`, `MINUS`, `EXISTS` and sub-`SELECT`s by ordinary correlation. A
     /// parameter the query never mentions could bind nothing, so it raises `ValueError`
     /// naming it (`message_id` `sparql-prepared-parameter-unmentioned`) — see
@@ -219,16 +219,16 @@ impl PyStore {
     /// reachable twice while in flight is one two evaluations can disagree about.
     ///
     /// Engine configuration and relation/aggregate registration behave exactly as on
-    /// [`query`](Self::query) — `extension_namespaces`, `property_fn_namespaces`,
+    /// [`query`](PyQuadStore::query) — `extension_namespaces`, `property_fn_namespaces`,
     /// `standpoint_predicates`, `relations`, `relations_from_graph`, `path_relations`
     /// and `aggregate_namespace` all admit the plan and are then CARRIED by the
     /// returned object, so [`PreparedQuery::run`](super::prepared::PyPreparedQuery::run)
     /// evaluates under the SAME registries the plan was admitted under. `xpath_regex`
-    /// (see [`query`](Self::query)) is carried the same way: every run's `REGEX` and
+    /// (see [`query`](PyQuadStore::query)) is carried the same way: every run's `REGEX` and
     /// `REPLACE` evaluate under the dated law selected here. Nothing here
     /// widens what a registered relation reaches — running under a different registry
     /// than the one a plan was prepared against is refused, not silently answered
-    /// short, exactly as [`query`](Self::query) would refuse it if asked to.
+    /// short, exactly as [`query`](PyQuadStore::query) would refuse it if asked to.
     ///
     /// Two of those axes read the store's OWN GRAPH rather than a caller's constant:
     /// `relations_from_graph` reads an `rdf:List` of `rdf:List`s written in the store,
@@ -470,7 +470,7 @@ impl PyStore {
 /// A `Dataset` is a plain quad list rather than a store, so it has no term table whose
 /// interner would enforce the IR-boundary absoluteness invariant for it. It enforces the
 /// invariant itself, at both ingresses ([`add`](PyDataset::add) and the constructor),
-/// through [`QuadValues::check_absolute_iris`] — the SAME
+/// through [`purrdf_core::QuadValues::check_absolute_iris`] — the SAME
 /// `purrdf_core::ir::absolute::check_absolute` every other ingress reaches, not a second
 /// spelling of the rule.
 ///

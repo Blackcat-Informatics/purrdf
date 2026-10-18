@@ -900,7 +900,7 @@ def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
     host and verified on another would have had it move under them.
     """
     cases = _dl_proof_vectors()
-    assert len(cases) == 16, "seven service cases and nine prepared-schema cases"
+    assert len(cases) == 17, "service, schema and recursive NI cases"
     assert [case["case"] for case in cases[:7]] == entail.proof_services()
     # Keep the original service prefix and check every appended case through PyO3.
     # The service-set guard still rejects a lost or unrecognized proof service.

@@ -5,6 +5,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # PurRDF columnar schema
 
+English | [简体中文](COLUMNAR.zh-Hans.md)
+
 `purrdf-columnar` represents one RDF 1.2 dataset and one content-addressed blob
 store as a closed set of five Parquet files. A `ParquetFiles` value always
 contains all five files, including valid zero-row files for empty tables.

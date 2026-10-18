@@ -24,21 +24,25 @@ schema layer and the shape-map validator, pure Rust and wasm-clean.
 - **Structural checks** (spec §5.7) — dangling references, label collisions,
   reference-only cycles, and the negation-stratification requirement.
 
-```rust,ignore
-use purrdf::shex::{check_structure, parse_shexc, to_shexj};
+```rust
+use purrdf::shex::{check_structure, parse_shexc, parse_shexj, to_shexj};
 
 let schema = parse_shexc(
     "PREFIX ex: <http://example.org/>\n\
      PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n\
      ex:S { ex:p xsd:integer? }",
     None,
-)?;
+).expect("well-formed");
 check_structure(&schema).expect("well-formed");
 let json = to_shexj(&schema);
+let restored = parse_shexj(&json, None).expect("well-formed");
+check_structure(&restored).expect("well-formed");
+assert_eq!(restored, schema);
 ```
 
-Hard-fail discipline: every malformed schema is a typed `ShexError` — no
-lenient mode, no panics on any input.
+Schema parsing reports malformed syntax through a typed `ShexError`;
+`check_structure` reports a list of `StructureError` violations. There is no
+lenient mode that accepts a malformed schema.
 
 ## Validation with shape maps
 

@@ -7,7 +7,7 @@
 //! # Why this exists
 //!
 //! This module exposes the Store + SPARQL (SELECT / ASK / CONSTRUCT, variable substitution) +
-//! `parse` / `serialize` + RDFC-1.0 canonicalization surface our Python layer
+//! `parse` / `serialize` + native canonicalization surface our Python layer
 //! needs, so `make check` / CI / the build run with **no external RDF runtime**
 //! (CONSTITUTION Principle 18).
 //!
@@ -35,7 +35,7 @@
 //! * **Eager materialization** — `Store.query` freezes a snapshot and collects the
 //!   native engine's results into owned `Vec`s before returning, so a borrow of the
 //!   store never escapes into a `'static` `#[pyclass]`.
-//! * **Pure-Rust cores** — [`parse_quads`] and [`canonicalize_quads`] hold the
+//! * **Pure-Rust cores** — [`parse_quads`] and [`canon::canonicalize_quads`] hold the
 //!   load-bearing logic and stay PyO3-free; the `#[pymethods]` are thin wrappers
 //!   over them. Installed interpreter coverage lives in `bindings/python/tests`.
 //!   The native load-ingress control imports its interpreter-free production
@@ -72,7 +72,7 @@ use pyo3::prelude::*;
 /// Render an IRI failure as the `ValueError` every mutation surface raises.
 ///
 /// One spelling for the whole binding: the message leads with
-/// [`purrdf_iri::IriError::diagnostic_code`], the workspace's single owner of those
+/// [`purrdf::iri::IriError::diagnostic_code`], the workspace's single owner of those
 /// stable strings, so Python callers switch on the same code the CLI, the C ABI and
 /// wasm report for the same condition.
 pub(crate) fn iri_value_error(err: &purrdf_core::IriError) -> PyErr {

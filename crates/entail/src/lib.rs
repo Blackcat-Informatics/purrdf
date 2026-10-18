@@ -152,15 +152,16 @@ pub use entails::{
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
 };
+pub use owl_dl::proof::source as proof_source;
 pub use owl_dl::proof::{
     BlockingPair, BranchOutcome, BranchReplay, BranchStep, CALCULUS_VERSION as DL_CALCULUS_VERSION,
     CheckReport, ClashReplay, ClashStep, Completion, CompletionEdge, CompletionNode,
-    CompletionReplay, DerivedConclusion, DlProof, DlProofContext, DlProofError,
-    MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS, MergeCause,
-    MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative, ProofAnswer,
-    ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
+    CompletionReplay, CurrentSupportEvidence, DerivedConclusion, DlProof, DlProofContext,
+    DlProofError, MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS,
+    MergeCause, MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative,
+    ProofAnswer, ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
     TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
-    prove_consistency, try_ontology_identity,
+    prove_consistency, try_ontology_identity, try_ontology_identity_with_stop,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{

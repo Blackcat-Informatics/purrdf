@@ -23,7 +23,7 @@ codec — for nine formats:
 They live in [`purrdf-rdf`](https://docs.rs/purrdf-rdf), one layer above the
 kernel, and are reachable through the umbrella crate:
 
-```rust,ignore
+```rust
 use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
 
 let turtle = br#"
@@ -38,6 +38,7 @@ assert_eq!(ds.quad_count(), 1);
 // Serialize back out through any native codec — byte-deterministic output.
 let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
     .expect("serializes");
+assert_eq!(nq.as_slice(), b"<https://example.org/cat> <https://example.org/says> \"meow\" .\n");
 ```
 
 ## Open Knowledge Format bundles

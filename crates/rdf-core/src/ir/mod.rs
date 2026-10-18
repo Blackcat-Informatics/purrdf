@@ -79,8 +79,8 @@ pub use canon::{
     canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
     check_admissible_flat_view, check_admissible_view, graph_digest_view, try_blank_count_view,
     try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_graph_digest_view,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop,
+    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
