@@ -35,7 +35,7 @@ impl fmt::Display for XmlNamespaceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::XmlnsPrefixDeclaration => "the `xmlns` prefix cannot be declared",
-            Self::XmlPrefixBinding => "the `xml` prefix is bound to the XML namespace",
+            Self::XmlPrefixBinding => "the `xml` prefix may be bound only to the XML namespace",
             Self::XmlNamespaceBinding => "only `xml` may be bound to the XML namespace",
             Self::XmlnsNamespaceDeclaration => "the xmlns namespace cannot be declared",
             Self::XmlnsElementPrefix => "an element cannot have the `xmlns` prefix",
