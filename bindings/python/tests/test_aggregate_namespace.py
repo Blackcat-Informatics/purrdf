@@ -50,7 +50,7 @@ def test_query_computes_median_through_aggregate_namespace() -> None:
     solutions = store.query(MEDIAN_QUERY, aggregate_namespace=NS)
 
     assert len(solutions) == 1
-    assert str(next(iter(solutions))[0].value) == "2"
+    assert str(next(iter(solutions))[0].value) == "2.0"
 
 
 def test_query_governed_computes_median_through_aggregate_namespace() -> None:
@@ -60,7 +60,7 @@ def test_query_governed_computes_median_through_aggregate_namespace() -> None:
 
     assert outcome.is_complete
     assert len(outcome.result) == 1
-    assert str(next(iter(outcome.result))[0].value) == "2"
+    assert str(next(iter(outcome.result))[0].value) == "2.0"
 
 
 def test_mutable_dataset_query_computes_median_through_aggregate_namespace() -> None:
@@ -69,7 +69,7 @@ def test_mutable_dataset_query_computes_median_through_aggregate_namespace() -> 
     solutions = dataset.query(MEDIAN_QUERY, aggregate_namespace=NS)
 
     assert len(solutions) == 1
-    assert str(next(iter(solutions))[0].value) == "2"
+    assert str(next(iter(solutions))[0].value) == "2.0"
 
 
 def test_omitting_aggregate_namespace_leaves_the_statistical_set_unregistered() -> None:
@@ -98,7 +98,7 @@ def test_update_reaches_median_from_a_nested_select_group_by() -> None:
         f"SELECT ?m WHERE {{ <{EX}summary> <{EX}median> ?m }}"
     )
     assert len(solutions) == 1
-    assert str(next(iter(solutions))[0].value) == "2"
+    assert str(next(iter(solutions))[0].value) == "2.0"
 
 
 def test_update_governed_reaches_median_from_a_nested_select_group_by() -> None:
@@ -116,7 +116,7 @@ def test_update_governed_reaches_median_from_a_nested_select_group_by() -> None:
         f"SELECT ?m WHERE {{ <{EX}summary> <{EX}median> ?m }}"
     )
     assert len(solutions) == 1
-    assert str(next(iter(solutions))[0].value) == "2"
+    assert str(next(iter(solutions))[0].value) == "2.0"
 
 
 def test_mutable_dataset_update_governed_reaches_median() -> None:
@@ -134,7 +134,7 @@ def test_mutable_dataset_update_governed_reaches_median() -> None:
         f"SELECT ?m WHERE {{ <{EX}summary> <{EX}median> ?m }}"
     )
     assert len(solutions) == 1
-    assert str(next(iter(solutions))[0].value) == "2"
+    assert str(next(iter(solutions))[0].value) == "2.0"
 
 
 def test_aggregate_namespace_registration_does_not_leak_across_calls() -> None:
@@ -183,7 +183,7 @@ def test_query_entailment_governed_computes_median_over_an_entailed_closure() ->
     assert outcome.outcome is not None and outcome.outcome.is_complete
     rows = list(outcome.outcome.result)
     assert len(rows) == 1
-    assert str(rows[0][0].value) == "2"
+    assert str(rows[0][0].value) == "2.0"
 
 
 def test_mutable_dataset_query_entailment_governed_computes_median() -> None:
@@ -198,7 +198,7 @@ def test_mutable_dataset_query_entailment_governed_computes_median() -> None:
     assert outcome.outcome is not None
     rows = list(outcome.outcome.result)
     assert len(rows) == 1
-    assert str(rows[0][0].value) == "2"
+    assert str(rows[0][0].value) == "2.0"
 
 
 def test_omitting_aggregate_namespace_leaves_entailment_lane_unregistered() -> None:

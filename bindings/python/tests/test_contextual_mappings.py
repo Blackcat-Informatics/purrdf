@@ -213,7 +213,7 @@ def test_contextual_aggregate_and_standpoint_configuration(compat):
     query = (
         f"SELECT (AGG(<{namespace}MEDIAN>, ?v) AS ?m) WHERE {{ VALUES ?v {{1 2 3}} }}"
     )
-    assert str(next(iter(graph.query(query, aggregate_namespace=namespace))).m) == "2"
+    assert str(next(iter(graph.query(query, aggregate_namespace=namespace))).m) == "2.0"
     extension = EX + "extension/"
     held = f"ASK {{ FILTER(<{extension}heldIn>(<{EX}r>, <{EX}s>)) }}"
     with pytest.raises(ValueError, match="standpoint predicate configuration"):
