@@ -250,7 +250,7 @@ fn xml_namespace_producers_retain_typed_reasons_and_existing_messages() {
         (
             "<a xmlns:xml='https://example.org/'/>".to_owned(),
             "xml-prefix-namespace-mismatch",
-            "the `xml` prefix is bound to the XML namespace",
+            "the `xml` prefix may be bound only to the XML namespace",
         ),
         (
             format!("<a xmlns:x='{XML_NAMESPACE}'/>"),

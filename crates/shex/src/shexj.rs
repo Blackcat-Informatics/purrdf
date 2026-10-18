@@ -129,6 +129,7 @@ pub(crate) fn parse_shexj_exact(
     base: Option<&str>,
     saturate: bool,
 ) -> Result<(Schema, crate::exact::ExactTable)> {
+    ShexError::admit_stack("ShExJ document")?;
     let value = json::read_with(input, SHEXJ_LIMITS)
         .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
     // A numeric facet's value is compared with every datum validated against it: its
@@ -770,6 +771,7 @@ impl Reader {
     }
 
     fn shape_expr(&self, value: &Value) -> Result<ShapeExpr> {
+        ShexError::admit_stack("ShExJ shape expression")?;
         if let Value::String(label) = value {
             return Ok(ShapeExpr::Ref(self.label(label)?));
         }
@@ -1076,6 +1078,7 @@ impl Reader {
     }
 
     fn triple_expr(&self, value: &Value) -> Result<TripleExpr> {
+        ShexError::admit_stack("ShExJ triple expression")?;
         if let Value::String(label) = value {
             return Ok(TripleExpr::Ref(self.label(label)?));
         }
@@ -1268,6 +1271,32 @@ fn wildcard_stem(value: &Value, what: &'static str) -> Result<StemValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recursive_readers_refuse_the_physical_stack_margin() {
+        purrdf_stack::on_stack(1024 * 1024, || {
+            let reader = Reader::new(None).unwrap();
+            let shape = json::read(r#"{"type":"ShapeExternal"}"#).unwrap();
+            let triple = json::read(
+                r#"{"type":"TripleConstraint","predicate":"http://example.org/p"}"#,
+            )
+            .unwrap();
+            let reserve = purrdf_stack::reserve(purrdf_stack::remaining());
+            for (result, expected) in [
+                (reader.shape_expr(&shape).map(|_| ()), "ShExJ shape expression"),
+                (
+                    reader.triple_expr(&triple).map(|_| ()),
+                    "ShExJ triple expression",
+                ),
+            ] {
+                assert!(matches!(result, Err(ShexError::StackMargin { construct }) if construct == expected));
+            }
+            drop(reserve);
+            assert!(reader.shape_expr(&shape).is_ok());
+            assert!(reader.triple_expr(&triple).is_ok());
+        })
+        .unwrap();
+    }
 
     const BASE: &str = "http://example.org/dir/doc.shexj";
 
