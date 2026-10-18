@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use crate::{FastMap, FastSet};
 use std::io::Read;
 
+mod append_error;
+pub use append_error::AppendError;
+
 mod payload_error;
 use payload_error::{PayloadCause, PayloadError};
 
@@ -1552,38 +1555,40 @@ pub struct SegmentAppendState {
 /// Returns an error when the file is empty, ends in a torn append, carries no
 /// segment header, or its last item has no `"id"` — appending onto any of those
 /// would silently break the chain.
-pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
+pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
     let (items, torn) = iter_items(data);
     if let Some(offset) = torn {
-        return Err(format!(
-            "cannot append to a file with a torn append at byte {offset}"
-        ));
+        return Err(AppendError::Torn { offset });
     }
     let Some(last_header) = items.iter().rposition(|(_, item)| is_header_item(item)) else {
-        return Err("cannot append: the file carries no GTS segment header".to_string());
+        return Err(AppendError::MissingHeader);
     };
-    let header =
-        unwrap_header(&items[last_header].1).map_err(|err| format!("cannot append: {err}"))?;
+    let header = unwrap_header(&items[last_header].1).map_err(AppendError::Header)?;
 
     let mut catalog: Vec<CatalogRow> = Vec::new();
     if let Some(Value::Map(raw)) = map_get(header, "cat") {
         for (cid, entry) in raw {
             let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) else {
-                return Err("cannot append: a catalog entry is malformed".to_string());
+                return Err(AppendError::CatalogEntry {
+                    id: cid.clone(),
+                    entry: entry.clone(),
+                });
             };
             let level = match map_get(fields, "level") {
                 None => None,
                 Some(value) => {
-                    let raw = as_i128(value)
-                        .ok_or_else(|| "cannot append: a catalog level is malformed".to_string())?;
-                    Some(i32::try_from(raw).map_err(|_| {
-                        "cannot append: a catalog level is out of range".to_string()
+                    let raw = as_i128(value).ok_or_else(|| AppendError::CatalogLevel {
+                        id: cid,
+                        value: value.clone(),
+                    })?;
+                    Some(i32::try_from(raw).map_err(|_| AppendError::LevelRange {
+                        id: cid,
+                        actual: raw,
                     })?)
                 }
             };
             catalog.push(CatalogRow {
-                id: i64::try_from(cid)
-                    .map_err(|_| "cannot append: a catalog id is out of range".to_string())?,
+                id: i64::try_from(cid).map_err(|_| AppendError::IdRange { actual: cid })?,
                 name: text_or(map_get(fields, "name"), "").to_string(),
                 cls: text_or(map_get(fields, "cls"), "encode").to_string(),
                 dct: map_get(fields, "dct")
@@ -1599,7 +1604,10 @@ pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
     if let Some(Value::Map(entries)) = map_get(header, "dct") {
         for (name, bytes) in entries {
             let (Value::Text(name), Value::Bytes(bytes)) = (name, bytes) else {
-                return Err("cannot append: a header \"dct\" entry is malformed".to_string());
+                return Err(AppendError::DictionaryEntry {
+                    name: name.clone(),
+                    bytes: bytes.clone(),
+                });
             };
             dicts.insert(name.clone(), bytes.clone());
         }
@@ -1610,19 +1618,22 @@ pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, String> {
         if let Some(name) = &row.dct
             && !dicts.contains_key(name)
         {
-            return Err(format!(
-                "cannot append: catalog id {} names dictionary {name:?}, absent from the \
-                 header \"dct\" map",
-                row.id
-            ));
+            return Err(AppendError::MissingDictionary {
+                id: row.id,
+                name: name.clone(),
+            });
         }
     }
 
     let last = items.last().expect("a header item was found above");
-    let entries = unwrap_header(&last.1).map_err(|err| format!("cannot append: {err}"))?;
+    let entries = unwrap_header(&last.1).map_err(AppendError::Header)?;
     let head = match map_get(entries, "id") {
         Some(Value::Bytes(id)) => id.clone(),
-        _ => return Err("cannot append: the file's last item carries no \"id\"".to_string()),
+        actual => {
+            return Err(AppendError::MissingHead {
+                actual: actual.cloned(),
+            });
+        }
     };
     Ok(SegmentAppendState {
         catalog,
@@ -1891,7 +1902,8 @@ impl ActiveStreamingSegment {
                         code: "DamagedFrame".to_string(),
                         detail: format!("invalid header: {e}"),
                         frame_index: Some(index_offset),
-                    },
+                    }
+                    .with_native_cause(e),
                 );
             }
         }
@@ -2431,7 +2443,8 @@ fn read_segment_with_sink(
                     code: "DamagedFrame".to_string(),
                     detail: format!("invalid header: {e}"),
                     frame_index: Some(index_offset),
-                },
+                }
+                .with_native_cause(e),
             );
             return g;
         }

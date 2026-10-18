@@ -112,11 +112,11 @@ pub fn iter_items(data: &[u8]) -> (Vec<(usize, Value)>, Option<usize>) {
 }
 
 /// Return the Header map, unwrapping the optional self-describe tag (§3).
-pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, String> {
+pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, HeaderError> {
     let inner = match item {
         Value::Tag(tag, inner) => {
             if *tag != SELF_DESCRIBE_TAG {
-                return Err(format!("unexpected CBOR tag {tag} on the header item"));
+                return Err(HeaderError::Tag { actual: *tag });
             }
             inner.as_ref()
         }
@@ -124,7 +124,41 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, String> {
     };
     match inner {
         Value::Map(entries) => Ok(entries),
-        _ => Err("header item is not a CBOR map".to_string()),
+        other => Err(HeaderError::NotMap(other.clone())),
+    }
+}
+
+/// A native refusal to interpret an item as a header map.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum HeaderError {
+    /// A tag other than the optional self-describe tag.
+    Tag {
+        /// Original tag number.
+        actual: u64,
+    },
+    /// The unwrapped original value is not a map.
+    NotMap(Value),
+}
+
+impl core::fmt::Display for HeaderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Tag { actual } => write!(f, "unexpected CBOR tag {actual} on the header item"),
+            Self::NotMap(_) => f.write_str("header item is not a CBOR map"),
+        }
+    }
+}
+
+impl std::error::Error for HeaderError {}
+
+impl purrdf_hash::error::StructuredError for HeaderError {
+    purrdf_hash::error_visit! {
+        Tag { actual } => "gts-header-tag" {
+            "actual" => Unsigned(u128::from(*actual)),
+            "expected" => Unsigned(u128::from(SELF_DESCRIBE_TAG))
+        },
+        NotMap(value) => "gts-header-not-map" { "value" => Record(value) },
     }
 }
 

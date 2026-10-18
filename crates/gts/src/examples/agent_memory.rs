@@ -373,7 +373,7 @@ impl Memory {
                 .last()
                 .map_or_else(Vec::new, |segment| segment.terms.clone());
             let append_state = segment_append_state(&bytes)
-                .map_err(WriterError::InvalidFrame)
+                .map_err(WriterError::Append)
                 .map_err(MemoryError::Author)?;
             (terms, Some(append_state))
         };
@@ -842,7 +842,7 @@ impl Memory {
             } else {
                 Some(
                     segment_append_state(&segment)
-                        .map_err(WriterError::InvalidFrame)
+                        .map_err(WriterError::Append)
                         .map_err(MemoryError::Author)?,
                 )
             }

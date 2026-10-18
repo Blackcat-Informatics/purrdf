@@ -614,7 +614,188 @@ fn caller_messages_remain_message_data() {
     assert_eq!(copy.detail(), original);
 }
 
+fn writer_catalog_and_frame_failures_keep_original_fields() {
+    use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
+    let duplicate = Writer::with_options(
+        "purrdf.gts",
+        WriterOptions {
+            catalog: Some(vec![
+                (i64::MIN, Codec::new("identity", "encode")),
+                (i64::MIN, Codec::new("zstd", "compress")),
+            ]),
+            ..WriterOptions::default()
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&duplicate).child("cause");
+    assert_eq!(fields.code, "gts-writer-duplicate-codec-id");
+    assert!(
+        matches!(fields.field("id"), ErrorValue::Signed(value) if value == i128::from(i64::MIN))
+    );
+    assert_eq!(
+        duplicate.to_string(),
+        format!(
+            "duplicate codec id {} in the writer catalog (§5 \"cat\" is a map)",
+            i64::MIN
+        )
+    );
+
+    let boundary = Writer::with_options(
+        "purrdf.gts",
+        WriterOptions {
+            catalog: Some(vec![(i64::MAX, Codec::new("zstd", "compress"))]),
+            dicts: vec![("pinned".into(), vec![1])],
+            ..WriterOptions::default()
+        },
+    )
+    .unwrap_err();
+    let fields = Capture::read(&boundary).child("cause");
+    assert_eq!(fields.code, "gts-writer-dictionary-id-start");
+    assert!(
+        matches!(fields.field("maximum"), ErrorValue::Signed(value) if value == i128::from(i64::MAX))
+    );
+    assert_eq!(
+        boundary.to_string(),
+        "writer catalog ids leave no range for dictionary-bound entries"
+    );
+
+    let mut writer = Writer::with_options(
+        "purrdf.gts",
+        WriterOptions {
+            zstd_level: Some(3),
+            ..WriterOptions::default()
+        },
+    )
+    .unwrap();
+    let error = writer
+        .add_frame_with_options(
+            "blob",
+            FrameOptions {
+                raw: Some(vec![1]),
+                transform: vec!["zstd".into()],
+                zstd_level: Some(i32::MIN),
+                ..FrameOptions::default()
+            },
+        )
+        .unwrap_err();
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    let fields = fields.child("cause");
+    assert_eq!(fields.code, "gts-writer-level-mismatch");
+    assert!(
+        matches!(fields.field("requested"), ErrorValue::Signed(value) if value == i128::from(i32::MIN))
+    );
+    assert!(matches!(fields.field("declared"), ErrorValue::Signed(3)));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "frame zstd_level {} contradicts the pack's declared level 3 (§8.5 catalog \"level\")",
+            i32::MIN
+        )
+    );
+    // A refused frame must leave the real authoring path and chain usable.
+    writer
+        .add_frame_with_options(
+            "blob",
+            FrameOptions {
+                raw: Some(vec![1]),
+                ..FrameOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        purrdf_gts::reader::read(&writer.into_bytes(), true, None).diagnostics,
+        []
+    );
+}
+
+fn append_and_header_failures_keep_native_values_and_sources() {
+    use purrdf_gts::{reader, wire, writer::Writer};
+    use purrdf_lex::{assoc, cbor::Value};
+    let writer = Writer::new("purrdf.gts");
+    let (mut items, torn) = wire::iter_items(&writer.into_bytes());
+    assert_eq!(torn, None);
+    let Value::Tag(_, inner) = &mut items[0].1 else {
+        panic!("writer emits a tagged header")
+    };
+    let header = inner.as_map_mut().unwrap();
+    assoc::insert(
+        header,
+        "cat".into(),
+        Value::Map(vec![(
+            Value::from(0_u8),
+            Value::Map(vec![
+                ("name".into(), "zstd".into()),
+                ("level".into(), Value::from(u64::MAX)),
+            ]),
+        )]),
+    );
+    let bytes = wire::canonical(&items[0].1);
+    let error = Writer::appending(&bytes).unwrap_err();
+    drop(bytes);
+    let fields = Capture::read(&error).child("cause");
+    assert_eq!(fields.code, "gts-append-level-range");
+    assert!(
+        matches!(fields.field("actual"), ErrorValue::Signed(value) if value == i128::from(u64::MAX))
+    );
+    assert!(matches!(fields.field("id"), ErrorValue::Signed(0)));
+    assert_eq!(
+        error.to_string(),
+        "cannot append: a catalog level is out of range"
+    );
+    assert!(std::error::Error::source(&error).is_some());
+
+    let error = reader::segment_append_state(&[0x9f]).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-append-torn");
+    assert!(matches!(fields.field("offset"), ErrorValue::ByteCount(0)));
+
+    let item = Value::Tag(u64::MAX, Box::new(Value::Null));
+    let error = wire::unwrap_header(&item).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-header-tag");
+    assert!(
+        matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(
+        matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == u128::from(wire::SELF_DESCRIBE_TAG))
+    );
+    let error = wire::unwrap_header(&Value::Bytes(vec![0, 255])).unwrap_err();
+    let fields = Capture::read(&error).child("value");
+    assert_eq!(fields.code, "cbor-bytes");
+    assert!(matches!(fields.field("value"), ErrorValue::Bytes([0, 255])));
+}
+
+fn invalid_header_cause_survives_graph_and_streaming_diagnostics() {
+    use purrdf_gts::{reader, wire};
+    use purrdf_lex::cbor::Value;
+    let bytes = wire::canonical(&Value::Tag(
+        u64::MAX,
+        Box::new(Value::Map(vec![("gts".into(), wire::MAGIC.into())])),
+    ));
+    let graph = reader::read(&bytes, true, None);
+    let mut sink = DiagnosticSink::default();
+    let streamed = reader::read_to_sink(&bytes, true, None, &mut sink);
+    drop(bytes);
+    for diagnostics in [&graph.diagnostics, &streamed.diagnostics, &sink.diagnostics] {
+        let error = diagnostics
+            .iter()
+            .find(|error| error.detail.starts_with("invalid header:"))
+            .unwrap();
+        let fields = Capture::read(error).child("cause");
+        assert_eq!(fields.code, "gts-header-tag");
+        assert!(
+            matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
+    writer_catalog_and_frame_failures_keep_original_fields,
+    append_and_header_failures_keep_native_values_and_sources,
+    invalid_header_cause_survives_graph_and_streaming_diagnostics,
     transport_retains_native_source_errors_before_foreign_formatting,
     native_transport_framing_and_decoder_fields_survive,
     dictionary_and_key_envelope_errors_keep_native_fields,
