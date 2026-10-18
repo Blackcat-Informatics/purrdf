@@ -449,7 +449,7 @@ impl JobRun<'_> {
     /// Request options carrying the run's sources and `env`.
     pub(crate) fn options<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
     ) -> QueryOptions<'o, 'o> {
         QueryOptions::new()
             .with_env(env)
@@ -469,7 +469,7 @@ impl JobRun<'_> {
     /// `division`: the request options every SPARQL operation evaluates with.
     pub(crate) fn options_under<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
         division: DivisionPolicy,
     ) -> QueryOptions<'o, 'o> {
         self.options(env).with_division(division)
@@ -479,7 +479,7 @@ impl JobRun<'_> {
     /// dated law was selected.
     fn selected_options<'o>(
         &'o self,
-        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        env: &'o purrdf_sparql_eval::ExtensionEnv<'o>,
         division: DivisionPolicy,
         xpath_regex: Option<Profile>,
         geo: &'o purrdf_validate::geo::GeoProfile,
@@ -644,7 +644,7 @@ fn ungoverned_query(
 /// The aggregate environment a governed operation's `aggregateNamespace` requests.
 fn governed_env(
     aggregate_namespace: Option<&str>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, JobError> {
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, JobError> {
     // The ENTIRE wasm surface for the first-party statistical aggregate set: one
     // namespace string crosses the boundary, with no callback and no per-aggregate
     // marshaling; the general custom-aggregate seam is Rust-host-only.

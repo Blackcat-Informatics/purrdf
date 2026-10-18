@@ -2102,7 +2102,7 @@ pub(crate) fn sparql_request<'a>(sparql: &'a str, base: Option<&'a str>) -> Spar
 /// environment reads every declaration.
 pub(crate) fn aggregate_env_message(
     aggregates: Option<&AggregateRegistry>,
-) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, String> {
     purrdf_sparql_eval::ExtensionEnv::over_aggregates(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )

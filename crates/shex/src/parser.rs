@@ -42,9 +42,8 @@ use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// Deepest allowed expression nesting; beyond this the parser hard-fails
 /// rather than risking stack exhaustion on hostile input. Each syntactic
 /// nesting level costs several recursive-descent frames (and two depth
-/// ticks), so this bound keeps worst-case stack use well under the default
-/// 2 MiB test-thread stack even in unoptimized builds, while allowing far
-/// deeper nesting than any real schema (the conformance corpus peaks at ~6).
+/// ticks). The logical limit is independent of the physical stack guard:
+/// parsing on a smaller stack may refuse before reaching this limit.
 const MAX_DEPTH: usize = 96;
 
 /// Parse a ShExC document. `base` seeds relative-IRI resolution (a `BASE`
@@ -89,6 +88,7 @@ pub(crate) fn parse_shexc_exact(
     base: Option<&str>,
     saturate: bool,
 ) -> Result<(Schema, crate::exact::ExactTable)> {
+    ShexError::admit_stack("ShExC document")?;
     let tokens = tokenize(input)?;
     let scope = match base {
         Some(iri) => BaseScope::rooted(
@@ -215,6 +215,7 @@ impl Parser<'_> {
     }
 
     fn enter(&mut self) -> Result<()> {
+        ShexError::admit_stack("ShExC expression")?;
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err(self.err("expression nesting too deep"));

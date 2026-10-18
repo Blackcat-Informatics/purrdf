@@ -1225,7 +1225,7 @@ mod tests {
     }
 
     /// The identity of `shapes` under a caller-supplied property-function registry.
-    fn identity_with(shapes: &Shapes, relations: &PropertyFunctionRegistry) -> Identity {
+    fn identity_with(shapes: &Shapes, relations: &PropertyFunctionRegistry<'_>) -> Identity {
         identity_identified_by(shapes, relations, &[])
     }
 
@@ -1233,7 +1233,7 @@ mod tests {
     /// and a caller-supplied implementation identity.
     fn identity_identified_by(
         shapes: &Shapes,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         implementation_identity: &[u8],
     ) -> Identity {
         build_identity(
@@ -1408,7 +1408,7 @@ mod tests {
     }
 
     /// A FRESH registry instance carrying [`NullRelation`] under [`EX_REL`].
-    fn relation_registry() -> PropertyFunctionRegistry {
+    fn relation_registry() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(EX_REL, Arc::new(NullRelation::new()));
         registry

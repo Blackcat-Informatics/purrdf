@@ -1000,14 +1000,34 @@ fn run_with_relations(
         .with_property_functions(relations)
         .with_charge_ledger(Arc::clone(&ledger));
     let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    recorded_run(evaluated.rows().len(), &state, &ledger)
+}
+
+/// Every fixture verifies the ledger against the original governor receipt,
+/// including finite stops and ordered worker replay.
+fn recorded_run(
+    rows: usize,
+    state: &GovernorState,
+    ledger: &crate::governor::ledger::ChargeLedger,
+) -> (Run, Vec<crate::governor::NodeCharges>) {
     let evidence = state.evidence();
+    let ledger = ledger.snapshot();
+    let fuel = evidence.consumed_in(ResourceDimension::Fuel);
+    assert_eq!(
+        ledger
+            .iter()
+            .map(crate::NodeCharges::fuel_total)
+            .sum::<u64>(),
+        fuel,
+        "the ledger attributes every consumed unit, including a ceiling crossing"
+    );
     (
         Run {
-            rows: evaluated.rows().len(),
-            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            rows,
+            fuel,
             tripped: evidence.tripped(),
         },
-        ledger.snapshot(),
+        ledger,
     )
 }
 
@@ -1213,14 +1233,17 @@ fn a_property_function_call_trips_at_the_same_point_parallel_and_sequential() {
 
     let parallel = {
         let _guard = force_parallel_for_test(true);
-        run_with_relations(&pattern, &dataset, &registry, &governors).0
+        run_with_relations(&pattern, &dataset, &registry, &governors)
     };
     let sequential = {
         let _guard = force_parallel_for_test(false);
-        run_with_relations(&pattern, &dataset, &registry, &governors).0
+        run_with_relations(&pattern, &dataset, &registry, &governors)
     };
 
-    assert!(parallel.tripped.is_some(), "the fixture must actually trip");
+    assert!(
+        parallel.0.tripped.is_some(),
+        "the fixture must actually trip"
+    );
     assert_eq!(
         parallel, sequential,
         "a relation's charges are folded in source-item order, so which strategy ran cannot \
@@ -1498,15 +1521,7 @@ fn run_with_aggregates(
         ctx = ctx.with_aggregates(registry);
     }
     let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
-    let evidence = state.evidence();
-    (
-        Run {
-            rows: evaluated.rows().len(),
-            fuel: evidence.consumed_in(ResourceDimension::Fuel),
-            tripped: evidence.tripped(),
-        },
-        ledger.snapshot(),
-    )
+    recorded_run(evaluated.rows().len(), &state, &ledger)
 }
 
 /// A `Commutative` custom `SUM`-alike over a single numeric-lexical argument — the same

@@ -848,11 +848,15 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
             return false;
         }
         let point = crate::governor::ChargePoint::PathFrontierExpansion;
-        let charged = state.charge_point_if_engaged(point).is_ok();
-        if charged && let Some((ledger, node)) = self.ledger.as_ref() {
-            ledger.record_fuel(*node, point, point.cost());
+        if let Some((ledger, node)) = self.ledger.as_ref() {
+            state
+                .charge_fuel_observed(point.cost(), false, |units| {
+                    ledger.record_fuel(*node, point, units);
+                })
+                .is_ok()
+        } else {
+            state.charge_point_if_engaged(point).is_ok()
         }
-        charged
     }
 
     /// Whether a governor has already stopped this execution, so that anything computed

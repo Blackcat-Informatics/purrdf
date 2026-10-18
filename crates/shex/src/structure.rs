@@ -25,8 +25,9 @@ use core::fmt;
 
 use purrdf_core::graph::tarjan_scc;
 use purrdf_core::{FastMap, FastSet};
+use purrdf_lex::walk::WorkList;
 
-use crate::ast::{Schema, Shape, ShapeExpr, TripleExpr};
+use crate::ast::{ExprRef, Schema, Shape, ShapeExpr, TripleExpr};
 
 /// A structural well-formedness violation (spec §5.7).
 #[derive(Clone, PartialEq, Eq)]
@@ -308,44 +309,18 @@ pub(crate) fn collect_triple_labels_shape_expr<'a>(
     expr: &'a ShapeExpr,
     out: &mut Vec<(&'a str, &'a TripleExpr)>,
 ) {
-    match expr {
-        ShapeExpr::And(parts) | ShapeExpr::Or(parts) => {
-            for part in parts {
-                collect_triple_labels_shape_expr(part, out);
-            }
+    for node in ExprRef::Shape(expr).walk() {
+        let ExprRef::Triple(expr) = node else {
+            continue;
+        };
+        let id = match expr {
+            TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => &group.id,
+            TripleExpr::TripleConstraint(constraint) => &constraint.id,
+            TripleExpr::Ref(_) => continue,
+        };
+        if let Some(id) = id {
+            out.push((id.as_str(), expr));
         }
-        ShapeExpr::Not(inner) => collect_triple_labels_shape_expr(inner, out),
-        ShapeExpr::Shape(shape) => {
-            if let Some(expr) = &shape.expression {
-                collect_triple_labels_triple_expr(expr, out);
-            }
-        }
-        ShapeExpr::Node(_) | ShapeExpr::External | ShapeExpr::Ref(_) => {}
-    }
-}
-
-fn collect_triple_labels_triple_expr<'a>(
-    expr: &'a TripleExpr,
-    out: &mut Vec<(&'a str, &'a TripleExpr)>,
-) {
-    match expr {
-        TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
-            if let Some(id) = &group.id {
-                out.push((id.as_str(), expr));
-            }
-            for member in &group.expressions {
-                collect_triple_labels_triple_expr(member, out);
-            }
-        }
-        TripleExpr::TripleConstraint(tc) => {
-            if let Some(id) = &tc.id {
-                out.push((id.as_str(), expr));
-            }
-            if let Some(ve) = &tc.value_expr {
-                collect_triple_labels_shape_expr(ve, out);
-            }
-        }
-        TripleExpr::Ref(_) => {}
     }
 }
 
@@ -362,67 +337,87 @@ struct Walker<'a, 'b> {
     include_stack: Vec<&'a str>,
 }
 
+/// Explicit traversal continuations retain the same branch-local inclusion
+/// guard and polarity as the recursive call stack did.
+enum Frame<'a> {
+    Shape(&'a ShapeExpr, bool, bool),
+    Triple(&'a TripleExpr, &'a Shape, bool),
+    LeaveInclude,
+}
+
 impl<'a> Walker<'a, '_> {
     /// `negated`: under an odd number of `NOT`s / EXTRA-covered constraints.
     /// `ref_only`: no triple constraint crossed yet.
     fn shape_expr(&mut self, expr: &'a ShapeExpr, negated: bool, ref_only: bool) {
-        match expr {
-            ShapeExpr::And(parts) | ShapeExpr::Or(parts) => {
-                for part in parts {
-                    self.shape_expr(part, negated, ref_only);
-                }
-            }
-            ShapeExpr::Not(inner) => self.shape_expr(inner, !negated, ref_only),
-            ShapeExpr::Ref(label) => match self.shape_labels.get(label.as_str()) {
-                Some(&to) => {
-                    if let Some(from) = self.from {
-                        self.edges.push(Edge {
-                            from,
-                            to,
-                            negated,
-                            ref_only,
-                        });
+        let mut pending = WorkList::<_, 16>::with(Frame::Shape(expr, negated, ref_only));
+        while let Some(frame) = pending.pop() {
+            match frame {
+                Frame::Shape(expr, negated, ref_only) => match expr {
+                    ShapeExpr::And(parts) | ShapeExpr::Or(parts) => {
+                        pending.extend(
+                            parts
+                                .iter()
+                                .rev()
+                                .map(|part| Frame::Shape(part, negated, ref_only)),
+                        );
                     }
-                }
-                None => self.dangling_shape.push(label.clone()),
-            },
-            ShapeExpr::Shape(shape) => self.shape(shape, negated),
-            ShapeExpr::Node(_) | ShapeExpr::External => {}
-        }
-    }
-
-    fn shape(&mut self, shape: &'a Shape, negated: bool) {
-        if let Some(expr) = &shape.expression {
-            self.triple_expr(expr, shape, negated);
-        }
-    }
-
-    fn triple_expr(&mut self, expr: &'a TripleExpr, enclosing: &'a Shape, negated: bool) {
-        match expr {
-            TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
-                for member in &group.expressions {
-                    self.triple_expr(member, enclosing, negated);
-                }
-            }
-            TripleExpr::TripleConstraint(tc) => {
-                if let Some(ve) = &tc.value_expr {
-                    // A reference through an EXTRA-covered predicate carries
-                    // negative polarity (spec §5.7 negation requirement).
-                    let extra_negates = tc.inverse != Some(true)
-                        && enclosing.extra.iter().any(|p| p == &tc.predicate);
-                    self.shape_expr(ve, negated ^ extra_negates, false);
-                }
-            }
-            TripleExpr::Ref(label) => match self.triple_exprs.get(label.as_str()) {
-                Some(&target) => {
-                    if !self.include_stack.contains(&label.as_str()) {
-                        self.include_stack.push(label.as_str());
-                        self.triple_expr(target, enclosing, negated);
-                        self.include_stack.pop();
+                    ShapeExpr::Not(inner) => {
+                        pending.push(Frame::Shape(inner, !negated, ref_only));
                     }
+                    ShapeExpr::Ref(label) => match self.shape_labels.get(label.as_str()) {
+                        Some(&to) => {
+                            if let Some(from) = self.from {
+                                self.edges.push(Edge {
+                                    from,
+                                    to,
+                                    negated,
+                                    ref_only,
+                                });
+                            }
+                        }
+                        None => self.dangling_shape.push(label.clone()),
+                    },
+                    ShapeExpr::Shape(shape) => {
+                        if let Some(expr) = &shape.expression {
+                            pending.push(Frame::Triple(expr, shape, negated));
+                        }
+                    }
+                    ShapeExpr::Node(_) | ShapeExpr::External => {}
+                },
+                Frame::Triple(expr, enclosing, negated) => match expr {
+                    TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
+                        pending.extend(
+                            group
+                                .expressions
+                                .iter()
+                                .rev()
+                                .map(|member| Frame::Triple(member, enclosing, negated)),
+                        );
+                    }
+                    TripleExpr::TripleConstraint(tc) => {
+                        if let Some(ve) = &tc.value_expr {
+                            // EXTRA-covered forward constraints reverse polarity
+                            // (spec §5.7); inverse constraints do not.
+                            let extra_negates = tc.inverse != Some(true)
+                                && enclosing.extra.iter().any(|p| p == &tc.predicate);
+                            pending.push(Frame::Shape(ve, negated ^ extra_negates, false));
+                        }
+                    }
+                    TripleExpr::Ref(label) => match self.triple_exprs.get(label.as_str()) {
+                        Some(&target) => {
+                            if !self.include_stack.contains(&label.as_str()) {
+                                self.include_stack.push(label.as_str());
+                                pending.push(Frame::LeaveInclude);
+                                pending.push(Frame::Triple(target, enclosing, negated));
+                            }
+                        }
+                        None => self.dangling_triple.push(label.clone()),
+                    },
+                },
+                Frame::LeaveInclude => {
+                    self.include_stack.pop();
                 }
-                None => self.dangling_triple.push(label.clone()),
-            },
+            }
         }
     }
 }
@@ -430,6 +425,22 @@ impl<'a> Walker<'a, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_syntax_walk_preserves_nested_label_preorder() {
+        let schema = crate::parse_shexc(
+            "PREFIX ex: <http://example.org/>\n\
+             ex:S { $ex:Group ($ex:First ex:p { $ex:Nested ex:q . }; $ex:Last ex:r .) }",
+            None,
+        )
+        .unwrap();
+        let mut labels = Vec::new();
+        collect_triple_labels_shape_expr(&schema.shapes[0].expr, &mut labels);
+        assert_eq!(
+            labels.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            ["Group", "First", "Nested", "Last"].map(|local| format!("http://example.org/{local}"))
+        );
+    }
 
     #[test]
     fn tarjan_finds_reference_cycle_over_shape_indices() {

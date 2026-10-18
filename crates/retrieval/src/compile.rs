@@ -3261,7 +3261,7 @@ mod tests {
         }
     }
 
-    fn neighbours_registry(exclusion: ExclusionBasis) -> PropertyFunctionRegistry {
+    fn neighbours_registry(exclusion: ExclusionBasis) -> PropertyFunctionRegistry<'static> {
         neighbours_declaring(
             exclusion,
             vec![
@@ -3277,7 +3277,7 @@ mod tests {
     fn neighbours_declaring(
         exclusion: ExclusionBasis,
         modes: Vec<BindingPattern>,
-    ) -> PropertyFunctionRegistry {
+    ) -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register_ranked(
             NEIGHBOURS,
@@ -3317,7 +3317,10 @@ mod tests {
 
     /// The lookup a caller's `text` derives under `registry`, and whether that lookup
     /// prepares with the candidate as its one parameter.
-    fn supplied_lookup(text: &str, registry: &PropertyFunctionRegistry) -> Result<String, String> {
+    fn supplied_lookup(
+        text: &str,
+        registry: &PropertyFunctionRegistry<'_>,
+    ) -> Result<String, String> {
         let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
         let options = || QueryOptions::new().with_env(&env);
         let engine = NativeSparqlEngine::new();
@@ -3584,7 +3587,7 @@ mod tests {
             "SELECT ?candidate WHERE {{ ?candidate <{NEIGHBOURS}> ( ?seed ?depth ?score ) }}"
         );
         let engine = NativeSparqlEngine::new();
-        let prepared_under = |registry: &PropertyFunctionRegistry, text: &str| {
+        let prepared_under = |registry: &PropertyFunctionRegistry<'_>, text: &str| {
             let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
             engine
                 .prepare_query_with_options(text, None, QueryOptions::new().with_env(&env))

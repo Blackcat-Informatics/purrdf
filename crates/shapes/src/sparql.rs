@@ -3758,7 +3758,7 @@ mod tests {
     /// environment across two runs must hold one `Arc` and clone it, not call this
     /// twice — that distinction is exactly what `still_current`'s `Arc::ptr_eq`
     /// tests.
-    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry> {
+    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry<'static>> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             STILL_CURRENT_REL.to_owned(),
@@ -3781,7 +3781,7 @@ mod tests {
     /// test — the production call sites in `components.rs` and `rules.rs` differ
     /// from this only in which parameters they declare.
     fn still_current_ask(
-        registry: Arc<PropertyFunctionRegistry>,
+        registry: Arc<PropertyFunctionRegistry<'static>>,
         focus: &str,
     ) -> Result<bool, crate::error::ShapesError> {
         let _scope = enter_property_function_scope(registry);

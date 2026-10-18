@@ -108,7 +108,8 @@ pub use provider::{
 pub use query::{PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView};
 pub use stack::{
     CanonicalPagedError, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
-    PagedStackSnapshot, StackPageOrigin, StackSource, canonical_paged_seal,
+    PagedStackSnapshot, PagedStackSnapshotError, StackPageOrigin, StackSource,
+    canonical_paged_seal,
 };
 pub use translation::PageTranslation;
 

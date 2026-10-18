@@ -7107,7 +7107,7 @@ mod tests {
     }
 
     /// A fresh registry with [`PfFlagged`] registered under `ex:pfFlagged`.
-    fn pf_flagged_registry() -> purrdf_sparql_eval::PropertyFunctionRegistry {
+    fn pf_flagged_registry() -> purrdf_sparql_eval::PropertyFunctionRegistry<'static> {
         let mut registry = purrdf_sparql_eval::PropertyFunctionRegistry::new();
         registry.register(
             "http://example.org/ns#pfFlagged",

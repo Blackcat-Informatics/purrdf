@@ -105,8 +105,8 @@ const TABLE_NS: &str = "http://purrdf.test/relations#";
 /// would turn every relation case into a vacuous pass, so the failure is loud and
 /// immediate rather than deferred to a confusing per-case mismatch.
 #[must_use]
-pub fn harness_relations() -> &'static PropertyFunctionRegistry {
-    static RELATIONS: OnceLock<PropertyFunctionRegistry> = OnceLock::new();
+pub fn harness_relations() -> &'static PropertyFunctionRegistry<'static> {
+    static RELATIONS: OnceLock<PropertyFunctionRegistry<'static>> = OnceLock::new();
     RELATIONS.get_or_init(|| {
         let tables = relation_tables();
         let mut registry = PropertyFunctionRegistry::new();
@@ -702,7 +702,7 @@ pub fn query_eval_parser_options() -> ParserOptions {
 #[must_use]
 pub fn query_eval_options<'a>(
     case: &SparqlTestCase,
-    env: &'a purrdf_sparql_eval::ExtensionEnv,
+    env: &'a purrdf_sparql_eval::ExtensionEnv<'a>,
 ) -> QueryOptions<'a, 'a> {
     QueryOptions::new()
         .with_env(env)
@@ -749,7 +749,9 @@ pub fn query_eval_engine() -> NativeSparqlEngine {
 /// # Errors
 ///
 /// Returns a message if the declarations do not read as one environment.
-pub fn query_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
+pub fn query_eval_env(
+    case: &SparqlTestCase,
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, String> {
     let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
         let mut registry = purrdf_sparql_eval::AggregateRegistry::default();
         registry.register_statistical_aggregates(namespace);
@@ -780,7 +782,9 @@ pub fn query_eval_is_ordered(query_text: &str) -> bool {
 /// # Errors
 ///
 /// Returns a message if the declarations do not read as one environment.
-pub fn update_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::ExtensionEnv, String> {
+pub fn update_eval_env(
+    case: &SparqlTestCase,
+) -> Result<purrdf_sparql_eval::ExtensionEnv<'static>, String> {
     purrdf_sparql_eval::ExtensionEnv::over_options(query_eval_parser_options())
         .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))
 }
@@ -791,7 +795,9 @@ pub fn update_eval_env(case: &SparqlTestCase) -> Result<purrdf_sparql_eval::Exte
 /// Public so a differential corpus that re-applies a suite update applies it exactly as
 /// [`run`] does.
 #[must_use]
-pub fn update_eval_options(env: &purrdf_sparql_eval::ExtensionEnv) -> QueryOptions<'_, '_> {
+pub fn update_eval_options<'a>(
+    env: &'a purrdf_sparql_eval::ExtensionEnv<'a>,
+) -> QueryOptions<'a, 'a> {
     QueryOptions::new()
         .with_env(env)
         .with_load(Some(&OfflineLoadResolver))
