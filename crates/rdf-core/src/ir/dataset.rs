@@ -2282,7 +2282,7 @@ impl RdfDataset {
     /// Number of RDF records across ordinary, reifier, and annotation tables.
     #[must_use]
     pub fn rdf_row_count(&self) -> usize {
-        self.quads.len() + self.reifiers.len() + self.annotations.len()
+        super::statement_row_count!(self)
     }
 
     /// UTF-8 arena bytes retained by the RDF term dictionary.

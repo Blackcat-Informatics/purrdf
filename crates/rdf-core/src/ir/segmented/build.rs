@@ -96,6 +96,16 @@ impl SegmentedBuilder {
         })
     }
 
+    /// Number of distinct retained statements across the ordinary, reifier and
+    /// annotation streams. Repeated pushes count once per distinct stored row;
+    /// named-graph declarations add no statements. This reads the shared IR
+    /// builder's existing counts without allocating or scanning the rows.
+    /// Structural RDF validation still occurs at [`Self::seal`].
+    #[must_use]
+    pub fn statement_count(&self) -> usize {
+        self.builder.statement_count()
+    }
+
     fn global(&self, id: TermId) -> GlobalTermId {
         GlobalTermId::from_index(
             self.limits.first_term_index
@@ -165,7 +175,7 @@ impl SegmentedBuilder {
         }
         Ok(next)
     }
-    /// Add a primary quad. Duplicate rows are normalized by the shared IR freeze.
+    /// Add a primary quad. Duplicate rows reuse the shared IR builder's stored row.
     ///
     /// # Errors
     /// Refuses foreign IDs or the inclusive resident row ceiling.
