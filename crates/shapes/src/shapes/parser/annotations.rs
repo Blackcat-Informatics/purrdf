@@ -281,9 +281,15 @@ impl Parser<'_> {
         let mut out = StatementAnnotation::default();
         let mut deactivated: Option<bool> = None;
         let mut message_set: Option<Vec<Term>> = None;
+        // How many reifiers state a `sh:deactivated` value, and whether any such value
+        // is a node expression: Core allows at most one reifier with a value for
+        // `sh:deactivated`, and the booleans are held to agreement instead (below).
+        let mut valued_reifiers = 0usize;
+        let mut expression_valued = false;
         let where_ = || format!("the reifiers of shape {shape}'s <{predicate}> {object} statement");
         for rows in self.reifier_rows(shape, predicate, object) {
             let mut messages: Vec<Term> = Vec::new();
+            let mut states_deactivated = false;
             for (annotation, value) in rows {
                 match annotation.as_str() {
                     sh::DEACTIVATED
@@ -305,12 +311,15 @@ impl Parser<'_> {
                             ));
                         }
                         out.present = true;
+                        states_deactivated = true;
+                        expression_valued = true;
                         if !out.expressions.contains(&value) {
                             out.expressions.push(value);
                         }
                     }
                     sh::DEACTIVATED => {
                         out.present = true;
+                        states_deactivated = true;
                         let flag = super::node_expr::boolean_value(&value).ok_or_else(|| {
                             format!(
                                 "sh:deactivated on {} must be an xsd:boolean literal or a node \
@@ -366,6 +375,7 @@ impl Parser<'_> {
                     _ => {}
                 }
             }
+            valued_reifiers += usize::from(states_deactivated);
             if !messages.is_empty() {
                 crate::term::sort_terms_canonical(&mut messages);
                 messages.dedup();
@@ -381,6 +391,14 @@ impl Parser<'_> {
                     _ => message_set = Some(messages),
                 }
             }
+        }
+        if valued_reifiers > 1 && expression_valued {
+            return Err(format!(
+                "{} state sh:deactivated on {valued_reifiers} reifiers and at least one value is a \
+                 node expression; SHACL 1.2 Core: a triple \"can have at most one reifier with a \
+                 value for the property sh:deactivated\"",
+                where_()
+            ));
         }
         out.deactivated = deactivated == Some(true);
         out.messages = message_set.unwrap_or_default();

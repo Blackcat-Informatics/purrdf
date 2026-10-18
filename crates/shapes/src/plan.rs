@@ -266,6 +266,10 @@ pub(crate) struct LoweredShapes {
     /// [`LoweredByTypes::index`] — one per shared index, however many
     /// constraints share it.
     closed_types: Box<[LoweredTypeIndex]>,
+    /// Whether any shape, constraint reifier or `sh:property` reifier of the shapes
+    /// graph states a node-expression `sh:deactivated`. A shape that reaches shapes
+    /// only by name, at evaluation, takes this graph-wide answer as its closure's.
+    any_deactivation: bool,
 }
 
 impl LoweredShapes {
@@ -462,6 +466,14 @@ pub(crate) struct LoweredShape {
     /// The lowered reifier `sh:deactivated` expressions of each entry of
     /// [`Shape::constraint_annotations`], positionally parallel to it.
     annotation_deactivations: Box<[Box<[LoweredExpr]>]>,
+    /// Whether the lowering of this shape, everything it nests included, met a
+    /// node-expression `sh:deactivated`: on a shape, a constraint reifier or a
+    /// `sh:property` reifier. Computed by the one walk, from the tree it just built.
+    deactivates: bool,
+    /// Whether that lowering met a reference it cannot follow to a shape lowered
+    /// here: a shape index resolved per value node, or a custom function body,
+    /// which is lowered once however many calls name it.
+    reaches_opaque: bool,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[LoweredProperty]>,
 }
@@ -968,6 +980,23 @@ impl<'a> ShapePlan<'a> {
             &self.lowered.annotation_deactivations,
             which,
         )
+    }
+
+    /// Whether a conformance question about this shape must be answered by walking
+    /// its whole reachable closure instead of stopping at the first answer.
+    ///
+    /// True exactly when the closure (`sh:or`, `sh:and`, `sh:xone`, `sh:not`,
+    /// `sh:node`, `sh:property`, `sh:qualifiedValueShape`, filter and
+    /// `shnex:conformsToShape` shapes, member and some-value shapes) holds a
+    /// node-expression `sh:deactivated`. Such an expression that is ill-formed at a
+    /// focus node fails the validation, so a short-circuit that skipped it would make
+    /// the verdict depend on member order. A shape that reaches shapes only through
+    /// a name resolved at evaluation, or a function body, takes the graph-wide
+    /// answer. False for every graph without a deactivation expression, so the
+    /// short-circuits there are untouched.
+    #[inline]
+    pub(crate) fn exhaustive(&self) -> bool {
+        self.lowered.deactivates || (self.lowered.reaches_opaque && self.graph.any_deactivation)
     }
 
     /// This shape's prepared target index.
@@ -2196,6 +2225,12 @@ struct ShapeWalk {
     unique_values: Vec<UniqueSpec>,
     /// Every `sh:closed sh:ByTypes` index lowered so far, in position order.
     closed_types: Vec<LoweredTypeIndex>,
+    /// How many node-expression `sh:deactivated` values the walk has lowered. A
+    /// shape's closure holds one exactly when this grew while it was lowered.
+    deactivations: usize,
+    /// How many references to a shape or body not lowered inline the walk has met
+    /// (see [`LoweredShape::reaches_opaque`]).
+    opaque_references: usize,
     /// The position each shared `sh:closed sh:ByTypes` index was lowered at, by
     /// the address of its `Arc` allocation — so a shapes graph's one index is
     /// lowered once however many constraints share it.
@@ -2323,11 +2358,15 @@ impl ShapeWalk {
             footprint,
             unique_values: self.unique_values.into_boxed_slice(),
             closed_types: self.closed_types.into_boxed_slice(),
+            any_deactivation: self.deactivations > 0,
         }
     }
 
     /// The position of the lowered form of `index`, entering it exactly once.
     fn index_position(&mut self, index: &Arc<OnceLock<FastMap<Term, Shape>>>) -> u32 {
+        // Whichever shape of the index a value node resolves to is chosen at
+        // evaluation, so no shape lowered inline here describes it.
+        self.opaque_references += 1;
         let cell = Arc::as_ptr(index).addr();
         if let Some(position) = self
             .indexes
@@ -2410,6 +2449,8 @@ pub(crate) fn lower_standalone_expression(expr: &NodeExpr) -> StandaloneLowering
         root_lowered: LoweredShape {
             deactivated_when: Box::new([]),
             annotation_deactivations: Box::new([]),
+            deactivates: false,
+            reaches_opaque: false,
             constraints: Box::new([]),
             properties: Box::new([]),
         },
@@ -2522,6 +2563,8 @@ fn standalone_root() -> Shape {
 /// Lower one shape: its targets' classes, its own constraints and its property
 /// shapes.
 fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+    let deactivations = walk.deactivations;
+    let opaque_references = walk.opaque_references;
     let scope = walk.footprint.enter_shape();
     for target in &shape.targets {
         walk.footprint.record_target(target);
@@ -2546,15 +2589,25 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
     let deactivated_when = lower_expressions(&shape.deactivated_when, walk);
     let annotation_deactivations =
         lower_annotation_deactivations(&shape.constraint_annotations, walk);
+    walk.deactivations += shape.deactivated_when.len()
+        + shape
+            .constraint_annotations
+            .iter()
+            .map(|annotation| annotation.deactivated_when.len())
+            .sum::<usize>();
+    let constraints = lower_constraints(&shape.constraints, &shape.property_shapes, walk);
+    let properties = shape
+        .property_shapes
+        .iter()
+        .map(|property| lower_property(property, walk))
+        .collect();
     let lowered = LoweredShape {
         deactivated_when,
         annotation_deactivations,
-        constraints: lower_constraints(&shape.constraints, &shape.property_shapes, walk),
-        properties: shape
-            .property_shapes
-            .iter()
-            .map(|property| lower_property(property, walk))
-            .collect(),
+        deactivates: walk.deactivations > deactivations,
+        reaches_opaque: walk.opaque_references > opaque_references,
+        constraints,
+        properties,
     };
     walk.footprint.leave(scope);
     lowered
@@ -2584,6 +2637,12 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
     let deactivated_when = lower_expressions(&property.deactivated_when, walk);
     let annotation_deactivations =
         lower_annotation_deactivations(&property.constraint_annotations, walk);
+    walk.deactivations += property.deactivated_when.len()
+        + property
+            .constraint_annotations
+            .iter()
+            .map(|annotation| annotation.deactivated_when.len())
+            .sum::<usize>();
     // Every step of the path is a read, and everything below applies to the nodes
     // the path arrives at — so the footprint moves to those value nodes here, while
     // remembering the declaring node the property-pair comparands are read from.
@@ -3056,6 +3115,9 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 .map(|(_, arg)| lower_expression(arg, walk))
                 .collect();
             let iri = func.iri.as_str().to_owned();
+            // The body is lowered once, at the first call site met; every call
+            // site reaches whatever shapes it holds.
+            walk.opaque_references += 1;
             // The body is lowered ONCE per function: it is shared by `Arc` and
             // names the same terms at every call site, and it may call this very
             // function, so re-entering it would not terminate. The in-flight list

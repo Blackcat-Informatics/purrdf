@@ -634,17 +634,25 @@ impl DetailResults {
 /// after it is work whose answer is already known; a result whose severity is not
 /// in the set (an `sh:Debug` one, under the default set) leaves the verdict open
 /// and the traversal continues.
+///
+/// An EXHAUSTIVE probe (see [`ShapePlan::exhaustive`]) records the same first
+/// disallowed violation but lets the traversal continue: the shape's closure holds a
+/// node-expression `sh:deactivated`, which fails the validation where it is
+/// ill-formed, so every constraint, property shape and nested shape the data reaches
+/// is walked exactly as a full validation walks it.
 struct AnyViolation<'d> {
     seen: bool,
+    exhaustive: bool,
     disallows: &'d ConformanceDisallows,
 }
 
 impl<'d> AnyViolation<'d> {
-    /// A probe that judges results against `disallows`.
+    /// A probe that judges results against `disallows`, over the closure of `plan`.
     #[inline]
-    const fn new(disallows: &'d ConformanceDisallows) -> Self {
+    fn new(disallows: &'d ConformanceDisallows, plan: ShapePlan<'_>) -> Self {
         Self {
             seen: false,
+            exhaustive: plan.exhaustive(),
             disallows,
         }
     }
@@ -664,7 +672,11 @@ impl ResultSink for AnyViolation<'_> {
     fn violation(&mut self, severity: &Severity, _build: impl FnOnce() -> ResultRecord) -> Flow {
         if self.disallows.contains(severity) {
             self.seen = true;
-            Flow::Stop
+            if self.exhaustive {
+                Flow::Continue
+            } else {
+                Flow::Stop
+            }
         } else {
             Flow::Continue
         }
@@ -953,7 +965,7 @@ fn conforms_memoized<'a>(
     {
         return Ok(recorded);
     }
-    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows(), plan);
     walk_shape(context.inner(plan), focus, &mut probe)?;
     let verdict = probe.conforms();
     if let Some(key) = key {
@@ -1525,7 +1537,7 @@ pub(crate) fn conforms_with_id_depth(
         capture: None,
         report_run: None,
     };
-    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows(), plan);
     walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
 }
@@ -2103,7 +2115,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     // this result's message, and this sink keeps no message. Probe
                     // for the first inner violation and stop there rather than
                     // collecting the rest.
-                    let mut probe = AnyViolation::new(disallows);
+                    let mut probe = AnyViolation::new(disallows, reifier_plan);
                     walk_shape(reifier_context, &reifier_focus, &mut probe)?;
                     if probe.conforms() {
                         continue;
@@ -2656,11 +2668,14 @@ fn eval_constraint<'a, S: ResultSink>(
                     ));
                     continue;
                 };
+                let exhaustive = context.plan.exhaustive();
                 let mut conforms = true;
                 for member in list.members(ds) {
                     if !conforms_memoized(context, member_shape, &FocusNode::Interned(member))? {
                         conforms = false;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if conforms {
@@ -3246,11 +3261,16 @@ fn eval_constraint<'a, S: ResultSink>(
                 // The recursion focus keeps the value node's own representation,
                 // so an interned one is never materialized to be recursed into.
                 let focus = value.as_focus(ds);
+                // Inside a closure holding a deactivation expression every member is
+                // asked, so the expressions evaluated do not depend on member order.
+                let exhaustive = context.plan.exhaustive();
                 let mut all_conform = true;
                 for member in members.iter(context.plan) {
                     if !conforms_memoized(context, member, &focus)? {
                         all_conform = false;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if !all_conform {
@@ -3269,11 +3289,15 @@ fn eval_constraint<'a, S: ResultSink>(
                 // As `sh:and`: the recursion focus keeps the value node's own
                 // representation.
                 let focus = value.as_focus(ds);
+                // As `sh:and`: every member is asked inside such a closure.
+                let exhaustive = context.plan.exhaustive();
                 let mut any_conforms = false;
                 for member in members.iter(context.plan) {
                     if conforms_memoized(context, member, &focus)? {
                         any_conforms = true;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if !any_conforms {
@@ -3468,10 +3492,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 }
                 let mut sibling_conforms = false;
                 if disjoint {
+                    let exhaustive = context.plan.exhaustive();
                     for sibling in siblings.iter(context.plan) {
                         if conforms_memoized(context, sibling, &focus)? {
                             sibling_conforms = true;
-                            break;
+                            if !exhaustive {
+                                break;
+                            }
                         }
                     }
                 }

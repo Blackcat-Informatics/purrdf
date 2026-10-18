@@ -2786,9 +2786,7 @@ impl<'s> Parser<'s> {
         for ps_node in property_shape_nodes {
             let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &ps_node)])?;
             let ps = self.parse_property_shape(&ps_node)?;
-            if let Some(ps) = annotate_property_edge(ps, annotated) {
-                property_shapes.push(ps);
-            }
+            property_shapes.push(annotate_property_edge(ps, annotated));
         }
 
         // -- Node-level constraints --
@@ -3256,7 +3254,7 @@ impl<'s> Parser<'s> {
                     continue;
                 }
                 match self.parse_property_shape(&nested) {
-                    Ok(parsed) => property_shapes.extend(annotate_property_edge(parsed, annotated)),
+                    Ok(parsed) => property_shapes.push(annotate_property_edge(parsed, annotated)),
                     Err(e) => {
                         self.in_flight.remove(&key);
                         return Err(e);
@@ -3649,18 +3647,28 @@ impl<'s> Parser<'s> {
 /// and "the validation results are the results of validating v as focus node
 /// against the property shape $property" — the results that constraint causes
 /// are the property shape's. So a reifier on the `sh:property` statement
-/// annotates exactly those results: `sh:deactivated true` drops this reach of
+/// annotates exactly those results: `sh:deactivated true` deactivates this reach of
 /// the property shape (the same shape reached through another, unannotated
-/// statement still validates), and `sh:severity` / `sh:message` take the place of
+/// statement still validates, and the reach keeps its path in `sh:closed`'s
+/// permitted set), and `sh:severity` / `sh:message` take the place of
 /// the property shape's own for this reach, below any reifier annotation on the
 /// property shape's own constraint statements, which names the constraint that
 /// caused the result more narrowly still. A node-expression `sh:deactivated` joins
 /// the property shape's own, so this reach is deactivated where any of them produces
 /// `true`.
-fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option<PropertyShape> {
+fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> PropertyShape {
     match annotated {
-        Annotated::Deactivated => None,
-        Annotated::Plain => Some(ps),
+        // The edge stays: `sh:closed`'s permitted set P is syntactic, "the set of IRI
+        // properties that can be reached from the current shape via the SPARQL path
+        // sh:property/sh:path", and `sh:property` is no parameter of the closed
+        // constraint, so a deactivated reach must not shrink it. Marked deactivated, the
+        // property shape validates nothing here — exactly as its own `sh:deactivated
+        // true` does — and the always-true expression spelling already keeps it.
+        Annotated::Deactivated => {
+            ps.deactivated = true;
+            ps
+        }
+        Annotated::Plain => ps,
         Annotated::Override {
             severity,
             messages,
@@ -3673,7 +3681,7 @@ fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option
                 ps.messages = messages;
             }
             ps.deactivated_when.extend(deactivated_when);
-            Some(ps)
+            ps
         }
     }
 }
