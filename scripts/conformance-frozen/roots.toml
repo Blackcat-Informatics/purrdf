@@ -8,6 +8,7 @@
 "vectors/rdf12-canon" = "scripts/conformance-frozen/vectors-rdf12-canon.sha256"
 "vectors/sparql-governors" = "scripts/conformance-frozen/vectors-sparql-governors.sha256"
 "vectors/shacl" = "scripts/conformance-frozen/vectors-shacl.sha256"
+"vectors/shacl-reports" = "scripts/conformance-frozen/vectors-shacl-reports.sha256"
 "vectors/shacl12" = "scripts/conformance-frozen/vectors-shacl12.sha256"
 "vectors/shexTest" = "scripts/conformance-frozen/vectors-shexTest.sha256"
 "vectors/sparql-cdt" = "scripts/conformance-frozen/vectors-sparql-cdt.sha256"

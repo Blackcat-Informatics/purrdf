@@ -170,6 +170,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   `scripts/conformance-frozen/vectors-shacl12.sha256`. Run by
   `crates/shapes/tests/w3c12_conformance.rs`; its `PROVENANCE.md` records the
   commit.
+- `vectors/shacl-reports/` — the Working Group's SHACL 1.0 test inventory
+  (`data-shapes-test-suite/reports/alltests.ttl`), copied byte-exact from
+  `w3c/data-shapes` at commit `4cd46986` and frozen by
+  `scripts/conformance-frozen/vectors-shacl-reports.sha256`. The SHACL 1.0
+  harness checks its EARL report against the inventory's approved entries.
 - `vectors/sparql-cdt/` — the SEP-0009 Composite Datatypes suite, vendored
   verbatim from `awslabs/SPARQL-CDTs` at commit `e0a7465` by
   `scripts/vendor-sparql-cdt.py` and frozen by

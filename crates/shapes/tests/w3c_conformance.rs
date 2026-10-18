@@ -452,6 +452,94 @@ fn w3c_2017_earl_covers_the_subset_and_nothing_else() {
     assert!(written.keys().all(|k| !k.starts_with("af/")));
 }
 
+/// The Working Group's own inventory of the 2017 suite
+/// (`vectors/shacl-reports/alltests.ttl`, frozen) is the reference for what the
+/// report must cover: its approved `urn:x-shacl-test:` subjects are exactly the
+/// report's `earl:test` IRIs, once each; its proposed subject is absent; and the
+/// report's passed and failed counts are the ones the scoreboard prints.
+#[test]
+fn w3c_2017_earl_matches_wg_inventory() {
+    use purrdf_iri::vocab::{earl, mf, sht};
+    use purrdf_shapes::data::{GraphFilter, native_quads};
+    use purrdf_shapes::term::Term;
+    use std::collections::BTreeSet;
+
+    let inventory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vectors/shacl-reports/alltests.ttl");
+    let graph = shacl_corpora::parse_turtle_file(&inventory).expect("the WG inventory parses");
+    let with_status = |status: &str| -> BTreeSet<String> {
+        native_quads(
+            &*graph,
+            None,
+            Some(&shacl_corpora::named(mf::STATUS)),
+            Some(&shacl_corpora::named(status)),
+            GraphFilter::AnyGraph,
+        )
+        .into_iter()
+        .map(|(subject, _, _)| match subject {
+            Term::NamedNode(n) => n.as_str().to_owned(),
+            other => panic!("inventory subject {other} is not an IRI"),
+        })
+        .collect()
+    };
+    let approved = with_status(sht::APPROVED);
+    let proposed = with_status(sht::PROPOSED);
+    assert_eq!(
+        approved.len(),
+        W3C_SUBSET_CASES,
+        "the WG approves 120 tests"
+    );
+    assert_eq!(proposed.len(), W3C_PROPOSED_UNINCLUDED.len());
+    assert!(approved.is_disjoint(&proposed));
+
+    // The report as the writer builds it, parsed back: any parse error fails. A
+    // second assertion about one test is a parse error in `assertions`, so each
+    // test occurs exactly once.
+    let bytes = earl_bytes_for_sample();
+    let statements = w3c_earl::statements(&bytes).expect("the report parses");
+    let assertions = w3c_earl::assertions(&statements).expect("the assertions parse");
+    let asserted: BTreeSet<&str> = assertions.keys().map(String::as_str).collect();
+    let test_count = statements
+        .iter()
+        .filter(|t| t.p == w3c_earl::angle(earl::TEST))
+        .count();
+    assert_eq!(test_count, approved.len(), "one earl:test per assertion");
+    assert_eq!(
+        asserted,
+        approved.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+        "the report covers exactly the WG's approved tests"
+    );
+    for iri in &proposed {
+        assert!(!assertions.contains_key(iri), "{iri} is proposed");
+    }
+
+    // The counts equal the printed line.
+    let line = scope_line();
+    let counts = line
+        .strip_prefix(&format!("{SCOPE_LABEL}: passed "))
+        .and_then(|rest| rest.split_once(&format!(", {SCOPE_FAILED_LABEL} ")))
+        .and_then(|(passed, rest)| {
+            let (failed, total) = rest.split_once(" of ")?;
+            Some((
+                passed.parse::<usize>().ok()?,
+                failed.parse::<usize>().ok()?,
+                total.parse::<usize>().ok()?,
+            ))
+        })
+        .unwrap_or_else(|| panic!("unparseable scoreboard line {line:?}"));
+    let outcome = |wanted: &str| assertions.values().filter(|a| a.outcome == wanted).count();
+    assert_eq!(
+        (
+            outcome(earl::PASSED),
+            outcome(earl::FAILED),
+            assertions.len()
+        ),
+        counts,
+        "{line}"
+    );
+    assert_eq!(counts.2, 120);
+}
+
 /// The subject and the assertor, by exact value.
 #[test]
 fn w3c_2017_earl_subject_and_assertor_are_exact() {
