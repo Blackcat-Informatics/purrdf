@@ -1037,7 +1037,7 @@ pub(crate) fn for_each_step(
     st: &State,
     y: usize,
     ach: &[(u32, bool)],
-    mut visit: impl FnMut(usize),
+    mut visit: impl FnMut(usize, changes::reach::Step),
 ) {
     let y = find(st, y);
     for &edge in st.class_edges(y) {
@@ -1045,10 +1045,26 @@ pub(crate) fn for_each_step(
         let f = find(st, from);
         let t = find(st, to);
         if realizes(ach, (prop, true)) && f == y {
-            visit(t);
+            visit(
+                t,
+                changes::reach::Step {
+                    edge,
+                    from: y,
+                    to: t,
+                    letter: Role::Named(prop),
+                },
+            );
         }
         if realizes(ach, (prop, false)) && t == y {
-            visit(f);
+            visit(
+                f,
+                changes::reach::Step {
+                    edge,
+                    from: y,
+                    to: f,
+                    letter: Role::Inv(prop),
+                },
+            );
         }
     }
 }
@@ -1905,6 +1921,25 @@ impl<'a> Graph<'a> {
         if self.selecting_reads() {
             self.publish_observation(|journal| journal.read(fact));
         }
+    }
+
+    /// A selected cached member uses the immutable witness retained by that cache.
+    fn observe_reach(&self, pattern: usize, from: usize, to: usize, role: Role, via: Role) {
+        if !self.selecting_reads() || self.changes_refused() {
+            return;
+        }
+        let path = self
+            .changes
+            .borrow()
+            .as_ref()
+            .expect("selected replay journal")
+            .reach_path(pattern, from, to);
+        self.observe_read(ReadFact::Role {
+            from,
+            to,
+            role,
+            witness: RoleWitness::Transitive { via, path },
+        });
     }
 
     /// Metadata publication shares one stop, work, and typed storage boundary.
@@ -3016,13 +3051,8 @@ impl<'a> Graph<'a> {
                 self.work.charge(reach.order.len() as u64 + 1);
                 for &y in &reach.order {
                     if scratch.emit(y) && visit(y) {
-                        self.observe_read(ReadFact::Role {
-                            from: x,
-                            to: y,
-                            role,
-                            witness: RoleWitness::PendingPath,
-                        });
-                        return true;
+                        self.observe_reach(index, x, y, role, pattern_role(prop, dir));
+                        return !self.changes_refused();
                     }
                 }
                 continue;
@@ -3042,7 +3072,7 @@ impl<'a> Graph<'a> {
             if !self.charge_step(st, x) {
                 return false;
             }
-            Self::reach(st, x, &single, scratch);
+            self.reach(st, x, &single, scratch, index, x);
             while let Some(y) = scratch.frontier.pop() {
                 // The transitive closure is the one loop here whose length is a function of
                 // the graph rather than of the role hierarchy, so it is polled as well as
@@ -3054,12 +3084,10 @@ impl<'a> Graph<'a> {
                     scratch.members.push(y);
                 }
                 if !stopped && scratch.emit(y) && visit(y) {
-                    self.observe_read(ReadFact::Role {
-                        from: x,
-                        to: y,
-                        role,
-                        witness: RoleWitness::PendingPath,
-                    });
+                    self.observe_reach(index, x, y, role, pattern_role(prop, dir));
+                    if self.changes_refused() {
+                        return false;
+                    }
                     if !record {
                         return true;
                     }
@@ -3068,7 +3096,7 @@ impl<'a> Graph<'a> {
                 if !self.charge_step(st, y) {
                     return false;
                 }
-                Self::reach(st, y, &single, scratch);
+                self.reach(st, y, &single, scratch, index, x);
             }
             if record {
                 st.closures.borrow_mut().store(
@@ -3112,9 +3140,19 @@ impl<'a> Graph<'a> {
             let (from, to) = (find(st, from), find(st, to));
             for index in 0..self.patterns.len() {
                 let forward = self.patterns.forward(index);
-                for (src, dst, realized) in [
-                    (from, to, realizes(forward, (property, true))),
-                    (to, from, realizes(forward, (property, false))),
+                for (src, dst, realized, letter) in [
+                    (
+                        from,
+                        to,
+                        realizes(forward, (property, true)),
+                        Role::Named(property),
+                    ),
+                    (
+                        to,
+                        from,
+                        realizes(forward, (property, false)),
+                        Role::Inv(property),
+                    ),
                 ] {
                     if !realized {
                         continue;
@@ -3132,6 +3170,28 @@ impl<'a> Graph<'a> {
                     self.work.charge((owners.len() + gain.len()) as u64);
                     let mut closures = st.closures.borrow_mut();
                     for owner in owners {
+                        if self.observing_changes() {
+                            let step = changes::reach::Step {
+                                edge,
+                                from: src,
+                                to: dst,
+                                letter,
+                            };
+                            for &target in &gain {
+                                if !closures
+                                    .get(index, owner)
+                                    .expect("native closure owner")
+                                    .contains(target)
+                                {
+                                    self.publish_observation(|journal| {
+                                        journal.reach_extend(index, owner, step, target)
+                                    });
+                                    if self.changes_refused() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
                         closures.extend(index, owner, &gain, round);
                     }
                 }
@@ -3149,8 +3209,11 @@ impl<'a> Graph<'a> {
         let mut visited: BTreeSet<usize> = BTreeSet::new();
         let mut frontier: Vec<usize> = Vec::new();
         self.charge_step(st, x);
-        for_each_step(st, x, single, |z| {
+        for_each_step(st, x, single, |z, step| {
             if visited.insert(z) {
+                if self.observing_changes() {
+                    self.publish_observation(|journal| journal.reach_step(index, x, step));
+                }
                 frontier.push(z);
             }
         });
@@ -3160,8 +3223,11 @@ impl<'a> Graph<'a> {
             }
             out.push(y);
             self.charge_step(st, y);
-            for_each_step(st, y, single, |z| {
+            for_each_step(st, y, single, |z, step| {
                 if visited.insert(z) {
+                    if self.observing_changes() {
+                        self.publish_observation(|journal| journal.reach_step(index, x, step));
+                    }
                     frontier.push(z);
                 }
             });
@@ -3211,9 +3277,20 @@ impl<'a> Graph<'a> {
 
     /// One closure step from `y` over the patterns `ach`: push every endpoint the current walk
     /// has not reached onto the frontier, in edge order.
-    fn reach(st: &State, y: usize, ach: &[(u32, bool)], scratch: &mut ReadScratch) {
-        for_each_step(st, y, ach, |z| {
+    fn reach(
+        &self,
+        st: &State,
+        y: usize,
+        ach: &[(u32, bool)],
+        scratch: &mut ReadScratch,
+        index: usize,
+        root: usize,
+    ) {
+        for_each_step(st, y, ach, |z, step| {
             if scratch.reach(z) {
+                if self.observing_changes() {
+                    self.publish_observation(|journal| journal.reach_step(index, root, step));
+                }
                 scratch.frontier.push(z);
             }
         });

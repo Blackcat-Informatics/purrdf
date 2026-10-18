@@ -4,12 +4,31 @@
 //! Proof-local dependency construction over one native replay's ordered observations.
 //! This private qualification seam does not resolve original RDF/schema licenses.
 
+use super::reach;
 use super::{
     Cause, Event, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
 };
 use crate::owl_dl::concept::Role;
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
+
+/// One normalized transitivity/hierarchy license for a selected immutable path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TransitiveRead {
+    pub(crate) root: usize,
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) role: Role,
+    pub(crate) via: Role,
+}
+
+/// Preserve shared joins instead of exponentially expanding a composed walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TransitiveNode {
+    pub(crate) root: usize,
+    pub(crate) id: usize,
+    pub(crate) path: reach::Path,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Fact {
@@ -27,6 +46,8 @@ struct Dependency {
     owner: Option<ReadOwner>,
     parents: Range<usize>,
     paths: Range<usize>,
+    transitive: Range<usize>,
+    transitive_nodes: Range<usize>,
     incomplete: bool,
 }
 
@@ -52,6 +73,8 @@ pub(crate) struct Slice {
     pub(crate) causes: Vec<Cause>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
+    pub(crate) transitive: Vec<TransitiveRead>,
+    pub(crate) transitive_nodes: Vec<TransitiveNode>,
 }
 
 #[derive(Default)]
@@ -63,6 +86,8 @@ struct Builder {
     nodes: Vec<Dependency>,
     parents: Vec<usize>,
     paths: Vec<PathStep>,
+    transitive: Vec<TransitiveRead>,
+    transitive_nodes: Vec<TransitiveNode>,
 }
 
 impl Builder {
@@ -113,6 +138,7 @@ impl Builder {
         &mut self,
         fact: ReadFact,
         paths: &[PathStep],
+        reach: &[reach::Path],
         memory: &mut Memory<'_, Resident>,
     ) -> Result<(), Error> {
         match fact {
@@ -142,6 +168,52 @@ impl Builder {
                     }
                     memory.push(&mut self.paths, *step)?;
                 }
+                Ok(())
+            }
+            ReadFact::Role {
+                from,
+                to,
+                role,
+                witness: RoleWitness::Transitive { via, path },
+            } => {
+                let mut pending = Vec::new();
+                let mut visited = OrderedTable::default();
+                memory.push(
+                    &mut self.transitive,
+                    TransitiveRead {
+                        root: path,
+                        from,
+                        to,
+                        role,
+                        via,
+                    },
+                )?;
+                memory.push(&mut pending, path)?;
+                while let Some(id) = pending.pop() {
+                    if visited.insert(id, (), memory)?.is_some() {
+                        continue;
+                    }
+                    let node = *reach.get(id).ok_or(Error::MissingPath)?;
+                    memory.push(
+                        &mut self.transitive_nodes,
+                        TransitiveNode {
+                            root: path,
+                            id,
+                            path: node,
+                        },
+                    )?;
+                    match node {
+                        reach::Path::Step(step) => {
+                            self.edge(step.edge, step.letter, step.from, step.to, memory)?;
+                        }
+                        reach::Path::Join { first, second } => {
+                            memory.push(&mut pending, second)?;
+                            memory.push(&mut pending, first)?;
+                        }
+                    }
+                }
+                memory.release_vec(pending)?;
+                visited.release(memory)?;
                 Ok(())
             }
             ReadFact::Role { .. } => Err(Error::MissingPath),
@@ -274,6 +346,8 @@ impl Builder {
                 owner: None,
                 parents: start..self.parents.len(),
                 paths: 0..0,
+                transitive: 0..0,
+                transitive_nodes: 0..0,
                 incomplete,
             },
         )?;
@@ -322,12 +396,14 @@ impl Journal {
             }
             let start = graph.parents.len();
             let path_start = graph.paths.len();
+            let transitive_start = graph.transitive.len();
+            let transitive_nodes_start = graph.transitive_nodes.len();
             let mut incomplete = false;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
                 && next.checkpoint == selected.checkpoint
             {
-                match graph.read(next.fact, &self.paths, &mut memory) {
+                match graph.read(next.fact, &self.paths, &self.reach.paths, &mut memory) {
                     Ok(()) => {}
                     Err(Error::MissingPath) => incomplete = true,
                     Err(error) => return Err(error),
@@ -342,6 +418,8 @@ impl Journal {
                     owner: Some(selected.owner),
                     parents: start..graph.parents.len(),
                     paths: path_start..graph.paths.len(),
+                    transitive: transitive_start..graph.transitive.len(),
+                    transitive_nodes: transitive_nodes_start..graph.transitive_nodes.len(),
                     incomplete,
                 },
             )?;
@@ -361,6 +439,8 @@ impl Journal {
             causes: Vec::new(),
             owners: Vec::new(),
             paths: Vec::new(),
+            transitive: Vec::new(),
+            transitive_nodes: Vec::new(),
         };
         while let Some(id) = pending.pop() {
             if visited[id] {
@@ -384,6 +464,16 @@ impl Journal {
             memory.extend(
                 &mut result.paths,
                 graph.paths[node.paths.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.transitive,
+                graph.transitive[node.transitive.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.transitive_nodes,
+                graph.transitive_nodes[node.transitive_nodes.clone()]
+                    .iter()
+                    .copied(),
             )?;
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;

@@ -230,6 +230,78 @@ fn checked_clash_retains_selected_compiled_role_path() {
     }
 }
 
+/// Transitive source support reaches the actual clash through independent replay.
+#[test]
+fn checked_clash_retains_selected_transitive_role_path() {
+    use crate::owl_dl::graph::changes::{Journal, Origin};
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("C");
+    let disjoint = f.name("D");
+    f.edge(filler, owl::DISJOINT_WITH, disjoint);
+    let role = f.name("r");
+    let transitive = f.builder.intern_iri(owl::TRANSITIVE_PROPERTY).unwrap();
+    f.edge(role, rdf::TYPE, transitive);
+    let restriction = f.blank();
+    f.edge(class, rdfs::SUB_CLASS_OF, restriction);
+    f.edge(restriction, owl::ON_PROPERTY, role);
+    f.edge(restriction, owl::ALL_VALUES_FROM, filler);
+    let from = f.instance("from", class);
+    let middle = f.name("middle");
+    let target = f.instance("target", disjoint);
+    f.builder.push_quad(from, role, middle, None).unwrap();
+    f.builder.push_quad(middle, role, target, None).unwrap();
+    let (proof, ctx) = checked_fixture(&f.freeze());
+    assert!(ctx.kb.role_program.is_none());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.current.is_some())
+        .unwrap();
+    assert!(
+        proof
+            .resolve_clash(index, &ctx)
+            .unwrap()
+            .replay()
+            .current_supported()
+    );
+    let step = &proof.clashes[index];
+    let current = step.current.as_ref().unwrap();
+    let prefix = crate::owl_dl::support::prefix(&proof.support, current.latest, None).unwrap();
+    let observed = crate::owl_dl::hyper::replay_observing_support(
+        &ctx.kb,
+        &crate::owl_dl::graph::Assumptions::of_kb(),
+        &prefix,
+        step.clause,
+        &current.frame,
+        &proof.branches,
+        Journal::default(),
+    )
+    .unwrap();
+    assert_eq!(observed.frame, step.frame);
+    assert_eq!(observed.facts, step.witness);
+    let slice = observed.mutations.unwrap().normalized_slice().unwrap();
+    assert!(
+        slice
+            .transitive_nodes
+            .iter()
+            .filter(|node| matches!(
+                node.path,
+                crate::owl_dl::graph::changes::reach::Path::Step(_)
+            ))
+            .count()
+            >= 2
+    );
+    for index in 0..2 {
+        assert!(
+            slice
+                .causes
+                .iter()
+                .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index)
+        );
+    }
+}
+
 /// A failed native recording keeps its original refusal and cannot publish an empty trace.
 #[test]
 fn native_mutations_preserve_original_storage_refusal_before_malformed_reporting() {

@@ -7,6 +7,7 @@
 //! RDF premises until their original parser/normalization licenses are resolved.
 
 use super::super::concept::Role;
+pub(crate) mod reach;
 #[cfg(test)]
 pub(crate) mod slice;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
@@ -47,8 +48,8 @@ pub(crate) enum ReadFact {
 pub(crate) enum RoleWitness {
     Edge(usize),
     Language { start: usize, end: usize },
+    Transitive { via: Role, path: usize },
     Universal,
-    PendingPath,
 }
 
 /// An actual transition selected in the native product traversal. State numbers
@@ -275,6 +276,7 @@ pub(crate) struct Journal {
     events: Vec<Event>,
     reads: Vec<Read>,
     paths: Vec<PathStep>,
+    reach: reach::Witnesses,
     pub(super) read_owner: Option<ReadOwner>,
     storage: Resident,
     live: usize,
@@ -283,6 +285,39 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    pub(super) fn reach_step(
+        &mut self,
+        pattern: usize,
+        root: usize,
+        step: reach::Step,
+    ) -> Result<(), StorageError> {
+        #[cfg(test)]
+        self.publication_refusal()?;
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = self.reach.step(pattern, root, step, &mut memory);
+        self.live = memory.admitted_bytes();
+        result
+    }
+
+    pub(super) fn reach_extend(
+        &mut self,
+        pattern: usize,
+        owner: usize,
+        step: reach::Step,
+        target: usize,
+    ) -> Result<(), StorageError> {
+        #[cfg(test)]
+        self.publication_refusal()?;
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = self.reach.extend(pattern, owner, step, target, &mut memory);
+        self.live = memory.admitted_bytes();
+        result
+    }
+
+    pub(super) fn reach_path(&self, pattern: usize, root: usize, target: usize) -> usize {
+        self.reach.path(pattern, root, target)
+    }
+
     pub(super) fn path_len(&self) -> usize {
         self.paths.len()
     }
@@ -359,6 +394,9 @@ impl Journal {
         let mut memory = Memory::resume(&mut self.storage, self.live);
         let result = memory.push(&mut self.events, Event { cause, mutation });
         self.live = memory.admitted_bytes();
+        if result.is_ok() && matches!(mutation, Mutation::Merge { .. }) {
+            self.reach.clear();
+        }
         result
     }
 

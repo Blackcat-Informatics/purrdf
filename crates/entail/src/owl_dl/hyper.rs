@@ -3219,7 +3219,7 @@ fn reach_back(
         scratch.walk.push(y);
     } else {
         g.work().charge(st.class_edges(y).len() as u64);
-        for_each_step(st, y, mirror, |z| scratch.walk.push(z));
+        for_each_step(st, y, mirror, |z, _| scratch.walk.push(z));
     }
     while let Some(z) = scratch.walk.pop() {
         if scratch.stamp[z] == scratch.epoch && scratch.via[z] & bit != 0 {
@@ -3230,7 +3230,7 @@ fn reach_back(
         }
         scratch.via[z] |= bit;
         g.work().charge(st.class_edges(z).len() as u64 + 1);
-        for_each_step(st, z, mirror, |w| scratch.walk.push(w));
+        for_each_step(st, z, mirror, |w, _| scratch.walk.push(w));
     }
 }
 
@@ -3673,10 +3673,10 @@ mod tests {
         }
     }
 
-    /// An unresolved native path is never an empty successful justification.
+    /// A warm transitive read reuses the witness made by the native closure walk.
     #[test]
-    fn selected_reads_refuse_pending_transitive_path() {
-        use crate::owl_dl::graph::changes::{Journal, ReadOwner, slice::Error};
+    fn selected_reads_slice_transitive_path_from_native_cache() {
+        use crate::owl_dl::graph::changes::{Journal, ReadFact, ReadOwner, RoleWitness};
         let mut kb = Kb::empty();
         kb.transitive.insert(R);
         kb.abox_roles
@@ -3699,10 +3699,56 @@ mod tests {
             state.root_of[&(IND + 2)]
         ));
         driver.g.select_reads(None);
-        assert!(matches!(
-            driver.g.finish_changes().unwrap().normalized_slice(),
-            Err(Error::MissingPath)
+        let cold = driver.g.work().spent();
+        driver.g.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+        assert!(driver.g.is_neighbour(
+            &state,
+            state.root_of[&IND],
+            Role::Named(R),
+            state.root_of[&(IND + 2)]
         ));
+        driver.g.select_reads(None);
+        assert!(driver.g.work().spent() - cold < cold);
+        let journal = driver.g.finish_changes().unwrap();
+        let paths: Vec<_> = journal
+            .reads()
+            .iter()
+            .filter_map(|read| match read.fact {
+                ReadFact::Role {
+                    witness: RoleWitness::Transitive { path, .. },
+                    ..
+                } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(
+            paths[0], paths[1],
+            "warm lookup retains the same immutable witness"
+        );
+        let slice = journal.normalized_slice().unwrap();
+        assert_eq!(slice.transitive.len(), 1);
+        assert_eq!(
+            slice
+                .transitive_nodes
+                .iter()
+                .filter_map(|node| match node.path {
+                    crate::owl_dl::graph::changes::reach::Path::Step(step) => Some(step.edge),
+                    crate::owl_dl::graph::changes::reach::Path::Join { .. } => None,
+                })
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert!(
+            slice
+                .transitive
+                .iter()
+                .all(|step| step.via == Role::Named(R) && step.role == Role::Named(R))
+        );
+        assert_eq!(
+            (slice.transitive[0].from, slice.transitive[0].to),
+            (state.root_of[&IND], state.root_of[&(IND + 2)])
+        );
     }
 
     /// A birth record alone cannot license a witness-reuse or counting effect.
