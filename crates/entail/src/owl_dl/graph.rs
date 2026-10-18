@@ -1983,6 +1983,13 @@ impl<'a> Graph<'a> {
                 node,
                 named,
                 parent: value.parent,
+                incoming: value.incoming.map(|(property, inverted)| {
+                    if inverted {
+                        Role::Inv(property)
+                    } else {
+                        Role::Named(property)
+                    }
+                }),
                 reserved,
                 concrete: value.concrete,
             },
@@ -2292,8 +2299,8 @@ impl<'a> Graph<'a> {
     /// else `None`. The nominal-introduction rules gate on this rather than on the bare
     /// [`Node::root`] flag, because an anonymous `fresh_types` witness is an unblocked root that
     /// is not a nominal.
-    pub(crate) fn nominal_id(&self, st: &State, x: usize) -> Option<NominalId> {
-        st.nodes[find(st, x)].nominal_id.clone()
+    pub(crate) fn nominal_id<'s>(&self, st: &'s State, x: usize) -> Option<&'s NominalId> {
+        st.nodes[find(st, x)].nominal_id.as_ref()
     }
 
     /// Whether `filler` is a nominal `{o₁,…}` at least one of whose roots counts over an INVERSE
@@ -2363,14 +2370,54 @@ impl<'a> Graph<'a> {
         x: usize,
         role: Role,
     ) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.visit_blockable_predecessors(st, x, role, &mut |y, _, _, _| {
+            if seen.insert(y) {
+                out.push(y);
+            }
+            false
+        });
+        out
+    }
+
+    /// Read the actual chosen generative predecessor through the shared native predicate.
+    pub(crate) fn select_blockable_predecessor(
+        &self,
+        st: &State,
+        x: usize,
+        role: Role,
+        target: usize,
+    ) -> bool {
+        self.visit_blockable_predecessors(st, x, role, &mut |y, child, parent, letter| {
+            if y != target {
+                return false;
+            }
+            self.observe_read(ReadFact::Predecessor {
+                child,
+                parent,
+                node: find(st, x),
+                predecessor: y,
+                role,
+                letter,
+            });
+            true
+        })
+    }
+
+    fn visit_blockable_predecessors(
+        &self,
+        st: &State,
+        x: usize,
+        role: Role,
+        visit: &mut dyn FnMut(usize, usize, usize, Role) -> bool,
+    ) -> bool {
         if self.work.exhausted() {
-            return Vec::new();
+            return false;
         }
-        let ach = self.achievers(role);
+        let mut achievers = None;
         let x = find(st, x);
         self.work.charge(1);
-        let mut out: Vec<usize> = Vec::new();
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
         // The nodes that resolve to `x` are its union-find class, kept per root, so this reads
         // the class rather than scanning the graph for it: one unit per member, in the
         // ascending order the scan met them.
@@ -2388,16 +2435,28 @@ impl<'a> Graph<'a> {
             // `parent` generated `n` under `R` (`incoming`): the edge is `n → parent` for an
             // inverse `R` (x the source, forward achiever) and `parent → n` for a named `R`
             // (x the target, inverse achiever).
+            let ach = achievers.get_or_insert_with(|| self.achievers(role));
             let realized = if inverted {
-                realizes(&ach, (prop, true))
+                realizes(ach, (prop, true))
             } else {
-                realizes(&ach, (prop, false))
+                realizes(ach, (prop, false))
             };
-            if realized && seen.insert(y) {
-                out.push(y);
+            if realized
+                && visit(
+                    y,
+                    n,
+                    parent,
+                    if inverted {
+                        Role::Named(prop)
+                    } else {
+                        Role::Inv(prop)
+                    },
+                )
+            {
+                return true;
             }
         }
-        out
+        false
     }
 
     /// Merge `discard` into `keep`, identifying the two nodes.

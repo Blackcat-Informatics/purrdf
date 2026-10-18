@@ -3,10 +3,10 @@
 
 //! The same complete boundary artifact on native and actual WASM.
 
-/// Execute all sixteen committed service/schema vectors through their production checker.
+/// Execute all seventeen committed service/schema vectors through their production checker.
 fn all_shared_dl_proof_vectors_match_the_current_native_boundary() {
     let cases = purrdf_validate::regime::dl_proof_golden_vectors().unwrap();
-    assert_eq!(cases.len(), 16, "the complete service and schema inventory");
+    assert_eq!(cases.len(), 17, "the complete service and schema inventory");
     purrdf_validate::regime::check_dl_proof_golden_vectors().unwrap();
 }
 

@@ -559,6 +559,7 @@ impl Builder {
     fn read(
         &mut self,
         fact: ReadFact,
+        events: &[Event],
         paths: &[PathStep],
         reach: &[reach::Path],
         rules: &OrderedTable<(Role, Role), (Role, Input)>,
@@ -584,6 +585,44 @@ impl Builder {
             ReadFact::Node(node) | ReadFact::Top(node) => self.parent(Fact::Node(node), memory),
             ReadFact::ObjectDomain(node) => self.parent(Fact::Domain(node), memory),
             ReadFact::Distinct { left, right } => self.parent(distinct(left, right), memory),
+            ReadFact::Predecessor {
+                child,
+                parent,
+                node,
+                predecessor,
+                role,
+                letter,
+            } => {
+                let birth = |node| -> Result<Event, Error> {
+                    let id = self
+                        .facts
+                        .get(&Fact::Node(node))
+                        .ok_or(Error::MissingFact)?;
+                    let ordinal = self.nodes[*id].event.ok_or(Error::MissingFact)?;
+                    events.get(ordinal).copied().ok_or(Error::MissingFact)
+                };
+                let incoming = match letter {
+                    Role::Named(p) => Role::Inv(p),
+                    Role::Inv(p) => Role::Named(p),
+                };
+                if !matches!(birth(child)?.mutation, Mutation::Node { parent: Some(p), incoming: Some(r), reserved: false, .. } if p == parent && r == incoming)
+                    || !matches!(
+                        birth(predecessor)?.mutation,
+                        Mutation::Node {
+                            parent: Some(_),
+                            reserved: false,
+                            ..
+                        }
+                    )
+                {
+                    return Err(Error::MissingEffect);
+                }
+                self.parent(Fact::Node(child), memory)?;
+                self.parent(Fact::Node(parent), memory)?;
+                self.alias(child, node, memory)?;
+                self.alias(parent, predecessor, memory)?;
+                self.role_rules(role, letter, rules, memory)
+            }
             ReadFact::Label { node, concept } => self.parent(Fact::Label(node, concept), memory),
             ReadFact::Denotes { node, individual } => {
                 self.parent(Fact::Name(node, individual), memory)
@@ -712,13 +751,31 @@ impl Builder {
                 node,
                 named,
                 parent,
+                incoming,
                 reserved,
                 concrete,
             } => {
                 // The native checker already validated this application and its
                 // head. Retain the actual birth and original predecessor rather
                 // than treating every generated successor as an opaque leaf.
-                incomplete = reserved || (parent.is_some() && cause.origin != Origin::Application);
+                incomplete = if reserved {
+                    parent.is_some()
+                        || incoming.is_some()
+                        || named.is_some()
+                        || concrete
+                        || cause.origin != Origin::Application
+                        || !self.applications.get(&cause.index).is_some_and(|&id| {
+                            matches!(
+                                self.nodes[id].owner,
+                                Some(ReadOwner::Application {
+                                    branch: Some(_),
+                                    ..
+                                })
+                            )
+                        })
+                } else {
+                    parent.is_some() && cause.origin != Origin::Application
+                };
                 if let Some(parent) = parent {
                     self.parent(Fact::Node(parent), memory)?;
                 }
@@ -923,6 +980,7 @@ impl Journal {
             {
                 match graph.read(
                     next.fact,
+                    &self.events,
                     &self.paths,
                     &self.reach.paths,
                     &self.role_rules.0,

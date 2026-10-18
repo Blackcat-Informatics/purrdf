@@ -61,6 +61,14 @@ pub(crate) enum ReadFact {
         left: usize,
         right: usize,
     },
+    Predecessor {
+        child: usize,
+        parent: usize,
+        node: usize,
+        predecessor: usize,
+        role: Role,
+        letter: Role,
+    },
     Denotes {
         node: usize,
         individual: u32,
@@ -152,6 +160,7 @@ pub(crate) enum Mutation {
         node: usize,
         named: Option<u32>,
         parent: Option<usize>,
+        incoming: Option<Role>,
         reserved: bool,
         concrete: bool,
     },
@@ -212,6 +221,7 @@ impl fmt::Debug for Mutation {
                 node,
                 named,
                 parent,
+                incoming,
                 reserved,
                 concrete,
             } => f
@@ -219,6 +229,7 @@ impl fmt::Debug for Mutation {
                 .field("node", node)
                 .field("named", named)
                 .field("parent", parent)
+                .field("incoming", incoming)
                 .field("reserved", reserved)
                 .field("concrete", concrete)
                 .finish(),

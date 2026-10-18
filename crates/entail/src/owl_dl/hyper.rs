@@ -337,6 +337,7 @@ impl<N> Ground<N> {
 /// The alternatives alone do not say what generated them, and a proof term that could not name
 /// the clause instance would leave a checker nothing to regenerate them from.
 pub(crate) struct BranchSite {
+    introduction_only: bool,
     /// The clause whose disjunctive head produced the alternatives.
     index: usize,
     /// The node variable `0` was bound to.
@@ -344,8 +345,7 @@ pub(crate) struct BranchSite {
     /// The matcher's binding frame.
     frame: Vec<usize>,
     /// How many leading alternatives came from [`ground_head`] — the rest are the `NI`-rule's,
-    /// which are appended by [`Hyper::append_ni_alternatives`] and are NOT regenerable from the
-    /// clause alone.
+    /// with zero for an NI-only branch over the original at-most source binding.
     head_alternatives: usize,
 }
 
@@ -452,6 +452,13 @@ enum ReplayGoal<'a> {
     Merge(&'a MergeStep),
 }
 
+struct Introduction<'s> {
+    origin: &'s super::graph::NominalId,
+    role: Role,
+    filler: u32,
+    bound: u32,
+}
+
 /// One independently checked replay and its requested native mutation owner.
 #[derive(Debug)]
 pub(crate) struct ReplaySupport {
@@ -462,6 +469,8 @@ pub(crate) struct ReplaySupport {
 
 /// The hypertableau driver: the graph operations, the clause set, and a budget.
 struct Hyper<'a> {
+    /// NI is inapplicable without a nominal concept in the prepared calculus.
+    has_nominals: bool,
     /// The completion graph operations over the knowledge base.
     g: Graph<'a>,
     /// The DL-clauses derived from it.
@@ -723,6 +732,7 @@ impl<'a> Hyper<'a> {
         let g = Graph::new(kb, budget.work);
         let clauses = derive(g.kb());
         let mut hyper = Self {
+            has_nominals: kb.table.has_nominals(),
             radius: clauses.match_radius(),
             single_reads: single_reads(g.kb(), g.patterns(), &clauses),
             defer: std::cell::Cell::new(false),
@@ -953,13 +963,15 @@ impl<'a> Hyper<'a> {
             .iter()
             .map(|disjunct| observe_alternative(st, disjunct))
             .collect();
-        trace.borrow_mut().branch(BranchStep::new(
+        let mut step = BranchStep::new(
             site.index,
             node_ref(st, site.x),
             frame_refs(st, &site.frame),
             head,
             introduced,
-        ))
+        );
+        step.introduction_only = site.introduction_only;
+        trace.borrow_mut().branch(step)
     }
 
     /// File the outcome of the alternative `slot` names.
@@ -2038,15 +2050,16 @@ impl<'a> Hyper<'a> {
             return None;
         }
         let recording = self.trace.is_some();
+        if let Some(branch) = self.introduction_branch(st, index, x, clause) {
+            return Some(branch);
+        }
+        if self.g.work().exhausted() {
+            return None;
+        }
         let mut found: Option<Branching> = None;
         Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
-            let mut disjuncts = ground_head(&clause.head, frame);
+            let disjuncts = ground_head(&clause.head, frame);
             let head_alternatives = disjuncts.len();
-            // Motik–Shearer–Horrocks Table 5 `NI`-rule: at a NOMINAL at-most node pressed by a
-            // BLOCKABLE predecessor, add the alternatives that branch that predecessor into the
-            // reserved roots `u.⟨R,B,i⟩`. This is what bounds the corner the plain pairwise
-            // `≤`-merges cannot, and it decides beside them rather than replacing them.
-            self.append_ni_alternatives(st, clause, x, &mut disjuncts);
             // Grounding a `≤n` head expands one schematic atom into one alternative per PAIR
             // of counted successors, so the alternatives a single match produces are
             // quadratic in the count. Charged by what came out.
@@ -2060,6 +2073,7 @@ impl<'a> Hyper<'a> {
             found = Some(Branching {
                 alternatives: disjuncts,
                 site: recording.then(|| BranchSite {
+                    introduction_only: false,
                     index,
                     x,
                     frame: frame.to_vec(),
@@ -2071,11 +2085,11 @@ impl<'a> Hyper<'a> {
         found
     }
 
-    /// Append the Motik–Shearer–Horrocks Table 5 `NI`-rule alternatives for the `≤`-clause
+    /// Select the Motik–Shearer–Horrocks Table 5 `NI`-rule alternatives for the `≤`-clause
     /// `clause` at node `x`.
     ///
     /// The rule fires only in the corner: `x` is a NOMINAL (named or generated reserved root,
-    /// [`Graph::nominal_id`], never a mere anonymous root) whose at-most bound `≤n R.B` is pressed
+    /// [`Graph::nominal_id`], never a mere anonymous root) whose at-most bound is `≤n R.B`,
     /// by a BLOCKABLE predecessor `y` satisfying `B` (`x` a completion-successor of `y` —
     /// [`Graph::blockable_predecessor_neighbours`]). For each such `y`, an alternative merges `y`
     /// into one of the reserved roots `u.⟨R,B,i⟩` (`u = ` the nominal identity of `x`, `i ∈
@@ -2083,15 +2097,98 @@ impl<'a> Hyper<'a> {
     /// what the plain pairwise `≤`-merges cannot do without renaming a named element or looping.
     /// Non-corner `≤`-clauses gain nothing: `nominal_id` is `None` for anonymous nodes and the
     /// blockable-predecessor set is empty when no inverse edge makes `y` an `R`-neighbour of `x`.
-    fn append_ni_alternatives(
+    fn introduction_branch(
         &self,
         st: &State,
+        clause_index: usize,
+        x: usize,
+        clause: &DlClause,
+    ) -> Option<Branching> {
+        if !self.has_nominals {
+            return None;
+        }
+        let site = self.introduction(st, clause, x)?;
+        let at = clause
+            .body
+            .iter()
+            .position(|atom| matches!(atom, BodyAtom::Successors { .. }))?;
+        let guards = DlClause {
+            body: clause.body[..at].to_vec(),
+            head: Vec::new(),
+        };
+        let BodyAtom::Successors { count, .. } = clause.body[at] else {
+            unreachable!("selected counted source")
+        };
+        let mut found = None;
+        Self::for_each_match(&self.g, st, &guards, x, &mut |prefix| {
+            for y in self.g.blockable_predecessor_neighbours(st, x, site.role) {
+                if !self.g.has_concept(st, y, site.filler) {
+                    continue;
+                }
+                // A source nominal split already awaiting this predecessor identifies it
+                // with a named root directly. Resolve that real branch before allocating
+                // another reserved set that the same identification would immediately absorb.
+                // `identifying` excludes counted-equality clauses, so this cannot recurse
+                // into NI; the returned branch retains its own original source and binding.
+                if let Some(branch) = self.branch_at(st, y, true) {
+                    found = Some(branch);
+                    return true;
+                }
+                self.g
+                    .work()
+                    .charge(prefix.len() as u64 + u64::from(count) + u64::from(site.bound));
+                if self.g.work().exhausted() {
+                    return true;
+                }
+                let mut frame = prefix.to_vec();
+                let Some(width) = frame.len().checked_add(count as usize) else {
+                    st.clique_exhausted.set(true);
+                    return true;
+                };
+                frame.resize(width, y);
+                debug_assert_eq!(
+                    at + 1,
+                    clause.body.len(),
+                    "the native at-most count is its final guard"
+                );
+                let alternatives = (0..site.bound)
+                    .map(|index| {
+                        vec![Ground::EqualReserved(
+                            y,
+                            GeneratedRoot {
+                                origin: site.origin.clone(),
+                                role: site.role,
+                                filler: site.filler,
+                                index,
+                            },
+                        )]
+                    })
+                    .collect();
+                found = Some(Branching {
+                    alternatives,
+                    site: self.trace.is_some().then_some(BranchSite {
+                        introduction_only: true,
+                        index: clause_index,
+                        x,
+                        frame,
+                        head_alternatives: 0,
+                    }),
+                });
+                return true;
+            }
+            false
+        });
+        found
+    }
+
+    fn introduction<'s>(
+        &self,
+        st: &'s State,
         clause: &DlClause,
         x: usize,
-        disjuncts: &mut Vec<Vec<Ground<usize>>>,
-    ) {
+    ) -> Option<Introduction<'s>> {
         // The `≤`-clause names its counted `(role, filler, n+1)` in a `Successors` body atom.
-        let Some((role, filler, count)) = clause.body.iter().find_map(|atom| match *atom {
+        let (role, filler, count) = clause.body.iter().find_map(|atom| match *atom {
             BodyAtom::Successors {
                 role,
                 filler,
@@ -2099,33 +2196,55 @@ impl<'a> Hyper<'a> {
                 ..
             } => Some((role, filler, count)),
             _ => None,
-        }) else {
-            return;
-        };
+        })?;
         let n = count.saturating_sub(1);
         if n == 0 {
-            return;
+            return None;
         }
-        let Some(origin) = self.g.nominal_id(st, x) else {
-            return;
+        let origin = self.g.nominal_id(st, x)?;
+        Some(Introduction {
+            origin,
+            role,
+            filler,
+            bound: n,
+        })
+    }
+
+    fn check_introduction(
+        &self,
+        st: &State,
+        clause: &DlClause,
+        x: usize,
+        head: &[Ground<usize>],
+    ) -> bool {
+        let [Ground::EqualReserved(predecessor, key)] = head else {
+            return false;
         };
-        for y in self.g.blockable_predecessor_neighbours(st, x, role) {
-            // Only a `B`-neighbour presses `≤n R.B`.
-            if !self.g.has_concept(st, y, filler) {
-                continue;
-            }
-            for index in 0..n {
-                disjuncts.push(vec![Ground::EqualReserved(
-                    y,
-                    GeneratedRoot {
-                        origin: origin.clone(),
-                        role,
-                        filler,
-                        index,
-                    },
-                )]);
-            }
+        let Some(site) = self.introduction(st, clause, x) else {
+            return false;
+        };
+        if key.index >= site.bound {
+            return false;
         }
+        if key.origin != *site.origin || key.role != site.role || key.filler != site.filler {
+            return false;
+        }
+        match site.origin {
+            super::graph::NominalId::Named(individual) => {
+                self.g
+                    .observe_read(super::graph::changes::ReadFact::Denotes {
+                        node: find(st, x),
+                        individual: *individual,
+                    });
+            }
+            super::graph::NominalId::Generated(_) => self
+                .g
+                .observe_read(super::graph::changes::ReadFact::Node(find(st, x))),
+        }
+        self.g.has_concept(st, *predecessor, site.filler)
+            && self
+                .g
+                .select_blockable_predecessor(st, x, site.role, *predecessor)
     }
 
     /// Whether every atom of a grounded disjunct already holds.
@@ -2370,12 +2489,18 @@ impl<'a> Hyper<'a> {
                         branch: application.branch,
                     }));
             }
+            let introduction_only = application.branch.is_some_and(|(branch, _)| {
+                branches
+                    .get(branch)
+                    .is_some_and(BranchStep::introduction_only)
+            });
             let supported = application.clause < driver.clauses.count()
-                && Self::frame_is_supported(
+                && Self::frame_is_supported_as(
                     &driver,
                     &state,
                     application.clause,
                     &application.frame,
+                    introduction_only,
                 );
             driver.g.select_reads(None);
             check()?;
@@ -2433,6 +2558,30 @@ impl<'a> Hyper<'a> {
                     return Err(super::proof::malformed(
                         "current-support alternative differs from its licensed case",
                     ));
+                }
+                if ordinal >= step.alternatives().len() {
+                    if observing {
+                        driver.g.select_reads(Some(
+                            super::graph::changes::ReadOwner::Application {
+                                index,
+                                clause: application.clause,
+                                branch: application.branch,
+                            },
+                        ));
+                    }
+                    let introduced = driver.check_introduction(
+                        &state,
+                        clause,
+                        application.frame[0],
+                        &application.head,
+                    );
+                    driver.g.select_reads(None);
+                    check()?;
+                    if !introduced {
+                        return Err(super::proof::malformed(
+                            "nominal introduction lacks its native generative predecessor",
+                        ));
+                    }
                 }
             } else if matches!(
                 clause.head_form(),
@@ -2519,6 +2668,16 @@ impl<'a> Hyper<'a> {
     }
 
     fn frame_is_supported(driver: &Self, state: &State, index: usize, frame: &[usize]) -> bool {
+        Self::frame_is_supported_as(driver, state, index, frame, false)
+    }
+
+    fn frame_is_supported_as(
+        driver: &Self,
+        state: &State,
+        index: usize,
+        frame: &[usize],
+        introduction_only: bool,
+    ) -> bool {
         let Some(&root) = frame.first() else {
             return false;
         };
@@ -2614,8 +2773,18 @@ impl<'a> Hyper<'a> {
                     }
                     let selected = &frame[bound..end];
                     bound = end;
-                    selected.windows(2).all(|pair| pair[0] < pair[1])
-                        && selected.iter().all(|&node| {
+                    let ordered = if introduction_only {
+                        selected.windows(2).all(|pair| pair[0] == pair[1])
+                    } else {
+                        selected.windows(2).all(|pair| pair[0] < pair[1])
+                    };
+                    let witnesses = if introduction_only {
+                        &selected[..1]
+                    } else {
+                        selected
+                    };
+                    ordered
+                        && witnesses.iter().all(|&node| {
                             driver.g.has_concept(state, node, filler)
                                 && driver.g.is_neighbour(state, frame[0], role, node)
                         })
@@ -3946,6 +4115,7 @@ mod tests {
                 node: witness,
                 named: None,
                 parent: Some(root),
+                incoming: Some(Role::Named(R)),
                 reserved: false,
                 concrete: false,
             },

@@ -574,6 +574,221 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
     }
 }
 
+fn public_causal_service_checks_reserved_birth_and_generative_trigger() {
+    use purrdf_core::RdfLiteral;
+    use purrdf_core::collections::{ListVocab, build_rdf_list};
+    use purrdf_entail::proof_source::causal::{CausalFact, CausalMutation, CausalObservation};
+    let mut f = Fixture::default();
+    let thing = f.builder.intern_iri(owl::THING).unwrap();
+    let spy_class = f.name("Spy");
+    let demand = f.name("Demand");
+    let spy = f.builder.intern_blank("spy", BlankScope(91)).unwrap();
+    let subject = f.name("subject");
+    let p = f.name("p");
+    let r = f.name("r");
+    let cells: Vec<_> = (0..6)
+        .map(|index| {
+            f.builder
+                .intern_blank(&format!("reserved{index}"), BlankScope(92))
+                .unwrap()
+        })
+        .collect();
+    let vocab = ListVocab {
+        first: f.builder.intern_iri(rdf::FIRST).unwrap(),
+        rest: f.builder.intern_iri(rdf::REST).unwrap(),
+        nil: f.builder.intern_iri(rdf::NIL).unwrap(),
+    };
+    let members = build_rdf_list(
+        [spy],
+        &vocab,
+        |_| cells[0],
+        |s, p, o| {
+            f.builder.push_quad(s, p, o, None).unwrap();
+        },
+    );
+    let counts = [2, 3].map(|count| {
+        f.builder
+            .intern_literal(RdfLiteral {
+                lexical_form: count.to_string(),
+                datatype: Some(purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap()
+    });
+    for (s, predicate, o) in [
+        (spy, rdf::TYPE, spy_class),
+        (subject, rdf::TYPE, demand),
+        (cells[1], owl::ONE_OF, members),
+        (thing, rdfs::SUB_CLASS_OF, cells[2]),
+        (cells[2], owl::ON_PROPERTY, p),
+        (cells[2], owl::SOME_VALUES_FROM, cells[1]),
+        (cells[3], owl::INVERSE_OF, p),
+        (spy_class, rdfs::SUB_CLASS_OF, cells[4]),
+        (cells[4], owl::ON_PROPERTY, cells[3]),
+        (cells[4], owl::ON_CLASS, thing),
+        (cells[4], owl::MAX_QUALIFIED_CARDINALITY, counts[0]),
+        (demand, rdfs::SUB_CLASS_OF, cells[5]),
+        (cells[5], owl::ON_PROPERTY, r),
+        (cells[5], owl::ON_CLASS, thing),
+        (cells[5], owl::MIN_QUALIFIED_CARDINALITY, counts[1]),
+    ] {
+        f.edge(s, predicate, o);
+    }
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let mut reserved = 0;
+    let mut predecessors = 0;
+    for (_, refutation) in checked.refutations() {
+        assert!(refutation.replay().is_closed());
+        for leaf in refutation.clashes() {
+            for step in leaf.steps() {
+                predecessors += step
+                    .reads()
+                    .filter(|read| matches!(read, CausalFact::Predecessor { .. }))
+                    .count();
+                if let CausalObservation::Effect {
+                    mutation:
+                        CausalMutation::Node {
+                            node,
+                            reserved: true,
+                            ..
+                        },
+                    ..
+                } = step.observation()
+                {
+                    reserved += 1;
+                    let identity = node.reserved_identity().unwrap();
+                    assert!(identity.role().inverse);
+                    assert!(identity.index() < 2);
+                    assert!(
+                        matches!(identity.origin(), purrdf_entail::proof_source::ResolvedNode::Individual(purrdf_entail::proof_source::ResolvedTerm::Source(value)) if value == &source.term_value(spy))
+                    );
+                }
+            }
+        }
+    }
+    assert!(reserved > 0);
+    assert!(predecessors > 0);
+}
+
+/// The recursive NI case is exercised through the same public wire and consumer on WASM.
+fn public_causal_service_checks_nested_reserved_origin() {
+    use purrdf_entail::proof_source::causal::{CausalMutation, CausalObservation};
+    use purrdf_entail::proof_source::{ResolvedNode, ResolvedTerm};
+    let mut f = Fixture::default();
+    let [spy, subject, spy_class, middle, leaf, demand, p, r, s] = [
+        "spy", "subject", "Spy", "Middle", "Leaf", "Demand", "p", "r", "s",
+    ]
+    .map(|name| f.name(name));
+    let thing_iri = f.builder.intern_iri(owl::THING).unwrap();
+    let cells: Vec<_> = (0..9)
+        .map(|i| {
+            f.builder
+                .intern_blank(&format!("nested{i}"), BlankScope(93))
+                .unwrap()
+        })
+        .collect();
+    let nil = f.builder.intern_iri(rdf::NIL).unwrap();
+    for (a, predicate, b) in [
+        (spy, rdf::TYPE, spy_class),
+        (subject, rdf::TYPE, demand),
+        (cells[0], owl::ONE_OF, cells[1]),
+        (cells[1], rdf::FIRST, spy),
+        (cells[1], rdf::REST, nil),
+        (middle, rdfs::SUB_CLASS_OF, cells[2]),
+        (cells[2], owl::ON_PROPERTY, r),
+        (cells[2], owl::SOME_VALUES_FROM, leaf),
+        (leaf, rdfs::SUB_CLASS_OF, cells[3]),
+        (cells[3], owl::ON_PROPERTY, p),
+        (cells[3], owl::SOME_VALUES_FROM, cells[0]),
+        (cells[4], owl::INVERSE_OF, p),
+        (cells[5], owl::INVERSE_OF, r),
+    ] {
+        f.edge(a, predicate, b);
+    }
+    for (i, owner, role, filler, count, predicate) in [
+        (
+            6,
+            spy_class,
+            cells[4],
+            thing_iri,
+            1,
+            owl::MAX_QUALIFIED_CARDINALITY,
+        ),
+        (
+            7,
+            leaf,
+            cells[5],
+            thing_iri,
+            1,
+            owl::MAX_QUALIFIED_CARDINALITY,
+        ),
+        (8, demand, s, middle, 2, owl::MIN_QUALIFIED_CARDINALITY),
+    ] {
+        let count = f
+            .builder
+            .intern_literal(purrdf_core::RdfLiteral {
+                lexical_form: count.to_string(),
+                datatype: Some(purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        f.edge(owner, rdfs::SUB_CLASS_OF, cells[i]);
+        f.edge(cells[i], owl::ON_PROPERTY, role);
+        f.edge(cells[i], owl::ON_CLASS, filler);
+        f.edge(cells[i], predicate, count);
+    }
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), Verdict::False);
+    let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    let checked = proof
+        .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+        .unwrap();
+    let mut nested = 0;
+    for (_, refutation) in checked.refutations() {
+        assert!(refutation.replay().is_closed());
+        for clash in refutation.clashes() {
+            for step in clash.steps() {
+                if let CausalObservation::Effect {
+                    mutation:
+                        CausalMutation::Node {
+                            node,
+                            reserved: true,
+                            ..
+                        },
+                    ..
+                } = step.observation()
+                {
+                    let identity = node.reserved_identity().unwrap();
+                    if let ResolvedNode::Reserved(parent) = identity.origin() {
+                        assert_eq!(identity.index(), 0);
+                        assert_eq!(parent.index(), 0);
+                        assert!(
+                            matches!(parent.origin(), ResolvedNode::Individual(ResolvedTerm::Source(value)) if value == &source.term_value(spy))
+                        );
+                        nested += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(nested > 0);
+}
+
 purrdf_testkit::harness_main!(
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,
@@ -584,4 +799,6 @@ purrdf_testkit::harness_main!(
     public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs,
     public_causal_service_binds_the_requested_question_and_query_assumptions,
     public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip,
+    public_causal_service_checks_reserved_birth_and_generative_trigger,
+    public_causal_service_checks_nested_reserved_origin,
 );

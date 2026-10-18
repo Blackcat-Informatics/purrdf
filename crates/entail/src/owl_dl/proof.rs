@@ -169,6 +169,7 @@ const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");
 const SCHEMA_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v4");
 const CURRENT_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v5");
 const MERGE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v6");
+const INTRODUCTION_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v7");
 
 /// Domain-separation tag for [`contract_digest`].
 const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
@@ -1135,6 +1136,8 @@ impl BranchOutcome {
 /// checked by [`DlProof::replay_branch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchStep {
+    /// NI saturation over one repeated successor binding, before ordinary equality cases.
+    pub(crate) introduction_only: bool,
     /// The clause whose DISJUNCTIVE head generated the alternatives, into the clause set the
     /// CHECKER derives from the caller's ontology.
     clause: usize,
@@ -1161,6 +1164,13 @@ pub struct BranchStep {
 }
 
 impl BranchStep {
+    fn regenerated_head(&self, clause: &DlClause) -> Vec<Vec<Ground<NodeRef>>> {
+        if self.introduction_only {
+            Vec::new()
+        } else {
+            ground_head(&clause.head, &self.frame)
+        }
+    }
     /// Record a branch point with every outcome still [`BranchOutcome::Unexplored`].
     /// Crate-private: the only producer is the instrumented search.
     pub(crate) fn new(
@@ -1172,6 +1182,7 @@ impl BranchStep {
     ) -> Self {
         let outcomes = vec![BranchOutcome::Unexplored; alternatives.len() + introduced.len()];
         Self {
+            introduction_only: false,
             clause,
             node,
             frame,
@@ -1185,6 +1196,12 @@ impl BranchStep {
     #[must_use]
     pub const fn clause(&self) -> usize {
         self.clause
+    }
+
+    /// Whether this is an exhaustive reserved-root introduction rather than a head split.
+    #[must_use]
+    pub const fn introduction_only(&self) -> bool {
+        self.introduction_only
     }
 
     /// The node variable `0` was bound to.
@@ -1727,6 +1744,15 @@ impl ProofAnswer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DlProofError {
+    /// A completion still has an eligible blockable neighbour of a nominal at-most root.
+    UnsaturatedIntroduction {
+        /// Original at-most clause.
+        clause: usize,
+        /// Nominal root requiring its reserved-set normalization.
+        node: Box<NodeRef>,
+        /// Blockable neighbour still awaiting introduction.
+        predecessor: Box<NodeRef>,
+    },
     /// The selected causal operation lacks a required checked dependency.
     CausalSupport {
         /// Service run, when checking through a service-bound entry point.
@@ -2050,6 +2076,14 @@ pub enum DlProofError {
 impl std::fmt::Display for DlProofError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            } => write!(
+                f,
+                "completion leaves nominal introduction at clause {clause}, root {node:?}, predecessor {predecessor:?} unsaturated"
+            ),
             Self::CausalSupport {
                 run,
                 clash,
@@ -3430,7 +3464,8 @@ impl DlProof {
         }
         // THE REGENERATION. The search's own grounding, over the CALLER's clause and the
         // recorded frame, with the proof's node identities as the carrier.
-        let derived: Vec<ProofAlternative> = ground_head(&clause.head, &step.frame)
+        let derived: Vec<ProofAlternative> = step
+            .regenerated_head(clause)
             .iter()
             .map(|disjunct| ProofAlternative {
                 atoms: disjunct.iter().map(ProofGround::of).collect(),
@@ -3634,10 +3669,8 @@ impl DlProof {
                 let replay = self.replay_branch(branch, ctx)?;
                 checks.absorb(&replay.checks);
                 let step = &self.branches[branch];
-                let derived = ground_head(
-                    &ctx.clauses.clause(step.clause, &ctx.kb.schema).head,
-                    &step.frame,
-                );
+                let derived =
+                    step.regenerated_head(ctx.clauses.clause(step.clause, &ctx.kb.schema));
                 let alternative = match derived.get(ordinal) {
                     Some(disjunct) => disjunct
                         .get(atom)
@@ -4066,6 +4099,8 @@ impl DlProof {
     /// Current-support recordings use v5, storing each application once with an
     /// earlier predecessor and each clash's cursor/frame separately. A recorded merge
     /// closure uses v6, adding its original final-application cursor to that same arena.
+    /// NI-only reserved-root branches use v7, adding an explicit branch-kind flag;
+    /// their repeated predecessor binding does not assert a violated ordinary count.
     /// Proofs without
     /// current evidence or recording refusal keep the v3 layout. Decoding also
     /// admits v4 prepared prefixes and normalizes them to the shared arena; their
@@ -4100,6 +4135,7 @@ impl DlProof {
     /// u64 data_clash_count, node each
     /// outcome                                     -- the root's
     /// u64 branch_count, then per branch:
+    ///     v7: u8 introduction_only
     ///     u64 clause index
     ///     node                                    -- the branch node
     ///     u64 frame_len, node each
@@ -4123,7 +4159,9 @@ impl DlProof {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let merge_support = self.merges.iter().any(|step| step.current.is_some());
-        let schema = merge_support
+        let introduction = self.branches.iter().any(|step| step.introduction_only);
+        let schema = introduction
+            || merge_support
             || self.schema_recording_obstruction.is_some()
             || self
                 .clashes
@@ -4131,7 +4169,9 @@ impl DlProof {
                 .any(|step| step.schema.is_some() || step.current.is_some());
         frame_le(
             &mut out,
-            if merge_support {
+            if introduction {
+                INTRODUCTION_PROOF_ENCODING_TAG.as_bytes()
+            } else if merge_support {
                 MERGE_PROOF_ENCODING_TAG.as_bytes()
             } else if schema {
                 CURRENT_PROOF_ENCODING_TAG.as_bytes()
@@ -4220,7 +4260,7 @@ impl DlProof {
             encode_node(&mut out, &step.joined);
             out.push(u8::from(step.clashed));
             encode_licence(&mut out, &step.licence);
-            if merge_support {
+            if merge_support || introduction {
                 out.push(u8::from(step.current.is_some()));
                 if let Some(latest) = step.current {
                     out.extend_from_slice(&(latest as u64).to_le_bytes());
@@ -4234,6 +4274,9 @@ impl DlProof {
         encode_outcome(&mut out, self.root);
         out.extend_from_slice(&(self.branches.len() as u64).to_le_bytes());
         for step in &self.branches {
+            if introduction {
+                out.push(u8::from(step.introduction_only));
+            }
             out.extend_from_slice(&(step.clause as u64).to_le_bytes());
             encode_node(&mut out, &step.node);
             out.extend_from_slice(&(step.frame.len() as u64).to_le_bytes());
@@ -4292,7 +4335,8 @@ impl DlProof {
     pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
         let mut reader = Reader::new(bytes);
         let tag = reader.frame()?;
-        let merge_support = tag == MERGE_PROOF_ENCODING_TAG.as_bytes();
+        let introduction = tag == INTRODUCTION_PROOF_ENCODING_TAG.as_bytes();
+        let merge_support = introduction || tag == MERGE_PROOF_ENCODING_TAG.as_bytes();
         let current = merge_support || tag == CURRENT_PROOF_ENCODING_TAG.as_bytes();
         let schema = current || tag == SCHEMA_PROOF_ENCODING_TAG.as_bytes();
         if !schema && tag != PROOF_ENCODING_TAG.as_bytes() {
@@ -4465,6 +4509,7 @@ impl DlProof {
         let root = reader.outcome()?;
         let mut branches = Vec::new();
         for _ in 0..reader.length()? {
+            let introduction_only = introduction && reader.flag()?;
             let clause = reader.length()?;
             let node = reader.node()?;
             let mut frame = Vec::new();
@@ -4484,6 +4529,7 @@ impl DlProof {
                 outcomes.push(reader.outcome()?);
             }
             branches.push(BranchStep {
+                introduction_only,
                 clause,
                 node,
                 frame,
@@ -4495,6 +4541,7 @@ impl DlProof {
         let completion = reader.flag()?.then(|| reader.completion()).transpose()?;
         if schema
             && schema_recording_obstruction.is_none()
+            && !branches.iter().any(|step| step.introduction_only)
             && !merges.iter().any(|step| step.current.is_some())
             && !clashes
                 .iter()
@@ -4768,6 +4815,13 @@ fn check_introduced(
     clause: &DlClause,
 ) -> Result<(), DlProofError> {
     if step.introduced.is_empty() {
+        if step.introduction_only {
+            return Err(DlProofError::IllFormedIntroduction {
+                branch,
+                position: 0,
+                detail: "NI-only branch has no exhaustive reserved choices".to_owned(),
+            });
+        }
         return Ok(());
     }
     let ill = |position: usize, detail: &str| DlProofError::IllFormedIntroduction {
@@ -4792,8 +4846,37 @@ fn check_introduced(
         ));
     };
     let bound = count.saturating_sub(1);
+    let target = if step.introduction_only {
+        let first = clause
+            .body
+            .iter()
+            .find_map(|atom| match atom {
+                BodyAtom::Successors { first, .. } => Some(*first as usize),
+                _ => None,
+            })
+            .expect("counted NI source");
+        if bound == 0 || step.introduced.len() != bound as usize || !step.alternatives.is_empty() {
+            return Err(ill(
+                0,
+                "NI-only branch must enumerate its complete nonempty reserved set",
+            ));
+        }
+        let target = step
+            .frame
+            .get(first)
+            .ok_or_else(|| ill(0, "NI-only branch has no predecessor binding"))?;
+        if !step.frame[first..].iter().all(|node| node == target) {
+            return Err(ill(
+                0,
+                "NI-only successor binding must repeat its selected predecessor",
+            ));
+        }
+        Some(target)
+    } else {
+        None
+    };
     for (position, alternative) in step.introduced.iter().enumerate() {
-        let [ProofGround::EqualReserved { root, .. }] = alternative.atoms.as_slice() else {
+        let [ProofGround::EqualReserved { node, root }] = alternative.atoms.as_slice() else {
             return Err(ill(
                 position,
                 "a nominal-introduction alternative is exactly one reserved-root identification",
@@ -4815,6 +4898,12 @@ fn check_introduced(
             return Err(ill(
                 position,
                 "the reserved root belongs to another at-most root than the branch node",
+            ));
+        }
+        if target.is_some_and(|target| node != target || root.index as usize != position) {
+            return Err(ill(
+                position,
+                "NI-only alternatives must cover the original predecessor and each reserved index in order",
             ));
         }
     }
@@ -4840,6 +4929,10 @@ enum FiniteRoleRefusal {
 purrdf_lex::variant_from!(FiniteRoleRefusal { Storage(purrdf_lex::allocation::StorageError) });
 
 struct CompletionView<'a> {
+    /// NI applies only to calculi containing nonempty nominal concepts.
+    has_nominals: bool,
+    /// Existing identity index retained for generative and blocking obligations.
+    position: BTreeMap<NodeRef, usize>,
     /// Universal object property resolved once from the original term table.
     top_role: Option<u32>,
     /// Least closure of original RBox inclusions on this finite proof graph.
@@ -4957,6 +5050,8 @@ impl<'a> CompletionView<'a> {
             None
         };
         Ok(Self {
+            has_nominals: kb.table.has_nominals(),
+            position,
             top_role,
             role_relation,
             kb,
@@ -5184,6 +5279,77 @@ impl<'a> CompletionView<'a> {
         out
     }
 
+    /// NI saturation is required before a blocked graph can be unravelled into a model.
+    /// Return false on the existing check budget, never discharge an unvisited obligation.
+    fn introduction_saturated(
+        &self,
+        clause: &DlClause,
+        index: usize,
+        x: usize,
+    ) -> Result<bool, DlProofError> {
+        if !self.has_nominals
+            || !self.nodes[x].root
+            || !matches!(
+                self.nodes[x].node,
+                NodeRef::Individual(_) | NodeRef::Reserved(_)
+            )
+        {
+            return Ok(true);
+        }
+        let Some((at, role, filler, count)) =
+            clause
+                .body
+                .iter()
+                .enumerate()
+                .find_map(|(at, atom)| match atom {
+                    BodyAtom::Successors {
+                        role,
+                        filler,
+                        count,
+                        ..
+                    } => Some((at, *role, *filler, *count)),
+                    _ => None,
+                })
+        else {
+            return Ok(true);
+        };
+        if count <= 1 {
+            return Ok(true);
+        }
+        let guards = DlClause {
+            body: clause.body[..at].to_vec(),
+            head: Vec::new(),
+        };
+        if self.body_matches(&guards, x).is_empty() {
+            return Ok(!self.spent());
+        }
+        for y in self.neighbors(x, role) {
+            self.charge(1);
+            if self.spent() {
+                return Ok(false);
+            }
+            let candidate = &self.nodes[y];
+            let parent = candidate
+                .parent
+                .as_ref()
+                .and_then(|parent| self.position.get(parent))
+                .copied();
+            if candidate.root
+                || parent == Some(x)
+                || parent.is_some_and(|parent| self.blocked[parent])
+                || !self.has_concept(y, filler)
+            {
+                continue;
+            }
+            return Err(DlProofError::UnsaturatedIntroduction {
+                clause: index,
+                node: Box::new(self.nodes[x].node.clone()),
+                predecessor: Box::new(candidate.node.clone()),
+            });
+        }
+        Ok(!self.spent())
+    }
+
     /// Match `clause.body[at..]`, extending `frame` — the checker's own left-deep join over the
     /// recorded graph.
     fn walk(
@@ -5298,7 +5464,7 @@ impl<'a> CompletionView<'a> {
         checks.attest(1 + self.blocked.iter().filter(|&&b| b).count());
         let mut checked = 0_usize;
         let mut deferred = 0_usize;
-        for index in 0..clauses.count() {
+        'clauses: for index in 0..clauses.count() {
             if self.spent() {
                 // A clause the budget did not reach is UNATTESTED, never assumed satisfied.
                 checks.leave(clauses.count() - index);
@@ -5314,6 +5480,10 @@ impl<'a> CompletionView<'a> {
                 // calculus never fired on that node.
                 if tbox && self.nodes[x].concrete {
                     continue;
+                }
+                if !self.introduction_saturated(clause, index, x)? {
+                    checks.leave(clauses.count() - index);
+                    break 'clauses;
                 }
                 for frame in self.body_matches(clause, x) {
                     if empty {

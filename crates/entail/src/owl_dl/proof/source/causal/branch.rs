@@ -37,6 +37,12 @@ impl<'a> CausalBranch<'a> {
         self.proof.branches[self.ordinal].clause
     }
 
+    /// NI saturation over its original repeated neighbour binding, before ordinary head cases.
+    #[must_use]
+    pub fn introduction_only(&self) -> bool {
+        self.proof.branches[self.ordinal].introduction_only()
+    }
+
     /// Actual original binding, resolving named terms and keeping anonymous identities proof-local.
     pub fn frame(&self) -> impl ExactSizeIterator<Item = ResolvedNode<'a>> + 'a + use<'a> {
         let kb = self.kb;

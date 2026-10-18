@@ -3,7 +3,10 @@
 
 //! Borrowed graph capabilities created only by question-bound native verification.
 
-use super::{ResolvedAxiomSource, ResolvedConcept, ResolvedRole, ResolvedTerm, origin, role, term};
+use super::{
+    ResolvedAxiomSource, ResolvedConcept, ResolvedReserved, ResolvedRole, ResolvedTerm, origin,
+    role, term,
+};
 use crate::owl_dl::graph::changes::{
     Cause, Mutation, Origin, PathKind, ReadFact, ReadOwner, RoleWitness, UniversalLicence,
     slice::{self, Observation, Support, Vertex},
@@ -726,6 +729,21 @@ pub enum CausalRoleWitness<'a> {
 /// One successful native body read, expressed in the sealed consumer vocabulary.
 #[derive(Debug)]
 pub enum CausalFact<'a> {
+    /// Original generative birth and alias paths licensing nominal introduction.
+    Predecessor {
+        /// Tree child whose generating predecessor pressed the nominal bound.
+        child: CausalNode<'a>,
+        /// Original parent recorded at that birth.
+        parent: CausalNode<'a>,
+        /// Current nominal representative of the generated child.
+        node: CausalNode<'a>,
+        /// Current blockable representative of the original parent.
+        predecessor: CausalNode<'a>,
+        /// Counted role of the original at-most restriction.
+        role: ResolvedRole<'a>,
+        /// Original signed role making the parent a neighbour of the nominal.
+        letter: ResolvedRole<'a>,
+    },
     /// Existing replay-local node.
     Node(CausalNode<'a>),
     /// Membership in the native object domain.
@@ -792,6 +810,21 @@ fn fact(scope: CausalClash<'_>, fact: ReadFact) -> CausalFact<'_> {
         ReadFact::Node(id) => CausalFact::Node(node(id)),
         ReadFact::ObjectDomain(id) => CausalFact::ObjectDomain(node(id)),
         ReadFact::Top(id) => CausalFact::Top(node(id)),
+        ReadFact::Predecessor {
+            child,
+            parent,
+            node: current,
+            predecessor,
+            role: requested,
+            letter,
+        } => CausalFact::Predecessor {
+            child: node(child),
+            parent: node(parent),
+            node: node(current),
+            predecessor: node(predecessor),
+            role: role(scope.kb, requested),
+            letter: role(scope.kb, letter),
+        },
         ReadFact::Distinct { left, right } => CausalFact::Distinct(node(left), node(right)),
         ReadFact::Label {
             node: id,
@@ -1031,18 +1064,57 @@ pub struct CausalNode<'a> {
 }
 
 impl<'a> CausalNode<'a> {
-    /// Original birth denotation, if this node was born with an RDF name or literal.
-    /// Later aliases remain separate checked merge/transfer effects.
-    #[must_use]
-    pub fn term(&self) -> Option<ResolvedTerm<'a>> {
+    fn birth(&self) -> crate::owl_dl::graph::changes::Event {
         let graph = &self.scope.support.derivation;
         let at = graph
             .births
             .binary_search_by_key(&self.node, |&(node, _)| node)
             .expect("selected nodes retain their original births");
-        let Mutation::Node { named, .. } =
-            self.scope.support.effects[graph.births[at].1].1.mutation
+        self.scope.support.effects[graph.births[at].1].1
+    }
+
+    /// Original typed reserved descriptor from the independently checked introducing case.
+    /// Its recursive origin and set index are proof-local identities, never minted RDF names.
+    #[must_use]
+    pub fn reserved_identity(&self) -> Option<ResolvedReserved<'a>> {
+        let birth = self.birth();
+        if !matches!(birth.mutation, Mutation::Node { reserved: true, .. }) {
+            return None;
+        }
+        let (branch, ordinal) = self
+            .scope
+            .support
+            .owners
+            .iter()
+            .find_map(|owner| match owner {
+                ReadOwner::Application { index, branch, .. } if *index == birth.cause.index => {
+                    *branch
+                }
+                _ => None,
+            })
+            .expect("reserved birth retains its checked introducing application");
+        let step = &self.scope.proof.branches[branch];
+        let alternative = step
+            .alternatives()
+            .iter()
+            .chain(step.introduced())
+            .nth(ordinal)
+            .expect("native introduction checked the original alternative");
+        let crate::owl_dl::proof::ProofGround::EqualReserved { root, .. } =
+            &alternative.atoms[birth.cause.atom]
         else {
+            unreachable!("native reserved birth belongs to the checked reserved head")
+        };
+        Some(ResolvedReserved {
+            kb: self.scope.kb,
+            root,
+        })
+    }
+    /// Original birth denotation, if this node was born with an RDF name or literal.
+    /// Later aliases remain separate checked merge/transfer effects.
+    #[must_use]
+    pub fn term(&self) -> Option<ResolvedTerm<'a>> {
+        let Mutation::Node { named, .. } = self.birth().mutation else {
             unreachable!("birth entries address the original node effect");
         };
         named.map(|id| term(self.scope.kb, id))
@@ -1082,6 +1154,8 @@ pub enum CausalMutation<'a> {
         named: Option<ResolvedTerm<'a>>,
         /// Original predecessor of an existential witness.
         parent: Option<CausalNode<'a>>,
+        /// Original generating role, preserving inverse direction.
+        incoming: Option<ResolvedRole<'a>>,
         /// Whether native nominal introduction reserved this root.
         reserved: bool,
         /// Whether the node belongs to the datatype-value domain.
@@ -1181,12 +1255,14 @@ fn mutation(scope: CausalClash<'_>, mutation: Mutation) -> CausalMutation<'_> {
             node: id,
             named,
             parent,
+            incoming,
             reserved,
             concrete,
         } => CausalMutation::Node {
             node: node(id),
             named: named.map(|id| term(scope.kb, id)),
             parent: parent.map(node),
+            incoming: incoming.map(|r| role(scope.kb, r)),
             reserved,
             concrete,
         },
