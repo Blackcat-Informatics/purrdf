@@ -9,7 +9,7 @@ use purrdf_iri::vocab::{owl, rdfs};
 use purrdf_lex::allocation::{Memory, Resident};
 
 #[test]
-fn composite_order_license_is_explicitly_missing_not_empty_success() {
+fn composite_order_license_retains_native_closure_sources_and_refusals() {
     let mut f = Fixture::default();
     let p = f.name("p");
     let q = f.name("q");
@@ -20,10 +20,11 @@ fn composite_order_license_is_explicitly_missing_not_empty_success() {
     f.edge(q, rdfs::SUB_PROPERTY_OF, r);
     let list = f.list(&[r, x]);
     f.edge(t, owl::PROPERTY_CHAIN_AXIOM, list);
-    let kb = Kb::from_dataset(&f.freeze()).unwrap();
+    let mut kb = Kb::from_dataset(&f.freeze()).unwrap();
     let program = kb.role_program.as_ref().unwrap();
     let p = Role::Named(kb.interner.id_of_iri("https://example.org/p").unwrap());
     let r = Role::Named(kb.interner.id_of_iri("https://example.org/r").unwrap());
+    let q = Role::Named(kb.interner.id_of_iri("https://example.org/q").unwrap());
     let transition = program
         .machine(r)
         .unwrap()
@@ -33,10 +34,13 @@ fn composite_order_license_is_explicitly_missing_not_empty_success() {
         .unwrap();
     let mut storage = Resident;
     let mut memory = Memory::new(&mut storage);
-    assert_eq!(
-        program.path_inputs([(r, transition)], None, &mut memory),
-        Err(Error::MissingOrder { sub: p, sup: r })
-    );
+    let inputs = program
+        .path_inputs([(r, transition)], None, &mut memory)
+        .unwrap();
+    assert_eq!(inputs.len(), 2);
+    assert!(inputs.contains(&super::Input::Inclusion(p, q)));
+    assert!(inputs.contains(&super::Input::Inclusion(q, r)));
+    memory.release_vec(inputs).unwrap();
     assert_eq!(memory.admitted_bytes(), 0);
     assert_eq!(
         program.path_inputs([(r, usize::MAX)], None, &mut memory),
@@ -53,6 +57,13 @@ fn composite_order_license_is_explicitly_missing_not_empty_success() {
     assert_eq!(
         program.path_inputs([], Some(&Stop), &mut memory),
         Err(Error::Stopped)
+    );
+    assert_eq!(memory.admitted_bytes(), 0);
+    let program = kb.role_program.as_mut().unwrap();
+    program.simple.as_mut().unwrap().witnesses = None;
+    assert_eq!(
+        program.path_inputs([(r, transition)], None, &mut memory),
+        Err(Error::MissingOrder { sub: p, sup: r })
     );
     assert_eq!(memory.admitted_bytes(), 0);
 }

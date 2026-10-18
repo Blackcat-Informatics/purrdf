@@ -2398,6 +2398,11 @@ impl<'a> Hyper<'a> {
         }
         if driver.g.selecting_reads() {
             use super::graph::changes::ReadFact;
+            if let Some(program) = &driver.g.kb().role_program
+                && let Some(source) = driver.clauses.role_source(index, program)
+            {
+                driver.g.observe_read(ReadFact::RoleClause(source));
+            }
             for &node in frame {
                 driver.g.observe_read(ReadFact::Node(node));
                 // The public frame's selected name is also a premise. An equality

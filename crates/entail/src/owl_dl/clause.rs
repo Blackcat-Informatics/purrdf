@@ -479,6 +479,7 @@ pub(crate) struct ClauseSet {
     /// carry no such source — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
     tbox_sources: Vec<Option<std::num::NonZeroUsize>>,
+    role_clauses: std::ops::Range<usize>,
     /// Number of original admitted schema guards appended logically to this
     /// compilation. Their bodies and sorted trigger directory remain in the Kb.
     schema_count: usize,
@@ -489,6 +490,16 @@ pub(crate) struct ClauseSet {
 }
 
 impl ClauseSet {
+    pub(crate) fn role_source(
+        &self,
+        index: usize,
+        program: &super::roles::RoleProgram,
+    ) -> Option<super::roles::RoleClause> {
+        self.role_clauses
+            .contains(&index)
+            .then(|| program.clause_source(index - self.role_clauses.start))
+            .flatten()
+    }
     /// The clause at `index`.
     pub(crate) fn schema_class(
         &self,
@@ -698,6 +709,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         by_edge: BTreeMap::new(),
         role_first: Vec::new(),
         tbox_sources: Vec::new(),
+        role_clauses: 0..0,
         schema_count: kb.schema.guards.len(),
         reads: Vec::new(),
         transitive_readers: Vec::new(),
@@ -724,6 +736,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // Universal restrictions over regular role languages use a finite closure
     // of internal state labels. These labels travel with blocking signatures;
     // no completion edge or RDF name stands in for an automaton continuation.
+    let role_start = out.clauses.len();
     if let Some(program) = &kb.role_program {
         for obligation in &program.obligations {
             let machine = &program.machines[obligation.machine];
@@ -766,6 +779,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             }
         }
     }
+    out.role_clauses = role_start..out.clauses.len();
     // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
     // inclusion's guard, so emission is a translation and not a second place the encoding is
     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a

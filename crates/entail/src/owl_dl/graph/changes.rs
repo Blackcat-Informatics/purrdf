@@ -35,6 +35,7 @@ pub(crate) enum ReadOwner {
 pub(crate) enum ReadFact {
     Tbox(usize),
     SchemaGuard(usize),
+    RoleClause(crate::owl_dl::roles::RoleClause),
     Node(usize),
     ObjectDomain(usize),
     Label {

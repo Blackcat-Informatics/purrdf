@@ -57,6 +57,7 @@ struct Dependency {
     rules: Range<usize>,
     tbox: Range<usize>,
     guards: Range<usize>,
+    role_clauses: Range<usize>,
     incomplete: bool,
 }
 
@@ -93,6 +94,7 @@ pub(crate) struct Slice<'a> {
     pub(crate) rules: Vec<Input>,
     pub(crate) tbox: Vec<usize>,
     guards: Vec<usize>,
+    pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
     pub(crate) schema: Option<crate::owl_dl::proof::CheckedSchema<'a>>,
     pub(crate) schema_reads: Vec<schema::Read>,
 }
@@ -109,6 +111,7 @@ impl std::fmt::Debug for Slice<'_> {
             .field("rules", &self.rules)
             .field("tbox", &self.tbox)
             .field("guards", &self.guards)
+            .field("role_clauses", &self.role_clauses)
             .field("schema", &self.schema)
             .field("schema_reads", &self.schema_reads)
             .finish()
@@ -126,7 +129,7 @@ pub(crate) struct SelectedInput {
 impl Slice<'_> {
     pub(crate) fn role_inputs(&self) -> Result<Vec<crate::owl_dl::roles::source::Input>, Error> {
         let Some(program) = &self.kb.role_program else {
-            return if self.paths.is_empty() {
+            return if self.paths.is_empty() && self.role_clauses.is_empty() {
                 Ok(Vec::new())
             } else {
                 Err(Error::MissingPath)
@@ -134,13 +137,32 @@ impl Slice<'_> {
         };
         let mut storage = Resident;
         let mut memory = Memory::new(&mut storage);
-        program
-            .path_inputs(
+        memory.try_scope(|memory| {
+            let mut transitions = Vec::new();
+            memory.extend(
+                &mut transitions,
                 self.paths.iter().map(|step| (step.role, step.transition)),
-                self.kb.stop.as_deref(),
-                &mut memory,
-            )
-            .map_err(Error::RoleLicence)
+            )?;
+            for source in &self.role_clauses {
+                let obligation = program
+                    .obligations
+                    .get(source.obligation)
+                    .ok_or(Error::MissingPath)?;
+                let crate::owl_dl::concept::Decomp::All(role, _) =
+                    self.kb.table.decomp(obligation.source)
+                else {
+                    return Err(Error::MissingPath);
+                };
+                if let crate::owl_dl::roles::RoleClauseKind::Transition(transition) = source.kind {
+                    memory.push(&mut transitions, (*role, transition))?;
+                }
+            }
+            let inputs = program
+                .path_inputs(transitions.iter().copied(), self.kb.stop.as_deref(), memory)
+                .map_err(Error::RoleLicence)?;
+            memory.release_vec(transitions)?;
+            Ok(inputs)
+        })
     }
     /// Bind actual checked input/inclusion captures. Multi-license schema guards
     /// still require their checked bound derivations, not an empty syntax set.
@@ -256,6 +278,7 @@ struct Builder {
     rules: Vec<Input>,
     tbox: Vec<usize>,
     guards: Vec<usize>,
+    role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
 }
 
 impl Builder {
@@ -328,6 +351,10 @@ impl Builder {
         memory: &mut Memory<'_, Resident>,
     ) -> Result<(), Error> {
         match fact {
+            ReadFact::RoleClause(source) => {
+                memory.push(&mut self.role_clauses, source)?;
+                Ok(())
+            }
             ReadFact::Tbox(index) => {
                 memory.push(&mut self.tbox, index)?;
                 Ok(())
@@ -561,6 +588,7 @@ impl Builder {
                 rules: 0..0,
                 tbox: 0..0,
                 guards: 0..0,
+                role_clauses: 0..0,
                 incomplete,
             },
         )?;
@@ -622,6 +650,7 @@ impl Journal {
             let rules_start = graph.rules.len();
             let tbox_start = graph.tbox.len();
             let guards_start = graph.guards.len();
+            let role_clauses_start = graph.role_clauses.len();
             let mut incomplete = false;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
@@ -653,6 +682,7 @@ impl Journal {
                     rules: rules_start..graph.rules.len(),
                     tbox: tbox_start..graph.tbox.len(),
                     guards: guards_start..graph.guards.len(),
+                    role_clauses: role_clauses_start..graph.role_clauses.len(),
                     incomplete,
                 },
             )?;
@@ -678,6 +708,7 @@ impl Journal {
             rules: Vec::new(),
             tbox: Vec::new(),
             guards: Vec::new(),
+            role_clauses: Vec::new(),
             schema,
             schema_reads: Vec::new(),
         };
@@ -725,6 +756,12 @@ impl Journal {
             memory.extend(
                 &mut result.guards,
                 graph.guards[node.guards.clone()].iter().copied(),
+            )?;
+            memory.extend(
+                &mut result.role_clauses,
+                graph.role_clauses[node.role_clauses.clone()]
+                    .iter()
+                    .copied(),
             )?;
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;

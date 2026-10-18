@@ -17,6 +17,7 @@ use crate::interner::Interner;
 use crate::owl_dl::concept::{ConceptTable, Decomp, Role};
 use crate::owl_dl::parser::{TripleIndex, Vocab};
 mod licence;
+mod order;
 pub(crate) mod source;
 #[cfg(test)]
 pub(crate) use licence::Error as LicenceError;
@@ -469,7 +470,9 @@ impl Hierarchy {
         memory.try_scope(|memory| {
             let order = self.source_order(top, stop, memory)?;
             let mut program = self.automata(&order, top, stop, memory)?;
-            order.release(memory)?;
+            order.strict.release(memory)?;
+            memory.release_vec(order.roles)?;
+            program.simple = Some(order.simple);
             program.admitted_bytes = memory
                 .admitted_bytes()
                 .checked_sub(baseline)
@@ -545,7 +548,7 @@ impl Hierarchy {
                 memory.push(&mut simple[position(top)], position(top.inverse()))?;
                 memory.push(&mut simple[position(top.inverse())], position(top))?;
             }
-            let simple = RoleRelation::close(simple, stop, memory)?;
+            let simple = RoleRelation::close_observing(simple, Some((&roles, top)), stop, memory)?;
             for chain in &self.chains {
                 poll(stop)?;
                 if Some(chain.head) == top || chain.body.as_slice() == [chain.head, chain.head] {
@@ -613,6 +616,7 @@ struct RoleRelation {
     component: Vec<usize>,
     reachable: Vec<Vec<usize>>,
     cyclic: Vec<bool>,
+    witnesses: Option<order::Witnesses>,
 }
 
 impl RoleRelation {
@@ -621,10 +625,22 @@ impl RoleRelation {
         stop: Option<&dyn StopSignal>,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, RoleHierarchyError> {
+        Self::close_observing(adjacency, None, stop, memory)
+    }
+
+    fn close_observing<S: Admission + ?Sized>(
+        adjacency: Vec<Vec<usize>>,
+        authored: Option<(&[Role], Option<Role>)>,
+        stop: Option<&dyn StopSignal>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, RoleHierarchyError> {
         poll(stop)?;
         let component = scc_component_index_with_memory(&adjacency, memory)?;
         poll(stop)?;
         let count = component.iter().max().map_or(0, |n| n + 1);
+        let mut witnesses = authored
+            .map(|_| order::Witnesses::new(count, memory))
+            .transpose()?;
         let mut reachable = memory.collect(std::iter::repeat_with(Vec::new).take(count))?;
         let mut sizes = memory.collect(std::iter::repeat_n(0usize, count))?;
         let mut cyclic = memory.collect(std::iter::repeat_n(false, count))?;
@@ -634,6 +650,9 @@ impl RoleRelation {
             sizes[from] += 1;
             for &target in targets {
                 let to = component[target];
+                if let (Some(witnesses), Some((roles, top))) = (&mut witnesses, authored) {
+                    witnesses.edge((from, to), (roles[source], roles[target]), top, memory)?;
+                }
                 if from == to {
                     cyclic[from] = true;
                 } else {
@@ -657,6 +676,9 @@ impl RoleRelation {
                 let (lower, upper) = reachable.split_at_mut(id);
                 for &ancestor in &lower[target] {
                     poll(stop)?;
+                    if let Some(witnesses) = &mut witnesses {
+                        witnesses.extend(id, target, ancestor, memory)?;
+                    }
                     memory.push(&mut upper[0], ancestor)?;
                 }
             }
@@ -668,6 +690,7 @@ impl RoleRelation {
             component,
             reachable,
             cyclic,
+            witnesses,
         })
     }
 
@@ -685,6 +708,9 @@ impl RoleRelation {
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
+        if let Some(witnesses) = self.witnesses {
+            witnesses.release(memory)?;
+        }
         release_rows(self.reachable, memory)?;
         memory.release_vec(self.cyclic)?;
         memory.release_vec(self.component)
@@ -887,6 +913,7 @@ impl Automaton {
 /// share a machine, but distinct transition continuations never share a copy.
 #[derive(Debug, Default)]
 pub(crate) struct RoleProgram {
+    simple: Option<RoleRelation>,
     /// Original authored inclusions, retained for the independent finite proof
     /// replay and consequence saturation rather than reconstructed from an NFA.
     pub(crate) source: Hierarchy,
@@ -908,13 +935,49 @@ pub(crate) struct RoleProgram {
 /// The initial and transition clauses for one authored universal restriction.
 #[derive(Debug)]
 pub(crate) struct Obligation {
+    pub(crate) clause_offset: usize,
     pub(crate) source: u32,
     pub(crate) machine: usize,
     pub(crate) filler: u32,
     pub(crate) states: Vec<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoleClauseKind {
+    Enter,
+    Accept,
+    Transition(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RoleClause {
+    pub(crate) obligation: usize,
+    pub(crate) kind: RoleClauseKind,
+}
+
 impl RoleProgram {
+    pub(crate) fn clause_source(&self, relative: usize) -> Option<RoleClause> {
+        let ordinal = self
+            .obligations
+            .partition_point(|obligation| obligation.clause_offset <= relative)
+            .checked_sub(1)?;
+        let obligation = &self.obligations[ordinal];
+        let kind = match relative - obligation.clause_offset {
+            0 => RoleClauseKind::Enter,
+            1 => RoleClauseKind::Accept,
+            offset => {
+                let transition = offset - 2;
+                self.machines[obligation.machine]
+                    .transitions
+                    .get(transition)?;
+                RoleClauseKind::Transition(transition)
+            }
+        };
+        Some(RoleClause {
+            obligation: ordinal,
+            kind,
+        })
+    }
     /// Extend the finite blocking closure after query/negation-cache concept
     /// interning. Every state label is published before its obligation is visible;
     /// a refusal cannot publish a partly initialized state vector.
@@ -932,6 +995,16 @@ impl RoleProgram {
                 && let Ok(position) = self.roles.binary_search(&role)
             {
                 let machine = self.machine_for[position];
+                let clause_offset = match self.obligations.last() {
+                    None => 0,
+                    Some(previous) => previous
+                        .clause_offset
+                        .checked_add(2)
+                        .and_then(|offset| {
+                            offset.checked_add(self.machines[previous.machine].transitions.len())
+                        })
+                        .ok_or(StorageError::SizeOverflow)?,
+                };
                 let states = memory.try_scope(|memory| {
                     let mut states = Vec::new();
                     memory.reserve(&mut states, self.machines[machine].states)?;
@@ -948,6 +1021,7 @@ impl RoleProgram {
                 if let Err(original) = memory.push(
                     &mut self.obligations,
                     Obligation {
+                        clause_offset,
                         source,
                         machine,
                         filler,
@@ -976,6 +1050,7 @@ impl RoleProgram {
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         let Self {
+            simple,
             source,
             roles,
             machine_for,
@@ -986,6 +1061,9 @@ impl RoleProgram {
             scanned_concepts: _,
             admitted_bytes: _,
         } = self;
+        if let Some(simple) = simple {
+            simple.release(memory)?;
+        }
         source.release(memory)?;
         while let Some(obligation) = obligations.pop() {
             memory.release_vec(obligation.states)?;
@@ -1016,6 +1094,7 @@ impl Hierarchy {
             let representative = order.representatives(memory)?;
             self.check_dependencies(order, &representative, top, stop, memory)?;
             let mut program = RoleProgram {
+                simple: None,
                 source: Self::default(),
                 roles: memory.collect(order.roles.iter().copied())?,
                 machine_for: memory.collect(std::iter::repeat_n(usize::MAX, count))?,

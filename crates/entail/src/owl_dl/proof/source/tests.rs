@@ -380,6 +380,192 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
 
 /// Real RDF property chains retain checked native paths through independent replay.
 #[test]
+fn checked_universal_role_clauses_retain_their_original_compiler_license() {
+    use crate::owl_dl::{graph::changes::Journal, roles::RoleClauseKind};
+    let mut f = Fixture::default();
+    let class = f.name("A");
+    let filler = f.name("F");
+    let disjoint = f.name("D");
+    f.edge(filler, owl::DISJOINT_WITH, disjoint);
+    let first = f.name("first");
+    let second = f.name("second");
+    let chained = f.name("chained");
+    let list = f.list(&[first, second]);
+    f.edge(chained, owl::PROPERTY_CHAIN_AXIOM, list);
+    let restriction = f.blank();
+    f.edge(class, rdfs::SUB_CLASS_OF, restriction);
+    f.edge(restriction, owl::ON_PROPERTY, chained);
+    f.edge(restriction, owl::ALL_VALUES_FROM, filler);
+    let from = f.instance("from", class);
+    let middle = f.name("middle");
+    let target = f.instance("target", disjoint);
+    f.builder.push_quad(from, first, middle, None).unwrap();
+    f.builder.push_quad(middle, second, target, None).unwrap();
+    let (mut proof, ctx) = checked_fixture(&f.freeze());
+    let index = proof
+        .clashes
+        .iter()
+        .position(|step| step.current.is_some())
+        .unwrap();
+    // The ordinary direct universal clause wins before the state route. Reuse
+    // its actual accepted native path to supply the alternative legal prefix;
+    // no second role search or change to production scheduling is needed.
+    let (mut applications, tail, path, obligation_index) = {
+        let current = proof.clashes[index].current.as_ref().unwrap();
+        let prefix = crate::owl_dl::support::prefix(&proof.support, current.latest, None).unwrap();
+        let direct = prefix
+            .iter()
+            .position(|application| {
+                matches!(ctx.clauses.clause(application.clause, &ctx.kb.schema).body.first(),
+                Some(crate::owl_dl::clause::BodyAtom::Concept { concept, .. })
+                if matches!(ctx.kb.table.decomp(*concept), crate::owl_dl::concept::Decomp::All(..)))
+            })
+            .unwrap();
+        let crate::owl_dl::clause::BodyAtom::Concept { concept, .. } = ctx
+            .clauses
+            .clause(prefix[direct].clause, &ctx.kb.schema)
+            .body[0]
+        else {
+            unreachable!()
+        };
+        let program = ctx.kb.role_program.as_ref().unwrap();
+        let obligation_index = program
+            .obligations
+            .iter()
+            .position(|obligation| obligation.source == concept)
+            .unwrap();
+        let (_, journal, schema) = proof
+            .replay_clash_recording(index, &ctx, Journal::default())
+            .unwrap();
+        let selected = journal
+            .unwrap()
+            .normalized_slice_with_schema(&ctx.kb, schema)
+            .unwrap();
+        (
+            prefix[..direct]
+                .iter()
+                .map(|application| (**application).clone())
+                .collect::<Vec<_>>(),
+            prefix[direct + 1..]
+                .iter()
+                .map(|application| (**application).clone())
+                .collect::<Vec<_>>(),
+            selected.paths.into_iter().rev().collect::<Vec<_>>(),
+            obligation_index,
+        )
+    };
+    let program = ctx.kb.role_program.as_ref().unwrap();
+    let obligation = &program.obligations[obligation_index];
+    let machine = &program.machines[obligation.machine];
+    let clause = |kind| {
+        (0..ctx.clauses.count())
+            .find(|&index| {
+                ctx.clauses.role_source(index, program)
+                    == Some(crate::owl_dl::roles::RoleClause {
+                        obligation: obligation_index,
+                        kind,
+                    })
+            })
+            .unwrap()
+    };
+    use crate::owl_dl::{
+        hyper::Ground,
+        support::{Application, Link},
+    };
+    let from = path.first().unwrap().from.0;
+    let to = path.last().unwrap().to.0;
+    applications.push(Application {
+        clause: clause(RoleClauseKind::Enter),
+        frame: vec![from],
+        branch: None,
+        head: vec![Ground::Concept(from, obligation.states[machine.initial])],
+    });
+    for step in &path {
+        let transition = &machine.transitions[step.transition];
+        let frame = if transition.letter.is_some() {
+            vec![step.from.0, step.to.0]
+        } else {
+            vec![step.from.0]
+        };
+        applications.push(Application {
+            clause: clause(RoleClauseKind::Transition(step.transition)),
+            frame,
+            branch: None,
+            head: vec![Ground::Concept(step.to.0, obligation.states[transition.to])],
+        });
+    }
+    applications.push(Application {
+        clause: clause(RoleClauseKind::Accept),
+        frame: vec![to],
+        branch: None,
+        head: vec![Ground::Concept(to, obligation.filler)],
+    });
+    applications.extend(tail);
+    proof.support.clear();
+    for application in applications {
+        let previous = proof.support.len().checked_sub(1);
+        proof.support.push(Link {
+            previous,
+            application,
+        });
+    }
+    proof.clashes[index].current.as_mut().unwrap().latest = proof.support.len().checked_sub(1);
+    assert!(
+        proof
+            .resolve_clash(index, &ctx)
+            .unwrap()
+            .replay()
+            .current_supported()
+    );
+    let (_, journal, schema) = proof
+        .replay_clash_recording(index, &ctx, Journal::default())
+        .unwrap();
+    let slice = journal
+        .unwrap()
+        .normalized_slice_with_schema(&ctx.kb, schema)
+        .unwrap();
+    assert!(
+        slice
+            .role_clauses
+            .iter()
+            .any(|source| source.kind == RoleClauseKind::Enter)
+    );
+    assert!(
+        slice
+            .role_clauses
+            .iter()
+            .any(|source| source.kind == RoleClauseKind::Accept)
+    );
+    assert!(
+        slice
+            .role_clauses
+            .iter()
+            .filter(|source| matches!(source.kind, RoleClauseKind::Transition(_)))
+            .count()
+            >= 2
+    );
+    let inputs = slice.role_inputs().unwrap();
+    assert_eq!(inputs.len(), 1);
+    assert!(matches!(
+        inputs[0],
+        crate::owl_dl::roles::source::Input::Chain(_)
+    ));
+    assert_ne!(slice.syntax_roots().unwrap(), []);
+    let program = ctx.kb.role_program.as_ref().unwrap();
+    let window = CurrentThreadWindow::open();
+    let located = (0..ctx.clauses.count())
+        .filter_map(|index| ctx.clauses.role_source(index, program))
+        .count();
+    let measured = window.close();
+    assert!(located > 0);
+    assert_eq!(
+        measured.allocations, 0,
+        "clause source lookup borrows the original obligation directory"
+    );
+}
+
+/// Real RDF property chains retain checked native paths through independent replay.
+#[test]
 fn checked_clash_retains_selected_compiled_role_path() {
     use crate::owl_dl::graph::changes::{Journal, PathKind};
     let mut f = Fixture::default();
@@ -390,19 +576,30 @@ fn checked_clash_retains_selected_compiled_role_path() {
     f.bounds(class, counted, filler, 1, false, false);
     let first = f.name("first");
     let second = f.name("second");
+    let leaf = f.name("leaf");
+    let bridge = f.name("bridge");
+    let alias_a = f.name("roleAliasA");
+    let alias_b = f.name("roleAliasB");
+    f.edge(leaf, rdfs::SUB_PROPERTY_OF, bridge);
+    f.edge(bridge, rdfs::SUB_PROPERTY_OF, first);
+    f.edge(first, rdfs::SUB_PROPERTY_OF, alias_a);
+    f.edge(alias_a, rdfs::SUB_PROPERTY_OF, alias_b);
+    f.edge(alias_b, rdfs::SUB_PROPERTY_OF, first);
     let chained = f.name("chained");
     let list = f.list(&[first, second]);
     f.edge(chained, owl::PROPERTY_CHAIN_AXIOM, list);
     let unused = f.name("unusedChain");
     let unused_first = f.name("unusedFirst");
     let unused_second = f.name("unusedSecond");
+    f.edge(unused_first, rdfs::SUB_PROPERTY_OF, unused_second);
+    f.edge(unused_second, rdfs::SUB_PROPERTY_OF, unused_first);
     let unused_list = f.list(&[unused_first, unused_second]);
     f.edge(unused, owl::PROPERTY_CHAIN_AXIOM, unused_list);
     f.edge(chained, rdfs::RANGE, class);
     let from = f.name("from");
     let middle = f.name("middle");
     let target = f.name("target");
-    f.builder.push_quad(from, first, middle, None).unwrap();
+    f.builder.push_quad(from, leaf, middle, None).unwrap();
     f.builder.push_quad(middle, second, target, None).unwrap();
     let (proof, ctx) = checked_fixture(&f.freeze());
     let index = proof
@@ -450,9 +647,18 @@ fn checked_clash_retains_selected_compiled_role_path() {
         assert_eq!((transition.from, transition.to), (path.from.1, path.to.1));
     }
     let inputs = slice.role_inputs().unwrap();
-    assert_eq!(inputs.len(), 1, "the unused chain is not a causal source");
+    assert_eq!(
+        inputs.len(),
+        6,
+        "one chain, two inclusions and one three-edge component certificate"
+    );
     let program = ctx.kb.role_program.as_ref().unwrap();
-    let source = program.source.sources.get(inputs[0]).unwrap();
+    let chains: Vec<_> = inputs
+        .iter()
+        .filter(|input| matches!(input, crate::owl_dl::roles::source::Input::Chain(_)))
+        .collect();
+    assert_eq!(chains.len(), 1, "the unused chain is not a causal source");
+    let source = program.source.sources.get(*chains[0]).unwrap();
     assert!(
         matches!(ctx.kb.interner.value(source.anchor.0), TermValue::Iri(iri) if iri == "https://example.org/chained")
     );
