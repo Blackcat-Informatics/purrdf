@@ -703,7 +703,7 @@ fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
 /// multiset of its top-level `sh:result` tuples.
 ///
 /// This is the produced-side twin of the expected-report reduction the manifest reader
-/// applies to `mf:result` ([`expected_multiset`], [`expected_tuple`]): the same functions
+/// applies to `mf:result` (`expected_multiset`, `expected_tuple`): the same functions
 /// read both, so a report a host serialized and an approved expectation are compared on
 /// exactly the tuple the in-process grader uses, with blank nodes collapsed by [`norm`].
 /// It grades the tuple and the verdict, not the messages, annotations or details the
