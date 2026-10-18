@@ -138,6 +138,7 @@ use purrdf_hash::frame::{frame_le, frame_le_into};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::ownership::OwnedOrBorrowed;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_datalog::clause::HeadForm;
 
@@ -2693,35 +2694,13 @@ impl CompletionReplay {
 /// runs no search: it only prepares the source when needed and derives native clauses.
 pub struct DlProofContext<'kb> {
     /// The knowledge base the consumer's own dataset reverse-maps to.
-    pub(crate) kb: ProofKnowledgeBase<'kb>,
+    pub(crate) kb: OwnedOrBorrowed<'kb, Kb>,
     /// The DL-clause set the consumer's own knowledge base produces.
     clauses: ClauseSet,
     /// The producer-independent identity of the consumer's dataset.
     input: [u8; 32],
     /// The calculus/clausification contract of the consumer's clause set.
     contract: [u8; 32],
-}
-
-/// Keep the existing inline owning representation without allocating for a borrow.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "owning contexts already store Kb inline; borrowing must not allocate or clone it"
-)]
-pub(crate) enum ProofKnowledgeBase<'kb> {
-    Owned(Kb),
-    Borrowed(&'kb Kb),
-}
-
-impl std::ops::Deref for ProofKnowledgeBase<'_> {
-    type Target = Kb;
-
-    /// Read the prepared knowledge base through either immutable storage choice.
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Owned(kb) => kb,
-            Self::Borrowed(kb) => kb,
-        }
-    }
 }
 
 impl std::fmt::Debug for DlProofContext<'_> {
@@ -2786,18 +2765,18 @@ impl DlProofContext<'static> {
     /// [`TrustBaseEntry::RefutationEncoding`]; `input` stays the identity of the caller's
     /// dataset, so a proof still cannot be verified against a store the producer chose.
     pub(crate) fn of_prepared_kb(kb: Kb, input: [u8; 32]) -> Self {
-        Self::prepared(ProofKnowledgeBase::Owned(kb), input)
+        Self::prepared(OwnedOrBorrowed::Owned(kb), input)
     }
 }
 
 impl<'kb> DlProofContext<'kb> {
     /// Borrow the exact independently prepared consumer source without rebuilding it.
     pub(crate) fn borrowing_prepared_kb(kb: &'kb Kb, input: [u8; 32]) -> Self {
-        Self::prepared(ProofKnowledgeBase::Borrowed(kb), input)
+        Self::prepared(OwnedOrBorrowed::Borrowed(kb), input)
     }
 
     /// Clausification and identity binding are identical for both storage choices.
-    fn prepared(kb: ProofKnowledgeBase<'kb>, input: [u8; 32]) -> Self {
+    fn prepared(kb: OwnedOrBorrowed<'kb, Kb>, input: [u8; 32]) -> Self {
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
         Self {
