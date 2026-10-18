@@ -3,6 +3,8 @@ SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinform
 SPDX-License-Identifier: CC-BY-4.0
 -->
 
+
+English | [简体中文](purrdf-text-scoring.zh-Hans.md)
 # PurRDF text scoring and ranking
 
 `purrdf-text` builds an in-memory inverted index over the literals of a frozen
@@ -22,8 +24,8 @@ Every score is computed in base-10 fixed point: a signed integer scaled by a
 fixed number of fractional digits, truncating at every specified operation.
 Ranking intermediates promote from checked i128 to the workspace's exact
 Integer/BigInt when needed, preserving the same law without a chosen input
-ceiling. A final value is never wrapped or saturated. No floating-point value enters the crate at all — the crate
-root denies `clippy::float_arithmetic`, so none can.
+ceiling. A final value is never wrapped or saturated. Scoring and ranking use no floating-point arithmetic; the crate
+root denies `clippy::float_arithmetic`.
 
 This is not a stylistic preference for integers. BM25 needs a natural logarithm,
 and a libm `ln` is permitted to differ by a unit in the last place between
@@ -53,17 +55,18 @@ number of query terms nor field length, corpus size, weight or field count is
 refused to reserve space for a host tie key. See [the complete ranking
 law](../../crates/text/RANKING.md) for the physical representations and proof.
 
-## 2. The BM25 constants are constants
+## 2. `k1` is fixed; the ranking profile owns field normalization
 
-`K1` (1.2) and `B` (0.75) are crate constants. There is no parameter struct, no
-builder, and no knob.
+`K1` (1.2) is fixed. `B` (0.75) remains the default for the explicit
+single-field profile; an immutable `RankingProfile` binds each named field's
+weight and length normalization, predicate routing and score law to its
+fingerprint. Two different profiles have different ranking identities.
 
-PurRDF is a carrier, and optionality that changes semantics per consumer is
-forbidden. A tuning parameter here would be exactly that: two callers pointing
-the same query at the same index would get different scores and — worse, because
-it is the thing consumers actually order on — a different `?rank`, with neither
-answer identifiable as the wrong one. Ranked retrieval's entire output *is* an
-order, so a knob that changes the order changes the answer.
+PurRDF is a carrier, so a ranking choice must be part of the index's declared
+identity rather than an implicit per-query knob. Two callers querying the same
+index use its same immutable profile. Changing field weights, normalization or
+predicate routing constructs a differently identified ranking index; those
+choices can change scores and `?rank`, which is the answer's order.
 
 This is a different rule from the one governing the indexed predicate IRIs.
 Those are caller-supplied because PurRDF mints no vocabulary: an IRI this
@@ -73,9 +76,9 @@ the retrieval literature is not a vocabulary, ends up in no graph, and names
 nothing. The two rules point in opposite directions here, and it is worth being
 explicit about which one applies.
 
-The values are the canonical Okapi ones from the published literature. Choosing
-the literature's numbers rather than inventing better ones is the point: they
-are the values a reader can check this implementation against.
+The fixed `k1` and the single-field default `b` are the usual Okapi values.
+Other field normalizations are explicit, validated profile inputs and are
+included in the profile fingerprint; none is silently chosen for another field.
 
 ## 3. Statistics and `?rank` are per partition
 
@@ -120,8 +123,8 @@ English partition and a `1` from the French one are both ordinary integers, and
 nothing downstream — not the row, not the `xsd:integer` cell, not a comparison
 between them — records that they were computed against different corpora. A
 SPARQL answer over a three-language index therefore contains **three** rows of
-rank 1, and `LIMIT 10` over it is the first ten of that interleaving rather than
-the ten best documents. Binding the language is what makes it one list.
+rank 1, and `LIMIT 10` over it is the first ten of the partition-major output rather than
+the ten best documents. Restricting both graph and language, or using a single-partition index, makes it one list.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
 assigned only after every document has been sorted by `(graph, subject,
@@ -206,7 +209,7 @@ showed it, or because the value was rendered at fewer digits than separate them.
 
 `ORDER BY DESC(?score)` is consequently **not** a total order over the rows, and
 it can disagree with `ORDER BY ?rank`. `ORDER BY ?rank` states the order the
-ranker computed rather than recomputing one from a rounded number; it is total,
+ranker computed rather than recomputing one from a rounded number; within one partition it is total,
 and it is the only one that survives rounding.
 
 ## 6. The analysis pipeline
@@ -238,13 +241,13 @@ source alignment, input interpretation, domain and refusal contracts.
 
 ## 7. One Unicode version, generated in the crate
 
-The analyzer depends on four Unicode tables: the case fold, the normalization
-tables, the word-break properties and the alphanumeric predicate of the word
-filter. All four are generated by this crate from the vendored Unicode
-Character Database in `crates/iri/unicode/`, so they are at the same version,
-17.0.0, and none of them follows the toolchain the crate is built with. All
-four versions are still reported individually, so a future regeneration that
-moved one of them would be visible rather than summarized away.
+The analyzer depends on case-fold, normalization, word-boundary and
+alphanumeric tables. The workspace's `purrdf-lex` Unicode pipeline supplies
+the normalization version and generated tables; the text crate's generated
+case-fold and boundary data use the same vendored Unicode Character Database
+in `crates/iri/unicode/`. The pinned workspace version is 17.0.0, independent
+of the build toolchain. The analyzer records the relevant versions separately,
+so a future regeneration that moved one would be visible.
 
 Answers are deterministic because the tables are committed source: a given
 checkout analyzes a given literal to a fixed token vector on every target and

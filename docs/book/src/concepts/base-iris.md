@@ -241,7 +241,12 @@ purrdf convert data.ttl --to ntriples
 cat data.ttl | purrdf convert - --from turtle --to ntriples \
   --base http://example.org/dir/
 
-# Re-root a document: parse under one base, write another and relativize.
+```
+
+If `data.ttl` declares its own base, keep that parsing base while writing a
+new output base:
+
+```bash
 purrdf convert data.ttl --to turtle --base http://example.org/v2/
 ```
 

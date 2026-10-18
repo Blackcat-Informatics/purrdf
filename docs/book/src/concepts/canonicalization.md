@@ -22,11 +22,15 @@ The entry point is `canonicalize` (with a `canonicalize_with` variant for
 choosing the hash), producing canonical blank-node labels and, one layer up in
 `purrdf-rdf`, canonical flat N-Quads over the frozen IR:
 
-```rust,ignore
-use purrdf::canonicalize;
+```rust
+use purrdf::{canonicalize, parse_dataset};
 
+let ds = parse_dataset(b"_:source <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
+let renamed = parse_dataset(b"_:renamed <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
 let canon = canonicalize(&ds);
 // Canonical labels are stable across runs, hosts, and language bindings.
+assert_eq!(canon.nquads, canonicalize(&renamed).nquads);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Use canonicalization when you need a content identity for a graph: hashing,
@@ -42,14 +46,19 @@ When a compiler or analyzer must associate source nodes with that result, use
 `canonical_relabel_with_mapping`. It records the actual term mapping during
 the same rebuild, after one canonical-label search:
 
-```rust,ignore
-use purrdf::canonical_relabel_with_mapping;
+```rust
+use purrdf::{canonical_relabel_with_mapping, datasets_isomorphic, parse_dataset, TermRef};
 
+let source = parse_dataset(b"<https://example.org/alice> <https://example.org/knows> _:friend .", "application/n-triples", None)?;
+let source_node = source.term_id_by_iri("https://example.org/alice").ok_or("source IRI not interned")?;
 let result = canonical_relabel_with_mapping(&source)?;
 let output_node = result.map_term(source_node).ok_or("source node not retained")?;
 let canonical_value = result.dataset().resolve(output_node);
+assert!(matches!(canonical_value, TermRef::Iri("https://example.org/alice")));
 // Associate source receipts and owner metadata with canonical_value here.
 let canonical_dataset = result.into_dataset();
+assert!(datasets_isomorphic(source.as_ref(), &canonical_dataset));
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 `source_node` must belong to the exact input dataset; `output_node` belongs to
@@ -91,7 +100,8 @@ are holding is part of the identity:
 ## Isomorphism
 
 `datasets_isomorphic(a, b)` decides whether two frozen datasets are
-RDF-structurally isomorphic: the same quads under a blank-node bijection.
+RDF-structurally isomorphic: the same quads, reifier bindings, and annotations
+under a single blank-node bijection.
 Canonicalization gives the equivalent verdict — two datasets are isomorphic
 iff their canonicalizations are equal — but the direct check is the
 convenient form for tests and harnesses. PurRDF's own conformance harnesses

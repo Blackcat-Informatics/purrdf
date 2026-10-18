@@ -15,10 +15,10 @@
 //! four W3C SPARQL Results formats — JSON (SRJ), XML, CSV, and TSV — plus an
 //! additive, provenance-carrying `purrdf` extension.
 //!
-//! It depends **only** on `purrdf-core` (with `default-features = false`) so
-//! it stays wasm-clean. Term and N-Triples syntax are produced
-//! exclusively by the rdf-core kernel `emit_*` primitives (see `term`,
-//! `graph`); this crate adds no term-syntax of its own.
+//! It depends on `purrdf-core`, `purrdf-lex` and `purrdf-iri` and stays
+//! wasm-clean. Term and N-Triples syntax use the kernel's emit primitives
+//! (see `term`, `graph`) and the shared lexical term writer; this crate adds
+//! no term-syntax of its own.
 //!
 //! Scope: the shared infrastructure (error type, provenance carrier, term
 //! lexicalization bridge, CONSTRUCT-graph N-Triples writer), the four per-format

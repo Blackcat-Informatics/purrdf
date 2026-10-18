@@ -19,7 +19,7 @@ import shutil
 import os
 import tempfile
 import tarfile
-import urllib.request
+import subprocess
 from pathlib import PurePosixPath
 from pathlib import Path
 
@@ -86,9 +86,9 @@ def atomic_archive(path: Path, data: bytes) -> None:
 
 
 def fetch() -> bytes:
-    request = urllib.request.Request(URL, headers={"User-Agent": "purrdf-vendor-xmlconf"})
-    with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - pinned https host
-        return response.read()
+    return subprocess.check_output(
+        ["curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "120", "--user-agent", "purrdf-vendor-xmlconf", URL]
+    )
 
 
 def main() -> None:

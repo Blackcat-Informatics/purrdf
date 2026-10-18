@@ -127,11 +127,15 @@ raised nests that condition under `presentation.detail`, for example
 the IRI failure without parsing English. The error message and the record's
 `code`, `message` and other keys are unchanged.
 
-- **No unwinding across the boundary.** Every function runs inside
-  `catch_unwind`; a caught panic becomes `PURRDF_STATUS_PANIC` (never a process
-  abort across FFI).
+- **No unwinding across the boundary.** Fallible entry points use
+  `catch_unwind`; a caught unwinding panic becomes `PURRDF_STATUS_PANIC`.
+  Entry points without an error channel return their guard's default value
+  after a caught panic. Aborting panics and other process aborts cannot be
+  converted into status codes.
 - **`int32_t` status + out-params.** Fallible functions return a
-  `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
+  `PurrdfStatus` value (as `int32_t`) and write results through out-pointers.
+  When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
+  there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
   additive. The current ABI is **0.11.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib

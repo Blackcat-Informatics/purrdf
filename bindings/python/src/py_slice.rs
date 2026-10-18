@@ -5,10 +5,9 @@
 //!
 //! # Engine core separation
 //!
-//! Only this binding file imports pyo3. The engine modules in `purrdf-slice` are
-//! PyO3-free so the rlib links
-//! into the future Rust compiler without any Python dependency; the `python`
-//! feature gates this module.
+//! This binding lives in the dedicated Python crate. The engine modules in
+//! `purrdf-slice` remain PyO3-free; native consumers use that crate without a
+//! Python dependency. No semantic Cargo feature selects this behavior.
 //!
 //! # What is exposed
 //!

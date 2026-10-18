@@ -30,13 +30,13 @@ use purrdf::{parse_dataset, serialize_dataset, RdfDatasetBuilder, RdfLiteral, Se
 
 // Build a dataset in interned TermId space.
 let mut b = RdfDatasetBuilder::new();
-let alice = b.intern_iri("https://example.org/alice");
-let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows");
-let bob = b.intern_iri("https://example.org/bob");
-let name = b.intern_iri("http://xmlns.com/foaf/0.1/name");
-let hi = b.intern_literal(RdfLiteral::simple("Alice"));
-b.push_quad(alice, knows, bob, None);
-b.push_quad(alice, name, hi, None);
+let alice = b.intern_iri("https://example.org/alice").unwrap();
+let knows = b.intern_iri("http://xmlns.com/foaf/0.1/knows").unwrap();
+let bob = b.intern_iri("https://example.org/bob").unwrap();
+let name = b.intern_iri("http://xmlns.com/foaf/0.1/name").unwrap();
+let hi = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+b.push_quad(alice, knows, bob, None).unwrap();
+b.push_quad(alice, name, hi, None).unwrap();
 let ds = b.freeze().expect("freeze");
 
 // Serialize to any native codec and parse back, losslessly.
@@ -48,7 +48,9 @@ assert_eq!(back.quad_count(), 2);
 The builder→freeze split is the heart of the API: you intern terms and push
 quads on a mutable `RdfDatasetBuilder`, then `freeze()` into an immutable,
 indexed `RdfDataset` that every engine (SPARQL, SHACL, ShEx, entailment)
-evaluates over. See [The Interned Dataset IR](../concepts/interned-dataset.md).
+evaluates over. Interning and insertion return typed storage failures;
+propagate those errors in application code rather than ignoring them.
+See [The Interned Dataset IR](../concepts/interned-dataset.md).
 
 ## Parsing text directly
 

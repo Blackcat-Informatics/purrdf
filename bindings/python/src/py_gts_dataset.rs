@@ -118,7 +118,9 @@ impl PyRdfDataset {
         self.inner.quad_count()
     }
 
-    /// Serialize this immutable dataset to canonical (RDFC-1.0) flat N-Quads.
+    /// Serialize this immutable dataset to the shipped profile's canonical flat N-Quads.
+    /// It agrees with RDFC-1.0 on the RDF 1.1 subset; RDF 1.2 statements follow
+    /// the separate [`purrdf_core::CANON_PROFILE_ID`] contract.
     ///
     /// The readable surface of a frozen dataset: without it a handle returned by
     /// `purrdf.entail.materialize` can be counted but never inspected. The output
