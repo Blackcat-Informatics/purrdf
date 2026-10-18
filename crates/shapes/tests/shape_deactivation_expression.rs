@@ -258,10 +258,11 @@ fn sparql_constraint(deactivated: &str) -> String {
     )
 }
 
-/// SHACL 1.2 SPARQL Extensions, "Syntax of SPARQL-based Constraints": the value of a
-/// SPARQL-based constraint's `sh:deactivated` "is a node expression that must have
-/// either `true` or `false` as its (only) output node, as for shapes", and "Validation
-/// with SPARQL-based Constraints": the constraint is deactivated, with no validation
+/// SHACL 1.2 SPARQL Extensions at the editor's draft `shacl-ed-2026-10-16`, "Syntax of
+/// SPARQL-based Constraints": the value of a SPARQL-based constraint's `sh:deactivated`
+/// "is a node expression that must have either `true` or `false` as its (only) output
+/// node, as for shapes", and "Validation with SPARQL-based Constraints": the
+/// constraint is deactivated, with no validation
 /// results, when `evalExpr(expr, data graph, focus node, {})` "produces `true` as its
 /// only output node". So the constraint reports `ex:b` and not `ex:a`; the constants
 /// give every focus node or none, and an expression that is no one boolean fails.
@@ -289,8 +290,10 @@ fn a_node_expression_deactivates_a_sparql_based_constraint_where_it_yields_true(
     assert!(failure(&data_of(&["e"]), &shapes).contains("produced 0 output nodes"));
 }
 
-/// The same holds for an `sh:expression` constraint node, which SHACL 1.2 treats as a
-/// SPARQL-based constraint does (its `sh:deactivated` is read from the node).
+/// The same holds for an `sh:expression` constraint node, which the engine reads as a
+/// SPARQL-based constraint is read (its `sh:deactivated` is read from the node). No draft
+/// states a rule for the `sh:expression` node itself, so it follows the SPARQL-based
+/// constraint's sentence, and with it the editor's draft alone defines the expression.
 #[test]
 fn a_node_expression_deactivates_an_expression_constraint_where_it_yields_true() {
     let shapes = |deactivated: &str| {
@@ -383,51 +386,172 @@ fn a_reifier_node_expression_deactivates_the_constraint_where_it_yields_true() {
     }
 }
 
-// ── The 2017 Recommendation ───────────────────────────────────────────────────
+// ── The dated laws ────────────────────────────────────────────────────────────
 
-/// SHACL REC 2017-07-20, "Deactivating Shapes": "The value of `sh:deactivated` in a
-/// shape must be either `true` or `false`." Under that law a node expression is
-/// refused at load wherever it is written (a shape, a SPARQL-based constraint, a
-/// reifier), and the boolean spelling is accepted. The dated 1.2 profile accepts the
-/// same expression, which is the neighbour that shows the refusal is the law's.
-#[test]
-fn the_2017_recommendation_allows_only_a_boolean_sh_deactivated() {
+/// Load `shapes` under `profile`: `Ok` when it loads, the refusal otherwise.
+fn load(shapes: &str, profile: purrdf_shapes::ShaclProfile) -> Result<(), String> {
+    use purrdf_shapes::ShapesImports;
     use purrdf_shapes::engine::{ValidationOptions, parse_shapes_with_options};
-    use purrdf_shapes::{ShaclProfile, ShapesImports};
 
-    let load = |shapes: &str, profile: ShaclProfile| {
-        parse_shapes_with_options(
-            shapes,
-            None,
-            None,
-            None,
-            &ShapesImports::new(),
-            &ValidationOptions::default().with_profile(profile),
+    parse_shapes_with_options(
+        shapes,
+        None,
+        None,
+        None,
+        &ShapesImports::new(),
+        &ValidationOptions::default().with_profile(profile),
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+/// The focus nodes `data` reports against `shapes` under `profile`, sorted, or the
+/// refusal.
+fn reported_under(
+    profile: purrdf_shapes::ShaclProfile,
+    data: &str,
+    shapes: &str,
+) -> Result<Vec<String>, String> {
+    use purrdf_shapes::ShapesImports;
+    use purrdf_shapes::engine::{ValidationOptions, validate_graphs_with_options};
+
+    let report = validate_graphs_with_options(
+        data,
+        shapes,
+        None,
+        &ValidationOptions::default().with_profile(profile),
+        &ShapesImports::new(),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut focus: Vec<String> = report
+        .results
+        .iter()
+        .map(|result| result.focus_node.to_string())
+        .collect();
+    focus.sort();
+    Ok(focus)
+}
+
+/// Where each law reads a node expression as the value of `sh:deactivated`.
+///
+/// * SHACL REC 2017-07-20, "Deactivating Shapes": "The value of `sh:deactivated` in a
+///   shape must be either `true` or `false`." Refused wherever it is written.
+/// * The working draft (`shacl-wd-2026-09-18`): Core defines a node expression on a
+///   shape and on a constraint's reifier; SPARQL Extensions, "Syntax of SPARQL-based
+///   Constraints", says of a SPARQL-based constraint that "this value is either true
+///   or false". So a node expression on a SPARQL-based constraint or an `sh:expression`
+///   constraint node is refused under it.
+/// * The editor's draft (`shacl-ed-2026-10-16`) says the constraint's value "is a node
+///   expression that must have either `true` or `false` as its (only) output node, as
+///   for shapes", so it accepts all four. The compatibility law reads the editor's
+///   draft.
+///
+/// Every refusal has its neighbour: the same position written with the constants
+/// `true` and `false` loads under all three dated laws, and the position the law does
+/// define loads with the expression.
+#[test]
+fn each_law_reads_a_node_expression_sh_deactivated_where_its_text_defines_one() {
+    use purrdf_shapes::ShaclProfile;
+
+    let expression_constraint = |value: &str| {
+        format!(
+            "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:expression [
+                 sh:deactivated {value} ; sh:path ex:never ] ."
         )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
     };
-    let written_at: [(&str, Writer); 3] = [
-        ("a shape", node_shape),
-        ("a SPARQL-based constraint", sparql_constraint),
-        ("a reifier", |value| {
-            format!(
-                "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ;
-                 sh:datatype xsd:integer {{| sh:deactivated {value} |}} ."
-            )
-        }),
+    let reifier = |value: &str| {
+        format!(
+            "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ;
+             sh:datatype xsd:integer {{| sh:deactivated {value} |}} ."
+        )
+    };
+    // (position, writer, whether the working draft's text defines an expression there)
+    let written_at: [(&str, Writer, bool); 4] = [
+        ("a shape", node_shape, true),
+        ("a SPARQL-based constraint", sparql_constraint, false),
+        ("an sh:expression constraint", expression_constraint, false),
+        ("a reifier", reifier, true),
     ];
-    for (what, shapes) in written_at {
+    for (what, shapes, defined_by_the_working_draft) in written_at {
         let expression = shapes("[ sh:path ex:muted ]");
         let error = load(&expression, ShaclProfile::REC_20170720)
             .expect_err("the 2017 law allows only true and false");
         assert!(error.contains("SHACL REC 2017-07-20"), "{what}: {error}");
-        load(&expression, ShaclProfile::WD_20260918)
-            .unwrap_or_else(|error| panic!("{what}: the 1.2 law accepts it: {error}"));
-        for constant in ["true", "false"] {
-            load(&shapes(constant), ShaclProfile::REC_20170720)
-                .unwrap_or_else(|error| panic!("{what}: {constant} loads under 2017: {error}"));
+
+        for law in [ShaclProfile::ED_20261016, ShaclProfile::LEGACY] {
+            load(&expression, law)
+                .unwrap_or_else(|error| panic!("{what}: {law} accepts it: {error}"));
         }
+
+        let working_draft = load(&expression, ShaclProfile::WD_20260918);
+        if defined_by_the_working_draft {
+            working_draft.unwrap_or_else(|error| panic!("{what}: the WD defines it: {error}"));
+        } else {
+            let error = working_draft.expect_err("the working draft allows only true and false");
+            assert!(
+                error.contains("this value is either true or false")
+                    && error.contains("shacl-wd-2026-09-18")
+                    && error.contains("shacl-ed-2026-10-16"),
+                "{what}: {error}"
+            );
+        }
+
+        for constant in ["true", "false"] {
+            for law in [
+                ShaclProfile::REC_20170720,
+                ShaclProfile::WD_20260918,
+                ShaclProfile::ED_20261016,
+            ] {
+                load(&shapes(constant), law).unwrap_or_else(|error| {
+                    panic!("{what}: {constant} loads under {law}: {error}")
+                });
+            }
+        }
+    }
+}
+
+/// The refusal under the working draft is a law's, not a broken constraint: the same
+/// SPARQL-based and `sh:expression` constraints validate under it with the constants
+/// (`true` deactivates, `false` does not), and under the editor's draft the expression
+/// deactivates the constraint at `ex:a` and not at `ex:b`.
+#[test]
+fn the_working_draft_validates_a_boolean_constraint_deactivation_and_refuses_an_expression() {
+    use purrdf_shapes::ShaclProfile;
+
+    let expression_constraint = |value: &str| {
+        format!(
+            "{PREFIXES} ex:S a sh:NodeShape ; sh:targetClass ex:T ; sh:expression [
+                 sh:deactivated {value} ; sh:path ex:never ] ."
+        )
+    };
+    let writers: [(&str, Writer); 2] = [
+        ("a SPARQL-based constraint", sparql_constraint),
+        ("an sh:expression constraint", expression_constraint),
+    ];
+    let data = data_of(&["a", "b"]);
+    for (what, shapes) in writers {
+        for law in [ShaclProfile::WD_20260918, ShaclProfile::ED_20261016] {
+            assert_eq!(
+                reported_under(law, &data, &shapes("true")),
+                Ok(Vec::new()),
+                "{what} under {law}: true deactivates it everywhere"
+            );
+            assert_eq!(
+                reported_under(law, &data, &shapes("false")),
+                Ok(vec![iri("a"), iri("b")]),
+                "{what} under {law}: false deactivates it nowhere"
+            );
+        }
+        let muted = shapes("[ sh:path ex:muted ]");
+        assert_eq!(
+            reported_under(ShaclProfile::ED_20261016, &data, &muted),
+            Ok(vec![iri("b")]),
+            "{what}: the editor's draft evaluates the expression"
+        );
+        assert!(
+            reported_under(ShaclProfile::WD_20260918, &data, &muted).is_err(),
+            "{what}: the working draft refuses the expression at load"
+        );
     }
 }
 

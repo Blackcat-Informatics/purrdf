@@ -629,8 +629,9 @@ way the matrix stays honest:
      why the scoreboard reports rule-table coverage and entailment conformance
      as separate rows.
 - **SHACL** — the harness discovers **129** `sht:Validate` entries and passes
-  **129 / 129** as approved, with **0 ledgered xfails**: **120** from the W3C `core/` and `sparql/` suites, plus
-  **9** under `vectors/shacl/af/`. Of those 9, **6 are vendored** from pySHACL's
+  **129 / 129** as approved, with **0 ledgered xfails**: **120** from the W3C `core/` and `sparql/` suites,
+  graded under the dated `shacl-rec-2017-07-20` profile (the Recommendation they test, and the law the
+  published 2017 report names), plus **9** under `vectors/shacl/af/`, graded under the compatibility law. Of those 9, **6 are vendored** from pySHACL's
   DASH tests and **3 are first-party** cases authored for PurRDF against W3C
   "SHACL 1.2 Node Expressions", which the DASH corpus predates — there is
   **no W3C SHACL-AF conformance suite**, so no vendored suite grades that surface
@@ -686,9 +687,14 @@ way the matrix stays honest:
   isomorphism) and 209 SPARQL 1.2 RL tests across seven test types, each
   negative test required to fail at the stage its type names. Discovery
   refuses to lose a test: an unknown test type, an unreached manifest, an
-  unlisted test node or a duplicate id stops the run. The `sht:Validate` entries run under
-  the dated `shacl-wd-2026-09-18` profile, the law their text is written
-  against. One vendored file
+  unlisted test node or a duplicate id stops the run. The `sht:Validate` entries and the
+  rule cases run under the dated `shacl-ed-2026-10-16` profile, the editor's drafts of the
+  suite's own commit (`4cd469867a1cc6d2fff80e8a40723b26c695d67a`). That law is the
+  `shacl-wd-2026-09-18` working draft plus four rules first published after it: a node
+  expression as `sh:deactivated` on a SPARQL-based or `sh:expression` constraint, the
+  `owl:versionIRI` steps of the `sh:prefixes` path, the refusal of a blank node as a
+  custom SPARQL function argument, and rule sets as `sh:entailment` values. The working
+  draft law refuses or ignores those four, each with a tested neighbour. One vendored file
   that no upstream manifest includes (`inference-rules/rdfs/rdfs1.ttl`) is
   graded exactly as written by a test of its own and reported apart from the
   approved suite, never counted among its passes. `core/property/reifierShape-001` and `-002` are

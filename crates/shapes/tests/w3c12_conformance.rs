@@ -274,7 +274,10 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         .map_err(|errors| format!("node-expression graph parse error: {}", errors.join("; ")))?
         .prefixes;
     // The node-expression loader and evaluator take no profile: node expressions exist
-    // only in SHACL 1.2, so there is no compatibility alternative to select.
+    // only in SHACL 1.2, so there is no compatibility alternative to select. The
+    // report's law sentence (`shacl-ed-2026-10-16`) therefore covers the `sht:Validate`
+    // and rule records, which load and run under that law, and not these records,
+    // which no law selects.
     let (shapes, mut exprs) = shapes::from_dataset_with_node_expressions(
         &tc.dataset,
         &doc_prefixes,
@@ -342,7 +345,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         ..
     } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    // Rules run under the dated law the suite is written against.
+    // Rules run under the editor's draft law, which the suite's commit pins.
     let shapes = shapes::from_dataset_with_options(
         &shapes_dataset,
         None,
@@ -350,7 +353,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         None,
         Some(tc.shapes_graph_iri.clone()),
         &purrdf_shapes::ShapesImports::new(),
-        &engine::ValidationOptions::default().with_profile(ShaclProfile::WD_20260918),
+        &engine::ValidationOptions::default().with_profile(ShaclProfile::ED_20261016),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data_dataset = if tc.data_path == tc.shapes_path {
@@ -588,6 +591,7 @@ const SUITE: w3c_earl::Suite = w3c_earl::Suite {
     file_name: "purrdf-shacl12-earl.ttl",
     commit: W3C12_SUITE_COMMIT,
     profile: "shacl-1.2",
+    law: ShaclProfile::ED_20261016.id(),
 };
 
 /// The EARL-scope scoreboard line's label and the name its failed count carries.
@@ -887,6 +891,69 @@ fn w3c_shacl12_unlisted_vendored_files() {
         with_delta, UNLISTED_FILE_DELTAS_COUNT,
         "entries graded with a delta"
     );
+}
+
+/// The approved `sht:Validate` entries whose expected result rests on a sentence first
+/// published after the working draft of 2026-09-18 (`shacl-wd-2026-09-18`, text
+/// `32318223`) pass under the editor's-draft law (`shacl-ed-2026-10-16`) and are not met
+/// by the working-draft law: it refuses the shapes graph at load or reports another
+/// result, as its own text says. Their neighbours, the entries that rest on text the
+/// working draft already has, pass under both laws, so the difference is the law's.
+/// The rows name the editor's-draft sentences that the working-draft text
+/// (`w3c/data-shapes` commit `32318223`) does not contain.
+#[test]
+fn the_entries_resting_on_post_wd_text_need_the_editors_draft_law() {
+    const POST_WD: [&str; 6] = [
+        "sparql/node/prefixes-003",
+        "sparql/functions/blankNodeArgument-001",
+        "inference-rules/rules-entailment-ruleset-validation",
+        "inference-rules/rules-entailment-ruleset-includes",
+        "inference-rules/rules-entailment-ruleset-multiple",
+        "inference-rules/rules-entailment-ruleset-and-all",
+    ];
+    const WD_TEXT: [&str; 7] = [
+        "sparql/node/deactivated-select-001",
+        "sparql/node/sparql-deactivated-001",
+        "sparql/functions/singleInstanceOf-001",
+        "core/property/closed-001",
+        "inference-rules/rules-entailment-validation",
+        "sparql/pre-binding/pre-binding-009",
+        "core/misc/deactivated-001",
+    ];
+    let mut seen = Vec::new();
+    for case in shacl12_cases() {
+        let post_wd = POST_WD.contains(&case.id.as_str());
+        if !post_wd && !WD_TEXT.contains(&case.id.as_str()) {
+            continue;
+        }
+        let Body::Validate(mut tc) = case.body else {
+            panic!("{} is an sht:Validate test", case.id);
+        };
+        assert_eq!(tc.profile, ShaclProfile::ED_20261016, "{}", case.id);
+        grade_against(&tc, &tc.expected)
+            .unwrap_or_else(|error| panic!("{} fails under the editor's draft: {error}", case.id));
+        tc.profile = ShaclProfile::WD_20260918;
+        let under_the_working_draft = grade_against(&tc, &tc.expected);
+        if post_wd {
+            assert!(
+                under_the_working_draft.is_err(),
+                "{} rests on post-WD text, so the working-draft law must not meet it",
+                case.id
+            );
+        } else {
+            under_the_working_draft.unwrap_or_else(|error| {
+                panic!(
+                    "{} rests on working-draft text and must pass: {error}",
+                    case.id
+                )
+            });
+        }
+        seen.push(case.id);
+    }
+    seen.sort();
+    let mut expected: Vec<&str> = POST_WD.iter().chain(&WD_TEXT).copied().collect();
+    expected.sort_unstable();
+    assert_eq!(seen, expected, "every named entry is discovered");
 }
 
 /// No approved entry is graded against an amended expectation: a table row naming
@@ -2129,6 +2196,7 @@ fn w3c12_earl_subject_and_assertor_are_exact() {
         &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         w3c_earl::SAMPLE_COMMIT,
         "4cd469867a1cc6d2fff80e8a40723b26c695d67a",
+        "shacl-ed-2026-10-16",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -2268,7 +2336,7 @@ fn w3c12_earl_report_is_written_when_configured() {
         &scope_entries(graded()),
     ))
     .expect("the report renders");
-    w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT)
+    w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT, SUITE.law)
         .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
         .unwrap_or_else(|error| panic!("{error}"));

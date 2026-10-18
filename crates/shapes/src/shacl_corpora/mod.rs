@@ -242,7 +242,9 @@ pub struct W3cCase {
     pub expected_details: Vec<ExpectedResult>,
     /// The SHACL law the shared report grader ([`report_grading`]) loads and
     /// validates this case under; nothing else reads it. [`parse_entry`] sets the
-    /// compatibility law and the SHACL 1.2 discovery sets the dated 1.2 law. Lanes
+    /// compatibility law, the SHACL 1.2 discovery sets the editor's-draft law
+    /// (`shacl-ed-2026-10-16`, the suite commit's texts), and the SHACL 1.0 harness
+    /// sets the 2017 Recommendation's law on the vendored W3C entries it grades. Lanes
     /// that load shapes themselves (the SHACL 1.0 harness's own loaders, the
     /// prepared-product, vocabulary-import and shacl-shacl lanes) ignore it by
     /// design and always run the compatibility law.

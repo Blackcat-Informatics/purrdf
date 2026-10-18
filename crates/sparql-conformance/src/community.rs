@@ -40,7 +40,11 @@ use purrdf_validate::CompleteValidationStatus;
 pub const BASE: &str = "http://example.org/community/";
 
 /// The built-in dated laws a catalog profile can select.
-const DATED: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
+const DATED: [ShaclProfile; 3] = [
+    ShaclProfile::REC_20170720,
+    ShaclProfile::WD_20260918,
+    ShaclProfile::ED_20261016,
+];
 
 /// Data and shapes identity domains. The two documents are acquired separately,
 /// so their blanks never share identity.

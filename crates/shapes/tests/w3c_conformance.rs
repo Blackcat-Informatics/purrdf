@@ -104,12 +104,18 @@ const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
 /// [`SPEC_CONTRADICTED`] pinned by count.
 const SPEC_CONTRADICTED_COUNT: usize = 0;
 
+/// The law the vendored W3C entries are graded under: the Recommendation they test.
+/// The first-party `af/` seam exercises SHACL-AF, which the Recommendation does not
+/// define, and keeps the compatibility law.
+const LAW: purrdf_shapes::ShaclProfile = purrdf_shapes::ShaclProfile::REC_20170720;
+
 /// This suite's report: its file, the full commit of the vendored suite, and the
 /// profile each record carries.
 const SUITE: w3c_earl::Suite = w3c_earl::Suite {
     file_name: "purrdf-shacl-earl.ttl",
     commit: W3C_SUITE_COMMIT,
     profile: "shacl-20170720",
+    law: LAW.id(),
 };
 
 /// The EARL-scope scoreboard line's label and the name its failed count carries.
@@ -128,7 +134,10 @@ struct Graded {
 fn graded() -> &'static [Graded] {
     static GRADED: std::sync::OnceLock<Vec<Graded>> = std::sync::OnceLock::new();
     GRADED.get_or_init(|| {
-        let tests = w3c_cases();
+        let mut tests = w3c_cases();
+        for tc in tests.iter_mut().filter(|tc| !tc.first_party) {
+            tc.profile = LAW;
+        }
         // Engine panics are caught by `report_grading::no_panic` and reported as
         // ledgered failures, so their backtraces would only drown the scoreboard.
         let default_hook = std::panic::take_hook();
@@ -537,6 +546,7 @@ fn w3c_2017_earl_subject_and_assertor_are_exact() {
         &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         w3c_earl::SAMPLE_COMMIT,
         "08adb3776709a014bc3062ede793c36275b22446",
+        "shacl-rec-2017-07-20",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -602,7 +612,7 @@ fn w3c_2017_earl_report_is_written_when_configured() {
         &scope_entries(graded()),
     ))
     .expect("the report renders");
-    w3c_earl::check_descriptions(&bytes, &config.commit, W3C_SUITE_COMMIT)
+    w3c_earl::check_descriptions(&bytes, &config.commit, W3C_SUITE_COMMIT, SUITE.law)
         .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
         .unwrap_or_else(|error| panic!("{error}"));

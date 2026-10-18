@@ -658,14 +658,22 @@ impl Parser<'_> {
     }
 }
 
+/// Whether the law in force makes a blank-node argument to a custom SPARQL function
+/// an error: the editor's draft and the compatibility law do, the working draft and
+/// the 2017 Recommendation state no such rule.
+fn blank_node_argument_is_error() -> bool {
+    crate::query_law::current().is_none_or(|law| law.profile().reads_editors_draft_semantics())
+}
+
 /// Evaluate one SPARQL call of a custom LIST parameter function — the body of the
 /// closure [`crate::shapes::link::link_shapes`] installs.
 ///
 /// SHACL 1.2 SPARQL Extensions §7.3 in three moves:
 ///
 /// 1. The already-evaluated arguments become the argument scope, keyed by INDEX.
-///    An unbound argument, or one that is a blank node, in a required position leaves
-///    the call with no value (`Ok(None)` — SPARQL's own expression-error result); in
+///    An unbound argument, or (under the editor's draft) one that is a blank node, in a
+///    required position leaves the call with no value (`Ok(None)` — SPARQL's own
+///    expression-error result); in
 ///    an optional position it is left out of the scope and the arguments after it keep
 ///    their indexes.
 /// 2. The body is evaluated over `call.focus_graph`, the graph the calling query is
@@ -687,13 +695,16 @@ pub(crate) fn invoke_expression_function(
         // SHACL 1.2 SPARQL Extensions §7.3: an argument whose evaluation is an error
         // makes the call an error "unless the corresponding sh:parameter for the
         // argument has sh:optional true. In that case, the argument will be unbound in
-        // the scope", and "an argument that evaluates to a blank node leads to an
-        // evaluation failure and thus an error". A blank node is therefore treated as
-        // the error it is.
+        // the scope". The editor's draft adds that "blank nodes cannot be passed as
+        // arguments: they are not constant node expressions, so an argument that
+        // evaluates to a blank node leads to an evaluation failure and thus an error".
+        // The working draft states no such rule, so a blank node is an ordinary
+        // argument under it.
+        let blank_is_error = blank_node_argument_is_error();
         let bound = value
             .as_ref()
             .map(term_value_to_native)
-            .filter(|term| !matches!(term, Term::BlankNode(_)));
+            .filter(|term| !(blank_is_error && matches!(term, Term::BlankNode(_))));
         if bound.is_none() && index < func.required {
             return Ok(None);
         }

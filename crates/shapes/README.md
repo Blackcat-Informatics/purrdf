@@ -255,6 +255,15 @@ admission law with the native XPath law required for `sh:pattern`, `REGEX` and
 | --- | --- |
 | `REC_20170720` | [F&O 2.0 Second Edition, 2010-12-14](https://www.w3.org/TR/2010/REC-xpath-functions-20101214/), including incorporated errata |
 | `WD_20260918` | [F&O 3.1 Recommendation, 2017-03-21](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/) |
+| `ED_20261016` | [F&O 3.1 Recommendation, 2017-03-21](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/) |
+
+`ED_20261016` (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at
+commit `4cd469867a1cc6d2fff80e8a40723b26c695d67a`. It is `WD_20260918` plus the semantics
+first published after that working draft: a node expression as `sh:deactivated` on a
+SPARQL-based or `sh:expression` constraint, the `owl:versionIRI` steps of the `sh:prefixes`
+path, a blank node as a custom SPARQL function argument being an error, and rule sets as
+`sh:entailment` values. `WD_20260918` refuses or ignores each as the working draft's text
+says, and `REC_20170720` follows the 2017 text (`sh:prefixes/owl:imports*/sh:declare`).
 
 The Recommendation's recognized constraint/component declarations receive its
 graph-wide pre-binding checks. The draft's execution restrictions apply when

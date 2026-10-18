@@ -5,12 +5,19 @@
 //!
 //! # What the specification defines
 //!
-//! SHACL 1.2 SPARQL Extensions, "Prefix Declarations for SPARQL Queries":
+//! SHACL 1.2 SPARQL Extensions, "Prefix Declarations for SPARQL Queries". Each law
+//! reads the path its own text states ([`reached_holders`]). The editor's draft
+//! (`shacl-ed-2026-10-16`), which the compatibility law also reads:
 //!
 //! > A SHACL processor collects a set of prefix mappings as the union of all
 //! > individual prefix mappings that are values of the SPARQL property path
 //! > `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare` of
 //! > the SPARQL-based constraint, validator or SPARQL-based node expression.
+//!
+//! The working draft (`shacl-wd-2026-09-18`) has
+//! `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`, and SHACL REC 2017-07-20
+//! has `sh:prefixes/owl:imports*/sh:declare`. The two sentences below are quoted from
+//! the editor's draft; the working draft words them alike:
 //!
 //! > If such a collection of prefix declarations contains multiple different
 //! > namespaces for the same value of `sh:prefix`, then the shapes graph is
@@ -82,6 +89,7 @@ use purrdf_core::graph_roles::{GraphRoleIndex, GraphRoles};
 use super::objects_of;
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{sh, xsd};
+use crate::profile::ShaclProfile;
 use crate::term::{NamedNode, Term};
 
 use purrdf_iri::vocab::owl::{IMPORTS as OWL_IMPORTS, VERSION_IRI as OWL_VERSION_IRI};
@@ -127,7 +135,12 @@ impl PrefixResolver {
     /// When the collection the query reaches is ill-formed: a conflicting binding,
     /// a value of `sh:prefixes` or `sh:declare` that cannot be a node, or a
     /// declaration without exactly one `sh:prefix` and one `sh:namespace`.
-    pub(crate) fn header(&self, data: &RdfDataset, owners: &[&Term]) -> Result<String, String> {
+    pub(crate) fn header(
+        &self,
+        data: &RdfDataset,
+        owners: &[&Term],
+        profile: ShaclProfile,
+    ) -> Result<String, String> {
         let mut roots: Vec<Term> = Vec::new();
         for owner in owners {
             roots.extend(objects_of(data, owner, sh::PREFIXES));
@@ -155,7 +168,7 @@ impl PrefixResolver {
                      prefixes-nodeKind]"
                 ));
             }
-            for holder in reached_holders(data, &root) {
+            for holder in reached_holders(data, &root, profile) {
                 collect_declarations(data, &holder, &origin, &mut collection)?;
             }
         }
@@ -208,22 +221,62 @@ pub(crate) fn split_syntax_rule(message: String) -> (Option<&'static str>, Strin
     (None, message)
 }
 
-/// Every node whose `sh:declare` values the path
-/// `(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*` reaches from `root` (the
+/// Every node whose `sh:declare` values the law's prefix path reaches from `root` (the
 /// rest of the path of SHACL 1.2 SPARQL Extensions, "Prefix Declarations for SPARQL
 /// Queries", after `sh:prefixes`), `root` first, each once, in discovery order.
 ///
-/// The path has two kinds of step, both optional in the ways its `?` and `*` say:
+/// Each law reads the path its own text states:
 ///
-/// * `(^owl:versionIRI)?` — from a node to itself, or to every graph whose
+/// * [`ShaclProfile::REC_20170720`], SHACL §5.2.1: `owl:imports*`. A version IRI is an
+///   ordinary node there, and no `owl:versionIRI` step is followed.
+/// * [`ShaclProfile::WD_20260918`]: `(^owl:versionIRI?/owl:imports)*`. Each step goes
+///   to a node, or to every graph whose `owl:versionIRI` it is, and then along
+///   `owl:imports`. Only `root` and the nodes an `owl:imports` step arrives at hold
+///   declarations; the graph a version IRI leads to is a stepping stone.
+/// * [`ShaclProfile::ED_20261016`] and the compatibility law:
+///   `(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*`, the editor's draft's
+///   path, which also reads the declarations of the graph a version IRI leads to.
+///   `(^owl:versionIRI)?` goes from a node to itself, or to every graph whose
 ///   `owl:versionIRI` it is. It is applied to `root` first, and again after every
-///   `owl:imports` step, so a graph named by its version IRI, directly or by an import,
-///   contributes its own declarations as well as those of the unversioned graph.
-/// * `owl:imports` — from a node to every one of its `owl:imports` values.
-///
-/// Both the node a step arrives at and the unversioned graph the version IRI leads
-/// to are reached: a declaration on either is on the path.
-fn reached_holders(data: &RdfDataset, root: &Term) -> Vec<Term> {
+///   `owl:imports` step, so a graph named by its version IRI, directly or by an
+///   import, contributes its own declarations as well as those of the unversioned
+///   graph.
+fn reached_holders(data: &RdfDataset, root: &Term, profile: ShaclProfile) -> Vec<Term> {
+    if profile.reads_editors_draft_semantics() {
+        reached_by_editors_draft_path(data, root)
+    } else {
+        reached_by_imports(data, root, profile == ShaclProfile::WD_20260918)
+    }
+}
+
+/// The nodes `owl:imports*` reaches from `root` (SHACL REC 2017-07-20), or, with
+/// `versioned`, the working draft's `(^owl:versionIRI?/owl:imports)*`: every step may
+/// first move to a graph the node is the `owl:versionIRI` of.
+fn reached_by_imports(data: &RdfDataset, root: &Term, versioned: bool) -> Vec<Term> {
+    let mut reached: Vec<Term> = vec![root.clone()];
+    let mut next = 0;
+    while next < reached.len() {
+        let node = reached[next].clone();
+        next += 1;
+        let mut sources = vec![node.clone()];
+        if versioned {
+            sources.extend(subjects_of(data, OWL_VERSION_IRI, &node));
+        }
+        for source in sources {
+            for imported in objects_of(data, &source, OWL_IMPORTS) {
+                if imported.is_subject() && !reached.contains(&imported) {
+                    reached.push(imported);
+                }
+            }
+        }
+    }
+    reached
+}
+
+/// The nodes `(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*` reaches from
+/// `root`: both the node a step arrives at and the unversioned graph the version IRI
+/// leads to, so a declaration on either is on the path.
+fn reached_by_editors_draft_path(data: &RdfDataset, root: &Term) -> Vec<Term> {
     let mut reached: Vec<Term> = Vec::new();
     // Nodes whose `owl:imports` are still to be followed: every node a
     // `(^owl:versionIRI)?` step arrives at, itself or the graph it versions.

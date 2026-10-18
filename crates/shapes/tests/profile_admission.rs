@@ -6,7 +6,11 @@
 use purrdf_shapes::{AdmissionReason, QueryPurpose, ShaclProfile};
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
-const DATED: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
+const DATED: [ShaclProfile; 3] = [
+    ShaclProfile::REC_20170720,
+    ShaclProfile::WD_20260918,
+    ShaclProfile::ED_20261016,
+];
 
 fn parse(text: &str) -> Query {
     SparqlParser::new()
@@ -32,7 +36,7 @@ fn role_query(purpose: QueryPurpose, body: &str) -> Query {
 #[test]
 fn identities_are_exact_and_name_each_required_edition() {
     assert_eq!(ShaclProfile::default(), ShaclProfile::LEGACY);
-    for profile in [ShaclProfile::LEGACY, DATED[0], DATED[1]] {
+    for profile in [ShaclProfile::LEGACY, DATED[0], DATED[1], DATED[2]] {
         assert_eq!(ShaclProfile::from_id(profile.id()).unwrap(), profile);
         assert_eq!(profile.to_string(), profile.id());
     }
@@ -42,6 +46,7 @@ fn identities_are_exact_and_name_each_required_edition() {
         " legacy",
         "shacl-rec-2017-07-21",
         "shacl-wd-2026-09-17",
+        "shacl-ed-2026-10-17",
     ] {
         let error = ShaclProfile::from_id(id).expect_err("no date or spelling fallback");
         assert_eq!(error.id(), id);
@@ -73,6 +78,29 @@ fn identities_are_exact_and_name_each_required_edition() {
         DATED[1].xpath_specification(),
         Some("https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/")
     );
+    // The editor's draft law pins the suite commit's documents, not a dated TR URL.
+    assert_eq!(DATED[2].id(), "shacl-ed-2026-10-16");
+    assert_eq!(
+        DATED[2].core_specification(),
+        Some(
+            "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-core/index.html"
+        )
+    );
+    assert_eq!(
+        DATED[2].sparql_specification(),
+        Some(
+            "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-sparql/index.html"
+        )
+    );
+    assert_eq!(
+        DATED[2].xpath_specification(),
+        DATED[1].xpath_specification()
+    );
+    assert_eq!(DATED[2].xpath_profile(), DATED[1].xpath_profile());
+    assert_ne!(
+        DATED[2], DATED[1],
+        "the editor's draft is not the working draft"
+    );
 }
 
 #[test]
@@ -85,7 +113,9 @@ fn local_values_differs_by_date_and_prebound_values_are_refused() {
         assert_eq!(refusal.profile(), profile);
         assert_eq!(refusal.purpose(), QueryPurpose::SelectConstraint);
     }
-    check(DATED[1], local).expect("draft local VALUES is an admitted neighbor");
+    for draft in [DATED[1], DATED[2]] {
+        check(draft, local).expect("draft local VALUES is an admitted neighbor");
+    }
     for profile in DATED {
         let refusal = check(
             profile,
@@ -93,7 +123,7 @@ fn local_values_differs_by_date_and_prebound_values_are_refused() {
         )
         .unwrap_err();
         assert_eq!(refusal.reason(), AdmissionReason::Values);
-        assert_eq!(refusal.variable(), (profile == DATED[1]).then_some("this"));
+        assert_eq!(refusal.variable(), profile.is_shacl12().then_some("this"));
         check(
             profile,
             "SELECT $this WHERE { $this ?p ?local FILTER(?local IN (1, 2)) }",

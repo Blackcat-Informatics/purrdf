@@ -150,10 +150,13 @@ impl Parser<'_> {
     /// SHACL 1.2 Core: "If a shapes graph contains any triple with the predicate
     /// sh:entailment and the object E and the SHACL processor does not support E as an
     /// entailment regime for the given data graph then the processor MUST signal a
-    /// failure." This processor supports `sh:RulesEntailment` and, per SHACL 1.2
-    /// Inference Rules, "Entailment using Rule Sets": "Any rule set can be used as a
-    /// value of sh:entailment, i.e. any IRI that is a SHACL instance of sh:RuleSet in
-    /// the shapes graph." Every other value is a regime this processor does not support.
+    /// failure." This processor supports `sh:RulesEntailment` and, under the law
+    /// that reads the editor's draft's "Entailment using Rule Sets" ([`ShaclProfile::ED_20261016`](crate::profile::ShaclProfile::ED_20261016),
+    /// SHACL 1.2 Inference Rules: "Any rule set can be used as a value of
+    /// sh:entailment, i.e. any IRI that is a SHACL instance of sh:RuleSet in the shapes
+    /// graph."), the rule sets of the shapes graph. The working draft states only
+    /// `sh:RulesEntailment`, so under it a rule set is a regime this processor does
+    /// not support, like every other value.
     fn parse_entailment(&self) -> Result<(bool, Vec<NamedNode>), String> {
         let mut rules = false;
         let mut sets: Vec<NamedNode> = Vec::new();
@@ -164,9 +167,24 @@ impl Parser<'_> {
                 rules = true;
                 continue;
             }
-            if let Term::NamedNode(iri) = &object
+            let is_rule_set = matches!(&object, Term::NamedNode(_))
                 && crate::data::resolve_id(self.data, &object)
-                    .is_some_and(|node| instances.is_instance(node, rule_set_class))
+                    .is_some_and(|node| instances.is_instance(node, rule_set_class));
+            if is_rule_set && !self.profile.reads_editors_draft_semantics() {
+                return Err(format!(
+                    "the shapes graph declares {subject} sh:entailment {object}, a rule set; \
+                     under {} the only entailment regime this processor supports from \
+                     SHACL 1.2 Inference Rules is sh:RulesEntailment (\"the IRI \
+                     sh:RulesEntailment, which executes all rules of the shapes graph\"), and \
+                     SHACL requires a processor to signal a failure for a regime it does not \
+                     support; rule sets as sh:entailment values are first defined by the \
+                     editor's draft {}",
+                    self.profile,
+                    crate::profile::ShaclProfile::ED_20261016
+                ));
+            }
+            if let Term::NamedNode(iri) = &object
+                && is_rule_set
             {
                 if !sets.contains(iri) {
                     sets.push(iri.clone());

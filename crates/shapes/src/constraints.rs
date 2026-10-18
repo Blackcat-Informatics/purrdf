@@ -3526,7 +3526,7 @@ fn eval_constraint<'a, S: ResultSink>(
             let sev = source.severity_over(csev.as_ref());
             let msg = match context.capture.map(|capture| capture.profile) {
                 Some(crate::profile::ShaclProfile::REC_20170720) => cmsg,
-                Some(crate::profile::ShaclProfile::WD_20260918) if !cmsg.is_empty() => cmsg,
+                Some(profile) if profile.is_shacl12() && !cmsg.is_empty() => cmsg,
                 _ => source.messages_over(cmsg),
             };
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder

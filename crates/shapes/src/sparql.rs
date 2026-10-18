@@ -1659,7 +1659,7 @@ fn declared_shape_context(parameters: &[&str], scopes: &AmbientScopes) -> &'stat
     if scopes
         .query_law
         .as_ref()
-        .is_some_and(|law| law.profile() == crate::profile::ShaclProfile::WD_20260918)
+        .is_some_and(|law| law.profile().is_shacl12())
     {
         &[]
     } else {
@@ -2449,8 +2449,7 @@ pub fn current_call_depth() -> u32 {
 /// `$currentShape` are the query's own variables there, valued or not. The
 /// compatibility law and the 2017 Recommendation pre-bind both.
 fn law_binds_shape_context() -> bool {
-    crate::query_law::current()
-        .is_none_or(|law| law.profile() != crate::profile::ShaclProfile::WD_20260918)
+    crate::query_law::current().is_none_or(|law| !law.profile().is_shacl12())
 }
 
 /// The shape context the selected law pre-binds: as given, or none under a law that

@@ -1122,7 +1122,7 @@ impl<'a> ReportCapture<'a> {
         .find(|messages| !messages.is_empty());
         declared.map_or_else(
             || {
-                if self.profile == crate::profile::ShaclProfile::WD_20260918 {
+                if self.profile.is_shacl12() {
                     fallback
                 } else {
                     &[]

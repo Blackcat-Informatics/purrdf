@@ -1644,6 +1644,19 @@ pub(crate) enum InFlight {
     NodeExpr(Term),
 }
 
+/// Where a `sh:deactivated` value is written, which decides the law that reads a
+/// node expression there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeactivationSite {
+    /// A node shape or a property shape: SHACL 1.2 Core, "Deactivating Shapes and
+    /// Constraints", defines a node expression there.
+    Shape,
+    /// A SPARQL-based constraint or an `sh:expression` constraint node. The working
+    /// draft's SPARQL Extensions give the value as "either true or false"; the
+    /// editor's draft makes it a node expression "as for shapes".
+    Constraint,
+}
+
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
     /// One immutable policy and declaration applicability law for this parse.
@@ -2541,7 +2554,7 @@ impl<'s> Parser<'s> {
     /// When the prefix declarations the query reaches make the shapes graph
     /// ill-formed ([`prefixes::PrefixResolver::header`]).
     fn prefix_header(&self, owners: &[&Term]) -> Result<String, String> {
-        self.prefix_resolver.header(self.data, owners)
+        self.prefix_resolver.header(self.data, owners, self.profile)
     }
 
     /// The `sh:message` values of `node`, every one, in
@@ -2621,10 +2634,13 @@ impl<'s> Parser<'s> {
     /// `sh:deactivated` is a node expression that must have either `true` or `false`
     /// as the (only) output node. Let `expr` be the value of `sh:deactivated` in a
     /// shape. If `evalExpr(expr, data graph, focus node, {})` produces `true` as its
-    /// only output node, the shape is called deactivated." SHACL 1.2 SPARQL
+    /// only output node, the shape is called deactivated." The editor's draft
+    /// ([`crate::profile::ShaclProfile::ED_20261016`]) of SHACL 1.2 SPARQL
     /// Extensions, "Syntax of SPARQL-based Constraints", says the same of a
     /// SPARQL-based constraint: its value "is a node expression that must have
-    /// either `true` or `false` as its (only) output node, as for shapes".
+    /// either `true` or `false` as its (only) output node, as for shapes". The
+    /// working draft says only that "this value is either true or false", so a
+    /// node expression at a [`DeactivationSite::Constraint`] is refused under it.
     ///
     /// A structured expression (a blank node with properties) is parsed with `owner`
     /// as its prefix owner, as a constraint's is, and evaluated per focus node; the
@@ -2638,11 +2654,12 @@ impl<'s> Parser<'s> {
     ///
     /// A value that is no boolean literal and no well-formed node expression, or
     /// whose constant output is not `true` or `false`, or a node expression under
-    /// the 2017 Recommendation.
+    /// the 2017 Recommendation, or at a constraint under the working draft.
     pub(crate) fn deactivation_of(
         &mut self,
         node: &Term,
         owner: &Term,
+        site: DeactivationSite,
     ) -> Result<(bool, Vec<NodeExpr>), String> {
         let Some(value) = self.first_object_of(node, sh::DEACTIVATED) else {
             return Ok((false, Vec::new()));
@@ -2654,6 +2671,19 @@ impl<'s> Parser<'s> {
                         "sh:deactivated on {node} is a node expression, but SHACL REC \
                          2017-07-20 allows only the xsd:boolean literals true and false (\"The \
                          value of sh:deactivated in a shape must be either true or false\")"
+                    ));
+                }
+                if site == DeactivationSite::Constraint
+                    && !self.profile.reads_editors_draft_semantics()
+                {
+                    return Err(format!(
+                        "sh:deactivated on {node} is a node expression, but under {} the value \
+                         of sh:deactivated on a SPARQL-based or expression constraint is \
+                         boolean (SHACL 1.2 SPARQL Extensions, \"Syntax of SPARQL-based \
+                         Constraints\": \"this value is either true or false\"); a node \
+                         expression there is first defined by the editor's draft {}",
+                        self.profile,
+                        crate::profile::ShaclProfile::ED_20261016
                     ));
                 }
                 let expr = self.parse_deactivation_expression(owner, &value)?;
@@ -2743,7 +2773,8 @@ impl<'s> Parser<'s> {
         let messages = self.messages_of(id)?;
 
         // -- Deactivated --
-        let (deactivated, deactivated_when) = self.deactivation_of(id, id)?;
+        let (deactivated, deactivated_when) =
+            self.deactivation_of(id, id, DeactivationSite::Shape)?;
 
         // -- Targets (only for top-level node shapes; anonymous shapes have none) --
         let targets = self.parse_targets(id)?;
@@ -3191,7 +3222,8 @@ impl<'s> Parser<'s> {
         let messages = self.messages_of(ps_node)?;
 
         // sh:deactivated — a deactivated property shape validates nothing.
-        let (deactivated, deactivated_when) = self.deactivation_of(ps_node, ps_node)?;
+        let (deactivated, deactivated_when) =
+            self.deactivation_of(ps_node, ps_node, DeactivationSite::Shape)?;
 
         // constraints on the property shape
         let parsed = self.parse_constraints(ps_node, true)?;

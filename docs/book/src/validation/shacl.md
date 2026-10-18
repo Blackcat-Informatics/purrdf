@@ -19,7 +19,10 @@ or declare `sh:entailment sh:RulesEntailment` to run the shapes graph's own
 rules first, or name a `sh:RuleSet` of the shapes graph as an `sh:entailment`
 value to run only that rule set's rules (its included rule sets' too); several
 such values run together as one rule set. Any other `sh:entailment` value is
-refused, as SHACL requires of a processor that does not support it.
+refused, as SHACL requires of a processor that does not support it. A rule set
+as an `sh:entailment` value is first defined by the SHACL 1.2 editor's draft of
+2026-10-16, so the default law and `shacl-ed-2026-10-16` read it, and
+`shacl-wd-2026-09-18` and `shacl-rec-2017-07-20` refuse it.
 
 ## What it covers
 
@@ -52,6 +55,11 @@ refused, as SHACL requires of a processor that does not support it.
   `sh:SPARQLFunction` calls, `sh:SPARQLTargetType`, `sh:sparqlExpr`, and
   `sh:prefixes` resolved as that document specifies (see
   [below](#prefixes-in-shacl-sparql-queries)), all on the native SPARQL engine.
+  A SPARQL-based constraint's `sh:deactivated` is a node expression under the
+  default law and `shacl-ed-2026-10-16`; the working draft and the 2017
+  Recommendation allow `true` or `false` alone there. A blank node passed to a
+  custom SPARQL function is an error under the same two laws, and an ordinary
+  argument under the working draft.
 - **SHACL 1.2 Node Expressions** — the `shnex:` vocabulary and the older
   SHACL-AF `sh:` spelling of a node expression parse to one representation and
   run through one evaluator. Each expression kind keeps the order and
@@ -360,9 +368,15 @@ A SPARQL query in a shapes graph (`sh:select`, `sh:ask`, `sh:construct`,
 header before it is compiled. The header follows SHACL 1.2 SPARQL Extensions,
 "Prefix Declarations for SPARQL Queries":
 
-- **A query with `sh:prefixes`** uses the prefix declarations on the path
-  `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. The path is read
-  from the query node and from the shape or component that carries it.
+- **A query with `sh:prefixes`** uses the prefix declarations on the path of
+  the selected law, read from the query node and from the shape or component
+  that carries it. The default law and `shacl-ed-2026-10-16` read the editor's
+  draft path
+  `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`.
+  `shacl-wd-2026-09-18` reads the working draft path
+  `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`, which does not read
+  the declarations of the graph a version IRI leads to. `shacl-rec-2017-07-20`
+  reads `sh:prefixes/owl:imports*/sh:declare`, with no `owl:versionIRI` step.
 - **A query without `sh:prefixes`** uses every `sh:declare` of every SHACL
   instance of `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or
   `sh:RulesGraph` in the shapes graph. A subclass of one of those classes

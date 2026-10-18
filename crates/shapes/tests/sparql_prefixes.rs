@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The `PREFIX` header of a SHACL-SPARQL query, against SHACL 1.2 SPARQL
-//! Extensions, "Prefix Declarations for SPARQL Queries":
+//! The `PREFIX` header of a SHACL-SPARQL query, against the editor's draft
+//! (`shacl-ed-2026-10-16`) of SHACL 1.2 SPARQL Extensions, "Prefix Declarations for
+//! SPARQL Queries" (the default compatibility law reads it; the working draft and the
+//! 2017 Recommendation have their own paths, see
+//! [`each_law_collects_prefixes_along_its_own_path`]):
 //!
 //! > A SHACL processor collects a set of prefix mappings as the union of all
 //! > individual prefix mappings that are values of the SPARQL property path
@@ -24,8 +27,10 @@
 #[path = "support/turtle.rs"]
 mod turtle;
 
-use purrdf_shapes::engine::{parse_shapes, validate_graphs};
-use purrdf_shapes::{ShapesError, ShapesImportError};
+use purrdf_shapes::engine::{
+    ValidationOptions, parse_shapes, validate_graphs, validate_graphs_with_options,
+};
+use purrdf_shapes::{ShaclProfile, ShapesError, ShapesImportError, ShapesImports};
 
 const PREFIXES: &str = "
 @prefix ex:   <http://example.org/ns#> .
@@ -271,6 +276,134 @@ fn the_prefixes_path_reaches_declarations_on_each_hop() {
         r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
     );
     assert!(turtle::refusal_text("", &graph(&only_base)).contains("undeclared prefix \"t\""));
+}
+
+/// The violations of validating [`DATA`] against `shapes` under `law`, or the refusal.
+fn violations_under(law: ShaclProfile, shapes: &str) -> Result<Vec<String>, String> {
+    let report = validate_graphs_with_options(
+        DATA,
+        shapes,
+        None,
+        &ValidationOptions::default().with_profile(law),
+        &ShapesImports::new(),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(report
+        .results
+        .iter()
+        .map(|result| {
+            result
+                .value
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string)
+        })
+        .collect())
+}
+
+/// Each dated law collects prefixes along the path its own text states.
+///
+/// * SHACL REC 2017-07-20: `sh:prefixes/owl:imports*/sh:declare`. No `owl:versionIRI`
+///   step exists, so a version IRI is an ordinary node.
+/// * The working draft: `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. A
+///   step may move from a version IRI to the graph it versions and then import, but
+///   the graph a version IRI leads to is a stepping stone, not a holder.
+/// * The editor's draft:
+///   `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`,
+///   which also reads the declarations of the graph a version IRI leads to.
+///
+/// Three graphs separate the three paths; each refusal has the neighbour that every law
+/// accepts:
+///
+/// 1. `ex:V1` is the version IRI of `ex:G`, which imports `ex:Q` (declaring `t:`):
+///    the REC refuses (it never leaves `ex:V1`), the WD and the ED accept.
+/// 2. `ex:V2` is the version IRI of `ex:Shapes`, which declares `t:` itself: the REC and
+///    the WD refuse, the ED accepts.
+/// 3. The neighbour, a plain `owl:imports` chain, is accepted under all three.
+#[test]
+fn each_law_collects_prefixes_along_its_own_path() {
+    let rec = ShaclProfile::REC_20170720;
+    let wd = ShaclProfile::WD_20260918;
+    let ed = ShaclProfile::ED_20261016;
+    let outcomes = |shapes: &str| {
+        [rec, wd, ed, ShaclProfile::LEGACY]
+            .map(|law| violations_under(law, shapes).map(|values| values == target_violation()))
+    };
+    let accepted = |outcome: &Result<bool, String>| matches!(outcome, Ok(true));
+    let refused = |outcome: &Result<bool, String>| {
+        outcome
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.contains("undeclared prefix \"t\""))
+    };
+
+    // 1. A version IRI whose graph imports the declaring graph.
+    let through_the_graph = format!(
+        "{PREFIXES}{}\nex:G owl:versionIRI ex:V1 ; owl:imports ex:Q .\nex:Q sh:declare {} .\n",
+        shape("sh:prefixes ex:V1 ;"),
+        declare_t(TARGET)
+    );
+    let [by_rec, by_wd, by_ed, by_legacy] = outcomes(&through_the_graph);
+    assert!(
+        refused(&by_rec),
+        "the REC has no versionIRI step: {by_rec:?}"
+    );
+    assert!(
+        accepted(&by_wd),
+        "the WD follows the version IRI: {by_wd:?}"
+    );
+    assert!(
+        accepted(&by_ed),
+        "the ED follows the version IRI: {by_ed:?}"
+    );
+    assert!(
+        accepted(&by_legacy),
+        "the compatibility law reads the ED: {by_legacy:?}"
+    );
+
+    // 2. A declaration on the graph the version IRI leads to.
+    let on_the_graph = format!(
+        "{PREFIXES}{}\nex:Shapes owl:versionIRI ex:V2 ; sh:declare {} .\n",
+        shape("sh:prefixes ex:V2 ;"),
+        declare_t(TARGET)
+    );
+    let [by_rec, by_wd, by_ed, by_legacy] = outcomes(&on_the_graph);
+    assert!(refused(&by_rec), "the REC does not leave ex:V2: {by_rec:?}");
+    assert!(
+        refused(&by_wd),
+        "the WD graph is a stepping stone: {by_wd:?}"
+    );
+    assert!(
+        accepted(&by_ed),
+        "the ED reads the versioned graph: {by_ed:?}"
+    );
+    assert!(
+        accepted(&by_legacy),
+        "the compatibility law reads the ED: {by_legacy:?}"
+    );
+
+    // The neighbours of both refusals: the declaration on the named node itself, and a
+    // plain `owl:imports` chain, are on every law's path.
+    let on_the_node = format!(
+        "{PREFIXES}{}\nex:V2 sh:declare {} .\nex:Shapes owl:versionIRI ex:V2 .\n",
+        shape("sh:prefixes ex:V2 ;"),
+        declare_t(TARGET)
+    );
+    let plain_import = format!(
+        "{PREFIXES}{}\nex:P owl:imports ex:Q .\nex:Q sh:declare {} .\n",
+        shape("sh:prefixes ex:P ;"),
+        declare_t(TARGET)
+    );
+    for (what, shapes) in [
+        ("the node itself", on_the_node),
+        ("a plain import", plain_import),
+    ] {
+        for (law, outcome) in [rec, wd, ed, ShaclProfile::LEGACY]
+            .into_iter()
+            .zip(outcomes(&shapes))
+        {
+            assert!(accepted(&outcome), "{what} under {law}: {outcome:?}");
+        }
+    }
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────────────

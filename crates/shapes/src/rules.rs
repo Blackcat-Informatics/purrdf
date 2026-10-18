@@ -244,7 +244,10 @@ pub struct RuleGraph {
     /// rules execution instructions prior to performing the actual validation."
     pub entailment: bool,
     /// The rule sets the shapes graph names as values of `sh:entailment`, in IRI order.
-    /// SHACL 1.2 Inference Rules, "Entailment using Rule Sets": "If the shapes graph has
+    /// Empty under a law that does not define them: the working draft (which refuses
+    /// the declaration at load) and the 2017 Recommendation. The editor's draft
+    /// (`shacl-ed-2026-10-16`) of SHACL 1.2 Inference Rules, "Entailment using Rule
+    /// Sets", defines them: "If the shapes graph has
     /// more than one such value for sh:entailment, or also has the value
     /// sh:RulesEntailment, then the rules of all of them are executed together as a
     /// single rule set."
@@ -312,8 +315,8 @@ impl RuleOptions {
     }
 
     /// Execute the rule sets `iris` together as a single rule set instead of the default
-    /// rule set. SHACL 1.2 Inference Rules, "Entailment using Rule Sets": "the rules of
-    /// all of them are executed together as a single rule set." The rules of each set
+    /// rule set. SHACL 1.2 Inference Rules at the editor's draft, "Entailment using Rule
+    /// Sets": "the rules of all of them are executed together as a single rule set." The rules of each set
     /// include those of the sets it includes; an empty `iris` executes no rule.
     #[must_use]
     pub fn with_rule_sets(mut self, iris: impl IntoIterator<Item = NamedNode>) -> Self {

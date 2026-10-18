@@ -216,7 +216,7 @@ pub(crate) fn admit<'a>(
         }
     } else if prebound.is_empty() {
         Rules::ServiceOnly
-    } else if profile == ShaclProfile::WD_20260918
+    } else if profile.is_shacl12()
         || matches!(purpose, QueryPurpose::Function | QueryPurpose::TargetType)
     {
         Rules::AppendixA
@@ -670,7 +670,11 @@ mod tests {
             inner: Child::new(GraphPattern::empty_bgp()),
             expr: Expression::Exists(Child::new(application.clone())),
         };
-        for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+        for profile in [
+            ShaclProfile::REC_20170720,
+            ShaclProfile::WD_20260918,
+            ShaclProfile::ED_20261016,
+        ] {
             for pattern in [&application, &nested] {
                 let mut query = parse("ASK {}");
                 let Query::Ask { pattern: root, .. } = &mut query else {

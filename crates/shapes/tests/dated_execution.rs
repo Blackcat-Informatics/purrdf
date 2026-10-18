@@ -25,7 +25,11 @@ use purrdf_shapes::{AdmissionReason, QueryPurpose, ShaclProfile, ShapesImports};
 
 const PREFIXES: &str =
     "@prefix ex: <http://example.org/> . @prefix sh: <http://www.w3.org/ns/shacl#> .";
-const PROFILES: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
+const PROFILES: [ShaclProfile; 3] = [
+    ShaclProfile::REC_20170720,
+    ShaclProfile::WD_20260918,
+    ShaclProfile::ED_20261016,
+];
 const BACKREFERENCE: &str = r#"
     ex:S a sh:NodeShape; sh:targetNode ex:n;
         sh:property [ sh:path ex:p; sh:pattern "(a)\\1" ] .

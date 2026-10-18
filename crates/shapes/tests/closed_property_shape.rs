@@ -281,12 +281,18 @@ fn closed_result_path_roles_describe_the_offending_predicate() {
 }
 
 /// The 2017 Recommendation defines `sh:closed` over value nodes in the same words,
-/// so both dated laws report the same result, with the same roles.
+/// so the working draft, which states it again, the editor's draft and the
+/// Recommendation report the same result, with the same roles.
 #[test]
 fn closed_property_shape_reports_the_same_result_under_each_dated_law() {
     let dated = closed_result_under(ShaclProfile::WD_20260918);
+    let editors = closed_result_under(ShaclProfile::ED_20261016);
     let recommendation = closed_result_under(ShaclProfile::REC_20170720);
-    for report in [&dated, &recommendation] {
+    assert_eq!(
+        role_iris(&dated.results[0].path_box_roles),
+        role_iris(&editors.results[0].path_box_roles)
+    );
+    for report in [&dated, &editors, &recommendation] {
         assert_eq!(report.results.len(), 1);
         let result = &report.results[0];
         assert_eq!(result.focus_node.to_string(), "<http://example.org/ns#Bob>");

@@ -498,8 +498,8 @@ fn sparql_column(data_ttl: &str, shapes_ttl: &str, query: &str) -> Vec<Option<St
         .collect()
 }
 
-/// SHACL 1.2 SPARQL Extensions §7.3: "an argument that evaluates to a blank node leads
-/// to an evaluation failure and thus an error" — the call is unbound, where the same
+/// SHACL 1.2 SPARQL Extensions §7.3 (editor's draft `shacl-ed-2026-10-16`): "an argument
+/// that evaluates to a blank node leads to an evaluation failure and thus an error" — the call is unbound, where the same
 /// function over an IRI argument returns it. An OPTIONAL parameter turns that error into
 /// an argument "unbound in the scope", and the arguments after it keep their indexes.
 #[test]
@@ -542,6 +542,71 @@ fn a_blank_node_argument_is_an_error_unless_its_parameter_is_optional() {
             .is_some_and(|v| v.contains('6')),
         "an optional blank node argument is unbound and the next argument keeps index 2: {:?}",
         column("ex:total(1, ?blank, 5)")
+    );
+}
+
+/// A blank node as an argument is an error under the editor's draft only. Its text adds
+/// "Note that blank nodes cannot be passed as arguments: they are not constant node
+/// expressions, so an argument that evaluates to a blank node leads to an evaluation
+/// failure and thus an error"; the working draft's §7.3 states only that an argument
+/// whose evaluation is an error makes the call an error, so under it the blank node is
+/// an ordinary argument and the call returns it.
+///
+/// Both laws run the same SPARQL-based constraint (the W3C `blankNodeArgument-001`
+/// shape) over the same data, which holds a blank node and, beside it, an IRI. The IRI
+/// call is the neighbour: it returns its argument under both laws.
+#[test]
+fn a_blank_node_argument_is_an_error_under_the_editors_draft_and_an_argument_under_the_working_draft()
+ {
+    use purrdf_shapes::ShaclProfile;
+    use purrdf_shapes::ShapesImports;
+    use purrdf_shapes::engine::{ValidationOptions, validate_graphs_with_options};
+
+    let shapes = format!(
+        r#"{PREFIXES}
+        ex:identity a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ shnex:arg 0 ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:alice ; sh:sparql [
+          sh:select """
+            SELECT $this ?value WHERE {{
+              $this ex:node ?blank ; ex:iri ?iri .
+              BIND (ex:identity(?blank) AS ?fromBlank)
+              BIND (ex:identity(?iri) AS ?fromIri)
+              BIND (CONCAT(str(bound(?fromBlank)), " ", str(?fromIri)) AS ?value)
+            }}""" ] .
+        "#
+    );
+    let data = "<http://example.org/ns#alice> <http://example.org/ns#node> _:b .\n\
+                <http://example.org/ns#alice> <http://example.org/ns#iri> <http://example.org/ns#b> .\n";
+    let value_under = |law: ShaclProfile| {
+        let report = validate_graphs_with_options(
+            data,
+            &shapes,
+            None,
+            &ValidationOptions::default().with_profile(law),
+            &ShapesImports::new(),
+        )
+        .unwrap_or_else(|error| panic!("{law}: {error}"));
+        let [result] = report.results.as_slice() else {
+            panic!("{law}: one result expected, got {}", report.results.len());
+        };
+        result.value.as_ref().map(ToString::to_string)
+    };
+    assert_eq!(
+        value_under(ShaclProfile::ED_20261016).as_deref(),
+        Some("\"false http://example.org/ns#b\""),
+        "the editor's draft makes the blank node argument an error, the IRI call returns it"
+    );
+    assert_eq!(
+        value_under(ShaclProfile::WD_20260918).as_deref(),
+        Some("\"true http://example.org/ns#b\""),
+        "the working draft passes the blank node, and the IRI call is unchanged"
+    );
+    assert_eq!(
+        value_under(ShaclProfile::LEGACY),
+        value_under(ShaclProfile::ED_20261016),
+        "the compatibility law reads the editor's draft"
     );
 }
 

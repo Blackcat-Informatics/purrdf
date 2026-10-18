@@ -19,7 +19,7 @@ use crate::term::{Literal, NamedNode, Term};
 
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
-    InFlight, NodeKindValue, Parser, Path, Shape,
+    DeactivationSite, InFlight, NodeKindValue, Parser, Path, Shape,
 };
 
 use super::annotations::Annotated;
@@ -545,11 +545,14 @@ impl Parser<'_> {
             // reifier `sh:deactivated true` on the `sh:sparql` statement
             // deactivates it the same way.
             //
-            // The constraint node's own value is a node expression too, "as for
-            // shapes", and joins the reifiers': the constraint is deactivated at a
-            // focus node where any of them produces `true`.
+            // The editor's draft ([`ShaclProfile::ED_20261016`]) makes the constraint
+            // node's own value a node expression, "as for shapes", which joins the
+            // reifiers': the constraint is deactivated at a focus node where any of
+            // them produces `true`. The working draft's value "is either true or
+            // false", so `deactivation_of` refuses a node expression there under it.
             let annotated = self.constraint_annotation(id, &[(sh::SPARQL, &c_node)])?;
-            let (own_deactivated, own_expressions) = self.deactivation_of(&c_node, id)?;
+            let (own_deactivated, own_expressions) =
+                self.deactivation_of(&c_node, id, DeactivationSite::Constraint)?;
             if own_deactivated {
                 continue;
             }
@@ -608,7 +611,7 @@ impl Parser<'_> {
             // expression properties.)
             let annotated = self.constraint_annotation(id, &[(sh::EXPRESSION, &expr_node)])?;
             let (own_deactivated, own_expressions) = if matches!(expr_node, Term::BlankNode(_)) {
-                self.deactivation_of(&expr_node, id)?
+                self.deactivation_of(&expr_node, id, DeactivationSite::Constraint)?
             } else {
                 (false, Vec::new())
             };

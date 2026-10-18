@@ -110,6 +110,9 @@ pub struct Suite {
     pub commit: &'static str,
     /// The profile name written on each record.
     pub profile: &'static str,
+    /// The SHACL semantic-law identifier the suite is graded under
+    /// (`ShaclProfile::id`), named in the subject's description.
+    pub law: &'static str,
 }
 
 /// The `earl:TestSubject`: PurRDF, as a DOAP project, naming the build.
@@ -137,8 +140,8 @@ pub fn subject(purrdf_commit: &str, suite: &Suite) -> SubjectDescription {
                 doap("description"),
                 text(format!(
                     "PurRDF built from source commit {purrdf_commit}, run against the W3C \
-                     data-shapes test suite at commit {}",
-                    suite.commit
+                     data-shapes test suite at commit {}, graded under the {} profile",
+                    suite.commit, suite.law
                 )),
             ),
         ],
@@ -496,6 +499,7 @@ pub fn check_descriptions(
     bytes: &[u8],
     purrdf_commit: &str,
     suite_commit: &str,
+    law: &str,
 ) -> Result<(), String> {
     let statements = statements(bytes)?;
     let about = |subject: &str| -> BTreeSet<(String, String)> {
@@ -513,9 +517,14 @@ pub fn check_descriptions(
         .find(|(p, _)| *p == doap("description"))
         .map(|(_, o)| o.clone())
         .ok_or("the subject has no doap:description")?;
-    if !description.contains(purrdf_commit) || !description.contains(suite_commit) {
+    let profile = format!("graded under the {law} profile");
+    if !description.contains(purrdf_commit)
+        || !description.contains(suite_commit)
+        || !description.contains(&profile)
+    {
         return Err(format!(
-            "doap:description {description} names neither {purrdf_commit} nor {suite_commit}"
+            "doap:description {description} does not name {purrdf_commit}, {suite_commit} \
+             and `{profile}`"
         ));
     }
     let expected: BTreeSet<(String, String)> = [

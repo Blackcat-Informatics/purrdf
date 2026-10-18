@@ -109,6 +109,13 @@ fn unsupported_admission_semantic_and_resource_refusals_are_not_verdicts() {
         complete_profile(ShaclProfile::REC_20170720.id()).unwrap(),
         ShaclProfile::REC_20170720
     );
+    assert_eq!(
+        complete_profile("shacl-ed-2026-10-16").unwrap(),
+        ShaclProfile::ED_20261016
+    );
+    let (status, unsupported) = complete_profile("shacl-ed-2026-10-17").unwrap_err();
+    assert_eq!(status, CompleteValidationStatus::UnsupportedProfile);
+    assert_eq!(unsupported.id(), "shacl-ed-2026-10-17");
     let options = ValidationOptions::default().with_profile(ShaclProfile::REC_20170720);
     let minus = SHAPES.replace(
         "SELECT $this WHERE {}",
@@ -175,7 +182,11 @@ fn reached_native_query_resources_use_machine_codes_and_recover_with_current_lim
         "SELECT $this WHERE {}",
         "SELECT $this WHERE { FILTER(REGEX('a', 'a')) }",
     );
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         let low = options.clone().with_xpath_regex(
             profile.xpath_profile().unwrap(),
@@ -225,7 +236,11 @@ fn dated_some_value_discards_ordinary_query_failures_but_retains_resource_refusa
         "<http://example.org/missingFunction>($this)",
         "REGEX(STR($this), \"bad\", \"i\")",
     );
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         let discarded = validate_complete_documents(shapes, None, &data, &options, &[]);
         assert_eq!(
@@ -282,7 +297,11 @@ fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
         .unwrap()
         .declared_identity()
         .digest();
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let options = ValidationOptions::default().with_profile(profile);
         for rebuild in [false, true] {
             for expected in [None, Some(&identity)] {

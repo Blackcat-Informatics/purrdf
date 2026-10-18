@@ -440,7 +440,7 @@ fn conforms_under(declarations: &str) -> Result<bool, String> {
         .map_err(|error| error.to_string())
 }
 
-/// SHACL 1.2 Inference Rules, "Entailment using Rule Sets": a rule set named by
+/// SHACL 1.2 Inference Rules (editor's draft), "Entailment using Rule Sets": a rule set named by
 /// `sh:entailment` runs before validation, and "only the rules of that rule set are
 /// executed". Control: with no declaration nothing runs and the full-name requirement
 /// fails.
@@ -488,6 +488,70 @@ fn rules_entailment_beside_a_rule_set_executes_every_rule() {
     let with_all = "<http://example.org/shapes> sh:entailment sh:RulesEntailment, ex:Both";
     assert!(!conforms_under(with_all).unwrap());
     assert!(conforms_under("<http://example.org/shapes> sh:entailment ex:Both").unwrap());
+}
+
+/// Rule sets as `sh:entailment` values are first defined by the editor's draft
+/// (`shacl-ed-2026-10-16`, "Entailment using Rule Sets"). The working draft defines one
+/// entailment regime, the IRI `sh:RulesEntailment`, so a processor "that do[es] not
+/// support" a rule set as a regime "MUST signal a failure"; the 2017 Recommendation
+/// defines no rules entailment at all. Each of those two laws refuses the rule set at
+/// load; the neighbours are `sh:RulesEntailment` (loads and runs under every law) and the
+/// same rule set declared but not named by `sh:entailment` (loads under every law).
+/// The editor's draft and the compatibility law validate it.
+#[test]
+fn a_rule_set_as_an_entailment_value_is_read_by_the_editors_draft_alone() {
+    use purrdf_shapes::engine::{ValidationOptions, validate_graphs_with_options};
+    use purrdf_shapes::{ShaclProfile, ShapesImports};
+
+    let graph = |declaration: &str| format!("{PREFIXES}\n{}", rule_set_graph(declaration));
+    let alice = "<http://example.org/ns#Alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n\
+                 <http://example.org/ns#Alice> <http://example.org/ns#first> \"Alice\" .\n\
+                 <http://example.org/ns#Alice> <http://example.org/ns#last> \"Smith\" .\n";
+    let conforms = |law: ShaclProfile, declaration: &str| {
+        validate_graphs_with_options(
+            alice,
+            &graph(declaration),
+            None,
+            &ValidationOptions::default().with_profile(law),
+            &ShapesImports::new(),
+        )
+        .map(|report| report.conforms)
+        .map_err(|error| error.to_string())
+    };
+    let rule_set = "<http://example.org/shapes> sh:entailment ex:Both";
+    for law in [ShaclProfile::ED_20261016, ShaclProfile::LEGACY] {
+        assert_eq!(conforms(law, rule_set), Ok(true), "{law} runs the rule set");
+    }
+    for law in [ShaclProfile::WD_20260918, ShaclProfile::REC_20170720] {
+        let error = conforms(law, rule_set).expect_err("the rule set is an unsupported regime");
+        assert!(
+            error.contains(&law.to_string())
+                && error.contains("shacl-ed-2026-10-16")
+                && error.contains("sh:RulesEntailment"),
+            "{law}: {error}"
+        );
+    }
+    // Neighbours: the same graph names no rule set as an entailment, and so loads and
+    // validates (the requirements fail because nothing ran) under every law; and
+    // `sh:RulesEntailment` runs every rule under the laws that define rules.
+    let none = "<http://example.org/shapes> rdfs:label \"none\"";
+    for law in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
+        assert_eq!(conforms(law, none), Ok(false), "{law}: no entailment runs");
+    }
+    for law in [ShaclProfile::WD_20260918, ShaclProfile::ED_20261016] {
+        assert_eq!(
+            conforms(
+                law,
+                "<http://example.org/shapes> sh:entailment sh:RulesEntailment"
+            ),
+            Ok(false),
+            "{law}: every rule runs, so the nickname rule violates sh:maxCount 0"
+        );
+    }
 }
 
 /// SHACL 1.2 Core and Inference Rules: a processor that does not support an
