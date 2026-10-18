@@ -128,6 +128,15 @@ impl TermKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for TermKind {
+    purrdf_hash::error_visit! {
+        Iri => "gts-term-iri" {},
+        Literal => "gts-term-literal" {},
+        Bnode => "gts-term-blank-node" {},
+        Triple => "gts-term-triple" {},
+    }
+}
+
 /// An RDF term identified by append-order id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Term {

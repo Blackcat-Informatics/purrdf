@@ -488,6 +488,380 @@ fn reader_causes_survive_input_graph_and_streaming_owners() {
     assert!(matches!(fields.field("flags"), ErrorValue::Unsigned(value) if value & 0xe0 == 0xe0));
 }
 
+fn reader_file_and_chain_diagnostics_retain_native_inputs() {
+    use purrdf_gts::{
+        reader::{read, read_to_sink},
+        wire,
+        writer::Writer,
+    };
+    use purrdf_lex::cbor::{self, Value};
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[purrdf_gts::model::Term::iri("http://example.org/s")]);
+    let valid = writer.into_bytes();
+    let (items, torn) = wire::iter_items(&valid);
+    assert_eq!(torn, None);
+    let header = wire::unwrap_header(&items[0].1).unwrap();
+    let Value::Map(frame) = &items[1].1 else {
+        panic!("writer frame")
+    };
+    let mut cases = vec![
+        (Vec::new(), true, None, "gts-empty-file"),
+        (
+            cbor::encode(&Value::Bool(false)),
+            true,
+            None,
+            "gts-first-item-not-header",
+        ),
+        (
+            [valid.as_slice(), valid.as_slice()].concat(),
+            false,
+            None,
+            "gts-segment-boundary",
+        ),
+        (valid.clone(), true, Some(vec![19; 32]), "gts-expected-head"),
+        (
+            [valid.as_slice(), &[0x5a]].concat(),
+            true,
+            None,
+            "gts-torn-append",
+        ),
+        (
+            [cbor::encode(&items[0].1), cbor::encode(&Value::Bool(false))].concat(),
+            true,
+            None,
+            "gts-frame-not-map",
+        ),
+    ];
+    for (target, field, replacement, native) in [
+        (0, "id", Value::Bytes(vec![71; 32]), "gts-header-self-hash"),
+        (0, "v", Value::from(u64::MAX), "gts-header-version"),
+        (1, "id", Value::Bytes(vec![72; 32]), "gts-frame-self-hash"),
+        (1, "prev", Value::Bytes(vec![73; 32]), "gts-frame-previous"),
+    ] {
+        let mut entries = if target == 0 {
+            header.clone()
+        } else {
+            frame.clone()
+        };
+        entries
+            .iter_mut()
+            .find(|(key, _)| key.as_text() == Some(field))
+            .unwrap()
+            .1 = replacement;
+        if field != "id" {
+            let id = if target == 0 {
+                wire::header_id(&entries)
+            } else {
+                wire::content_id(&entries)
+            };
+            entries
+                .iter_mut()
+                .find(|(key, _)| key.as_text() == Some("id"))
+                .unwrap()
+                .1 = Value::Bytes(id);
+        }
+        let mut bytes = Vec::new();
+        let altered = Value::Map(entries);
+        for (index, (_, item)) in items.iter().enumerate() {
+            cbor::encode_into(if index == target { &altered } else { item }, &mut bytes);
+        }
+        cases.push((bytes, true, None, native));
+    }
+    for (bytes, allow_segments, expected, code) in cases {
+        let graph = read(&bytes, allow_segments, expected.as_deref());
+        let mut sink = DiagnosticSink::default();
+        let streamed = read_to_sink(&bytes, allow_segments, expected.as_deref(), &mut sink);
+        for diagnostics in [&graph.diagnostics, &streamed.diagnostics, &sink.diagnostics] {
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic
+                        .native_cause()
+                        .is_some_and(|cause| Capture::read(cause).code == code)
+                })
+                .unwrap_or_else(|| panic!("missing {code}: {diagnostics:?}"));
+            let native = diagnostic.native_cause().unwrap();
+            let fields = Capture::read(native);
+            match code {
+                "gts-segment-boundary" => {
+                    assert!(matches!(fields.field("item"), ErrorValue::Unsigned(2)));
+                }
+                "gts-expected-head" => assert!(
+                    matches!(fields.field("expected"), ErrorValue::Bytes(value) if value == [19; 32])
+                ),
+                "gts-torn-append" => assert!(
+                    matches!(fields.field("offset"), ErrorValue::Unsigned(value) if value == valid.len() as u128)
+                ),
+                "gts-header-self-hash" => assert!(
+                    matches!(fields.field("stored"), ErrorValue::Bytes(value) if value == [71; 32])
+                ),
+                "gts-frame-self-hash" => assert!(
+                    matches!(fields.field("stored"), ErrorValue::Bytes(value) if value == [72; 32])
+                ),
+                "gts-frame-previous" => assert!(
+                    matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == [73; 32])
+                ),
+                "gts-header-version" => assert!(
+                    matches!(fields.child("version").field("value"), ErrorValue::Signed(value) if value == i128::from(u64::MAX))
+                ),
+                "gts-empty-file" | "gts-first-item-not-header" | "gts-frame-not-map" => {
+                    assert_eq!(fields.events.len(), 0, "{code}");
+                }
+                _ => unreachable!("all file controls are checked"),
+            }
+            let buffer = Vec::with_capacity(12);
+            let window = CurrentThreadWindow::open();
+            let captured = Capture::read_with_buffer(native, buffer);
+            assert_eq!(window.close().allocations, 0);
+            assert_eq!(captured.code, code);
+        }
+    }
+}
+
+fn reader_row_diagnostics_keep_native_widths_ids_and_term_kinds() {
+    use purrdf_gts::{
+        model::Term,
+        reader::{read, read_to_sink},
+        writer::{FrameOptions, Writer},
+    };
+    use purrdf_lex::cbor::Value;
+    use purrdf_testkit::error_capture::Event;
+    let cases = [
+        (
+            "reifies",
+            vec![Value::from(0_u8)],
+            "DamagedFrame",
+            "gts-row-width",
+        ),
+        (
+            "reifies",
+            vec![
+                Value::from(0_u8),
+                Value::from(1_u8),
+                Value::from(u64::MAX),
+                Value::from(2_u8),
+            ],
+            "DamagedFrame",
+            "gts-row-ids",
+        ),
+        (
+            "annot",
+            vec![Value::from(0_u8), Value::from(2_u8), Value::from(1_u8)],
+            "PositionConstraint",
+            "gts-annotation-predicate-kind",
+        ),
+        (
+            "annot",
+            vec![
+                Value::from(0_u8),
+                Value::from(1_u8),
+                Value::from(2_u8),
+                Value::from(2_u8),
+            ],
+            "PositionConstraint",
+            "gts-annotation-graph-kind",
+        ),
+        (
+            "quads",
+            vec![Value::from(2_u8), Value::from(1_u8), Value::from(0_u8)],
+            "PositionConstraint",
+            "gts-row-positions",
+        ),
+        (
+            "quads",
+            vec![Value::from(0_u8), Value::from(1_u8), Value::from(u32::MAX)],
+            "PositionConstraint",
+            "gts-row-bounds",
+        ),
+        (
+            "quads",
+            vec![Value::from(0_u8), Value::from(1_u8), Value::Bool(true)],
+            "DamagedFrame",
+            "gts-quad-noninteger-ids",
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(kind, values, code, native)| {
+            (kind, Value::Array(vec![Value::Array(values)]), code, native)
+        })
+        .chain([
+            (
+                "caller-frame",
+                Value::Null,
+                "UnknownFrameType",
+                "gts-unknown-frame-type",
+            ),
+            (
+                "reifies",
+                Value::Bool(true),
+                "DamagedFrame",
+                "gts-reifies-not-array",
+            ),
+            (
+                "snapshot",
+                Value::Map(vec![(Value::from("reifies"), Value::Map(vec![]))]),
+                "DamagedFrame",
+                "gts-reifies-not-array",
+            ),
+            (
+                "terms",
+                Value::Array(vec![Value::Map(vec![
+                    (Value::from("k"), Value::from(1_u8)),
+                    (Value::from("l"), Value::from("en_XX")),
+                    (Value::from("dir"), Value::from("rtl")),
+                ])]),
+                "DamagedFrame",
+                "gts-refused-language",
+            ),
+            (
+                "terms",
+                Value::Array(vec![Value::Map(vec![
+                    (Value::from("k"), Value::from(1_u8)),
+                    (Value::from("l"), Value::from("en_XX")),
+                    (Value::from("dir"), Value::from("rtl")),
+                ])]),
+                "DamagedFrame",
+                "gts-refused-language-direction",
+            ),
+            (
+                "terms",
+                Value::Array(vec![Value::Map(vec![
+                    (Value::from("k"), Value::from(1_u8)),
+                    (Value::from("dir"), Value::from("sideways")),
+                ])]),
+                "DamagedFrame",
+                "gts-refused-direction",
+            ),
+            (
+                "terms",
+                Value::Array(vec![Value::Map(vec![
+                    (Value::from("dt"), Value::from(u64::MAX)),
+                    (Value::from("rf"), Value::from(u64::MAX)),
+                    (
+                        Value::from("tt"),
+                        Value::Array(vec![
+                            Value::from(u64::MAX),
+                            Value::from(0_u8),
+                            Value::from(1_u8),
+                        ]),
+                    ),
+                ])]),
+                "ForwardReference",
+                "gts-forward-reference",
+            ),
+        ]);
+    for (frame_type, payload, diagnostic_code, native_code) in cases {
+        let mut writer = Writer::new("generic");
+        writer.add_terms(&[
+            Term::iri("http://example.org/s"),
+            Term::iri("http://example.org/p"),
+            Term::literal("literal", None),
+        ]);
+        writer
+            .add_frame_with_options(
+                frame_type,
+                FrameOptions {
+                    payload: Some(payload),
+                    ..FrameOptions::default()
+                },
+            )
+            .unwrap();
+        let bytes = writer.into_bytes();
+        let offline = read(&bytes, true, None)
+            .diagnostics
+            .into_iter()
+            .find(|value| {
+                value.frame_index == Some(2)
+                    && Capture::read(value).child("cause").code == native_code
+            })
+            .unwrap();
+        assert_eq!(offline.code, diagnostic_code);
+        let mut sink = DiagnosticSink::default();
+        let returned = read_to_sink(&bytes, true, None, &mut sink)
+            .diagnostics
+            .into_iter()
+            .find(|value| {
+                value.frame_index == Some(2)
+                    && Capture::read(value).child("cause").code == native_code
+            })
+            .unwrap();
+        let observed = sink
+            .diagnostics
+            .into_iter()
+            .find(|value| {
+                value.frame_index == Some(2)
+                    && Capture::read(value).child("cause").code == native_code
+            })
+            .unwrap();
+        assert_eq!(offline, returned);
+        assert_eq!(observed, returned);
+        assert!(core::ptr::eq(
+            returned.native_cause().unwrap(),
+            observed.native_cause().unwrap()
+        ));
+        drop(bytes);
+        drop(returned);
+        let fields = Capture::read(&observed).child("cause");
+        assert_eq!(fields.code, native_code);
+        assert_eq!(Capture::read(&offline).child("cause").code, native_code);
+        match native_code {
+            "gts-row-width" => {
+                assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
+                assert!(matches!(fields.field("minimum"), ErrorValue::Unsigned(4)));
+                assert!(matches!(fields.field("maximum"), ErrorValue::Unsigned(5)));
+            }
+            "gts-row-ids" => {
+                assert!(matches!(fields.field("terms"), ErrorValue::Unsigned(3)));
+                assert!(fields.events.iter().any(|event| matches!(event, Event::Value(None, ErrorValue::Signed(value)) if *value == i128::from(u64::MAX))));
+            }
+            "gts-annotation-predicate-kind" | "gts-annotation-graph-kind" => {
+                assert_eq!(fields.child("actual").code, "gts-term-literal");
+            }
+            "gts-row-positions" => {
+                assert_eq!(fields.child("subject_kind").code, "gts-term-literal");
+            }
+            "gts-row-bounds" => assert!(
+                matches!(fields.field("object"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+            ),
+            "gts-quad-noninteger-ids" => {
+                assert!(matches!(fields.field("width"), ErrorValue::Unsigned(3)));
+            }
+            "gts-unknown-frame-type" => assert!(matches!(
+                fields.field("frame_type"),
+                ErrorValue::Text("caller-frame")
+            )),
+            "gts-reifies-not-array" => assert!(
+                matches!(fields.field("snapshot"), ErrorValue::Boolean(value) if value == (frame_type == "snapshot"))
+            ),
+            "gts-refused-language" => {
+                assert!(matches!(fields.field("term"), ErrorValue::Signed(3)));
+                assert!(matches!(fields.field("tag"), ErrorValue::Text("en_XX")));
+                assert!(matches!(fields.field("refusal"), ErrorValue::Code(_)));
+            }
+            "gts-refused-language-direction" | "gts-refused-direction" => assert!(
+                matches!(fields.field("direction"), ErrorValue::Text(value) if value == if native_code == "gts-refused-direction" { "sideways" } else { "rtl" })
+            ),
+            "gts-forward-reference" => {
+                assert!(
+                    matches!(fields.field("datatype"), ErrorValue::Signed(value) if value == i128::from(u64::MAX))
+                );
+                assert!(
+                    matches!(fields.field("reifier"), ErrorValue::Signed(value) if value == i128::from(u64::MAX))
+                );
+                assert!(fields.events.iter().any(|event| matches!(event, Event::Value(None, ErrorValue::Signed(value)) if *value == i128::from(u64::MAX))));
+            }
+            _ => unreachable!("all native controls have an explicit assertion"),
+        }
+        let native = observed.native_cause().unwrap();
+        let events = Vec::with_capacity(20);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(native, events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, native_code);
+    }
+}
+
 fn reader_missing_catalog_keeps_ordered_native_cbor_fields() {
     use purrdf_lex::cbor::Value;
     let id = Value::Map(vec![
@@ -1349,6 +1723,8 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
 }
 
 purrdf_testkit::harness_main!(
+    reader_file_and_chain_diagnostics_retain_native_inputs,
+    reader_row_diagnostics_keep_native_widths_ids_and_term_kinds,
     tar_blob_sources_keep_observed_size_and_digest_refusals,
     tar_and_files_public_io_retain_unformattable_original_causes,
     tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes,

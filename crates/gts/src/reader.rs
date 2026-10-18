@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 use crate::{FastMap, FastSet};
 use std::io::Read;
 
+mod fold_error;
+use fold_error::FoldError;
+
 mod append_error;
 pub use append_error::AppendError;
 
@@ -34,7 +37,7 @@ use crate::model::{
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
-    RowDecode, check_quad_positions, decode_annotation_row, decode_reifier_row,
+    RowDecode, RowError, check_quad_positions, decode_annotation_row, decode_reifier_row,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
@@ -554,14 +557,7 @@ impl Folder<'_, '_, '_> {
             })
             .collect();
         for (rid, index) in ambiguous {
-            self.diag(
-                "ConflictingReifier",
-                format!(
-                    "reifier {rid} binds several triples while a quoted-triple term \
-                     still resolves through it"
-                ),
-                Some(index),
-            );
+            self.diag(FoldError::ConflictingReifier { reifier: rid }, index);
         }
     }
 
@@ -571,28 +567,20 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn diag(&mut self, code: &str, detail: String, index: Option<u64>) {
-        push_diagnostic(
-            self.g,
-            &mut self.sink,
-            Diagnostic {
-                cause: None,
-                code: code.to_string(),
-                detail,
-                frame_index: index,
-            },
-        );
+    fn diag(&mut self, error: FoldError, index: u64) {
+        let detail = error.to_string();
+        self.diag_native(error.diagnostic_code(), error, detail, index);
     }
 
-    fn diag_payload(
+    fn diag_native(
         &mut self,
-        error: PayloadError,
+        code: &'static str,
+        error: impl purrdf_hash::error::NativeError + 'static,
         detail: String,
         index: u64,
-        budget_code: &'static str,
     ) {
         let diagnostic = Diagnostic {
-            code: error.diagnostic_code(budget_code).into(),
+            code: code.into(),
             detail,
             frame_index: Some(index),
             cause: None,
@@ -765,7 +753,12 @@ impl Folder<'_, '_, '_> {
             Err(error) => {
                 self.opaque(frame, ftype, error.opaque_reason());
                 let detail = error.diagnostic_detail();
-                self.diag_payload(error, detail, index, FRAME_BUDGET_DIAGNOSTIC);
+                self.diag_native(
+                    error.diagnostic_code(FRAME_BUDGET_DIAGNOSTIC),
+                    error,
+                    detail,
+                    index,
+                );
                 return;
             }
             Ok(p) => p,
@@ -783,9 +776,10 @@ impl Folder<'_, '_, '_> {
             _ => {
                 self.opaque(frame, ftype, "unknown-frame-type");
                 self.diag(
-                    "UnknownFrameType",
-                    format!("unsupported frame type {ftype:?}"),
-                    Some(index),
+                    FoldError::UnknownFrameType {
+                        frame_type: ftype.to_string(),
+                    },
+                    index,
                 );
             }
         }
@@ -842,12 +836,12 @@ impl Folder<'_, '_, '_> {
                 Some(tag) => match language_tag_refusal(tag) {
                     Some(code) => {
                         self.diag(
-                            "DamagedFrame",
-                            format!(
-                                "term {tid} carries a language tag the RDF concrete-syntax \
-                                 grammar refuses ({code}): {tag:?}"
-                            ),
-                            Some(index),
+                            FoldError::Language {
+                                term: tid,
+                                tag: tag.to_string(),
+                                refusal: code,
+                            },
+                            index,
                         );
                         (None, true)
                     }
@@ -868,12 +862,11 @@ impl Folder<'_, '_, '_> {
                 Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
                 Some(value) => {
                     self.diag(
-                        "DamagedFrame",
-                        format!(
-                            "term {tid} carries a base direction outside the RDF 1.2 \
-                             value space (ltr, rtl): {value:?}"
-                        ),
-                        Some(index),
+                        FoldError::Direction {
+                            term: tid,
+                            direction: value.to_string(),
+                        },
+                        index,
                     );
                     None
                 }
@@ -898,19 +891,18 @@ impl Folder<'_, '_, '_> {
             // all is a genuine defect in the container, and the importer's
             // `gts-direction-without-language` is then the correct name for it
             // — so that case is left alone to be reported accurately.
-            let direction = if lang_refused && direction.is_some() {
-                self.diag(
-                    "DamagedFrame",
-                    format!(
-                        "term {tid} loses its base direction as well, because a base \
-                         direction is only meaningful alongside a language tag and \
-                         this term's tag was refused"
-                    ),
-                    Some(index),
-                );
-                None
-            } else {
-                direction
+            let direction = match (lang_refused, direction) {
+                (true, Some(direction)) => {
+                    self.diag(
+                        FoldError::RefusedLanguageDirection {
+                            term: tid,
+                            direction,
+                        },
+                        index,
+                    );
+                    None
+                }
+                (_, direction) => direction,
             };
             let dt_raw = map_get(entries, "dt").and_then(as_i128);
             let rf_raw = map_get(entries, "rf").and_then(as_i128);
@@ -955,9 +947,13 @@ impl Folder<'_, '_, '_> {
                 && matches!(tt_raw, Some(ids) if ids.iter().any(|d| matches!(d, Some(d) if *d >= tid)));
             if dt_out_of_range || rf_out_of_range || tt_out_of_range {
                 self.diag(
-                    "ForwardReference",
-                    format!("term {tid} has an out-of-range ref"),
-                    Some(index),
+                    FoldError::ForwardReference {
+                        term: tid,
+                        datatype: dt_raw,
+                        reifier: rf_raw,
+                        triple: tt_raw,
+                    },
+                    index,
                 );
             }
             self.g.terms.push(Term {
@@ -986,10 +982,15 @@ impl Folder<'_, '_, '_> {
             let has_graph = items.len() >= 4;
             let gslot = if has_graph { as_idx(&items[3]) } else { None };
             if s.is_none() || p.is_none() || o.is_none() || (has_graph && gslot.is_none()) {
-                self.diag(
+                let error = RowError::QuadIds {
+                    values: items.iter().take(4).map(as_i128).collect(),
+                    width: items.len(),
+                };
+                self.diag_native(
                     "DamagedFrame",
+                    error,
                     "quad has non-integer term ids".to_string(),
-                    Some(index),
+                    index,
                 );
                 continue;
             }
@@ -997,7 +998,8 @@ impl Folder<'_, '_, '_> {
                 continue;
             };
             if let Err(detail) = check_quad_positions(self.g, s, p, o, gslot) {
-                self.diag("PositionConstraint", detail, Some(index));
+                let message = detail.to_string();
+                self.diag_native("PositionConstraint", *detail, message, index);
                 continue;
             }
             let quad = (s, p, o, gslot);
@@ -1020,11 +1022,7 @@ impl Folder<'_, '_, '_> {
 
     fn h_reifies(&mut self, payload: &Value, index: u64) {
         let Value::Array(rows) = payload else {
-            self.diag(
-                "DamagedFrame",
-                "reifies payload must be a row array".to_string(),
-                Some(index),
-            );
+            self.diag(FoldError::ReifiesArray { snapshot: false }, index);
             return;
         };
         for row in rows {
@@ -1032,11 +1030,13 @@ impl Folder<'_, '_, '_> {
                 RowDecode::Skip => continue,
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
-                    self.diag("DamagedFrame", detail.to_string(), Some(index));
+                    let message = detail.to_string();
+                    self.diag_native("DamagedFrame", *detail, message, index);
                     continue;
                 }
                 RowDecode::Position(detail) => {
-                    self.diag("PositionConstraint", detail, Some(index));
+                    let message = detail.to_string();
+                    self.diag_native("PositionConstraint", *detail, message, index);
                     continue;
                 }
             };
@@ -1054,9 +1054,11 @@ impl Folder<'_, '_, '_> {
             }
             if reifier_binding_is_recursive(self.g, rid, triple) {
                 self.diag(
-                    "DamagedFrame",
-                    format!("reifier {rid} creates a recursive quoted-triple binding"),
-                    Some(index),
+                    FoldError::RecursiveReifier {
+                        reifier: rid,
+                        triple,
+                    },
+                    index,
                 );
                 continue;
             }
@@ -1072,11 +1074,13 @@ impl Folder<'_, '_, '_> {
                 RowDecode::Skip => continue,
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
-                    self.diag("DamagedFrame", detail.to_string(), Some(index));
+                    let message = detail.to_string();
+                    self.diag_native("DamagedFrame", *detail, message, index);
                     continue;
                 }
                 RowDecode::Position(detail) => {
-                    self.diag("PositionConstraint", detail, Some(index));
+                    let message = detail.to_string();
+                    self.diag_native("PositionConstraint", *detail, message, index);
                     continue;
                 }
             };
@@ -1100,7 +1104,12 @@ impl Folder<'_, '_, '_> {
                 Err(error) => {
                     self.opaque(frame, "blob", error.opaque_reason());
                     let detail = error.diagnostic_detail();
-                    self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
+                    self.diag_native(
+                        error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                        error,
+                        detail,
+                        index,
+                    );
                     return;
                 }
             },
@@ -1151,7 +1160,12 @@ impl Folder<'_, '_, '_> {
                         );
                     }
                     self.opaque(frame, "blob", error.opaque_reason());
-                    self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
+                    self.diag_native(
+                        error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                        error,
+                        detail,
+                        index,
+                    );
                 }
             }
             return;
@@ -1232,7 +1246,12 @@ impl Folder<'_, '_, '_> {
                     );
                 }
                 self.opaque(frame, "blob", error.opaque_reason());
-                self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
+                self.diag_native(
+                    error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                    error,
+                    detail,
+                    index,
+                );
             }
         }
     }
@@ -1316,11 +1335,7 @@ impl Folder<'_, '_, '_> {
         }
         match map_get(entries, "reifies") {
             Some(Value::Map(_)) => {
-                self.diag(
-                    "DamagedFrame",
-                    "snapshot reifies payload must be a row array".to_string(),
-                    Some(index),
-                );
+                self.diag(FoldError::ReifiesArray { snapshot: true }, index);
             }
             Some(Value::Array(reifies)) => {
                 self.h_reifies(&Value::Array(reifies.iter().map(sh_row).collect()), index);
@@ -1350,7 +1365,12 @@ impl Folder<'_, '_, '_> {
                         });
                         let detail = error.diagnostic_detail();
                         self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
-                        self.diag_payload(error, detail, index, BLOB_BUDGET_DIAGNOSTIC);
+                        self.diag_native(
+                            error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                            error,
+                            detail,
+                            index,
+                        );
                         continue;
                     }
                     if self.materialize {
@@ -1682,12 +1702,15 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     let (items, torn) = iter_items(data);
     if items.is_empty() {
         let mut g = Graph::default();
-        g.diagnostics.push(Diagnostic {
-            cause: None,
-            code: "EmptyFile".to_string(),
-            detail: "no CBOR items".to_string(),
-            frame_index: None,
-        });
+        g.diagnostics.push(
+            Diagnostic {
+                cause: None,
+                code: "EmptyFile".to_string(),
+                detail: "no CBOR items".to_string(),
+                frame_index: None,
+            }
+            .with_native_cause(FoldError::EmptyFile),
+        );
         return g;
     }
 
@@ -1700,27 +1723,35 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
         .collect();
     if bounds.first() != Some(&0) {
         let mut g = Graph::default();
-        g.diagnostics.push(Diagnostic {
-            cause: None,
-            code: "DamagedFrame".to_string(),
-            detail: "first item is not a header".to_string(),
-            frame_index: Some(0),
-        });
+        g.diagnostics.push(
+            Diagnostic {
+                cause: None,
+                code: "DamagedFrame".to_string(),
+                detail: "first item is not a header".to_string(),
+                frame_index: Some(0),
+            }
+            .with_native_cause(FoldError::FirstHeader),
+        );
         return g;
     }
     if bounds.len() > 1 && !options.allow_segments {
         let mut g = read_segment_with_sink(&items[..bounds[1]], 0, 0, None, options.content_key);
-        g.diagnostics.push(Diagnostic {
-            cause: None,
-            code: "SegmentBoundary".to_string(),
-            detail: format!(
-                "segment boundary at item {} but reader is in pre-segment mode; \
+        g.diagnostics.push(
+            Diagnostic {
+                cause: None,
+                code: "SegmentBoundary".to_string(),
+                detail: format!(
+                    "segment boundary at item {} but reader is in pre-segment mode; \
                  remainder of file NOT folded (folding it with file-global \
                  term-ids would silently misfold — §16)",
-                bounds[1]
-            ),
-            frame_index: Some(bounds[1] as u64),
-        });
+                    bounds[1]
+                ),
+                frame_index: Some(bounds[1] as u64),
+            }
+            .with_native_cause(FoldError::SegmentBoundary {
+                item: bounds[1] as u64,
+            }),
+        );
         return g;
     }
 
@@ -1740,21 +1771,32 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
     if let Some(expected) = options.expected_head {
         let last_head = g.segment_heads.last().cloned().unwrap_or_default();
         if last_head != expected {
-            g.diagnostics.push(Diagnostic {
-                cause: None,
-                code: "TruncatedLog".to_string(),
-                detail: "observed head does not match expected head".to_string(),
-                frame_index: None,
-            });
+            g.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "TruncatedLog".to_string(),
+                    detail: "observed head does not match expected head".to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(FoldError::ExpectedHead {
+                    actual: last_head,
+                    expected: expected.to_vec(),
+                }),
+            );
         }
     }
     if let Some(offset) = torn {
-        g.diagnostics.push(Diagnostic {
-            cause: None,
-            code: "TornAppendError".to_string(),
-            detail: format!("torn at offset {offset}"),
-            frame_index: None,
-        });
+        g.diagnostics.push(
+            Diagnostic {
+                cause: None,
+                code: "TornAppendError".to_string(),
+                detail: format!("torn at offset {offset}"),
+                frame_index: None,
+            }
+            .with_native_cause(FoldError::Torn {
+                offset: offset as u64,
+            }),
+        );
     }
     g
 }
@@ -1791,7 +1833,7 @@ pub fn read_to_sink_with_options(
 struct StreamingCountingReader<R> {
     inner: R,
     pos: u64,
-    address_exhausted: bool,
+    address_exhausted: Option<(u64, usize)>,
 }
 
 impl<R: Read> Read for StreamingCountingReader<R> {
@@ -1800,9 +1842,13 @@ impl<R: Read> Read for StreamingCountingReader<R> {
         self.pos = match self.pos.checked_add(read as u64) {
             Some(position) => position,
             None => {
-                self.address_exhausted = true;
-                return Err(std::io::Error::other(
-                    "GTS source byte offset exceeds u64::MAX",
+                self.address_exhausted = Some((self.pos, read));
+                return Err(purrdf_hash::error::io_error(
+                    std::io::ErrorKind::Other,
+                    FoldError::ByteOffset {
+                        position: self.pos,
+                        read,
+                    },
                 ));
             }
         };
@@ -1870,7 +1916,11 @@ impl ActiveStreamingSegment {
                             code: "DamagedFrame".to_string(),
                             detail: "header self-hash mismatch".to_string(),
                             frame_index: Some(index_offset),
-                        },
+                        }
+                        .with_native_cause(FoldError::HeaderHash {
+                            stored: stored_hid.clone(),
+                            computed: header_id(&header),
+                        }),
                     );
                 }
                 if map_get(&header, "gts").and_then(Value::as_text) != Some(MAGIC)
@@ -1888,7 +1938,11 @@ impl ActiveStreamingSegment {
                                 map_get(&header, "v")
                             ),
                             frame_index: Some(index_offset),
-                        },
+                        }
+                        .with_native_cause(FoldError::HeaderVersion {
+                            magic: map_get(&header, "gts").cloned(),
+                            version: map_get(&header, "v").cloned(),
+                        }),
                     );
                 }
                 expected_prev = stored_hid.unwrap_or_default();
@@ -1998,9 +2052,11 @@ impl ActiveStreamingSegment {
                     });
                 });
                 folder.diag(
-                    "DamagedFrame",
-                    "frame self-hash mismatch".to_string(),
-                    Some(abs_index),
+                    FoldError::SelfHash {
+                        stored: stored_id.cloned(),
+                        computed: computed.clone(),
+                    },
+                    abs_index,
                 );
                 folder.opaque(frame, &ftype, "damaged");
                 self.expected_prev = stored_id.cloned().unwrap_or(computed);
@@ -2020,9 +2076,13 @@ impl ActiveStreamingSegment {
                 });
                 if !prev_ok {
                     folder.diag(
-                        "BrokenChain",
-                        "prev does not match".to_string(),
-                        Some(abs_index),
+                        FoldError::Previous {
+                            actual: map_get(frame, "prev")
+                                .and_then(Value::as_bytes)
+                                .map(<[u8]>::to_vec),
+                            expected: self.expected_prev.clone(),
+                        },
+                        abs_index,
                     );
                 }
                 self.expected_prev.clone_from(&computed);
@@ -2057,11 +2117,7 @@ impl ActiveStreamingSegment {
                     valid: false,
                 });
             });
-            folder.diag(
-                "DamagedFrame",
-                "frame is not a map".to_string(),
-                Some(abs_index),
-            );
+            folder.diag(FoldError::FrameMap, abs_index);
             self.frame_ids.push(Vec::new());
         }
         let catalog = std::mem::take(&mut folder.catalog);
@@ -2163,7 +2219,7 @@ pub fn read_to_sink_from_reader<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
-        address_exhausted: false,
+        address_exhausted: None,
     };
     let mut result = StreamingReadResult::default();
     let mut item_index = 0u64;
@@ -2173,7 +2229,7 @@ pub fn read_to_sink_from_reader<R: Read>(
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(torn) => {
-                if reader.address_exhausted {
+                if let Some((position, read)) = reader.address_exhausted {
                     push_result_diagnostic(
                         &mut result,
                         sink,
@@ -2182,7 +2238,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                             code: "ResourceLimit".to_owned(),
                             detail: "GTS source byte offset exceeds u64::MAX".to_owned(),
                             frame_index: Some(item_index),
-                        },
+                        }
+                        .with_native_cause(FoldError::ByteOffset { position, read }),
                     );
                     return result;
                 }
@@ -2206,7 +2263,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                                  it with file-global term-ids would silently misfold — §16)"
                             ),
                             frame_index: Some(item_index),
-                        },
+                        }
+                        .with_native_cause(FoldError::SegmentBoundary { item: item_index }),
                     );
                     return result;
                 }
@@ -2220,7 +2278,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                         code: "DamagedFrame".to_string(),
                         detail: "first item is not a header".to_string(),
                         frame_index: Some(0),
-                    },
+                    }
+                    .with_native_cause(FoldError::FirstHeader),
                 );
                 return result;
             }
@@ -2248,7 +2307,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                     code: "DamagedFrame".to_string(),
                     detail: "first item is not a header".to_string(),
                     frame_index: Some(0),
-                },
+                }
+                .with_native_cause(FoldError::FirstHeader),
             );
             return result;
         }
@@ -2263,7 +2323,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                         code: "ResourceLimit".to_owned(),
                         detail: "GTS item ordinal exceeds u64::MAX".to_owned(),
                         frame_index: Some(item_index),
-                    },
+                    }
+                    .with_native_cause(FoldError::ItemOrdinal { item: item_index }),
                 );
                 return result;
             }
@@ -2279,7 +2340,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                 code: "EmptyFile".to_string(),
                 detail: "no CBOR items".to_string(),
                 frame_index: None,
-            },
+            }
+            .with_native_cause(FoldError::EmptyFile),
         );
         return result;
     }
@@ -2298,7 +2360,11 @@ pub fn read_to_sink_from_reader<R: Read>(
                     code: "TruncatedLog".to_string(),
                     detail: "observed head does not match expected head".to_string(),
                     frame_index: None,
-                },
+                }
+                .with_native_cause(FoldError::ExpectedHead {
+                    actual: last_head,
+                    expected: expected.to_vec(),
+                }),
             );
         }
     }
@@ -2311,7 +2377,8 @@ pub fn read_to_sink_from_reader<R: Read>(
                 code: "TornAppendError".to_string(),
                 detail: format!("torn at offset {offset}"),
                 frame_index: None,
-            },
+            }
+            .with_native_cause(FoldError::Torn { offset }),
         );
     }
     result
@@ -2339,12 +2406,15 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
         return FileSegments {
             segments: Vec::new(),
             torn: torn.map(|offset| offset as u64),
-            fatal: Some(Diagnostic {
-                cause: None,
-                code: "EmptyFile".to_string(),
-                detail: "no CBOR items".to_string(),
-                frame_index: None,
-            }),
+            fatal: Some(
+                Diagnostic {
+                    cause: None,
+                    code: "EmptyFile".to_string(),
+                    detail: "no CBOR items".to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(FoldError::EmptyFile),
+            ),
         };
     }
     let bounds: Vec<usize> = items
@@ -2357,12 +2427,15 @@ pub fn read_file_segments(data: &[u8]) -> FileSegments {
         return FileSegments {
             segments: Vec::new(),
             torn: torn.map(|offset| offset as u64),
-            fatal: Some(Diagnostic {
-                cause: None,
-                code: "DamagedFrame".to_string(),
-                detail: "first item is not a header".to_string(),
-                frame_index: Some(0),
-            }),
+            fatal: Some(
+                Diagnostic {
+                    cause: None,
+                    code: "DamagedFrame".to_string(),
+                    detail: "first item is not a header".to_string(),
+                    frame_index: Some(0),
+                }
+                .with_native_cause(FoldError::FirstHeader),
+            ),
         };
     }
     let ends = bounds.iter().skip(1).copied().chain([items.len()]);
@@ -2462,7 +2535,11 @@ fn read_segment_with_sink(
                 code: "DamagedFrame".to_string(),
                 detail: "header self-hash mismatch".to_string(),
                 frame_index: Some(index_offset),
-            },
+            }
+            .with_native_cause(FoldError::HeaderHash {
+                stored: stored_hid.clone(),
+                computed: header_id(header),
+            }),
         );
     }
     if map_get(header, "gts").and_then(Value::as_text) != Some(MAGIC)
@@ -2480,7 +2557,11 @@ fn read_segment_with_sink(
                     map_get(header, "v")
                 ),
                 frame_index: Some(index_offset),
-            },
+            }
+            .with_native_cause(FoldError::HeaderVersion {
+                magic: map_get(header, "gts").cloned(),
+                version: map_get(header, "v").cloned(),
+            }),
         );
     }
     let mut expected_prev: Vec<u8> = stored_hid.unwrap_or_default();
@@ -2516,11 +2597,7 @@ fn read_segment_with_sink(
                 .and_then(|index| index.checked_add(index_offset))
                 .expect("bounded file item count fits u64");
             let Value::Map(frame) = raw else {
-                folder.diag(
-                    "DamagedFrame",
-                    "frame is not a map".to_string(),
-                    Some(abs_index),
-                );
+                folder.diag(FoldError::FrameMap, abs_index);
                 frame_ids.push(Vec::new());
                 continue;
             };
@@ -2533,9 +2610,11 @@ fn read_segment_with_sink(
                 .unwrap_or_else(|| content_id(frame));
             if stored_id.map(|b| &b[..]) != Some(&computed[..]) {
                 folder.diag(
-                    "DamagedFrame",
-                    "frame self-hash mismatch".to_string(),
-                    Some(abs_index),
+                    FoldError::SelfHash {
+                        stored: stored_id.cloned(),
+                        computed: computed.clone(),
+                    },
+                    abs_index,
                 );
                 let ftype = text_or(map_get(frame, "t"), "").to_string();
                 folder.opaque(frame, &ftype, "damaged");
@@ -2547,9 +2626,13 @@ fn read_segment_with_sink(
                 Some(Value::Bytes(b)) if *b == expected_prev);
             if !prev_ok {
                 folder.diag(
-                    "BrokenChain",
-                    "prev does not match".to_string(),
-                    Some(abs_index),
+                    FoldError::Previous {
+                        actual: map_get(frame, "prev")
+                            .and_then(Value::as_bytes)
+                            .map(<[u8]>::to_vec),
+                        expected: expected_prev.clone(),
+                    },
+                    abs_index,
                 );
             }
             expected_prev.clone_from(&computed);
@@ -2621,7 +2704,7 @@ mod transformed_payload_tests {
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,
-            address_exhausted: false,
+            address_exhausted: None,
         };
         let (_, start, end) = next_stream_item(&mut reader).unwrap().unwrap();
         assert_eq!(start, (1 << 32) + 7);
@@ -2629,10 +2712,10 @@ mod transformed_payload_tests {
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: u64::MAX,
-            address_exhausted: false,
+            address_exhausted: None,
         };
         assert_eq!(next_stream_item(&mut reader).unwrap_err(), u64::MAX);
-        assert!(reader.address_exhausted);
+        assert_eq!(reader.address_exhausted, Some((u64::MAX, 1)));
         assert_eq!(reader.pos, u64::MAX);
     }
 
