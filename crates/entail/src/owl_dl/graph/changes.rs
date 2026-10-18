@@ -62,7 +62,15 @@ pub(crate) enum RoleWitness {
     Edge { index: usize, letter: Role },
     Language { start: usize, end: usize },
     Transitive { via: Role, path: usize },
-    Universal,
+    Universal(UniversalLicence),
+}
+
+/// The actual native decision that licensed an all-object-pairs role read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UniversalLicence {
+    Fixed,
+    Hierarchy { via: Role },
+    Component { top: Role },
 }
 
 /// An actual transition selected in the native product traversal. State numbers

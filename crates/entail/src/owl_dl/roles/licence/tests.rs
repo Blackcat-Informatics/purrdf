@@ -35,7 +35,7 @@ fn composite_order_license_retains_native_closure_sources_and_refusals() {
     let mut storage = Resident;
     let mut memory = Memory::new(&mut storage);
     let inputs = program
-        .path_inputs([(r, transition)], None, &mut memory)
+        .path_inputs([(r, transition)], [], None, &mut memory)
         .unwrap();
     assert_eq!(inputs.len(), 2);
     assert!(inputs.contains(&super::Input::Inclusion(p, q)));
@@ -43,7 +43,7 @@ fn composite_order_license_retains_native_closure_sources_and_refusals() {
     memory.release_vec(inputs).unwrap();
     assert_eq!(memory.admitted_bytes(), 0);
     assert_eq!(
-        program.path_inputs([(r, usize::MAX)], None, &mut memory),
+        program.path_inputs([(r, usize::MAX)], [], None, &mut memory),
         Err(Error::MissingTransition)
     );
     assert_eq!(memory.admitted_bytes(), 0);
@@ -55,14 +55,14 @@ fn composite_order_license_retains_native_closure_sources_and_refusals() {
         }
     }
     assert_eq!(
-        program.path_inputs([], Some(&Stop), &mut memory),
+        program.path_inputs([], [], Some(&Stop), &mut memory),
         Err(Error::Stopped)
     );
     assert_eq!(memory.admitted_bytes(), 0);
     let program = kb.role_program.as_mut().unwrap();
     program.simple.as_mut().unwrap().witnesses = None;
     assert_eq!(
-        program.path_inputs([(r, transition)], None, &mut memory),
+        program.path_inputs([(r, transition)], [], None, &mut memory),
         Err(Error::MissingOrder { sub: p, sup: r })
     );
     assert_eq!(memory.admitted_bytes(), 0);

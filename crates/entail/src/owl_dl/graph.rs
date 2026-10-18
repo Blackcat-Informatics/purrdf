@@ -46,6 +46,7 @@ use crate::owl_dl::input_source::Input;
 pub(super) mod changes;
 use changes::{
     Cause, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
+    UniversalLicence,
 };
 
 /// A single completion-graph node.
@@ -2913,6 +2914,36 @@ impl<'a> Graph<'a> {
         })
     }
 
+    /// Preserve the original universal-role short-circuit decision and its native license.
+    fn universal_licence(&self, role: Role, property: u32) -> Option<UniversalLicence> {
+        if self.top_role == Some(property) {
+            return Some(UniversalLicence::Fixed);
+        }
+        if let Some(top) = self.top_role {
+            let achievers = self.achievers(role);
+            for dir in [true, false] {
+                if realizes(&achievers, (top, dir)) {
+                    return Some(UniversalLicence::Hierarchy {
+                        via: pattern_role(top, dir),
+                    });
+                }
+            }
+        }
+        let program = self.kb.role_program.as_ref()?;
+        let top = program.top?;
+        match (
+            program.roles.binary_search(&top),
+            program.roles.binary_search(&role),
+        ) {
+            (Ok(source), Ok(target))
+                if program.machine_for[source] == program.machine_for[target] =>
+            {
+                Some(UniversalLicence::Component { top })
+            }
+            _ => None,
+        }
+    }
+
     /// The one neighbourhood read: call `visit` on every `role`-neighbour of `x` in
     /// first-seen order, each once, and stop the moment it answers `true`. Returns whether it
     /// did.
@@ -2949,25 +2980,8 @@ impl<'a> Graph<'a> {
         // representative, including isolated roots and newly minted witnesses.
         // It is not approximated by paths through authored top-role assertions.
         let (Role::Named(property) | Role::Inv(property)) = role;
-        if self.top_role == Some(property)
-            || self.top_role.is_some_and(|top| {
-                let achievers = self.achievers(role);
-                realizes(&achievers, (top, true)) || realizes(&achievers, (top, false))
-            })
-            || self.kb.role_program.as_ref().is_some_and(|program| {
-                program.top.is_some_and(|top| {
-                    match (
-                        program.roles.binary_search(&top),
-                        program.roles.binary_search(&role),
-                    ) {
-                        (Ok(top), Ok(role)) => {
-                            program.machine_for[top] == program.machine_for[role]
-                        }
-                        _ => false,
-                    }
-                })
-            })
-        {
+        let universal = self.universal_licence(role, property);
+        if let Some(licence) = universal {
             if st.nodes[find(st, x)].concrete {
                 return false;
             }
@@ -2981,7 +2995,7 @@ impl<'a> Graph<'a> {
                         from: find(st, x),
                         to: node,
                         role,
-                        witness: RoleWitness::Universal,
+                        witness: RoleWitness::Universal(licence),
                     });
                     return true;
                 }

@@ -78,6 +78,7 @@ fn checked_existential_support_retains_original_effects_and_excludes_unrelated_i
         let slice = journal
             .normalized_slice_with_schema(&ctx.kb, schema)
             .unwrap();
+        crate::owl_dl::graph::changes::slice::tests::assert_derivation(&slice, &journal);
         let births = slice
             .effects
             .iter()
@@ -125,6 +126,92 @@ fn checked_existential_support_retains_original_effects_and_excludes_unrelated_i
 /// A real derived clash; the consumer prepares the original input independently.
 fn derived() -> (DlProof, DlProofContext<'static>) {
     derived_for(None)
+}
+
+/// All-pairs reads retain endpoint existence and their actual hierarchy or machine license.
+#[test]
+fn checked_universal_paths_retain_selected_domains_and_original_source_licenses() {
+    use crate::owl_dl::graph::changes::{
+        Journal, PathKind, ReadFact, RoleWitness, UniversalLicence,
+    };
+    for (mode, inverse) in [(0, false), (0, true), (1, false), (1, true), (2, false)] {
+        let mut f = Fixture::default();
+        let top = f.builder.intern_iri(owl::TOP_OBJECT_PROPERTY).unwrap();
+        let class = f.name("A");
+        let forbidden = f.name("B");
+        let filler = f.name("C");
+        let subject = f.instance("subject", class);
+        f.instance("target", forbidden);
+        f.edge(forbidden, owl::DISJOINT_WITH, filler);
+        let property = if mode == 0 {
+            top
+        } else {
+            let property = f.name("p");
+            if mode == 1 {
+                f.edge(top, rdfs::SUB_PROPERTY_OF, property);
+            } else {
+                let first = f.name("first");
+                let bridge = f.name("bridge");
+                f.builder.push_quad(subject, first, bridge, None).unwrap();
+                let list = f.list(&[first, top]);
+                f.edge(property, owl::PROPERTY_CHAIN_AXIOM, list);
+            }
+            property
+        };
+        let property = if inverse {
+            let expression = f.blank();
+            f.edge(expression, owl::INVERSE_OF, property);
+            expression
+        } else {
+            property
+        };
+        let restriction = f.blank();
+        f.edge(class, rdfs::SUB_CLASS_OF, restriction);
+        f.edge(restriction, owl::ON_PROPERTY, property);
+        f.edge(restriction, owl::ALL_VALUES_FROM, filler);
+        let (proof, ctx) = checked_fixture(&f.freeze());
+        let index = proof
+            .clashes
+            .iter()
+            .position(|step| step.current.is_some())
+            .unwrap();
+        assert!(
+            proof
+                .resolve_clash(index, &ctx)
+                .unwrap()
+                .replay()
+                .current_supported()
+        );
+        let (_, journal, schema) = proof
+            .replay_clash_recording(index, &ctx, Journal::default())
+            .unwrap();
+        let journal = journal.unwrap();
+        let selected = journal
+            .normalized_slice_with_schema(&ctx.kb, schema)
+            .unwrap();
+        crate::owl_dl::graph::changes::slice::tests::assert_derivation(&selected, &journal);
+        if mode == 2 {
+            assert!(
+                selected
+                    .paths
+                    .iter()
+                    .any(|step| matches!(step.kind, PathKind::Universal(_)))
+            );
+            assert_ne!(selected.role_inputs().unwrap(), []);
+        } else {
+            assert!(selected.derivation.reads.iter().any(|read| matches!(read.fact,
+                ReadFact::Role { witness: RoleWitness::Universal(licence), .. }
+                if matches!((mode, licence), (0, UniversalLicence::Fixed) | (1, UniversalLicence::Hierarchy { .. })))));
+            if mode == 1 {
+                assert!(selected.inputs().any(|input| matches!(
+                    input.unwrap().input,
+                    crate::owl_dl::input_source::Input::SubRole { .. }
+                )));
+            }
+        }
+        let support = selected.into_support().unwrap();
+        assert_ne!(support.derivation.vertices.len(), 0);
+    }
 }
 
 /// Retain either a named or scoped-blank source inhabitant through real replay.

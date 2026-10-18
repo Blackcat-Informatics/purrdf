@@ -7,7 +7,8 @@
 
 use super::reach;
 use super::{
-    Cause, Event, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
+    Cause, Event, Journal, Mutation, Origin, PathKind, PathStep, Read, ReadFact, ReadOwner,
+    RoleWitness, UniversalLicence,
 };
 use crate::owl_dl::concept::Role;
 use crate::owl_dl::{
@@ -19,7 +20,7 @@ use std::ops::Range;
 mod key;
 mod schema;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// One normalized transitivity/hierarchy license for a selected immutable path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +55,7 @@ struct Dependency {
     event: Option<usize>,
     owner: Option<ReadOwner>,
     parents: Range<usize>,
+    reads: Range<usize>,
     paths: Range<usize>,
     transitive: Range<usize>,
     transitive_nodes: Range<usize>,
@@ -62,6 +64,57 @@ struct Dependency {
     guards: Range<usize>,
     role_clauses: Range<usize>,
     incomplete: bool,
+}
+
+/// A selected observation addresses its one canonical effect or read-owner entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Observation {
+    Effect(usize),
+    Reads(usize),
+}
+
+/// Original replay-local vertex and its compact selected dependency/license spans.
+/// Parent values are original vertex identities, never RDF term identifiers.
+#[derive(Debug)]
+pub(crate) struct Vertex {
+    pub(crate) id: usize,
+    pub(crate) observation: Observation,
+    pub(crate) parents: Range<usize>,
+    pub(crate) reads: Range<usize>,
+    pub(crate) paths: Range<usize>,
+    pub(crate) transitive: Range<usize>,
+    pub(crate) transitive_nodes: Range<usize>,
+    pub(crate) rules: Range<usize>,
+    pub(crate) tbox: Range<usize>,
+    pub(crate) guards: Range<usize>,
+    pub(crate) role_clauses: Range<usize>,
+}
+
+/// Only the backwards-reachable checked derivation survives journal disposal.
+#[derive(Debug)]
+pub(crate) struct Derivation {
+    pub(crate) root: usize,
+    /// Sorted original vertex identities permit borrowed lookup without another index.
+    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) parents: Vec<usize>,
+    pub(crate) reads: Vec<Read>,
+}
+
+impl Derivation {
+    /// A retained root must resolve to a selected terminal read, never an effect leaf.
+    fn terminal(&self, owners: &[ReadOwner]) -> Result<ReadOwner, Error> {
+        let at = self
+            .vertices
+            .binary_search_by_key(&self.root, |vertex| vertex.id)
+            .map_err(|_| Error::MissingClash)?;
+        let Observation::Reads(owner) = self.vertices[at].observation else {
+            return Err(Error::MissingClash);
+        };
+        match owners.get(owner) {
+            Some(owner @ ReadOwner::Clash { .. }) => Ok(*owner),
+            _ => Err(Error::MissingClash),
+        }
+    }
 }
 
 /// Missing native derivation is a refusal, never a successful opaque leaf.
@@ -85,13 +138,16 @@ pub(crate) enum Error {
 /// Owned dependencies selected while their original source phase is still active.
 /// Schema reads address the enclosing captured proof's checked terminal evidence.
 pub(crate) struct Support {
+    pub(crate) derivation: Derivation,
     /// Original journal ordinals and effects, local to this checked clash's replay.
     pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
     pub(crate) transitive: Vec<TransitiveRead>,
     pub(crate) transitive_nodes: Vec<TransitiveNode>,
+    pub(crate) rules: Vec<Input>,
     pub(crate) tbox: Vec<usize>,
+    pub(crate) guards: Vec<usize>,
     pub(crate) role_clauses: Vec<crate::owl_dl::roles::RoleClause>,
     pub(crate) schema_reads: Vec<schema::Read>,
     pub(crate) inputs: Vec<SelectedInput>,
@@ -103,12 +159,15 @@ pub(crate) struct Support {
 impl std::fmt::Debug for Support {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Support")
+            .field("derivation", &self.derivation)
             .field("effects", &self.effects)
             .field("owners", &self.owners)
             .field("paths", &self.paths)
             .field("transitive", &self.transitive)
             .field("transitive_nodes", &self.transitive_nodes)
+            .field("rules", &self.rules)
             .field("tbox", &self.tbox)
+            .field("guards", &self.guards)
             .field("role_clauses", &self.role_clauses)
             .field("schema_reads", &self.schema_reads)
             .field("inputs", &self.inputs)
@@ -136,6 +195,7 @@ fn poll(kb: &Kb) -> Result<(), Error> {
 /// Checked native dependencies, with separately bound original input anchors.
 pub(crate) struct Slice<'a> {
     kb: &'a Kb,
+    pub(crate) derivation: Derivation,
     pub(crate) effects: Vec<(usize, Event)>,
     pub(crate) owners: Vec<ReadOwner>,
     pub(crate) paths: Vec<PathStep>,
@@ -153,6 +213,7 @@ pub(crate) struct Slice<'a> {
 impl std::fmt::Debug for Slice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Slice")
+            .field("derivation", &self.derivation)
             .field("effects", &self.effects)
             .field("source_terms", &self.kb.source_terms)
             .field("owners", &self.owners)
@@ -180,6 +241,7 @@ pub(crate) struct SelectedInput {
 
 impl Slice<'_> {
     pub(crate) fn into_support(self) -> Result<Support, Error> {
+        self.derivation.terminal(&self.owners)?;
         let mut storage = Resident;
         let mut memory = Memory::new(&mut storage);
         let mut inputs = Vec::new();
@@ -191,12 +253,15 @@ impl Slice<'_> {
         let roles = self.role_inputs()?;
         let key_equalities = memory.collect(self.keys.iter().map(|key| key.equality))?;
         Ok(Support {
+            derivation: self.derivation,
             effects: self.effects,
             owners: self.owners,
             paths: self.paths,
             transitive: self.transitive,
             transitive_nodes: self.transitive_nodes,
+            rules: self.rules,
             tbox: self.tbox,
+            guards: self.guards,
             role_clauses: self.role_clauses,
             schema_reads: self.schema_reads,
             inputs,
@@ -222,7 +287,16 @@ impl Slice<'_> {
 
     fn local_role_inputs(&self) -> Result<Vec<crate::owl_dl::roles::source::Input>, Error> {
         let Some(program) = &self.kb.role_program else {
-            return if self.paths.is_empty() && self.role_clauses.is_empty() {
+            let component = self.derivation.reads.iter().any(|read| {
+                matches!(
+                    read.fact,
+                    ReadFact::Role {
+                        witness: RoleWitness::Universal(UniversalLicence::Component { .. }),
+                        ..
+                    }
+                )
+            });
+            return if self.paths.is_empty() && self.role_clauses.is_empty() && !component {
                 Ok(Vec::new())
             } else {
                 Err(Error::MissingPath)
@@ -250,8 +324,25 @@ impl Slice<'_> {
                     memory.push(&mut transitions, (*role, transition))?;
                 }
             }
+            let inclusions = self
+                .derivation
+                .reads
+                .iter()
+                .filter_map(|read| match read.fact {
+                    ReadFact::Role {
+                        role,
+                        witness: RoleWitness::Universal(UniversalLicence::Component { top }),
+                        ..
+                    } => Some((top, role)),
+                    _ => None,
+                });
             let inputs = program
-                .path_inputs(transitions.iter().copied(), self.kb.stop.as_deref(), memory)
+                .path_inputs(
+                    transitions.iter().copied(),
+                    inclusions,
+                    self.kb.stop.as_deref(),
+                    memory,
+                )
                 .map_err(Error::RoleLicence)?;
             memory.release_vec(transitions)?;
             Ok(inputs)
@@ -515,7 +606,10 @@ impl Builder {
                             self.edge(index, letter, step.from.0, step.to.0, memory)?;
                         }
                         PathKind::Epsilon => self.parent(Fact::Node(step.from.0), memory)?,
-                        PathKind::Universal(_) => return Err(Error::MissingPath),
+                        PathKind::Universal(_) => {
+                            self.parent(Fact::Domain(step.from.0), memory)?;
+                            self.parent(Fact::Domain(step.to.0), memory)?;
+                        }
                     }
                     memory.push(&mut self.paths, *step)?;
                 }
@@ -571,7 +665,19 @@ impl Builder {
                 visited.release(memory)?;
                 Ok(())
             }
-            ReadFact::Role { .. } => Err(Error::MissingPath),
+            ReadFact::Role {
+                from,
+                to,
+                role,
+                witness: RoleWitness::Universal(licence),
+            } => {
+                self.parent(Fact::Domain(from), memory)?;
+                self.parent(Fact::Domain(to), memory)?;
+                if let UniversalLicence::Hierarchy { via } = licence {
+                    self.role_rules(role, via, rules, memory)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -718,6 +824,7 @@ impl Builder {
                 event: Some(ordinal),
                 owner: None,
                 parents: start..self.parents.len(),
+                reads: 0..0,
                 paths: 0..0,
                 transitive: 0..0,
                 transitive_nodes: 0..0,
@@ -791,6 +898,7 @@ impl Journal {
             let guards_start = graph.guards.len();
             let role_clauses_start = graph.role_clauses.len();
             let mut incomplete = false;
+            let read_start = read;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
                 && next.checkpoint == selected.checkpoint
@@ -815,6 +923,7 @@ impl Journal {
                     event: None,
                     owner: Some(selected.owner),
                     parents: start..graph.parents.len(),
+                    reads: read_start..read,
                     paths: path_start..graph.paths.len(),
                     transitive: transitive_start..graph.transitive.len(),
                     transitive_nodes: transitive_nodes_start..graph.transitive_nodes.len(),
@@ -836,9 +945,16 @@ impl Journal {
         let mut visited = Vec::new();
         memory.reserve(&mut visited, graph.nodes.len())?;
         visited.resize(graph.nodes.len(), false);
-        memory.push(&mut pending, root.ok_or(Error::MissingClash)?)?;
+        let root = root.ok_or(Error::MissingClash)?;
+        memory.push(&mut pending, root)?;
         let mut result = Slice {
             kb,
+            derivation: Derivation {
+                root,
+                vertices: Vec::new(),
+                parents: Vec::new(),
+                reads: Vec::new(),
+            },
             effects: Vec::new(),
             owners: Vec::new(),
             paths: Vec::new(),
@@ -866,13 +982,35 @@ impl Journal {
                     Error::MissingEffect
                 });
             }
-            if let Some(ordinal) = node.event {
+            let observation = if let Some(ordinal) = node.event {
                 let event = self.events[ordinal];
+                let selected = result.effects.len();
                 memory.push(&mut result.effects, (ordinal, event))?;
-            }
-            if let Some(owner) = node.owner {
+                Observation::Effect(selected)
+            } else if let Some(owner) = node.owner {
+                let selected = result.owners.len();
                 memory.push(&mut result.owners, owner)?;
-            }
+                Observation::Reads(selected)
+            } else {
+                return Err(Error::MissingFact);
+            };
+            let mut vertex = Vertex {
+                id,
+                observation,
+                parents: result.derivation.parents.len()..0,
+                reads: result.derivation.reads.len()..0,
+                paths: result.paths.len()..0,
+                transitive: result.transitive.len()..0,
+                transitive_nodes: result.transitive_nodes.len()..0,
+                rules: result.rules.len()..0,
+                tbox: result.tbox.len()..0,
+                guards: result.guards.len()..0,
+                role_clauses: result.role_clauses.len()..0,
+            };
+            memory.extend(
+                &mut result.derivation.reads,
+                self.reads[node.reads.clone()].iter().copied(),
+            )?;
             memory.extend(
                 &mut result.paths,
                 graph.paths[node.paths.clone()].iter().copied(),
@@ -906,9 +1044,27 @@ impl Journal {
                     .copied(),
             )?;
             for &parent in &graph.parents[node.parents.clone()] {
+                if parent >= id {
+                    return Err(Error::MissingFact);
+                }
                 memory.push(&mut pending, parent)?;
+                memory.push(&mut result.derivation.parents, parent)?;
             }
+            vertex.parents.end = result.derivation.parents.len();
+            vertex.reads.end = result.derivation.reads.len();
+            vertex.paths.end = result.paths.len();
+            vertex.transitive.end = result.transitive.len();
+            vertex.transitive_nodes.end = result.transitive_nodes.len();
+            vertex.rules.end = result.rules.len();
+            vertex.tbox.end = result.tbox.len();
+            vertex.guards.end = result.guards.len();
+            vertex.role_clauses.end = result.role_clauses.len();
+            memory.push(&mut result.derivation.vertices, vertex)?;
         }
+        result
+            .derivation
+            .vertices
+            .sort_unstable_by_key(|vertex| vertex.id);
         if let Some(schema) = result.schema
             && (result.guards.is_empty()
                 || result

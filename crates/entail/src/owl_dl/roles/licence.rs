@@ -57,6 +57,7 @@ impl super::RoleProgram {
     pub(crate) fn path_inputs<S: purrdf_lex::allocation::Admission + ?Sized>(
         &self,
         transitions: impl IntoIterator<Item = (Role, usize)>,
+        inclusions: impl IntoIterator<Item = (Role, Role)>,
         stop: Option<&dyn purrdf_datalog::StopSignal>,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Vec<Input>, Error> {
@@ -69,6 +70,12 @@ impl super::RoleProgram {
             let mut visited = OrderedTable::default();
             let mut inputs = OrderedTable::default();
             let mut selected = Vec::new();
+            for (sub, sup) in inclusions {
+                if stop.is_some_and(purrdf_datalog::StopSignal::stopped) {
+                    return Err(Error::Stopped);
+                }
+                self.select_inclusion(sub, sup, &mut pending, memory)?;
+            }
             for (role, index) in transitions {
                 if stop.is_some_and(purrdf_datalog::StopSignal::stopped) {
                     return Err(Error::Stopped);
