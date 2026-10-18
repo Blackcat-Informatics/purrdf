@@ -138,7 +138,24 @@ fn checked_prefix_contains_an_unrelated_application_before_the_clash() {
     );
     assert!(journal.reads().iter().any(|read| matches!(read.owner,
         ReadOwner::Application { index, .. } if index == unrelated_step)));
-    let selected = journal.normalized_slice().unwrap();
+    let selected = journal.normalized_slice(&ctx.kb).unwrap();
+    let input_sources = selected
+        .inputs(&ctx.kb)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        input_sources
+            .iter()
+            .any(|record| matches!(record.input, crate::owl_dl::input_source::Input::Role(_)))
+    );
+    assert!(input_sources.iter().all(|record| match record.source {
+        crate::owl_dl::input_source::Source::Anchor(crate::owl_dl::AxiomSource::Triple(
+            subject,
+            _,
+            _,
+        )) => subject != earlier,
+        _ => true,
+    }));
     assert!(selected.owners.contains(&ReadOwner::Clash {
         clause: step.clause
     }));
@@ -210,7 +227,11 @@ fn checked_clash_retains_selected_compiled_role_path() {
     .unwrap();
     assert_eq!(observed.frame, step.frame);
     assert_eq!(observed.facts, step.witness);
-    let slice = observed.mutations.unwrap().normalized_slice().unwrap();
+    let slice = observed
+        .mutations
+        .unwrap()
+        .normalized_slice(&ctx.kb)
+        .unwrap();
     assert!(
         slice
             .paths
@@ -242,6 +263,10 @@ fn checked_clash_retains_selected_transitive_role_path() {
     let role = f.name("r");
     let transitive = f.builder.intern_iri(owl::TRANSITIVE_PROPERTY).unwrap();
     f.edge(role, rdf::TYPE, transitive);
+    let subrole = f.name("s");
+    let inverse = f.name("inverse");
+    f.edge(subrole, rdfs::SUB_PROPERTY_OF, role);
+    f.edge(role, owl::INVERSE_OF, inverse);
     let restriction = f.blank();
     f.edge(class, rdfs::SUB_CLASS_OF, restriction);
     f.edge(restriction, owl::ON_PROPERTY, role);
@@ -249,8 +274,8 @@ fn checked_clash_retains_selected_transitive_role_path() {
     let from = f.instance("from", class);
     let middle = f.name("middle");
     let target = f.instance("target", disjoint);
-    f.builder.push_quad(from, role, middle, None).unwrap();
-    f.builder.push_quad(middle, role, target, None).unwrap();
+    f.builder.push_quad(from, subrole, middle, None).unwrap();
+    f.builder.push_quad(target, inverse, middle, None).unwrap();
     let (proof, ctx) = checked_fixture(&f.freeze());
     assert!(ctx.kb.role_program.is_none());
     let index = proof
@@ -280,7 +305,11 @@ fn checked_clash_retains_selected_transitive_role_path() {
     .unwrap();
     assert_eq!(observed.frame, step.frame);
     assert_eq!(observed.facts, step.witness);
-    let slice = observed.mutations.unwrap().normalized_slice().unwrap();
+    let slice = observed
+        .mutations
+        .unwrap()
+        .normalized_slice(&ctx.kb)
+        .unwrap();
     assert!(
         slice
             .transitive_nodes
@@ -292,6 +321,26 @@ fn checked_clash_retains_selected_transitive_role_path() {
             .count()
             >= 2
     );
+    let selected_inputs = slice
+        .inputs(&ctx.kb)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(selected_inputs.iter().any(|record| matches!(
+        record.input,
+        crate::owl_dl::input_source::Input::Transitive(_)
+    )));
+    assert!(selected_inputs.iter().any(|record| matches!(
+        record.input,
+        crate::owl_dl::input_source::Input::Transitive(_)
+    ) && record.cause.is_none()));
+    assert!(selected_inputs.iter().any(|record| matches!(
+        record.input,
+        crate::owl_dl::input_source::Input::SubRole { .. }
+    )));
+    assert!(selected_inputs.iter().any(|record| matches!(
+        record.input,
+        crate::owl_dl::input_source::Input::Inverse(..)
+    )));
     for index in 0..2 {
         assert!(
             slice
@@ -299,6 +348,78 @@ fn checked_clash_retains_selected_transitive_role_path() {
                 .iter()
                 .any(|cause| cause.origin == Origin::PreparedRole && cause.index == index)
         );
+    }
+}
+
+/// Authored equality binds to its real triple; key inference is not that triple.
+#[test]
+fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
+    use crate::owl_dl::graph::changes::{Journal, slice::Error};
+    use crate::owl_dl::input_source::{Input, Source};
+    for derived_key in [false, true] {
+        let mut f = Fixture::default();
+        let a = f.name("A");
+        let b = f.name("B");
+        f.edge(a, owl::DISJOINT_WITH, b);
+        let left = f.instance("left", a);
+        let right = f.instance("right", b);
+        if derived_key {
+            let keyed = f.name("Keyed");
+            let property = f.name("key");
+            let list = f.list(&[property]);
+            f.edge(keyed, owl::HAS_KEY, list);
+            f.edge(left, rdf::TYPE, keyed);
+            f.edge(right, rdf::TYPE, keyed);
+            let value = f.name("shared");
+            f.builder.push_quad(left, property, value, None).unwrap();
+            f.builder.push_quad(right, property, value, None).unwrap();
+        } else {
+            f.edge(left, owl::SAME_AS, right);
+        }
+        let (proof, ctx) = checked_fixture(&f.freeze());
+        let index = proof
+            .clashes
+            .iter()
+            .position(|step| step.current.is_some())
+            .unwrap();
+        assert!(
+            proof
+                .resolve_clash(index, &ctx)
+                .unwrap()
+                .replay()
+                .current_supported()
+        );
+        let step = &proof.clashes[index];
+        let current = step.current.as_ref().unwrap();
+        let prefix = crate::owl_dl::support::prefix(&proof.support, current.latest, None).unwrap();
+        let observed = crate::owl_dl::hyper::replay_observing_support(
+            &ctx.kb,
+            &crate::owl_dl::graph::Assumptions::of_kb(),
+            &prefix,
+            step.clause,
+            &current.frame,
+            &proof.branches,
+            Journal::default(),
+        )
+        .unwrap();
+        let slice = observed.mutations.unwrap().normalized_slice(&ctx.kb);
+        if derived_key {
+            assert!(matches!(slice, Err(Error::MissingEffect)));
+            assert!(matches!(
+                ctx.kb.inputs.get(Input::Equality(0)),
+                Some(Source::KeyInference { key: 0, .. })
+            ));
+        } else {
+            let slice = slice.unwrap();
+            let inputs = slice
+                .inputs(&ctx.kb)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(inputs.iter().any(|record| match (record.input, record.source) {
+                (Input::Equality(_), Source::Anchor(crate::owl_dl::AxiomSource::Triple(_, predicate, _))) => matches!(ctx.kb.interner.value(predicate), TermValue::Iri(iri) if iri == owl::SAME_AS),
+                _ => false,
+            }));
+        }
     }
 }
 

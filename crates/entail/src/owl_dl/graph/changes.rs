@@ -7,11 +7,21 @@
 //! RDF premises until their original parser/normalization licenses are resolved.
 
 use super::super::concept::Role;
+use super::super::input_source::Input;
 pub(crate) mod reach;
 #[cfg(test)]
 pub(crate) mod slice;
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::fmt;
+
+#[derive(Default)]
+struct RoleRules(OrderedTable<(Role, Role), (Role, Input)>);
+
+impl fmt::Debug for RoleRules {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.0.iter()).finish()
+    }
+}
 
 /// Only the independently checked binding owns these reads, never search candidates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +56,7 @@ pub(crate) enum ReadFact {
 /// own native path licenses before a causal graph may be published.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoleWitness {
-    Edge(usize),
+    Edge { index: usize, letter: Role },
     Language { start: usize, end: usize },
     Transitive { via: Role, path: usize },
     Universal,
@@ -277,6 +287,7 @@ pub(crate) struct Journal {
     reads: Vec<Read>,
     paths: Vec<PathStep>,
     reach: reach::Witnesses,
+    role_rules: RoleRules,
     pub(super) read_owner: Option<ReadOwner>,
     storage: Resident,
     live: usize,
@@ -285,6 +296,25 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    /// The first native hierarchy discovery owns one immutable predecessor.
+    pub(super) fn role_rule(
+        &mut self,
+        requested: Role,
+        parent: Role,
+        child: Role,
+        input: Input,
+    ) -> Result<(), StorageError> {
+        if requested == child || self.role_rules.0.get(&(requested, child)).is_some() {
+            return Ok(());
+        }
+        let mut memory = Memory::resume(&mut self.storage, self.live);
+        let result = self
+            .role_rules
+            .0
+            .insert((requested, child), (parent, input), &mut memory);
+        self.live = memory.admitted_bytes();
+        result.map(|_| ())
+    }
     pub(super) fn reach_step(
         &mut self,
         pattern: usize,

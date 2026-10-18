@@ -81,6 +81,7 @@ use crate::owl_dl::Kb;
 use crate::owl_dl::concept::{Concept, ConceptTable, Decomp, Role};
 use crate::owl_dl::constructs::{Support, support_of};
 use crate::owl_dl::data::{self, DataRangeTable, LiteralValue};
+use crate::owl_dl::input_source::{Input, Inputs, Source};
 use crate::report::Construct;
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_ALLDISJOINTCLASSES, OWL_ALLDISJOINTPROPERTIES, OWL_ALLVALUESFROM,
@@ -1296,6 +1297,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         // Every literal that reaches the knowledge base carries its VALUE into the completion
         // graph, and the literals' value classes decide which of them are one element of the data
         // domain and which are provably different ones.
+        let authored_types = acc.abox_types.len();
         let literal_class = register_literals(
             &interner,
             &mut table,
@@ -1305,6 +1307,13 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             &mut acc.boundaries,
             stop,
         )?;
+        for index in authored_types..acc.abox_types.len() {
+            poll(stop)?;
+            acc.inputs.record(
+                Input::Type(index),
+                Source::LiteralValue(acc.abox_types[index].0),
+            )?;
+        }
         // A data range this layer cannot decide EXACTLY is a reported boundary rather than a
         // silent weakening. The predicate is `purrdf-xsd`'s own, so the boundary and the decision
         // procedure cannot drift apart.
@@ -1315,6 +1324,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         poll(stop)?;
         let source_terms = u32::try_from(interner.len()).expect("term count fits u32");
         let mut kb = Kb {
+            inputs: acc.inputs,
             interner,
             source_terms,
             table,
@@ -1546,6 +1556,7 @@ fn subrole_satisfies(
 /// The knowledge-base accumulators filled while scanning axioms.
 #[derive(Default)]
 struct Accums {
+    inputs: Inputs,
     tbox: Vec<(u32, u32)>,
     tbox_sources: Vec<super::AxiomSource>,
     source: super::AxiomSource,
@@ -1603,6 +1614,10 @@ fn axiom_node(
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
+                    acc.inputs.record(
+                        Input::Distinct(acc.different_from.len()),
+                        Source::Anchor(acc.source),
+                    )?;
                     acc.different_from.push((left, right));
                 }
             }
@@ -1636,8 +1651,14 @@ fn axiom_node(
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
-                    acc.disjoint_roles.insert((left, right));
-                    acc.disjoint_roles.insert((right, left));
+                    for pair in [(left, right), (right, left)] {
+                        if acc.disjoint_roles.insert(pair) {
+                            acc.inputs.record(
+                                Input::DisjointRole(pair.0, pair.1),
+                                Source::Anchor(acc.source),
+                            )?;
+                        }
+                    }
                 }
             }
         }
@@ -1681,6 +1702,10 @@ fn negative_assertion(
         Box::new(Concept::Not(Box::new(Concept::Nominal(vec![target])))),
     );
     let cid = table.intern(concept);
+    acc.inputs.record(
+        Input::Type(acc.abox_types.len()),
+        Source::Anchor(acc.source),
+    )?;
     acc.abox_types.push((source, cid));
     acc.individuals.insert(source);
     Ok(())
@@ -1731,33 +1756,61 @@ fn axiom(
             Concept::All(Role::Named(s), Box::new(d)),
         );
     } else if p == v.inverse_of {
-        acc.inverses.entry(s).or_default().insert(o);
-        acc.inverses.entry(o).or_default().insert(s);
+        for (left, right) in [(s, o), (o, s)] {
+            if acc.inverses.entry(left).or_default().insert(right) {
+                acc.inputs
+                    .record(Input::Inverse(left, right), Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.equiv_prop {
-        acc.role_sub.entry(s).or_default().insert(o);
-        acc.role_sub.entry(o).or_default().insert(s);
+        for (sup, sub) in [(s, o), (o, s)] {
+            if acc.role_sub.entry(sup).or_default().insert(sub) {
+                acc.inputs
+                    .record(Input::SubRole { sub, sup }, Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.sub_prop {
         // s ⊑ o : `o` has sub-role `s`.
-        acc.role_sub.entry(o).or_default().insert(s);
+        if acc.role_sub.entry(o).or_default().insert(s) {
+            acc.inputs.record(
+                Input::SubRole { sub: s, sup: o },
+                Source::Anchor(acc.source),
+            )?;
+        }
     } else if p == v.property_disjoint_with {
-        acc.disjoint_roles.insert((s, o));
-        acc.disjoint_roles.insert((o, s));
+        for (left, right) in [(s, o), (o, s)] {
+            if acc.disjoint_roles.insert((left, right)) {
+                acc.inputs
+                    .record(Input::DisjointRole(left, right), Source::Anchor(acc.source))?;
+            }
+        }
     } else if p == v.has_key {
         let class = ce.expr(s)?;
         let cid = table.intern(class);
-        acc.keys.push((cid, ce.node_list(o)?));
+        let properties = ce.node_list(o)?;
+        acc.inputs
+            .record(Input::Key(acc.keys.len()), Source::Anchor(acc.source))?;
+        acc.keys.push((cid, properties));
     } else if p == v.same_as {
+        acc.inputs.record(
+            Input::Equality(acc.same_as.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.same_as.push((s, o));
         acc.name(interner, s);
         acc.name(interner, o);
     } else if p == v.different_from {
+        acc.inputs.record(
+            Input::Distinct(acc.different_from.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.different_from.push((s, o));
         acc.name(interner, s);
         acc.name(interner, o);
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
-        role_or_boundary(acc, interner, v, s, p, o);
+        role_or_boundary(acc, interner, v, s, p, o)?;
     }
     Ok(())
 }
@@ -1808,17 +1861,28 @@ fn disjoint_union(
 ///   own scaffolding — an `owl:withRestrictions` list cell — in the ABox as an individual;
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
-fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
+fn role_or_boundary(
+    acc: &mut Accums,
+    interner: &Interner,
+    v: &Vocab,
+    s: u32,
+    p: u32,
+    o: u32,
+) -> Result<(), EntailError> {
     if bottom_role_index(interner, p).is_some()
         || matches!(interner.value(p), TermValue::Iri(iri) if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
     {
+        acc.inputs.record(
+            Input::Role(acc.abox_roles.len()),
+            Source::Anchor(acc.source),
+        )?;
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);
-        return;
+        return Ok(());
     }
     if v.facets.iter().any(|&(facet, _)| facet == p) {
-        return;
+        return Ok(());
     }
     let iri = match interner.value(p) {
         TermValue::Iri(iri) => iri.clone(),
@@ -1826,7 +1890,7 @@ fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p:
         // but reading it as user vocabulary would be the wrong answer if it ever did.
         _ => {
             acc.boundaries.insert(Construct::UnrecognizedTerm);
-            return;
+            return Ok(());
         }
     };
     match support_of(&iri) {
@@ -1835,11 +1899,16 @@ fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p:
             acc.boundaries.insert(construct);
         }
         None => {
+            acc.inputs.record(
+                Input::Role(acc.abox_roles.len()),
+                Source::Anchor(acc.source),
+            )?;
             acc.abox_roles.push((s, p, o));
             acc.name(interner, s);
             acc.name(interner, o);
         }
     }
+    Ok(())
 }
 
 /// Handle `s rdf:type o`.
@@ -1875,15 +1944,24 @@ fn type_assertion(
     }
     if o == v.symmetric {
         // r ≡ r⁻: the role is its own inverse, so the role closure reaches both directions.
-        acc.inverses.entry(s).or_default().insert(s);
+        if acc.inverses.entry(s).or_default().insert(s) {
+            acc.inputs
+                .record(Input::Inverse(s, s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.transitive {
-        acc.transitive.insert(s);
+        if acc.transitive.insert(s) {
+            acc.inputs
+                .record(Input::Transitive(s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.asymmetric {
-        acc.asymmetric.insert(s);
+        if acc.asymmetric.insert(s) {
+            acc.inputs
+                .record(Input::Asymmetric(s), Source::Anchor(acc.source))?;
+        }
         return Ok(());
     }
     if o == v.reflexive {
@@ -1932,6 +2010,10 @@ fn type_assertion(
     // An instance-typing assertion `s : C` for a (possibly anonymous) class C.
     let c = ce.expr(o)?;
     let cid = table.intern(c);
+    acc.inputs.record(
+        Input::Type(acc.abox_types.len()),
+        Source::Anchor(acc.source),
+    )?;
     acc.abox_types.push((s, cid));
     acc.individuals.insert(s);
     Ok(())

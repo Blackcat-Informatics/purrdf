@@ -57,7 +57,7 @@ fn transitive_cache_composes_appended_edges_with_owner_and_destination_paths() {
         g.select_reads(None);
         assert!(g.storage_refusal().is_none());
         let journal = g.finish_changes().unwrap();
-        let slice = journal.normalized_slice().unwrap();
+        let slice = journal.normalized_slice(&kb).unwrap();
         assert_eq!(
             steps(&slice).map(|step| step.edge).collect::<Vec<_>>(),
             [0, 1, 4, 2]
@@ -124,7 +124,7 @@ fn transitive_cache_keeps_hierarchy_inverse_paths_and_rebuilds_after_equality() 
         g.select_reads(Some(ReadOwner::Clash { clause: 2 }));
         assert!(g.is_neighbour(&state, from, role, to));
         g.select_reads(None);
-        let slice = g.finish_changes().unwrap().normalized_slice().unwrap();
+        let slice = g.finish_changes().unwrap().normalized_slice(&kb).unwrap();
         assert!(slice.owners.contains(&ReadOwner::Application {
             index: 0,
             clause: 1
@@ -167,7 +167,7 @@ fn transitive_cache_preserves_original_refusal_in_capture_and_cached_publication
         assert!(!g.is_neighbour(&state, root, Role::Named(R), state.root_of[&(IND + 2)]));
         assert_eq!(g.storage_refusal(), Some(StorageError::AllocationFailed));
         assert!(matches!(
-            g.finish_changes().unwrap().normalized_slice(),
+            g.finish_changes().unwrap().normalized_slice(&kb),
             Err(crate::owl_dl::graph::changes::slice::Error::MissingClash)
         ));
     }
@@ -209,7 +209,7 @@ fn transitive_cache_slice_preserves_shared_join_graph() {
             },
         })
         .unwrap();
-    let slice = journal.normalized_slice().unwrap();
+    let slice = journal.normalized_slice(&kb).unwrap();
     assert_eq!(
         steps(&slice).count(),
         2,

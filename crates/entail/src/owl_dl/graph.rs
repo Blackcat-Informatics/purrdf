@@ -41,6 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, TransitivePatterns};
 use crate::owl_dl::concept::{Decomp, Role};
+use crate::owl_dl::input_source::Input;
 
 pub(super) mod changes;
 use changes::{
@@ -3022,7 +3023,10 @@ impl<'a> Graph<'a> {
                     from: x,
                     to: t,
                     role,
-                    witness: RoleWitness::Edge(edge),
+                    witness: RoleWitness::Edge {
+                        index: edge,
+                        letter: Role::Named(prop),
+                    },
                 });
                 return true;
             }
@@ -3031,7 +3035,10 @@ impl<'a> Graph<'a> {
                     from: x,
                     to: f,
                     role,
-                    witness: RoleWitness::Edge(edge),
+                    witness: RoleWitness::Edge {
+                        index: edge,
+                        letter: Role::Inv(prop),
+                    },
                 });
                 return true;
             }
@@ -3041,7 +3048,7 @@ impl<'a> Graph<'a> {
             let Some(index) = self.patterns.index((prop, dir)) else {
                 continue;
             };
-            if self.work.exhausted() {
+            if self.work.exhausted() || self.changes_stopped() {
                 return false;
             }
             // A closure this state has read before is read off its cache, for the length of
@@ -3326,7 +3333,7 @@ impl<'a> Graph<'a> {
         // bulk enumeration here is, rather than running the whole walk before the meter is
         // consulted.
         while let Some((q, dir)) = stack.pop() {
-            if self.work.exhausted() {
+            if self.work.exhausted() || self.changes_stopped() {
                 // Exhausted mid-walk: the closure this stack was building is incomplete, so it
                 // must never be memoized — a cached partial closure would silently answer every
                 // later call for this role, in this run or (were the cap raised) a later one,
@@ -3339,11 +3346,31 @@ impl<'a> Graph<'a> {
             }
             if let Some(subs) = self.kb.role_sub.get(&q) {
                 for &s in subs {
+                    if self.observing_changes() {
+                        self.publish_observation(|journal| {
+                            journal.role_rule(
+                                role,
+                                pattern_role(q, dir),
+                                pattern_role(s, dir),
+                                Input::SubRole { sub: s, sup: q },
+                            )
+                        });
+                    }
                     stack.push((s, dir));
                 }
             }
             if let Some(invs) = self.kb.inverses.get(&q) {
                 for &s in invs {
+                    if self.observing_changes() {
+                        self.publish_observation(|journal| {
+                            journal.role_rule(
+                                role,
+                                pattern_role(q, dir),
+                                pattern_role(s, !dir),
+                                Input::Inverse(q, s),
+                            )
+                        });
+                    }
                     stack.push((s, !dir));
                 }
             }

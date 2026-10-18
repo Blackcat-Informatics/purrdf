@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Proof-local dependency construction over one native replay's ordered observations.
-//! This private qualification seam does not resolve original RDF/schema licenses.
+//! Selected input anchors bind to their original native owner; complete syntax,
+//! schema/effect support and the public causal operation remain unfinished.
 
 use super::reach;
 use super::{
     Cause, Event, Journal, Mutation, Origin, PathKind, PathStep, ReadFact, ReadOwner, RoleWitness,
 };
 use crate::owl_dl::concept::Role;
+use crate::owl_dl::{
+    AxiomSource, Kb,
+    input_source::{Input, Source},
+};
 use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 use std::ops::Range;
 
@@ -48,6 +53,7 @@ struct Dependency {
     paths: Range<usize>,
     transitive: Range<usize>,
     transitive_nodes: Range<usize>,
+    rules: Range<usize>,
     incomplete: bool,
 }
 
@@ -59,6 +65,7 @@ pub(crate) enum Error {
     MissingPath,
     MissingEffect,
     MissingClash,
+    MissingInput(Input),
 }
 
 impl From<StorageError> for Error {
@@ -67,7 +74,7 @@ impl From<StorageError> for Error {
     }
 }
 
-/// Native ordinals only. These are not yet source-bound RDF premises.
+/// Checked native dependencies, with separately bound original input anchors.
 #[derive(Debug)]
 pub(crate) struct Slice {
     pub(crate) causes: Vec<Cause>,
@@ -75,6 +82,48 @@ pub(crate) struct Slice {
     pub(crate) paths: Vec<PathStep>,
     pub(crate) transitive: Vec<TransitiveRead>,
     pub(crate) transitive_nodes: Vec<TransitiveNode>,
+    pub(crate) rules: Vec<Input>,
+}
+
+/// One selected assertion or role-rule input and its original native source owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SelectedInput {
+    pub(crate) cause: Option<Cause>,
+    pub(crate) input: Input,
+    pub(crate) source: Source,
+}
+
+impl Slice {
+    /// Bind selected assertions and native role-rule predecessors. Expression,
+    /// query and effect licenses remain separate graph obligations.
+    pub(crate) fn inputs<'a>(
+        &'a self,
+        kb: &'a Kb,
+    ) -> impl Iterator<Item = Result<SelectedInput, Error>> + 'a {
+        let facts = self.causes.iter().filter_map(|&cause| {
+            let input = match cause.origin {
+                Origin::PreparedType => Input::Type(cause.index),
+                Origin::PreparedRole => Input::Role(cause.index),
+                Origin::PreparedEquality => Input::Equality(cause.index),
+                Origin::PreparedDistinct => Input::Distinct(cause.index),
+                _ => return None,
+            };
+            Some((Some(cause), input))
+        });
+        facts
+            .chain(self.rules.iter().map(|&input| (None, input)))
+            .map(|(cause, input)| match kb.inputs.get(input) {
+                None | Some(Source::Anchor(AxiomSource::Unrecorded)) => {
+                    Err(Error::MissingInput(input))
+                }
+                Some(Source::KeyInference { .. }) => Err(Error::MissingEffect),
+                Some(source) => Ok(SelectedInput {
+                    cause,
+                    input,
+                    source,
+                }),
+            })
+    }
 }
 
 #[derive(Default)]
@@ -88,9 +137,27 @@ struct Builder {
     paths: Vec<PathStep>,
     transitive: Vec<TransitiveRead>,
     transitive_nodes: Vec<TransitiveNode>,
+    rules: Vec<Input>,
 }
 
 impl Builder {
+    /// Follow the native hierarchy walk's retained predecessor, not another closure.
+    fn role_rules(
+        &mut self,
+        requested: Role,
+        mut actual: Role,
+        parents: &OrderedTable<(Role, Role), (Role, Input)>,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<(), Error> {
+        while actual != requested {
+            let &(parent, input) = parents
+                .get(&(requested, actual))
+                .ok_or(Error::MissingPath)?;
+            memory.push(&mut self.rules, input)?;
+            actual = parent;
+        }
+        Ok(())
+    }
     fn require(&self, fact: Fact) -> Result<usize, Error> {
         self.facts.get(&fact).copied().ok_or(Error::MissingFact)
     }
@@ -139,6 +206,7 @@ impl Builder {
         fact: ReadFact,
         paths: &[PathStep],
         reach: &[reach::Path],
+        rules: &OrderedTable<(Role, Role), (Role, Input)>,
         memory: &mut Memory<'_, Resident>,
     ) -> Result<(), Error> {
         match fact {
@@ -152,8 +220,11 @@ impl Builder {
                 from,
                 to,
                 role,
-                witness: RoleWitness::Edge(index),
-            } => self.edge(index, role, from, to, memory),
+                witness: RoleWitness::Edge { index, letter },
+            } => {
+                self.edge(index, letter, from, to, memory)?;
+                self.role_rules(role, letter, rules, memory)
+            }
             ReadFact::Role {
                 witness: RoleWitness::Language { start, end },
                 ..
@@ -178,6 +249,9 @@ impl Builder {
             } => {
                 let mut pending = Vec::new();
                 let mut visited = OrderedTable::default();
+                self.role_rules(role, via, rules, memory)?;
+                let (Role::Named(property) | Role::Inv(property)) = via;
+                memory.push(&mut self.rules, Input::Transitive(property))?;
                 memory.push(
                     &mut self.transitive,
                     TransitiveRead {
@@ -205,6 +279,7 @@ impl Builder {
                     match node {
                         reach::Path::Step(step) => {
                             self.edge(step.edge, step.letter, step.from, step.to, memory)?;
+                            self.role_rules(via, step.letter, rules, memory)?;
                         }
                         reach::Path::Join { first, second } => {
                             memory.push(&mut pending, second)?;
@@ -220,7 +295,12 @@ impl Builder {
         }
     }
 
-    fn event(&mut self, event: Event, memory: &mut Memory<'_, Resident>) -> Result<(), Error> {
+    fn event(
+        &mut self,
+        event: Event,
+        kb: &Kb,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<(), Error> {
         let start = self.parents.len();
         let cause = event.cause;
         if cause.origin == Origin::Application {
@@ -268,7 +348,11 @@ impl Builder {
                 self.parent(Fact::Node(keep), memory)?;
                 self.parent(Fact::Node(discard), memory)?;
                 self.aliases.insert(discard, (keep, id), memory)?;
-                incomplete = cause.origin == Origin::PreparedEquality;
+                incomplete = cause.origin == Origin::PreparedEquality
+                    && !matches!(
+                        kb.inputs.get(Input::Equality(cause.index)),
+                        Some(Source::Anchor(AxiomSource::Triple(..)))
+                    );
             }
             Mutation::LabelTransfer {
                 keep,
@@ -348,6 +432,7 @@ impl Builder {
                 paths: 0..0,
                 transitive: 0..0,
                 transitive_nodes: 0..0,
+                rules: 0..0,
                 incomplete,
             },
         )?;
@@ -381,7 +466,7 @@ const fn distinct(left: usize, right: usize) -> Fact {
 impl Journal {
     /// Consume observations once in replay order, then walk immutable parents.
     /// Unresolved role/effect support is rejected if selected by the terminal slice.
-    pub(crate) fn normalized_slice(&self) -> Result<Slice, Error> {
+    pub(crate) fn normalized_slice(&self, kb: &Kb) -> Result<Slice, Error> {
         let mut storage = Resident;
         let mut memory = Memory::new(&mut storage);
         let mut graph = Builder::default();
@@ -391,19 +476,26 @@ impl Journal {
         while read < self.reads.len() {
             let selected = self.reads[read];
             while event < selected.checkpoint {
-                graph.event(self.events[event], &mut memory)?;
+                graph.event(self.events[event], kb, &mut memory)?;
                 event += 1;
             }
             let start = graph.parents.len();
             let path_start = graph.paths.len();
             let transitive_start = graph.transitive.len();
             let transitive_nodes_start = graph.transitive_nodes.len();
+            let rules_start = graph.rules.len();
             let mut incomplete = false;
             while let Some(next) = self.reads.get(read)
                 && next.owner == selected.owner
                 && next.checkpoint == selected.checkpoint
             {
-                match graph.read(next.fact, &self.paths, &self.reach.paths, &mut memory) {
+                match graph.read(
+                    next.fact,
+                    &self.paths,
+                    &self.reach.paths,
+                    &self.role_rules.0,
+                    &mut memory,
+                ) {
                     Ok(()) => {}
                     Err(Error::MissingPath) => incomplete = true,
                     Err(error) => return Err(error),
@@ -420,6 +512,7 @@ impl Journal {
                     paths: path_start..graph.paths.len(),
                     transitive: transitive_start..graph.transitive.len(),
                     transitive_nodes: transitive_nodes_start..graph.transitive_nodes.len(),
+                    rules: rules_start..graph.rules.len(),
                     incomplete,
                 },
             )?;
@@ -441,6 +534,7 @@ impl Journal {
             paths: Vec::new(),
             transitive: Vec::new(),
             transitive_nodes: Vec::new(),
+            rules: Vec::new(),
         };
         while let Some(id) = pending.pop() {
             if visited[id] {
@@ -474,6 +568,10 @@ impl Journal {
                 graph.transitive_nodes[node.transitive_nodes.clone()]
                     .iter()
                     .copied(),
+            )?;
+            memory.extend(
+                &mut result.rules,
+                graph.rules[node.rules.clone()].iter().copied(),
             )?;
             for &parent in &graph.parents[node.parents.clone()] {
                 memory.push(&mut pending, parent)?;

@@ -42,6 +42,7 @@ use crate::EntailError;
 use crate::interner::Interner;
 
 mod axiom_source;
+pub(crate) mod input_source;
 use crate::owl_dl::absorb::{Encoding, GuardedClause};
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::concept::ConceptTable;
@@ -108,6 +109,8 @@ pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept
 /// the honest shape rather than a state machine in disguise.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
+    /// Source anchors and explicit native derivation owners for prepared inputs.
+    pub(crate) inputs: input_source::Inputs,
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
     /// Term-id boundary before any query/refutation symbol is minted.
@@ -298,6 +301,7 @@ impl Kb {
         let top = table.top();
         let bottom = table.bottom();
         Self {
+            inputs: input_source::Inputs::default(),
             interner: Interner::default(),
             source_terms: 0,
             meta_sources: Vec::new(),
@@ -424,8 +428,8 @@ impl Kb {
         }
         self.finalize()?;
         let named: Vec<u32> = self.individuals.iter().copied().collect();
-        let mut forced: Vec<(u32, u32)> = Vec::new();
-        for (class, properties) in &self.keys {
+        let mut forced: Vec<(usize, u32, u32)> = Vec::new();
+        for (key, (class, properties)) in self.keys.iter().enumerate() {
             // The individuals this key ranges over, in ascending id order.
             let mut members: Vec<u32> = Vec::new();
             for &individual in &named {
@@ -439,12 +443,22 @@ impl Kb {
                         .iter()
                         .all(|&property| self.agrees_on(left, right, property))
                     {
-                        forced.push((left, right));
+                        forced.push((key, left, right));
                     }
                 }
             }
         }
-        self.same_as.extend(forced);
+        let stop = self.stop.as_deref();
+        self.inputs
+            .record_key_equalities(self.same_as.len(), &forced, || {
+                if stop.is_some_and(StopSignal::stopped) {
+                    Err(EntailError::Stopped)
+                } else {
+                    Ok(())
+                }
+            })?;
+        self.same_as
+            .extend(forced.into_iter().map(|(_, left, right)| (left, right)));
         self.keys_applied = true;
         Ok(())
     }

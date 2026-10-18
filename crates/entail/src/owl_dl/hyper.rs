@@ -3397,7 +3397,7 @@ mod tests {
             });
             driver.g.select_reads(None);
             let journal = driver.g.finish_changes().unwrap();
-            let slice = journal.normalized_slice().unwrap();
+            let slice = journal.normalized_slice(&kb).unwrap();
             assert!(slice.owners.contains(&ReadOwner::Application {
                 index: 1,
                 clause: 1
@@ -3471,11 +3471,11 @@ mod tests {
         assert!(journal.reads().iter().any(|read| matches!(
             read.fact,
             ReadFact::Role {
-                witness: RoleWitness::Edge(1),
+                witness: RoleWitness::Edge { index: 1, .. },
                 ..
             }
         )));
-        let slice = journal.normalized_slice().unwrap();
+        let slice = journal.normalized_slice(&kb).unwrap();
         assert!(
             slice
                 .causes
@@ -3564,7 +3564,7 @@ mod tests {
             assert!(answer);
             assert_eq!(answer, plain.0);
             assert!(plain.1.is_none());
-            let slice = journal.unwrap().normalized_slice().unwrap();
+            let slice = journal.unwrap().normalized_slice(&kb).unwrap();
             let machine = kb.role_program.as_ref().unwrap().machine(role).unwrap();
             assert_eq!(slice.paths.first().unwrap().to, (to, machine.accepting));
             assert_eq!(slice.paths.last().unwrap().from, (from, machine.initial));
@@ -3667,7 +3667,7 @@ mod tests {
             );
             assert_eq!(driver.g.changes_stopped(), !storage_refusal);
             assert!(matches!(
-                driver.g.finish_changes().unwrap().normalized_slice(),
+                driver.g.finish_changes().unwrap().normalized_slice(&kb),
                 Err(Error::MissingClash)
             ));
         }
@@ -3726,7 +3726,7 @@ mod tests {
             paths[0], paths[1],
             "warm lookup retains the same immutable witness"
         );
-        let slice = journal.normalized_slice().unwrap();
+        let slice = journal.normalized_slice(&kb).unwrap();
         assert_eq!(slice.transitive.len(), 1);
         assert_eq!(
             slice
@@ -3748,6 +3748,13 @@ mod tests {
         assert_eq!(
             (slice.transitive[0].from, slice.transitive[0].to),
             (state.root_of[&IND], state.root_of[&(IND + 2)])
+        );
+        assert!(
+            matches!(
+                slice.inputs(&kb).collect::<Result<Vec<_>, _>>(),
+                Err(crate::owl_dl::graph::changes::slice::Error::MissingInput(_))
+            ),
+            "synthetic native facts are not invented source assertions"
         );
     }
 
@@ -3786,7 +3793,7 @@ mod tests {
         assert!(driver.g.has_concept(&state, witness, filler));
         driver.g.select_reads(None);
         assert!(matches!(
-            driver.g.finish_changes().unwrap().normalized_slice(),
+            driver.g.finish_changes().unwrap().normalized_slice(&kb),
             Err(Error::MissingEffect)
         ));
     }
