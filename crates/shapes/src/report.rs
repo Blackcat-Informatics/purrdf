@@ -452,6 +452,7 @@ impl CompleteValidationError {
     pub(crate) fn execution(error: ShapesError) -> Self {
         match error {
             ShapesError::Invalid(message) => Self::Execution(message),
+            ShapesError::Processor(failure) => Self::Execution(failure.to_string()),
             error => Self::Shapes(error),
         }
     }
@@ -463,7 +464,11 @@ impl CompleteValidationError {
         match error.into_parts() {
             (
                 Some(cause),
-                None | Some(Self::Execution(_) | Self::Shapes(ShapesError::Invalid(_))),
+                None
+                | Some(
+                    Self::Execution(_)
+                    | Self::Shapes(ShapesError::Invalid(_) | ShapesError::Processor(_)),
+                ),
             ) => Self::XPath(Box::new(cause.into_public())),
             (_, Some(error)) => error,
             (None, None) => unreachable!("a refused run retains an actual error"),

@@ -1940,6 +1940,9 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
         purrdf_validate::ShapesError::Invalid(message) => {
             pyo3::exceptions::PyValueError::new_err(message)
         }
+        purrdf_validate::ShapesError::Processor(failure) => {
+            pyo3::exceptions::PyValueError::new_err(failure.to_string())
+        }
         purrdf_validate::ShapesError::ShaclJs(refusal) => {
             pyo3::exceptions::PyValueError::new_err(refusal.to_string())
         }

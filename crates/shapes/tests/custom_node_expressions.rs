@@ -34,10 +34,13 @@ use terms::ex_ns as ex_term;
 use purrdf_rdf::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{parse_shapes, validate_with};
-use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};
+use purrdf_shapes::expression::{
+    CustomFunction, RecursionGuard, eval_custom_function_call, eval_node_expr,
+};
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::rules::entail_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use purrdf_shapes::{FailureClass, ProcessorFailure};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 const PREFIXES: &str = r"
@@ -636,6 +639,230 @@ fn a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error() {
     assert!(
         one[0].as_ref().is_some_and(|v| v.contains("one")),
         "exactly one node is returned: {one:?}"
+    );
+}
+
+/// G-05: an evaluation failure INSIDE a function body is the call's SPARQL error, not a
+/// failure of the validation around it. §7.3: "Otherwise, or if the evaluation produces
+/// an evaluation failure, the result of the SPARQL function call is an error."
+///
+/// The body `sparql:abs(<select>)` over a select that returns two nodes is a
+/// list-argument cardinality failure ("argument 0 produced 2 nodes"). Called from
+/// `BIND`, the variable stays unbound, so `str(bound(?r))` is `"false"`, and the
+/// validation produces a report rather than an error.
+#[test]
+fn a_cardinality_failure_in_a_body_is_a_sparql_error_in_a_report() {
+    const FN: &str = r#"
+        ex:twoNodes a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ sparql:abs ( [ sh:select "SELECT ?v WHERE { ?x <http://example.org/ns#n> ?v }" ] ) ] .
+        ex:S a sh:NodeShape ;
+          sh:targetNode ex:alice ;
+          sh:sparql [
+            sh:message "unbound" ;
+            sh:select """
+              SELECT $this ?value WHERE {
+                BIND (<http://example.org/ns#twoNodes>() AS ?r)
+                BIND (str(bound(?r)) AS ?value)
+              }
+            """ ;
+          ] .
+        "#;
+    let data = "ex:a ex:n 1 . ex:b ex:n 2 . ex:alice ex:n 3 .";
+    let report =
+        validate(data, FN).expect("an evaluation failure in the body does not fail validation");
+    let values: Vec<String> = report
+        .results
+        .iter()
+        .filter_map(|r| r.value.as_ref().map(ToString::to_string))
+        .collect();
+    assert_eq!(
+        values,
+        vec!["\"false\"".to_owned()],
+        "the call is unbound: {:?}",
+        report.results
+    );
+    // Neighbour: the same function over ONE node returns its value, so the unbound
+    // result above is the body's failure, not the harness.
+    let one = sparql_column(
+        "ex:a ex:n -1 .",
+        r#"ex:oneNode a sh:ListParameterExpressionFunction ;
+             sh:bodyExpression [ sparql:abs ( [ sh:select "SELECT ?v WHERE { ?x <http://example.org/ns#n> ?v }" ] ) ] ."#,
+        "SELECT ?v WHERE { BIND (ex:oneNode() AS ?v) }",
+    );
+    assert!(one[0].as_ref().is_some_and(|v| v.contains('1')), "{one:?}");
+}
+
+/// A second kind of evaluation failure: a shape argument that names no shape of the
+/// shapes graph. Unbound for the call; the neighbouring call naming a real shape returns
+/// its verdict. The declared built-in `shnex:conformsToShape` called directly from SPARQL
+/// follows the same rule.
+#[test]
+fn an_unresolvable_shape_in_a_body_is_a_sparql_error() {
+    let shapes = format!(
+        "ex:conforms a sh:ListParameterExpressionFunction ;
+           sh:bodyExpression [ shnex:conformsToShape ( [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] ;
+           sh:parameter [ sh:path shnex:arg0 ], [ sh:path shnex:arg1 ] .
+         shnex:conformsToShape a sh:ListParameterExpressionFunction .
+         {NAMED_SHAPE}"
+    );
+    let column = |call: &str| {
+        sparql_column(
+            "ex:a ex:name \"a\" .",
+            &shapes,
+            &format!("SELECT ?v WHERE {{ BIND ({call} AS ?v) }}"),
+        )
+    };
+    assert_eq!(
+        column("ex:conforms(ex:a, ex:Missing)"),
+        vec![None],
+        "custom body"
+    );
+    assert_eq!(
+        column("<http://www.w3.org/ns/shacl-node-expr#conformsToShape>(ex:a, ex:Missing)"),
+        vec![None],
+        "built-in"
+    );
+    for call in [
+        "ex:conforms(ex:a, ex:Named)",
+        "<http://www.w3.org/ns/shacl-node-expr#conformsToShape>(ex:a, ex:Named)",
+    ] {
+        let ok = column(call);
+        assert!(
+            ok[0].as_ref().is_some_and(|v| v.contains("true")),
+            "{call}: {ok:?}"
+        );
+    }
+}
+
+/// Neighbour of G-05 (F1): a failure of the PROCESSOR inside a body that is reached through
+/// SPARQL query text is not the call's SPARQL error; validation fails, and the typed cause
+/// is a `ShapesError::Processor`, not a message.
+///
+/// `ex:pingpong` calls itself through `BIND` in its own `sh:select` body, so each level is
+/// a SPARQL call; the evaluator's own function-depth bound (32) trips first and arrives as the
+/// propagated query-engine failure (`ProcessorFailure::Query`), which every enclosing level
+/// must pass on. Were that failure read as an evaluation failure, every level would turn it into an unbound value
+/// and the validation would complete with a report. Unlike a governor trip, nothing is
+/// latched on a shared state, so this test observes the classification alone.
+#[test]
+fn a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed_cause() {
+    let shapes = r#"
+        ex:pingpong a sh:ListParameterExpressionFunction ;
+          sh:bodyExpression [ sh:select """
+            SELECT ?result WHERE { BIND (ex:pingpong($this) AS ?result) }
+          """ ] ;
+          sh:parameter [ sh:path shnex:arg0 ] .
+        ex:S a sh:NodeShape ;
+          sh:targetNode ex:alice ;
+          sh:expression [ ex:pingpong ( sh:this ) ] .
+    "#;
+    let parsed = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
+    let error = validate_with(&store_of(INCOME_DATA), &parsed)
+        .expect_err("a processor failure inside the body must fail the validation");
+    assert_eq!(error.failure_class(), FailureClass::Processor, "{error}");
+    let Some(ProcessorFailure::Query { code, message }) = error.as_processor() else {
+        panic!("expected the query engine's propagated failure, got {error:?}");
+    };
+    assert_eq!(
+        code,
+        purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
+    );
+    assert!(
+        message.contains("recursion exceeded the depth bound of 32"),
+        "{message}"
+    );
+
+    // Neighbour: the same shape of call that terminates is answered, so the failure above
+    // is the depth bound and not the harness.
+    let ok = sparql_column(
+        INCOME_DATA,
+        INCOME_TOTAL_FN,
+        "SELECT ?v WHERE { BIND (ex:incomeTotal(ex:alice) AS ?v) }",
+    );
+    assert!(ok[0].as_ref().is_some_and(|v| v.contains("30")), "{ok:?}");
+}
+
+/// The direct form of the same fact: the body-level entry point returns the typed
+/// `CallDepth` cause when the guard has no depth left, and an internal defect (a function
+/// whose body was never installed) is `ProcessorFailure::Internal`. Both are of class
+/// `Processor`, so neither can be mapped to a SPARQL error.
+#[test]
+fn body_level_processor_failures_are_typed() {
+    use purrdf_shapes::expression::{ArgKey, CustomFnKind, NodeExpr};
+    let function = |body: Option<NodeExpr>| {
+        let installed = std::sync::OnceLock::new();
+        if let Some(body) = body {
+            installed.set(body).expect("a fresh lock is empty");
+        }
+        Arc::new(CustomFunction {
+            iri: purrdf_shapes::term::NamedNode::new_unchecked("http://example.org/ns#direct"),
+            kind: CustomFnKind::ListParameter,
+            params: vec![ArgKey::Index(0)],
+            required: 1,
+            body: installed,
+        })
+    };
+    let store = store_of(INCOME_DATA);
+    let args = [Some(ex_term("alice"))];
+
+    let with_body = function(Some(NodeExpr::Constant(ex_term("answer"))));
+    let mut exhausted = RecursionGuard::with_depth(purrdf_shapes::expression::MAX_RECURSION_DEPTH);
+    let error = eval_custom_function_call(&store, &with_body, &args, &mut exhausted)
+        .expect_err("no re-entry depth is left");
+    assert!(
+        matches!(
+            error.as_processor(),
+            Some(ProcessorFailure::CallDepth { limit: 64, .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.failure_class(), FailureClass::Processor);
+    // Neighbour: with depth to spare the same function answers.
+    let answer =
+        eval_custom_function_call(&store, &with_body, &args, &mut RecursionGuard::default())
+            .expect("the function evaluates");
+    assert_eq!(answer, Some(ex_term("answer")));
+
+    let uninstalled = function(None);
+    let error =
+        eval_custom_function_call(&store, &uninstalled, &args, &mut RecursionGuard::default())
+            .expect_err("a function without a body is an internal defect");
+    assert!(
+        matches!(
+            error.as_processor(),
+            Some(ProcessorFailure::Internal { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.failure_class(), FailureClass::Processor);
+}
+
+/// A declared built-in list function follows the same §7.3 rule as a custom one (the code
+/// path is shared): one output node is the value and no output node is the call's SPARQL
+/// error. (A built-in cannot produce MORE than one node: every `sparql:` form is a scalar
+/// and `shnex:conformsToShape` yields one boolean, so that arm of the rule is not
+/// constructible from a built-in; the custom-body case is tested above.)
+#[test]
+fn a_declared_builtin_follows_the_same_value_and_error_rule() {
+    let shapes = "sparql:abs a sh:ListParameterExpressionFunction .";
+    let column = |call: &str| {
+        sparql_column(
+            "ex:a ex:n 1 .",
+            shapes,
+            &format!(
+                "SELECT ?v WHERE {{ BIND (<http://www.w3.org/ns/sparql#abs>({call}) AS ?v) }}"
+            ),
+        )
+    };
+    let value = column("-3");
+    assert!(
+        value[0].as_ref().is_some_and(|v| v.contains('3')),
+        "{value:?}"
+    );
+    assert_eq!(
+        column("\"not a number\""),
+        vec![None],
+        "an error of the call"
     );
 }
 

@@ -334,12 +334,14 @@ pub(crate) fn capture(cause: Cause) {
     });
 }
 
-pub(crate) fn query_error(error: RdfDiagnostic) -> String {
+pub(crate) fn query_error(error: RdfDiagnostic) -> ShapesError {
     let message = format!("query evaluation error: {error}");
     if purrdf_sparql_eval::EvalError::diagnostic_requires_propagation(&error.code) {
+        let code = error.code.clone();
         capture(Cause::Query(error));
+        return crate::error::ProcessorFailure::Query { code, message }.into();
     }
-    message
+    ShapesError::Invalid(message)
 }
 
 /// An error travels with its root through the indexed chunk reduction.

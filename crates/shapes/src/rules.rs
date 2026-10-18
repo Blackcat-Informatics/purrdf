@@ -1896,17 +1896,20 @@ impl<'a> RulePlan<'a> {
         &'b self,
         shape: &'b Shape,
         position: usize,
-    ) -> Result<crate::plan::ShapePlan<'b>, String> {
+    ) -> Result<crate::plan::ShapePlan<'b>, crate::error::ShapesError> {
         self.lowered.untargeted_plan(shape, position, &self.binding)
     }
 
     /// The plan of the rule's own shape.
-    fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, String> {
+    fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
         self.plan_at(self.shape, 0)
     }
 
     /// The plan of the `position`-th `sh:condition` shape.
-    fn condition(&self, position: usize) -> Result<crate::plan::ShapePlan<'_>, String> {
+    fn condition(
+        &self,
+        position: usize,
+    ) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
         self.plan_at(&self.conditions[position], position + 1)
     }
 }

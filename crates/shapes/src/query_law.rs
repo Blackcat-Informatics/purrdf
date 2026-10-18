@@ -96,7 +96,11 @@ impl Runtime {
         self.profile
     }
 
-    pub(crate) fn admit(&self, invocation: Invocation<'_>, query: &Query) -> Result<(), String> {
+    pub(crate) fn admit(
+        &self,
+        invocation: Invocation<'_>,
+        query: &Query,
+    ) -> Result<(), crate::error::ShapesError> {
         crate::prebinding::admit(
             self.profile,
             invocation.purpose,
@@ -106,7 +110,7 @@ impl Runtime {
         .map_err(|refusal| {
             let message = refusal.to_string();
             self.record(refusal);
-            message
+            crate::error::ProcessorFailure::Admission { message }.into()
         })
     }
 

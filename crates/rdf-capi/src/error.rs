@@ -77,6 +77,9 @@ impl PurrdfError {
             purrdf_validate::ShapesError::Invalid(message) => {
                 Self::new(PurrdfStatus::ParseError, message)
             }
+            purrdf_validate::ShapesError::Processor(failure) => {
+                Self::new(PurrdfStatus::ParseError, failure.to_string())
+            }
             purrdf_validate::ShapesError::ShaclJs(refusal) => {
                 Self::new(PurrdfStatus::ParseError, refusal.to_string())
             }

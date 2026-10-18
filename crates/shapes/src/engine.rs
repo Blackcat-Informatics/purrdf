@@ -341,7 +341,7 @@ impl BoundShapes {
     }
 
     /// The plan for the `position`-th shape, with its prepared target index.
-    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, String> {
+    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, ShapesError> {
         let targets = self
             .targets
             .get(position)
@@ -977,7 +977,7 @@ fn instances_of_class(
     class_iri: &NamedNode,
     binding: &DatasetBinding,
     classes: &ClassCatalog,
-) -> Result<Vec<TermId>, String> {
+) -> Result<Vec<TermId>, ShapesError> {
     // A class the data graph never names has no instances — an ordinary empty
     // target, not a failure.
     let Some(class) = binding.class_id(classes, class_iri)? else {
@@ -3108,7 +3108,8 @@ impl PreparedValidator {
                     }
                     Some(path) => {
                         for id in
-                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)?
+                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)
+                                .map_err(|error| error.to_string())?
                         {
                             if seen.insert(id) {
                                 affected.push(FocusId::new(dataset, id));
@@ -5963,7 +5964,8 @@ mod tests {
                 classes,
                 &NamedNode::from("http://example.org/ns#NotInTheCatalog"),
             )
-            .expect_err("a class outside the catalog is a plan defect");
+            .expect_err("a class outside the catalog is a plan defect")
+            .to_string();
         assert!(
             error.contains("NotInTheCatalog") && error.contains("class-planning walk"),
             "the error must name the class and the walk that missed it, got: {error}"

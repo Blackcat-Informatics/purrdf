@@ -863,3 +863,47 @@ fn values_is_refused_only_when_it_mentions_a_pre_bound_variable_under_the_draft_
         }
     }
 }
+
+/// A dated-law admission refusal of a custom function's `sh:select` body, reached through a
+/// SPARQL call, fails the validation with the typed admission refusal: the call's SPARQL
+/// error is for evaluation failures only (SHACL 1.2 SPARQL Extensions, "Evaluation of
+/// Custom SPARQL Functions"), and a query the law never admitted is not evaluated at all.
+/// The neighbour body, a `VALUES` clause over a name nothing pre-binds, is admitted and
+/// returns its value.
+#[test]
+fn a_dated_admission_refusal_inside_a_function_body_still_fails_the_validation() {
+    let data = turtle::data(PREFIXES, r#"ex:n ex:p "x" ."#);
+    let shapes_with = |body_select: &str| {
+        format!(
+            r"ex:f a sh:ListParameterExpressionFunction ;
+                 sh:bodyExpression [ sh:select '''{body_select}''' ] .
+               ex:S a sh:NodeShape; sh:targetNode ex:n;
+                 sh:sparql [ sh:select '''SELECT $this ?value WHERE {{
+                   BIND (<http://example.org/f>() AS ?value) }}''' ] ."
+        )
+    };
+    let refused =
+        shapes_with("SELECT ?v WHERE { VALUES $this { <http://example.org/n> } ?v ?p ?o }");
+    let admitted = shapes_with("SELECT ?v WHERE { VALUES ?v { 7 } }");
+    for profile in [ShaclProfile::WD_20260918, ShaclProfile::ED_20261016] {
+        let options = ValidationOptions::default().with_profile(profile);
+        let run = |text: &str| {
+            PreparedShapes::new(parsed(text, &options).expect("the shapes graph loads"))
+                .bind_complete_shared_dataset(Arc::clone(&data))
+                .unwrap()
+                .validate()
+        };
+        match run(&refused).expect_err("the refused body must fail the validation") {
+            CompleteValidationError::Admission(refusal) => {
+                assert_eq!(refusal.reason(), AdmissionReason::Values, "{profile:?}");
+            }
+            error => panic!("{profile:?}: the typed admission refusal must survive: {error:?}"),
+        }
+        let report = run(&admitted).expect("the neighbour body is admitted");
+        assert_eq!(
+            report.results().len(),
+            1,
+            "{profile:?}: the admitted body returns 7"
+        );
+    }
+}

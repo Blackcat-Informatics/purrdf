@@ -15,6 +15,7 @@ use purrdf_sparql_eval::{
 };
 
 use crate::data::ShaclData;
+use crate::error::{FailureClass, ShapesError};
 use crate::expression::{
     CustomFunction, FnCall, NodeExpr, RecursionGuard, ShapeArg, SparqlCallForm,
     eval_custom_function_call, eval_node_expr, sparql_ns_lowering,
@@ -682,7 +683,10 @@ fn blank_node_argument_is_error() -> bool {
 ///    function based on a node expression is the IRI of the function itself."
 /// 3. Exactly one output node is returned; any other count is the call's SPARQL error
 ///    (`Ok(None)`), because the specification returns a node only in the one-member
-///    case and picking one would be inventing an answer.
+///    case and picking one would be inventing an answer. So is any EVALUATION failure
+///    of the body ("or if the evaluation produces an evaluation failure, the result of
+///    the SPARQL function call is an error"); a failure of the processor still fails the
+///    query ([`sparql_call_result`]).
 ///
 /// The recursion guard is SEEDED from `call.depth`, so a cycle that passed through
 /// SPARQL to get here keeps counting rather than restarting.
@@ -720,9 +724,39 @@ pub(crate) fn invoke_expression_function(
     );
     let mut guard = RecursionGuard::with_depth(call.depth);
     let _depth = enter_call_depth_scope(call.depth);
-    let result = eval_custom_function_call(&store, func, &args, &mut guard)
-        .map_err(|e| EvalError::function(format!("custom SPARQL function: {e}")))?;
+    let result = sparql_call_result(
+        eval_custom_function_call(&store, func, &args, &mut guard),
+        "custom SPARQL function",
+    )?;
     Ok(result.as_ref().map(Term::to_term_value))
+}
+
+/// The SPARQL result of a custom function call whose body evaluation returned `outcome`
+/// — the ONE place that decides which body failures are the call's SPARQL error.
+///
+/// SHACL 1.2 SPARQL Extensions, "Evaluation of Custom SPARQL Functions": "if the
+/// evaluation produces an evaluation failure, the result of the SPARQL function call is
+/// an error". A SPARQL error is `Ok(None)`, the unbound result every other value-less
+/// call returns, so a `BIND` leaves its variable unbound and the query continues. The
+/// sentence is about EVALUATION failures only. A failure of the processor (a storage
+/// refusal, a governor trip, a stop signal, a recursion bound, a query-engine failure
+/// that must propagate) and a refusal of the shapes graph still fail the query, because
+/// no verdict can honestly be computed from a run that did not finish; the
+/// classification is [`ShapesError::failure_class`], an exhaustive match on the typed
+/// error, never on its message.
+fn sparql_call_result<T>(
+    outcome: Result<Option<T>, ShapesError>,
+    what: &str,
+) -> Result<Option<T>, EvalError> {
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(error) => match error.failure_class() {
+            FailureClass::Evaluation => Ok(None),
+            FailureClass::Processor | FailureClass::Refusal => {
+                Err(EvalError::function(format!("{what}: {error}")))
+            }
+        },
+    }
 }
 
 /// What a declared built-in LIST-parameter function calls, resolved ONCE when the
@@ -770,8 +804,10 @@ impl NativeListCallee {
 ///
 /// An unbound argument leaves the call with no value (SPARQL's own
 /// expression-error result), and the result follows the §7.3 rule a custom
-/// function's does: one output node is the value, none is no value, more than one
-/// is an error.
+/// function's does: one output node is the value; none, more than one, and any
+/// evaluation failure are the call's SPARQL error (`Ok(None)`, unbound). A failure of the
+/// processor or a refusal of the shapes graph still fails the query
+/// ([`sparql_call_result`]).
 pub(crate) fn invoke_native_list_function(
     iri: &str,
     callee: &NativeListCallee,
@@ -818,17 +854,16 @@ pub(crate) fn invoke_native_list_function(
     let mut guard = RecursionGuard::with_depth(call.depth);
     let _depth = enter_call_depth_scope(call.depth);
     let focus = Term::NamedNode(NamedNode::from(iri));
-    let out = eval_node_expr(&store, &focus, &expr, &mut guard)
-        .map_err(|e| EvalError::function(format!("built-in SPARQL function <{iri}>: {e}")))?;
-    match out.as_slice() {
-        [] => Ok(None),
-        [only] => Ok(Some(only.to_term_value())),
-        more => Err(EvalError::function(format!(
-            "built-in SPARQL function <{iri}> produced {} output nodes; SHACL 1.2 SPARQL \
-             Extensions §7.3 returns a value only when exactly one is produced",
-            more.len()
-        ))),
-    }
+    let out = sparql_call_result(
+        eval_node_expr(&store, &focus, &expr, &mut guard).map(Some),
+        &format!("built-in SPARQL function <{iri}>"),
+    )?;
+    // §7.3 returns a value only when exactly one output node is produced; any other
+    // count is the call's SPARQL error, as for a custom function.
+    Ok(match out.as_deref() {
+        Some([only]) => Some(only.to_term_value()),
+        _ => None,
+    })
 }
 
 /// Map a `sh:nodeKind` object IRI to the evaluator's [`EvalNodeKind`] for a
@@ -860,5 +895,62 @@ fn projected_variables(pattern: &purrdf_sparql_algebra::GraphPattern) -> Option<
             GraphPattern::ProjectStar { variables, .. } => return Some(variables.len()),
             _ => return None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{PrebindingViolation, ProcessorFailure};
+
+    /// SHACL 1.2 SPARQL Extensions §7.3: an evaluation failure is the call's SPARQL error
+    /// (`Ok(None)`); a failure of the processor and a refusal of the shapes graph still
+    /// fail the query. The classification is by the typed error, one case per class.
+    #[test]
+    fn only_an_evaluation_failure_becomes_the_calls_sparql_error() {
+        let call = |error: ShapesError| sparql_call_result::<u8>(Err(error), "call");
+        assert!(matches!(
+            call(ShapesError::Invalid("arity".to_owned())),
+            Ok(None)
+        ));
+        assert!(matches!(
+            sparql_call_result::<u8>(Ok(Some(1)), "call"),
+            Ok(Some(1))
+        ));
+        let processor = [
+            ProcessorFailure::CallDepth {
+                iri: "http://example.org/f".to_owned(),
+                limit: 64,
+            },
+            ProcessorFailure::ExpressionDepth {
+                depth: 257,
+                limit: 256,
+            },
+            ProcessorFailure::ReentryCycle {
+                shape: "s".to_owned(),
+                focus: "f".to_owned(),
+            },
+            ProcessorFailure::Stopped(purrdf_core::governor::StopCause::Cancelled),
+            ProcessorFailure::IncompleteRelation {
+                relations: vec!["r".to_owned()],
+            },
+            ProcessorFailure::Internal {
+                what: "internal validation-plan defect".to_owned(),
+            },
+            ProcessorFailure::Admission {
+                message: "query refused by the law".to_owned(),
+            },
+            ProcessorFailure::Query {
+                code: "native-sparql-function-operational".to_owned(),
+                message: "host".to_owned(),
+            },
+        ];
+        for failure in processor {
+            assert!(
+                call(ShapesError::Processor(failure.clone())).is_err(),
+                "{failure:?} fails the query"
+            );
+        }
+        assert!(call(ShapesError::Prebinding(PrebindingViolation::new("d", "m"))).is_err());
     }
 }

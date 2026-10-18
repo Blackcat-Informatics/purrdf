@@ -1078,7 +1078,7 @@ impl<'a> OneShotLowering<'a> {
     ///
     /// Returns an error when the lowering and the shape it lowered disagree,
     /// which is a defect in this crate rather than in any input.
-    fn plan(&self) -> Result<ShapePlan<'_>, String> {
+    fn plan(&self) -> Result<ShapePlan<'_>, crate::error::ShapesError> {
         self.lowered.untargeted_plan(self.shape, 0, &self.binding)
     }
 }
@@ -2365,7 +2365,7 @@ fn indexed_shape_by_id<'a>(
     resolved: &'a FastMap<Term, Shape>,
     ds: &impl ShaclRead,
     id: TermId,
-) -> Result<Option<ShapePlan<'a>>, String> {
+) -> Result<Option<ShapePlan<'a>>, crate::error::ShapesError> {
     if let Some(node) = plan.binding().indexed_node(index, id)? {
         return plan.indexed(index, node, resolved);
     }
@@ -3704,10 +3704,10 @@ fn eval_constraint<'a, S: ResultSink>(
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
             let resolved = shapes.get().ok_or_else(|| {
-                format!(
+                crate::error::ShapesError::internal(format!(
                     "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
                      shape index was never filled"
-                )
+                ))
             })?;
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
@@ -4540,7 +4540,7 @@ impl PairComparands {
         focus: &FocusNode,
         other: PairPath<'_>,
         binding: &DatasetBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::error::ShapesError> {
         match other {
             PairPath::Predicate(pred) => Ok(Self::collect_predicate(ds, focus, pred)),
             PairPath::Path(lowered) => {

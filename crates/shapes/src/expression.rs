@@ -744,15 +744,15 @@ impl CustomFunction {
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` when no body was ever installed — an internal
+    /// Returns [`crate::error::ProcessorFailure::Internal`] when no body was ever installed — an internal
     /// inconsistency, reported rather than silently evaluated as the empty list.
-    pub fn body(&self) -> Result<&NodeExpr, String> {
+    pub fn body(&self) -> Result<&NodeExpr, crate::error::ShapesError> {
         self.body.get().ok_or_else(|| {
-            format!(
+            crate::error::ShapesError::internal(format!(
                 "internal error: custom node-expression function <{}> has no installed \
                  sh:bodyExpression",
                 self.iri.as_str()
-            )
+            ))
         })
     }
 }
@@ -1210,16 +1210,16 @@ impl RecursionGuard {
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` naming [`MAX_NODE_EXPR_DEPTH`] once the tree nests
+    /// Returns [`crate::error::ProcessorFailure::ExpressionDepth`] naming [`MAX_NODE_EXPR_DEPTH`] once the tree nests
     /// past the ceiling — a hard, catchable refusal in place of the uncatchable
     /// process abort a native stack overflow would be.
-    fn enter_node_expr(&mut self) -> Result<(), String> {
+    fn enter_node_expr(&mut self) -> Result<(), crate::error::ShapesError> {
         if self.structural >= MAX_NODE_EXPR_DEPTH {
-            return Err(format!(
-                "node expression nesting depth exceeded ({} > {MAX_NODE_EXPR_DEPTH}): the \
-                 expression tree is nested past the structural limit",
-                self.structural.saturating_add(1)
-            ));
+            return Err(crate::error::ProcessorFailure::ExpressionDepth {
+                depth: self.structural.saturating_add(1),
+                limit: MAX_NODE_EXPR_DEPTH,
+            }
+            .into());
         }
         self.structural += 1;
         Ok(())
@@ -1245,16 +1245,16 @@ impl RecursionGuard {
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` naming [`MAX_RECURSION_DEPTH`] once the ceiling is
+    /// Returns [`crate::error::ProcessorFailure::CallDepth`] naming [`MAX_RECURSION_DEPTH`] once the ceiling is
     /// reached — a hard, catchable refusal in place of the uncatchable process abort
     /// a native stack overflow would be.
-    pub fn enter_call(&mut self, iri: &str) -> Result<(), String> {
+    pub fn enter_call(&mut self, iri: &str) -> Result<(), crate::error::ShapesError> {
         if self.depth >= MAX_RECURSION_DEPTH {
-            return Err(format!(
-                "custom node-expression function <{iri}> re-entry depth exceeded \
-                 ({MAX_RECURSION_DEPTH}): the call chain is recursive and has been refused rather \
-                 than allowed to exhaust the native stack"
-            ));
+            return Err(crate::error::ProcessorFailure::CallDepth {
+                iri: iri.to_owned(),
+                limit: MAX_RECURSION_DEPTH,
+            }
+            .into());
         }
         self.depth += 1;
         Ok(())
@@ -1269,14 +1269,16 @@ impl RecursionGuard {
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` if the pair is already in flight — a recursion
+    /// Returns [`crate::error::ProcessorFailure::ReentryCycle`] if the pair is already in flight — a recursion
     /// cycle through `sh:filterShape` / `sh:exists`.
-    pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), String> {
+    pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), crate::error::ShapesError> {
         let key = (shape_id.to_owned(), focus.to_owned());
         if self.stack.contains(&key) {
-            return Err(format!(
-                "recursive node expression detected: shape {shape_id} re-entered for focus {focus}"
-            ));
+            return Err(crate::error::ProcessorFailure::ReentryCycle {
+                shape: shape_id.to_owned(),
+                focus: focus.to_owned(),
+            }
+            .into());
         }
         self.stack.insert(key);
         Ok(())
@@ -1505,7 +1507,7 @@ pub(crate) fn eval_planned_shape_nodes<'a>(
     expr: &'a NodeExpr,
     lowered: &LoweredExpr,
     plan: ShapePlan<'_>,
-) -> Result<Option<ShapeNodes<'a>>, String> {
+) -> Result<Option<ShapeNodes<'a>>, crate::error::ShapesError> {
     Ok(match expr {
         NodeExpr::Constant(term) => {
             Some(ShapeNodes::Terms(Cow::Borrowed(std::slice::from_ref(term))))
@@ -2228,9 +2230,10 @@ fn eval_node_expr_at_depth(
                                 .into());
                             };
                             let resolved = shapes.get().ok_or_else(|| {
-                                "shnex:conformsToShape: the shapes graph's shape index was never \
-                                 filled"
-                                    .to_owned()
+                                crate::error::ShapesError::internal(
+                                    "shnex:conformsToShape: the shapes graph's shape index was \
+                                     never filled",
+                                )
                             })?;
                             let shape_plan = plan
                                 .indexed(lowered.index()?, shape_iri, resolved)?
@@ -2567,8 +2570,11 @@ fn eval_custom_call(
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` when the body was never installed, when the re-entry depth
-/// bound is reached, or when the body's evaluation fails.
+/// Returns a [`crate::error::ShapesError`]: a [`crate::error::ProcessorFailure`] when the
+/// body was never installed (`Internal`) or the re-entry depth bound is reached
+/// (`CallDepth`), and otherwise whatever the body's evaluation failed with. The caller
+/// classifies it with [`crate::error::ShapesError::failure_class`]; only an
+/// evaluation failure is the call's SPARQL error.
 pub fn eval_custom_function_call(
     store: &ShaclData,
     func: &Arc<CustomFunction>,
@@ -3644,7 +3650,14 @@ mod tests {
         let mut guard = RecursionGuard::default();
         guard.enter("shapeA", "focusX").expect("first enter ok");
         let err = guard.enter("shapeA", "focusX").unwrap_err();
-        assert!(err.contains("recursive"), "got: {err}");
+        assert_eq!(
+            err,
+            crate::error::ProcessorFailure::ReentryCycle {
+                shape: "shapeA".to_owned(),
+                focus: "focusX".to_owned(),
+            }
+            .into()
+        );
         guard.exit("shapeA", "focusX");
         guard
             .enter("shapeA", "focusX")

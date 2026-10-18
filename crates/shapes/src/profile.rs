@@ -377,7 +377,8 @@ impl Request {
                 Err(error) => Err(match error {
                     crate::report::CompleteValidationError::Execution(_)
                     | crate::report::CompleteValidationError::Shapes(
-                        crate::error::ShapesError::Invalid(_),
+                        crate::error::ShapesError::Invalid(_)
+                        | crate::error::ShapesError::Processor(_),
                     ) => failure.map_or(error, crate::report::ReportFailure::into_public),
                     error => error,
                 }),
