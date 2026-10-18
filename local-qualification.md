@@ -1,0 +1,5 @@
+The complete `make helpers-hygiene` target now passes. Strict affected all-target Clippy, six ownership controls, four independently prepared proof-context tests, all 114 retrieval tests, and the actual borrowed-context compile-fail test passed. Normal commit and push hooks passed.
+
+The constructor source audit found exactly one added module and no changed prior constructor sources or named capacity authorities. The new module contains inline owned/reference variants, immutable dereference and non-Clone ownership tests; it creates no term IDs or capacity indexes. Only the constructor-set references in the existing proof rows were renewed. Their sinks, authority lists and invariant reasons remain unchanged.
+
+Review must cover both actual caller migrations, non-Clone and zero-copy storage, lifetime/drop semantics, removal of both duplicates, and preservation of the capacity audit. The full diff and issue contract are ready for independent review. Hosted CI and CodeRabbit are still pending; local qualification does not claim either passed.

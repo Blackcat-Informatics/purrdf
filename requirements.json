@@ -1,0 +1,16 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 7,
+      "rules": [
+        "modal"
+      ],
+      "text": "Use one first-party generic ownership implementation in the existing common dependency home. Move both production callers onto it, remove both private duplicate enums/accessors, and preserve inline owning storage, zero-copy borrowing, immutable lifetime exclusion and ordinary move/drop behavior. The wrapper must impose no Clone or ToOwned requirement and no new allocation for borrowing. Do not change the census, add an exemption, box or clone the prepared knowledge base, add a shipping dependency, or introduce a semantic feature.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

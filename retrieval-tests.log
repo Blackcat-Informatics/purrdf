@@ -1,0 +1,132 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+   Compiling getrandom v0.3.4
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/sparql-algebra)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 2m 04s
+     Running unittests src/lib.rs (/opt/.cargo/87/dfc58de5f3400f/debug/build/purrdf-retrieval/b5d97b90cf740aa1/out/purrdf_retrieval-b5d97b90cf740aa1)
+
+running 114 tests
+test compile::tests::only_the_streaming_text_renders_a_depth ... ok
+test document::tests::a_non_finite_embedding_component_writes_null_which_does_not_read_back ... ok
+test document::tests::a_repeated_member_is_refused_where_a_single_one_reads ... ok
+test document::tests::a_unit_variant_reads_as_a_name_or_a_null_bodied_object ... ok
+test document::tests::an_iri_that_does_not_parse_keeps_its_own_refusal ... ok
+test document::tests::a_shape_refusal_names_the_pointer_of_the_offending_value ... ok
+test embedding::tests::a_lower_case_spelling_is_refused_but_the_upper_case_one_decodes ... ok
+test embedding::tests::every_component_round_trips_bit_for_bit ... ok
+test document::tests::every_request_term_writes_its_pinned_document_and_reads_it_back ... ok
+test embedding::tests::signed_zeroes_are_two_lexicals ... ok
+test embedding::tests::the_documented_example_is_the_documented_text ... ok
+test embedding::tests::text_that_is_not_this_form_is_refused_but_a_long_vector_is_not ... ok
+test execute::tests::a_blank_candidate_is_named_and_does_not_take_its_stratum_down ... ok
+test execute::tests::a_candidate_is_the_canonical_lexical_and_decodes_back_to_its_value ... ok
+test execute::tests::a_row_past_the_declaration_is_refused_and_an_honest_one_is_not ... ok
+test execute::tests::a_self_bounding_producer_at_its_declaration_reports_the_bound_that_stopped_it ... ok
+test execute::tests::a_single_block_declaration_entails_every_rows_block_and_nothing_else_does ... ok
+test execute::tests::a_unit_that_projects_no_candidate_column_is_refused ... ok
+test execute::tests::a_unit_with_no_block_column_carries_the_entailed_block ... ok
+test execute::tests::a_witness_naming_no_relation_is_refused_and_names_the_count ... ok
+test execute::tests::a_witness_naming_two_relations_is_refused_and_names_the_count ... ok
+test execute::tests::a_witness_with_one_relation_and_one_generation_is_that_units_attestation ... ok
+test execute::tests::an_empty_witness_refuses_only_when_the_unit_returned_rows ... ok
+test execute::tests::one_relation_attesting_two_generations_is_refused_and_names_the_count ... ok
+test execute::tests::an_unspellable_literal_is_refused_and_its_well_formed_neighbours_are_named ... ok
+test execute::tests::one_relation_attesting_two_incompleteness_reasons_is_refused_and_names_the_count ... ok
+test compile::tests::a_quoted_triple_argument_keeps_the_callers_equalities ... ok
+test execute::tests::seven_invocations_of_one_relation_are_accepted ... ok
+test execute::tests::the_candidate_column_is_read_by_name_not_by_first_binding ... ok
+test execute::tests::refused_candidate_lookup_cannot_become_an_owned_value_fallback ... ok
+test execute::tests::the_block_column_is_read_as_an_iri_or_the_unit_is_refused ... ok
+test execute::tests::the_probe_row_changes_the_ending_and_nothing_else ... ok
+test execute::tests::the_evidence_digest_does_not_move_with_the_invocation_count ... ok
+test fusion_stream::tests::native_stream_sets_match_independent_membership_and_word_order ... ok
+test compile::tests::a_call_whose_input_nothing_binds_is_refused_by_name_where_its_relation_needs_it ... ok
+test compile::tests::a_supplied_call_derives_the_rendered_lookup_and_frees_its_depth ... ok
+test fusion_stream::tests::original_native_refusal_stops_repeated_pulls_and_successful_trailers ... ok
+test iri::tests::display_is_exactly_the_underlying_text ... ok
+test iri::tests::display_neither_quotes_nor_escapes ... ok
+test matching::tests::a_half_open_interval_refuses_the_endpoint_it_does_not_carry_but_places_the_one_it_does ... ok
+test matching::tests::a_numeric_range_renders_its_endpoints_in_exact_base_ten ... ok
+test matching::tests::a_refusal_names_the_lowest_refusing_term_in_either_order ... ok
+test matching::tests::a_depth_argument_is_refused_when_undeclared_and_placed_when_declared ... ok
+test matching::tests::a_temporal_interval_renders_both_endpoints_under_the_declared_datatype ... ok
+test matching::tests::a_blank_seed_is_refused_but_an_iri_seed_places ... ok
+test compile::tests::a_driven_call_keeps_the_pattern_binding_its_seed ... ok
+test matching::tests::an_interval_refuses_a_value_placement_and_says_where_its_endpoints_go ... ok
+test matching::tests::a_quoted_triple_seed_is_a_triple_and_not_an_iri ... ok
+test matching::tests::an_untagged_needle_with_a_language_placement_is_refused_but_a_tagged_one_places ... ok
+test matching::tests::an_untyped_embedding_is_refused_but_a_typed_one_places_exactly ... ok
+test matching::tests::an_untyped_endpoint_is_refused_but_a_typed_one_places ... ok
+test matching::tests::an_iri_seed_is_still_an_iri_and_not_a_triple ... ok
+test matching::tests::a_different_value_at_one_position_conflicts_but_the_same_value_does_not ... ok
+test matching::tests::seed_classification_agrees_with_the_decoder ... ok
+test matching::tests::lexical_value_carries_the_tag_only_when_no_language_placement_does ... ok
+test reciprocal_rank::tests::a_depth_of_one_costs_the_lightest_weight_and_a_depth_of_none_is_refused ... ok
+test matching::tests::a_seed_places ... ok
+test matching::tests::an_interval_is_reached_by_a_literal_pattern_and_by_its_own_predicate ... ok
+test reciprocal_rank::tests::a_negative_weight_truncates_toward_zero ... ok
+test matching::tests::bound_indices_are_consumed_in_ascending_order ... ok
+test matching::tests::field_scope_requires_transport_and_keeps_the_original_tag ... ok
+test reciprocal_rank::tests::a_rank_of_zero_is_refused_rather_than_anchoring_a_class_of_one ... ok
+test reciprocal_rank::tests::a_tolerance_of_zero_is_refused_rather_than_read_as_the_narrowest_real_one ... ok
+test reciprocal_rank::tests::a_weight_above_one_buys_depth_under_the_weighted_rule ... ok
+test reciprocal_rank::tests::a_weight_near_the_raw_unit_truncates_a_measurable_share_of_each_contribution ... ok
+test reciprocal_rank::tests::a_weight_below_one_lowers_the_bound ... ok
+test reciprocal_rank::tests::a_weight_that_truncates_to_nothing_has_a_bound_of_one ... ok
+test reciprocal_rank::tests::a_weight_above_one_buys_no_depth_under_the_truncated_rule ... ok
+test reciprocal_rank::tests::a_flat_shortfall_spans_only_separated_ranks ... ok
+test reciprocal_rank::tests::an_unusable_constant_is_refused_while_a_zero_weight_measures_the_single_rank_it_orders ... ok
+test reciprocal_rank::tests::both_rules_refuse_a_zero_constant_and_a_zero_rank ... ok
+test reciprocal_rank::tests::an_unusable_smoothing_constant_is_propagated_rather_than_rendered_as_a_measurement ... ok
+test reciprocal_rank::tests::adjacent_ranks_stay_distinct_to_the_bound_and_collide_beyond_it ... ok
+test reciprocal_rank::tests::ceil_div_rounds_up_at_every_boundary ... ok
+test reciprocal_rank::tests::the_dispatcher_selects_the_named_rule ... ok
+test reciprocal_rank::tests::a_zero_smoothing_constant_is_refused_as_a_malformed_law_on_every_path ... ok
+test reciprocal_rank::tests::the_separation_walk_propagates_an_unusable_operand_rather_than_naming_the_rank_it_failed_at ... ok
+test reciprocal_rank::tests::the_shortfall_is_exactly_what_the_contribution_loses ... ok
+test reciprocal_rank::tests::the_smoothing_constant_shifts_the_bound_one_for_one ... ok
+test reciprocal_rank::tests::the_weighted_guarantee_is_the_integer_test_it_claims_to_be ... ok
+test reciprocal_rank::tests::the_weighted_rule_is_the_truncated_rule_computed_more_accurately ... ok
+test render::tests::a_base_direction_rides_after_the_tag ... ok
+test render::tests::a_signed_uchar_is_refused ... ok
+test render::tests::an_iri_escapes_only_what_the_production_forbids ... ok
+test render::tests::a_blank_node_has_no_constant_form_but_an_iri_does ... ok
+test render::tests::control_characters_and_quotes_are_escaped ... ok
+test fusion_stream::tests::an_upper_bound_beyond_the_range_is_answered_as_the_walk_answers_it ... ok
+test render::tests::a_direction_without_a_language_is_refused_but_with_one_renders ... ok
+test render::tests::decoding_inverts_rendering ... ok
+test reciprocal_rank::tests::the_accelerated_search_agrees_with_a_walk_from_rank_one ... ok
+test render::tests::decoding_refuses_text_that_is_not_one_term ... ok
+test render::tests::form_feed_does_not_separate_terms ... ok
+test render::tests::plain_string_uses_the_short_form ... ok
+test reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank ... ok
+test render::tests::a_malformed_tag_is_refused_but_a_well_formed_one_renders ... ok
+test render::tests::space_tab_carriage_return_and_line_feed_still_separate_terms ... ok
+test union::admission_failure_tests::result_admission_refusal_settles_all_reads_and_moves_original_evidence ... ok
+test render::tests::a_typed_literal_carries_its_datatype ... ok
+test render::tests::a_triple_term_renders_in_its_value_form ... ok
+test render::tests::the_counters_are_the_documented_set_in_the_documented_order ... ok
+test render::tests::a_language_tag_is_written_verbatim ... ok
+test render::tests::an_unsigned_uchar_still_decodes ... ok
+test render::tests::the_rendering_is_the_counters_and_nothing_else ... ok
+test scope::tests::live_search_callback_and_original_writer_do_not_invert_dictionary_locks ... ok
+test reciprocal_rank::tests::every_positive_weight_under_a_usable_constant_measures_a_bound_rather_than_refusing ... ok
+test render::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test reciprocal_rank::tests::the_minimum_weight_agrees_with_an_exhaustive_search ... ok
+test reciprocal_rank::tests::the_bound_is_exact_at_unit_weight ... ok
+test fusion_stream::tests::selection_work_is_linear_in_a_plateau_as_long_as_the_streams ... ok
+test reciprocal_rank::tests::the_tolerance_walk_lands_near_the_square_root_of_the_tolerance ... ok
+test render::term_walk_tests::a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread ... ok
+test fusion_stream::tests::the_index_selects_what_the_pairwise_definition_selects ... ok
+test reciprocal_rank::tests::the_deepest_expressible_depth_is_priced_and_one_past_it_is_a_plan_range_refusal ... ok
+test reciprocal_rank::tests::a_tolerated_depth_that_saturates_is_reported_as_saturation_and_not_as_a_number ... ok
+
+test result: ok. 114 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+

@@ -1,0 +1,3 @@
+# Prior-art assessment (self-review)
+
+The brief captured the full issue, no comments, two linked items and fourteen forge search results, with no prior issue-specific branch or PR. Its recurrence scope is only two hundred commits. Actual source confirms the private Kb storage and retrieval profile storage have the same immutable ownership operation. The layer helper selects purrdf-core; both consumers already depend on it, so no edge or dependency is added. Existing lexical constructors do not supply this ownership carrier. Standard Cow requires ToOwned and cannot preserve a non-Clone Kb without an unnecessary ownership abstraction. Use one generic inline carrier; keep no duplicate private enums or sanctioned variants. This is self-assessment, not independent approval.

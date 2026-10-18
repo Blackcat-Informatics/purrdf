@@ -1,0 +1,14 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 55.15s
+     Running unittests src/lib.rs (/opt/.cargo/87/dfc58de5f3400f/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 6 tests
+test ownership::tests::borrowed_nonclone_payload_is_the_original_and_outlives_the_carrier ... ok
+test ownership::tests::owned_nonclone_payload_moves_and_drops_once ... ok
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test diagnostic::tests::shared_attachments_preserve_original_reporting_and_admitted_ownership ... ok
+test xsd_regex::xpath::cache::tests::shared_ownership_reuses_current_admission_without_holding_the_cache ... ok
+test small::tests::ownership_matches_vec ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1375 filtered out; finished in 0.01s
+

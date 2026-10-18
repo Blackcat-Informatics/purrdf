@@ -1,0 +1,115 @@
+{
+  "issue": 597,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Share owned-or-borrowed storage to repair native helper hygiene",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "596": "OWL DL: expose checked source-bound causal clash dependencies",
+    "501": "Entailment: reusable snapshot-bound proof and justification query sessions"
+  },
+  "link_relations": {
+    "596": "mentions",
+    "501": "2-hop"
+  },
+  "related": [
+    {
+      "number": 558,
+      "title": "Structured access to error variants and fields, so consumers never render errors to text",
+      "state": "OPEN"
+    },
+    {
+      "number": 594,
+      "title": "OWL DL: borrow the prepared proof checking context",
+      "state": "CLOSED"
+    },
+    {
+      "number": 508,
+      "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+      "state": "CLOSED"
+    },
+    {
+      "number": 458,
+      "title": "purrdf-gts: composite ML-DSA-65 + Ed25519 signatures under COSE_Sign1",
+      "state": "CLOSED"
+    },
+    {
+      "number": 490,
+      "title": "Typed capacity errors instead of u32 overflow panics, and 64-bit room for Datalog ids and global dictionary text",
+      "state": "CLOSED"
+    },
+    {
+      "number": 499,
+      "title": "Entailment: prepare schema-invariant cardinality contradictions once per class",
+      "state": "CLOSED"
+    },
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 512,
+      "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+      "state": "CLOSED"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    },
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 85,
+      "title": "Eliminate avoidable Rust allocations across core, query, validation, GTS, and bindings for 0.5.0",
+      "state": "CLOSED"
+    },
+    {
+      "number": 384,
+      "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests",
+      "state": "OPEN"
+    }
+  ],
+  "defect_classes": {
+    "performance": 3,
+    "source-identity": 1,
+    "missing-intrinsic-runtime": 1,
+    "proof-artifact-drift": 1,
+    "proof-premise-reachability": 1,
+    "correctness": 3,
+    "none": 19,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/597-share-owned-or-borrowed-storage-to"
+  },
+  "coverage": [
+    "issue #597 + 0 comment(s) via github",
+    "link crawl: 2 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['Share', 'owned-or-borrowed', 'storage']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 9 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #597 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #597: 0",
+    "requirement candidates: 1 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 0 path(s) (0 on disk), 0 identifier(s), 0 workspace package(s), 1 URL(s)"
+  ]
+}

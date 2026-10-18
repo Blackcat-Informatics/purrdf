@@ -1,0 +1,9 @@
+{
+  "baseline_constructor_source_count": 164,
+  "final_constructor_source_count": 165,
+  "added": [
+    "crates/rdf-core/src/ownership.rs"
+  ],
+  "removed": [],
+  "changed_existing_constructor_sources": []
+}

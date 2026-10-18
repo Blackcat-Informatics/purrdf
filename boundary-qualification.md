@@ -1,0 +1,1 @@
+The additional public-entry check passed: `cargo test --locked -p purrdf-retrieval --test boundary` ran all 21 tests successfully. This covers the actual borrowed `fuse` path as well as the exported evaluator-to-fusion bridge. Together with the full library suite, both production storage choices now have execution evidence. No source change or weakened assertion was required.

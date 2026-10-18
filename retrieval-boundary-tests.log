@@ -1,0 +1,29 @@
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/597-share-owned-or-borrowed-storage-to/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 21.12s
+     Running tests/boundary.rs (/opt/.cargo/87/dfc58de5f3400f/debug/build/purrdf-retrieval/651818637b0f98cf/out/boundary-651818637b0f98cf)
+
+running 21 tests
+test exactly_tied_candidates_are_ordered_rather_than_awaited ... ok
+test fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata ... ok
+test prefix_reader_incomplete_evidence ... ok
+test the_exported_bridge_reports_a_malformed_rank_rather_than_panicking ... ok
+test start_at_fuse_hand_built_streams ... ok
+test a_supplied_bound_is_not_destroyed_by_the_layers_own ... ok
+test encoding_and_fusion_are_deterministic_in_one_process ... ok
+test no_stage_takes_a_selector ... ok
+test fusing_at_a_bound_the_streams_were_not_planned_for_is_refused_by_name ... ok
+test stop_at_compile_run_directly ... ok
+test reporting_names_plan_and_profile ... ok
+test a_hand_built_stream_can_declare_the_depth_that_stopped_it ... ok
+test stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path ... ok
+test start_at_execute_a_hand_built_unit_is_checked_on_the_numbers_it_claims ... ok
+test a_supplied_prologue_is_hoisted_over_the_wrap_and_a_non_query_is_refused ... ok
+test start_at_compile_hand_built_plan ... ok
+test stop_at_plan_inspect_value ... ok
+test a_stream_that_names_another_plan_is_refused_rather_than_fused ... ok
+test the_exported_bridge_carries_an_executed_stream_into_fusion ... ok
+test start_at_execute_evaluator_only ... ok
+test unfused_rung_applies_no_threshold_to_its_rows ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

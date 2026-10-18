@@ -1,0 +1,21 @@
+{
+  "issue": 597,
+  "branch": "paudley/597-share-owned-or-borrowed-storage-to",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "bec31ed26dada71d914d84d113bfceac9e9029a6",
+      "subject": "Share inline immutable owned-or-borrowed storage",
+      "date": "2026-10-17"
+    }
+  ],
+  "files": [
+    "crates/entail/src/owl_dl/proof.rs",
+    "crates/entail/src/owl_dl/proof/schema_tests.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf-core/src/ownership.rs",
+    "crates/retrieval/src/fusion_stream.rs",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}
