@@ -3,6 +3,108 @@
 
 //! Actual question-bound public verification, with explicit missing-evidence refusals.
 
+/// A merge license alone must not attest the inequality that closed its branch.
+#[test]
+fn public_causal_counting_refuses_unchecked_merge_closure() {
+    let mut f = Fixture::default();
+    let a = f.name("A");
+    let filler = f.name("F");
+    let property = f.name("p");
+    f.bounds(a, property, filler, 2, true, false);
+    let nominal = f.blank();
+    let target = f.name("target");
+    let members = f.list(&[target]);
+    f.edge(nominal, owl::ONE_OF, members);
+    f.edge(filler, rdfs::SUB_CLASS_OF, nominal);
+    let root = f.instance("root", a);
+    let existing = f.instance("existing", filler);
+    f.edge(root, "https://example.org/p", existing);
+    let unrelated = f.name("unrelated");
+    f.edge(root, "https://example.org/p", unrelated);
+    let source = f.freeze();
+    let producer = Reasoner::with_proofs(&source).unwrap();
+    let answer = producer.consistency();
+    assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
+    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let ctx = consumer.borrowed_proof_context().unwrap();
+    assert!(matches!(
+        answer.proof().unwrap().verify_prepared_causal(
+            &Question::Consistency,
+            Some(answer.certificate()),
+            &ctx
+        ),
+        Err(DlProofError::CausalSupport {
+            kind: CausalSupportKind::Unclosed,
+            ..
+        })
+    ));
+}
+
+/// The public graph retains the actual counted head for forward and inverse witnesses.
+#[test]
+fn public_causal_counting_retains_original_head_and_generated_births() {
+    for inverse in [false, true] {
+        let mut f = Fixture::default();
+        let class = f.name("A");
+        let filler = f.name("B");
+        let forbidden = f.name("C");
+        let property = f.name("p");
+        let role = if inverse {
+            let role = f.blank();
+            f.edge(role, owl::INVERSE_OF, property);
+            role
+        } else {
+            property
+        };
+        f.bounds(class, role, filler, 2, true, false);
+        f.edge(
+            property,
+            if inverse { rdfs::DOMAIN } else { rdfs::RANGE },
+            forbidden,
+        );
+        f.edge(filler, owl::DISJOINT_WITH, forbidden);
+        f.instance("subject", class);
+        let source = f.freeze();
+        let producer = Reasoner::with_proofs(&source).unwrap();
+        let answer = producer.consistency();
+        assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
+        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let ctx = consumer.borrowed_proof_context().unwrap();
+        let checked = answer
+            .proof()
+            .unwrap()
+            .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
+            .unwrap();
+        let mut counting = 0;
+        let mut births = 0;
+        for (_, refutation) in checked.refutations() {
+            for clash in refutation.clashes() {
+                for step in clash.steps() {
+                    match step.observation() {
+                        CausalObservation::Counting { .. } => {
+                            counting += 1;
+                            assert!(step.parents().any(|parent| matches!(
+                                parent.observation(),
+                                CausalObservation::Application { .. }
+                            )));
+                        }
+                        CausalObservation::Effect {
+                            mutation:
+                                CausalMutation::Node {
+                                    parent: Some(_), ..
+                                },
+                            ..
+                        } => births += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert!(counting > 0);
+        assert!(births > 0);
+    }
+}
+
 use super::*;
 use crate::reasoner::{Question, Reasoner, RunProof, ServiceProof, schema_tests::Fixture};
 use purrdf_core::RdfDataset;

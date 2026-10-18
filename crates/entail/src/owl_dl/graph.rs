@@ -2713,7 +2713,7 @@ impl<'a> Graph<'a> {
     /// its own.
     pub(crate) fn neighbors_into(&self, st: &State, x: usize, role: Role, out: &mut Vec<usize>) {
         out.clear();
-        self.read_neighbours(st, x, role, &mut |y| {
+        self.read_neighbours(st, x, role, self.selecting_reads(), &mut |y| {
             out.push(y);
             false
         });
@@ -2725,7 +2725,7 @@ impl<'a> Graph<'a> {
     /// visited in the same order and charged the same, and nothing after it is read at all.
     pub(crate) fn is_neighbour(&self, st: &State, x: usize, role: Role, target: usize) -> bool {
         let target = find(st, target);
-        self.read_neighbours(st, x, role, &mut |y| y == target)
+        self.read_neighbours(st, x, role, false, &mut |y| y == target)
     }
 
     /// Whether some `role`-neighbour of `x` satisfies `test`, read in [`Self::neighbors`]'s
@@ -2740,7 +2740,7 @@ impl<'a> Graph<'a> {
         role: Role,
         test: &mut dyn FnMut(usize) -> bool,
     ) -> bool {
-        self.read_neighbours(st, x, role, test)
+        self.read_neighbours(st, x, role, false, test)
     }
 
     /// A cleared buffer from the read pool, returned to it when dropped.
@@ -2807,6 +2807,7 @@ impl<'a> Graph<'a> {
         x: usize,
         role: Role,
         machine: &super::roles::Automaton,
+        record_all: bool,
         visit: &mut dyn FnMut(usize) -> bool,
     ) -> Result<bool, purrdf_lex::allocation::StorageError> {
         use purrdf_lex::allocation::{Memory, OrderedTable, Resident};
@@ -2835,14 +2836,17 @@ impl<'a> Graph<'a> {
                 {
                     memory.reserve_for_push(&mut emitted)?;
                     emitted.insert(position, node);
-                    if visit(node) {
+                    let selected = visit(node);
+                    if selected || record_all {
                         if let Some(predecessors) = predecessors.as_ref()
                             && !self.observe_language_path(role, initial, (node, state), predecessors)
                         {
                             break;
                         }
-                        answer = true;
-                        break;
+                        if selected {
+                            answer = true;
+                            break;
+                        }
                     }
                 }
                 for (transition_index, transition) in machine.transitions.iter().enumerate() {
@@ -2967,6 +2971,7 @@ impl<'a> Graph<'a> {
         st: &State,
         x: usize,
         role: Role,
+        record_all: bool,
         visit: &mut dyn FnMut(usize) -> bool,
     ) -> bool {
         // A neighbourhood read is the single most-called scan in either calculus — every
@@ -2990,14 +2995,19 @@ impl<'a> Graph<'a> {
                     return false;
                 }
                 self.work.charge(1);
-                if find(st, node) == node && !st.nodes[node].concrete && visit(node) {
-                    self.observe_read(ReadFact::Role {
-                        from: find(st, x),
-                        to: node,
-                        role,
-                        witness: RoleWitness::Universal(licence),
-                    });
-                    return true;
+                if find(st, node) == node && !st.nodes[node].concrete {
+                    let selected = visit(node);
+                    if selected || record_all {
+                        self.observe_read(ReadFact::Role {
+                            from: find(st, x),
+                            to: node,
+                            role,
+                            witness: RoleWitness::Universal(licence),
+                        });
+                    }
+                    if selected || (record_all && self.changes_refused()) {
+                        return selected;
+                    }
                 }
             }
             return false;
@@ -3005,7 +3015,7 @@ impl<'a> Graph<'a> {
         if let Some(program) = &self.kb.role_program
             && let Some(machine) = program.machine(role)
         {
-            let result = self.read_role_language(st, x, role, machine, visit);
+            let result = self.read_role_language(st, x, role, machine, record_all, visit);
             return match result {
                 Ok(found) => found,
                 Err(original) => {
@@ -3032,29 +3042,39 @@ impl<'a> Graph<'a> {
             let (from, to, prop) = st.edges[edge];
             let f = find(st, from);
             let t = find(st, to);
-            if realizes(&ach, (prop, true)) && f == x && scratch.emit(t) && visit(t) {
-                self.observe_read(ReadFact::Role {
-                    from: x,
-                    to: t,
-                    role,
-                    witness: RoleWitness::Edge {
-                        index: edge,
-                        letter: Role::Named(prop),
-                    },
-                });
-                return true;
+            if realizes(&ach, (prop, true)) && f == x && scratch.emit(t) {
+                let selected = visit(t);
+                if selected || record_all {
+                    self.observe_read(ReadFact::Role {
+                        from: x,
+                        to: t,
+                        role,
+                        witness: RoleWitness::Edge {
+                            index: edge,
+                            letter: Role::Named(prop),
+                        },
+                    });
+                }
+                if selected || (record_all && self.changes_refused()) {
+                    return selected;
+                }
             }
-            if realizes(&ach, (prop, false)) && t == x && scratch.emit(f) && visit(f) {
-                self.observe_read(ReadFact::Role {
-                    from: x,
-                    to: f,
-                    role,
-                    witness: RoleWitness::Edge {
-                        index: edge,
-                        letter: Role::Inv(prop),
-                    },
-                });
-                return true;
+            if realizes(&ach, (prop, false)) && t == x && scratch.emit(f) {
+                let selected = visit(f);
+                if selected || record_all {
+                    self.observe_read(ReadFact::Role {
+                        from: x,
+                        to: f,
+                        role,
+                        witness: RoleWitness::Edge {
+                            index: edge,
+                            letter: Role::Inv(prop),
+                        },
+                    });
+                }
+                if selected || (record_all && self.changes_refused()) {
+                    return selected;
+                }
             }
         }
         let mut stopped = false;
@@ -3071,9 +3091,14 @@ impl<'a> Graph<'a> {
             if let Some(reach) = cached {
                 self.work.charge(reach.order.len() as u64 + 1);
                 for &y in &reach.order {
-                    if scratch.emit(y) && visit(y) {
-                        self.observe_reach(index, x, y, role, pattern_role(prop, dir));
-                        return !self.changes_refused();
+                    if scratch.emit(y) {
+                        let selected = visit(y);
+                        if selected || record_all {
+                            self.observe_reach(index, x, y, role, pattern_role(prop, dir));
+                        }
+                        if selected || self.changes_refused() {
+                            return selected && !self.changes_refused();
+                        }
                     }
                 }
                 continue;
@@ -3104,15 +3129,18 @@ impl<'a> Graph<'a> {
                 if record {
                     scratch.members.push(y);
                 }
-                if !stopped && scratch.emit(y) && visit(y) {
-                    self.observe_reach(index, x, y, role, pattern_role(prop, dir));
+                if !stopped && scratch.emit(y) {
+                    let selected = visit(y);
+                    if selected || record_all {
+                        self.observe_reach(index, x, y, role, pattern_role(prop, dir));
+                    }
                     if self.changes_refused() {
                         return false;
                     }
-                    if !record {
+                    if selected && !record {
                         return true;
                     }
-                    stopped = true;
+                    stopped = selected;
                 }
                 if !self.charge_step(st, y) {
                     return false;
@@ -3528,6 +3556,31 @@ impl<'a> Graph<'a> {
         false
     }
 
+    /// Retain the actual selected clique and its already-established inequalities.
+    /// No role traversal, filler check or clique search is repeated for provenance.
+    fn observe_counting(&self, start: Option<usize>, clique: &[usize]) {
+        let Some(start) = start else { return };
+        if let Some(journal) = self.changes.borrow_mut().as_mut() {
+            journal.retain_counting(start, clique);
+        }
+        for (at, &left) in clique.iter().enumerate() {
+            for &right in &clique[at + 1..] {
+                if self.changes_refused() {
+                    return;
+                }
+                self.observe_read(ReadFact::Distinct { left, right });
+            }
+        }
+    }
+
+    fn counting_start(&self) -> Option<usize> {
+        self.changes
+            .borrow()
+            .as_ref()
+            .filter(|journal| journal.read_owner.is_some())
+            .map(Journal::read_len)
+    }
+
     /// Ensure `x` has `n` pairwise-`≠` `role`-neighbours satisfying `filler`, minting the
     /// missing ones. Returns whether the graph changed.
     ///
@@ -3549,6 +3602,7 @@ impl<'a> Graph<'a> {
         if n == 0 {
             return false;
         }
+        let start = self.counting_start();
         let mut with_filler = self.neighbors(st, x, role);
         with_filler.retain(|&y| self.has_concept(st, y, filler));
         // Only whether `n` are already there decides anything: a clique that reaches `n` is
@@ -3561,6 +3615,7 @@ impl<'a> Graph<'a> {
             return false;
         };
         if clique.len() >= n {
+            self.observe_counting(start, &clique);
             return false;
         }
         // The witnesses to mint are pairwise-`≠`, which is quadratically many recorded
@@ -3571,6 +3626,12 @@ impl<'a> Graph<'a> {
         if n > MAX_COUNTING_WITNESSES {
             st.clique_exhausted.set(true);
             return false;
+        }
+        self.observe_counting(start, &clique);
+        // The head's pre-state reads end before fresh witnesses and inequalities
+        // are published. Their causes retain the original application/head atom.
+        if start.is_some() {
+            self.select_reads(None);
         }
         let observing = self.changes.borrow().is_some();
         while clique.len() < n {
@@ -3613,6 +3674,7 @@ impl<'a> Graph<'a> {
         if n == 1 {
             return self.any_neighbour(st, x, role, &mut |y| self.has_concept(st, y, filler));
         }
+        let start = self.counting_start();
         let mut with_filler = self.neighbors(st, x, role);
         with_filler.retain(|&y| self.has_concept(st, y, filler));
         match clique_of(
@@ -3621,7 +3683,10 @@ impl<'a> Graph<'a> {
             &self.work,
             n as usize,
         ) {
-            Some(clique) => clique.len() >= n as usize,
+            Some(clique) => {
+                self.observe_counting(start, &clique);
+                clique.len() >= n as usize
+            }
             None => {
                 // Exhaustion is recorded on the state the caller already consults; a
                 // `false` here only ever WITHHOLDS a satisfaction claim, which the

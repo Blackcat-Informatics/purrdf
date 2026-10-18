@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Proof-local dependency construction over one native replay's ordered observations.
-//! Selected input anchors bind to their original native owner; complete syntax,
-//! schema/effect support and the public causal operation remain unfinished.
+//! Selected input anchors, syntax and source licenses retain their original
+//! native owners; unsupported effects refuse.
 
 use super::reach;
 use super::{
@@ -480,6 +480,7 @@ impl Slice<'_> {
 struct Builder {
     facts: OrderedTable<Fact, usize>,
     applications: OrderedTable<usize, usize>,
+    counting: OrderedTable<(usize, usize), usize>,
     aliases: OrderedTable<usize, (usize, usize)>,
     edges: OrderedTable<usize, (usize, usize, u32)>,
     nodes: Vec<Dependency>,
@@ -582,6 +583,7 @@ impl Builder {
             }
             ReadFact::Node(node) | ReadFact::Top(node) => self.parent(Fact::Node(node), memory),
             ReadFact::ObjectDomain(node) => self.parent(Fact::Domain(node), memory),
+            ReadFact::Distinct { left, right } => self.parent(distinct(left, right), memory),
             ReadFact::Label { node, concept } => self.parent(Fact::Label(node, concept), memory),
             ReadFact::Denotes { node, individual } => {
                 self.parent(Fact::Name(node, individual), memory)
@@ -697,8 +699,9 @@ impl Builder {
         let cause = event.cause;
         if cause.origin == Origin::Application {
             let &application = self
-                .applications
-                .get(&cause.index)
+                .counting
+                .get(&(cause.index, cause.atom))
+                .or_else(|| self.applications.get(&cause.index))
                 .ok_or(Error::MissingFact)?;
             memory.push(&mut self.parents, application)?;
         }
@@ -779,7 +782,8 @@ impl Builder {
                 )?;
             }
             Mutation::Distinct { left, right } => {
-                incomplete = cause.origin == Origin::Application;
+                incomplete = cause.origin == Origin::Application
+                    && self.counting.get(&(cause.index, cause.atom)).is_none();
                 self.parent(Fact::Node(left), memory)?;
                 self.parent(Fact::Node(right), memory)?;
                 self.facts.insert(distinct(left, right), id, memory)?;
@@ -895,6 +899,13 @@ impl Journal {
                 event += 1;
             }
             let start = graph.parents.len();
+            if let ReadOwner::Counting { application, .. } = selected.owner {
+                let &body = graph
+                    .applications
+                    .get(&application)
+                    .ok_or(Error::MissingFact)?;
+                memory.push(&mut graph.parents, body)?;
+            }
             let path_start = graph.paths.len();
             let transitive_start = graph.transitive.len();
             let transitive_nodes_start = graph.transitive_nodes.len();
@@ -942,6 +953,11 @@ impl Journal {
             match selected.owner {
                 ReadOwner::Application { index, .. } => {
                     graph.applications.insert(index, id, &mut memory)?;
+                }
+                ReadOwner::Counting { application, atom } => {
+                    graph
+                        .counting
+                        .insert((application, atom), id, &mut memory)?;
                 }
                 ReadOwner::Clash { .. } => root = Some(id),
             }

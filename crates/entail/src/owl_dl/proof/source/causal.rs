@@ -476,6 +476,13 @@ pub enum CausalObservation<'a> {
         /// Original branch and alternative ordinals, checked against the refutation tree.
         branch: Option<(usize, usize)>,
     },
+    /// Native counting head's selected pre-state clique.
+    Counting {
+        /// Original checked application, also retained as this vertex's parent.
+        application: usize,
+        /// Original at-least head-atom ordinal.
+        atom: usize,
+    },
     /// Terminal checked empty-head clause.
     Clash {
         /// Empty-head clause ordinal in the independently prepared calculus.
@@ -523,6 +530,9 @@ impl<'a> CausalStep<'a> {
                     branch,
                 },
                 ReadOwner::Clash { clause } => CausalObservation::Clash { clause },
+                ReadOwner::Counting { application, atom } => {
+                    CausalObservation::Counting { application, atom }
+                }
             },
         }
     }
@@ -702,6 +712,8 @@ pub enum CausalFact<'a> {
     ObjectDomain(CausalNode<'a>),
     /// Universal object-domain class membership.
     Top(CausalNode<'a>),
+    /// Original pairwise inequality used by the native selected clique.
+    Distinct(CausalNode<'a>, CausalNode<'a>),
     /// Selected normalized class membership.
     Concept(CausalNode<'a>, ResolvedConcept<'a>),
     /// Exact selected term denotation.
@@ -760,6 +772,7 @@ fn fact(scope: CausalClash<'_>, fact: ReadFact) -> CausalFact<'_> {
         ReadFact::Node(id) => CausalFact::Node(node(id)),
         ReadFact::ObjectDomain(id) => CausalFact::ObjectDomain(node(id)),
         ReadFact::Top(id) => CausalFact::Top(node(id)),
+        ReadFact::Distinct { left, right } => CausalFact::Distinct(node(left), node(right)),
         ReadFact::Label {
             node: id,
             concept: idc,

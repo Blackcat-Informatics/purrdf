@@ -6,6 +6,92 @@
 use super::*;
 use crate::owl_dl::graph::{Assumptions, Graph};
 
+/// The native clique's chosen reused witnesses and inequalities license the new pair.
+#[test]
+fn selected_counting_retains_reused_clique_and_excludes_other_neighbours() {
+    let mut kb = Kb::empty();
+    let filler = kb.table.intern(crate::owl_dl::concept::Concept::Named(40));
+    kb.abox_types
+        .extend([(30, kb.top), (31, filler), (32, filler)]);
+    kb.abox_roles
+        .extend([(30, 20, 31), (30, 20, 32), (30, 20, 33)]);
+    kb.different_from.push((31, 32));
+    kb.finalize().unwrap();
+    let graph = Graph::new(&kb, u64::MAX);
+    graph.begin_changes(Journal::default());
+    let mut state = graph.init_state(&Assumptions::of_kb());
+    let root = state.root_of[&30];
+    let first = state.root_of[&31];
+    let second = state.root_of[&32];
+    let unrelated = state.root_of[&33];
+    graph.select_reads(Some(ReadOwner::Application {
+        index: 0,
+        clause: 0,
+        branch: None,
+    }));
+    graph.observe_read(ReadFact::Node(root));
+    graph.select_reads(Some(ReadOwner::Counting {
+        application: 0,
+        atom: 0,
+    }));
+    graph.observe_read(ReadFact::Node(root));
+    graph.change_cause(Origin::Application, 0);
+    let fresh = state.nodes.len();
+    assert!(graph.ensure_at_least(&mut state, root, 3, Role::Named(20), filler));
+    assert_eq!(state.nodes.len(), fresh + 1);
+    graph.select_reads(Some(ReadOwner::Clash { clause: 1 }));
+    graph.observe_read(ReadFact::Distinct {
+        left: first,
+        right: fresh,
+    });
+    graph.select_reads(None);
+    let mut journal = graph.finish_changes().unwrap();
+    let slice = journal.normalized_slice(&kb).unwrap();
+    assert_derivation(&slice, &journal);
+    let reads = &slice.derivation.reads;
+    assert!(reads.iter().any(|read| read.fact
+        == ReadFact::Distinct {
+            left: first,
+            right: second
+        }));
+    for selected in [first, second] {
+        assert!(
+            reads
+                .iter()
+                .any(|read| matches!(read.fact, ReadFact::Role { to, .. } if to == selected))
+        );
+        assert!(reads.iter().any(|read| read.fact
+            == ReadFact::Label {
+                node: selected,
+                concept: filler
+            }));
+    }
+    assert!(
+        !reads
+            .iter()
+            .any(|read| matches!(read.fact, ReadFact::Role { to, .. } if to == unrelated))
+    );
+    assert!(slice.effects.iter().any(|(_, event)| event.mutation
+        == Mutation::Distinct {
+            left: first,
+            right: fresh
+        }));
+    assert!(
+        !slice
+            .effects
+            .iter()
+            .any(|(_, event)| event.cause.origin == Origin::PreparedRole && event.cause.index == 2)
+    );
+    drop(slice);
+    journal
+        .reads
+        .retain(|read| !matches!(read.owner, ReadOwner::Counting { .. }));
+    assert!(matches!(
+        journal.normalized_slice(&kb),
+        Err(Error::MissingEffect)
+    ));
+}
+
 /// Compact spans retain original observations; every vertex belongs to the root's dependency closure.
 pub(crate) fn assert_derivation(slice: &Slice<'_>, journal: &Journal) {
     let graph = &slice.derivation;

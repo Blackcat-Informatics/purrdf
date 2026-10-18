@@ -30,6 +30,10 @@ pub(crate) enum ReadOwner {
         clause: usize,
         branch: Option<(usize, usize)>,
     },
+    Counting {
+        application: usize,
+        atom: usize,
+    },
     Clash {
         clause: usize,
     },
@@ -49,6 +53,10 @@ pub(crate) enum ReadFact {
         concept: u32,
     },
     Top(usize),
+    Distinct {
+        left: usize,
+        right: usize,
+    },
     Denotes {
         node: usize,
         individual: u32,
@@ -313,6 +321,26 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
+    pub(super) fn read_len(&self) -> usize {
+        self.reads.len()
+    }
+
+    /// Keep only the witnesses selected by the original native clique operation.
+    /// Earlier body reads and original path ordinals remain unchanged.
+    pub(super) fn retain_counting(&mut self, start: usize, selected: &[usize]) {
+        let mut index = 0;
+        self.reads.retain(|read| {
+            let keep = index < start
+                || match read.fact {
+                    ReadFact::Role { to, .. } => selected.contains(&to),
+                    ReadFact::Label { node, .. } | ReadFact::Top(node) => selected.contains(&node),
+                    _ => true,
+                };
+            index += 1;
+            keep
+        });
+    }
+
     /// The first native hierarchy discovery owns one immutable predecessor.
     pub(super) fn role_rule(
         &mut self,

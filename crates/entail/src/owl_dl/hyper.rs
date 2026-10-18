@@ -2130,7 +2130,19 @@ impl<'a> Hyper<'a> {
                     self.g.add_self_loop(st, *node, *role);
                 }
                 Ground::AtLeast(node, n, role, filler) => {
+                    if let ApplySite::Observed { application } = site {
+                        self.g
+                            .select_reads(Some(super::graph::changes::ReadOwner::Counting {
+                                application: *application,
+                                atom: at,
+                            }));
+                        self.g
+                            .observe_read(super::graph::changes::ReadFact::Node(find(st, *node)));
+                    }
                     self.g.ensure_at_least(st, *node, *n, *role, *filler);
+                    if observing {
+                        self.g.select_reads(None);
+                    }
                 }
                 Ground::Equal(left, right) => {
                     // The two identities are read BEFORE the merge, because a merge is exactly
