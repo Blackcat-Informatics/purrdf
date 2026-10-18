@@ -44,7 +44,10 @@
 //!
 //! Per the repo `no-optionality` doctrine, every malformed schema is a typed
 //! [`ShexError`] / [`StructureError`]; there is no lenient mode and no panic
-//! on any input (parsers are fuzz-safe and depth-bounded).
+//! on any input (parsers are fuzz-safe and depth-bounded). Parsing also admits
+//! the caller's physical stack margin at document and recursive-expression
+//! boundaries; exhaustion returns [`ShexError::StackMargin`] rather than a
+//! partial schema or a syntax verdict.
 //!
 //! # Conformance
 //!

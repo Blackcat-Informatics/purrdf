@@ -3378,7 +3378,7 @@ summary = "`str::chars().count()` in the ShEx length facets, which calls std's o
 
 [[site]]
 id = "shex.matcher"
-summary = "`matcher::search`, the backtracking triple-expression matcher"
+summary = "`matcher::search`, the iterative continuation-based triple-expression matcher"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

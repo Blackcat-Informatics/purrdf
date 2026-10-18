@@ -14,6 +14,12 @@ use core::fmt;
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShexError {
+    /// Parsing cannot enter the named construct without consuming the shared
+    /// physical stack margin. This is a resource refusal, not invalid syntax.
+    StackMargin {
+        /// The recursive parser construct whose next frame was refused.
+        construct: &'static str,
+    },
     /// The ShExC byte stream could not be tokenized. Carries a human reason
     /// and the byte offset at which the lexer gave up.
     Lex {
@@ -89,6 +95,15 @@ purrdf_lex::constructors! {
 }
 
 impl ShexError {
+    /// Admit every recursive front-end at the workspace's one stack boundary.
+    pub(crate) fn admit_stack(construct: &'static str) -> Result<()> {
+        if purrdf_stack::is_low() {
+            Err(Self::StackMargin { construct })
+        } else {
+            Ok(())
+        }
+    }
+
     /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
     /// reason with that crate's [`diagnostic_code`].
     ///
@@ -133,6 +148,7 @@ impl ShexError {
         match self {
             Self::Lex { at, .. } | Self::Syntax { at, .. } => Some(*at),
             Self::Iri { .. }
+            | Self::StackMargin { .. }
             | Self::Shexj(_)
             | Self::Import { .. }
             | Self::ImportConflict(_)
@@ -158,6 +174,12 @@ impl ShexError {
 impl fmt::Display for ShexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::StackMargin { construct } => {
+                write!(
+                    f,
+                    "ShEx parsing refused {construct}: physical stack margin exhausted"
+                )
+            }
             Self::Lex { reason, at } => write!(f, "ShExC lex error at byte {at}: {reason}"),
             Self::Syntax { reason, at } => {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")

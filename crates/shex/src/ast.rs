@@ -71,6 +71,52 @@ pub enum ShapeExpr {
     Ref(ShapeLabel),
 }
 
+/// A borrowed syntax node. References are leaves; following declarations is a
+/// separate semantic operation, rather than an implicit recursive tree walk.
+#[derive(Clone, Copy)]
+pub(crate) enum ExprRef<'a> {
+    Shape(&'a ShapeExpr),
+    Triple(&'a TripleExpr),
+}
+
+impl ExprRef<'_> {
+    /// Direct children in source order, without allocating a child collection.
+    fn children(self) -> impl DoubleEndedIterator<Item = Self> {
+        let (shapes, triples, single): (&[ShapeExpr], &[TripleExpr], Option<Self>) = match self {
+            Self::Shape(expr) => match expr {
+                ShapeExpr::And(parts) | ShapeExpr::Or(parts) => (parts, &[], None),
+                ShapeExpr::Not(inner) => (&[], &[], Some(Self::Shape(inner))),
+                ShapeExpr::Shape(shape) => (&[], &[], shape.expression.as_ref().map(Self::Triple)),
+                ShapeExpr::Node(_) | ShapeExpr::External | ShapeExpr::Ref(_) => (&[], &[], None),
+            },
+            Self::Triple(expr) => match expr {
+                TripleExpr::EachOf(group) | TripleExpr::OneOf(group) => {
+                    (&[], &group.expressions, None)
+                }
+                TripleExpr::TripleConstraint(constraint) => {
+                    (&[], &[], constraint.value_expr.as_deref().map(Self::Shape))
+                }
+                TripleExpr::Ref(_) => (&[], &[], None),
+            },
+        };
+        shapes
+            .iter()
+            .map(Self::Shape)
+            .chain(triples.iter().map(Self::Triple))
+            .chain(single)
+    }
+
+    /// Preorder syntax census shared by structural admission and preparation.
+    pub(crate) fn walk(self) -> impl Iterator<Item = Self> {
+        let mut pending = purrdf_lex::walk::WorkList::<_, 16>::with(self);
+        std::iter::from_fn(move || {
+            let node = pending.pop()?;
+            pending.extend(node.children().rev());
+            Some(node)
+        })
+    }
+}
+
 /// RDF node kinds a [`NodeConstraint`] may demand (ShExJ `nodeKind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeKind {

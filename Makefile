@@ -728,6 +728,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_completion -- --exact \
+				governed_explain_matches_bound_query_receipts_and_original_ownership \
+				governed_explain_preserves_remote_refusal_and_zero_request_limit \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
 				all_shared_dl_proof_vectors_match_the_current_native_boundary \
 				imported_closure_proofs_check_against_the_consumers_native_snapshot \
