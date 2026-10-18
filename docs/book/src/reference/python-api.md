@@ -99,8 +99,8 @@ stopped = store.query_governed("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", fuel=0)
 assert not stopped.is_complete
 assert stopped.result is None
 assert stopped.tripped is not None
-complete = store.query_governed("SELECT ?name WHERE { "
-    "<https://example.org/alice> <https://example.org/name> ?name }")
+complete = store.query_governed(
+    "SELECT ?name WHERE { <https://example.org/alice> <https://example.org/name> ?name }")
 assert complete.is_complete
 assert list(complete.result)[0]["name"].value == "Alice"
 ```

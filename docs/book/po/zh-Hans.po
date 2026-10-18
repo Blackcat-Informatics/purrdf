@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-17T15:00:24-06:00\n"
+"POT-Creation-Date: 2026-10-18T10:25:50-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1452,13 +1452,13 @@ msgstr ""
 msgid "\"SELECT ?s ?p ?o WHERE { ?s ?p ?o }\""
 msgstr "\"SELECT ?s ?p ?o WHERE { ?s ?p ?o }\""
 
-#: src/reference/python-api.md:102
-msgid "\"SELECT ?name WHERE { \""
-msgstr "\"SELECT ?name WHERE { \""
-
 #: src/reference/python-api.md:103
-msgid "\"<https://example.org/alice> <https://example.org/name> ?name }\""
-msgstr "\"<https://example.org/alice> <https://example.org/name> ?name }\""
+msgid ""
+"\"SELECT ?name WHERE { <https://example.org/alice> <https://example.org/"
+"name> ?name }\""
+msgstr ""
+"\"SELECT ?name WHERE { <https://example.org/alice> <https://example.org/"
+"name> ?name }\""
 
 #: src/reference/python-api.md:108
 msgid ""
@@ -15333,9 +15333,9 @@ msgstr ""
 "「owl:imports in the data graph is not enacted」，其注释要求：数据图若意在表"
 "示一个导入，则应同时将其类型声明为 `owl:Ontology`。数据图自身的 "
 "`owl:imports` 从不被读取。`purrdf shapes lint` 会把每条属于数据的 "
-"`owl:imports` 列在 `unanchored-imports` 下。蕴涵的导入由同一规则决定。导入"
-"锚点与下文隐式 SPARQL 前缀来源共用一个图角色分类器，但采用不同的选择条件："
-"数据图角色提供前缀，却不会使其 `owl:imports` 成为导入。"
+"`owl:imports` 列在 `unanchored-imports` 下。蕴涵的导入由同一规则决定。导入锚"
+"点与下文隐式 SPARQL 前缀来源共用一个图角色分类器，但采用不同的选择条件：数据"
+"图角色提供前缀，却不会使其 `owl:imports` 成为导入。"
 
 #: src/validation/shacl.md:200
 msgid ""
@@ -15579,7 +15579,8 @@ msgid ""
 "IncompatibleVersions)`"
 msgstr ""
 "`ShapesError::Imports(ShapesImportError::Unresolved \\| Unreached \\| "
-"InvalidEntry \\| UnresolvedLink \\| UnheldLink \\| InvalidLink \\| IncompatibleVersions)`"
+"InvalidEntry \\| UnresolvedLink \\| UnheldLink \\| InvalidLink \\| "
+"IncompatibleVersions)`"
 
 #: src/validation/shacl.md:304
 msgid "`--import IRI=FILE`, repeatable"
@@ -15647,8 +15648,7 @@ msgstr ""
 "指名的表项——在每个宿主上都会被拒绝，因为其中的形状会被读入却永不应用）或 "
 "`invalid-import`（不是绝对 IRI 的键、被指名两次的键，或语法解析失败的文档）。"
 "版本冲突使用 `incompatible-import-versions`；上文三种 `*-shapes-graph-link` "
-"kind 属于数据图的链接。应依据 kind 分支，而不"
-"是依据消息文本。"
+"kind 属于数据图的链接。应依据 kind 分支，而不是依据消息文本。"
 
 #: src/validation/shacl.md:321
 msgid "\"https://example.org/lib\""
@@ -16939,8 +16939,8 @@ msgstr ""
 "JSON Schema draft 2020-12（`import_json_schema`）、原生 LinkML 1.11"
 "（`import_linkml`），以及经过校验的、由 PurRDF 输出的 Pydantic v2、"
 "TypeScript 7.0 与 GraphQL September 2025 包（`import_*_package`）。五者都经由"
-"同一个有序的 JSON-Schema 语义模型转换，返回带类型的形状，外加一份总会计算"
-"的、带位置的反向 `LossLedger`。"
+"同一个有序的 JSON-Schema 语义模型转换，返回带类型的形状，外加一份总会计算的、"
+"带位置的反向 `LossLedger`。"
 
 #: src/validation/shacl.md:932
 msgid ""
@@ -17640,8 +17640,8 @@ msgid ""
 "term per round and remains subject to this limit."
 msgstr ""
 "**生成新项的轮数上限**限制那些推出图中原本没有的项的求值轮数。默认值为 16384 "
-"轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，"
-"同样受这一上限约束。"
+"轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，同"
+"样受这一上限约束。"
 
 #: src/validation/shacl.md:1222
 msgid ""
@@ -17751,8 +17751,8 @@ msgstr ""
 "出的三元组、它们的空节点标签及其证明，都与每次迭代运行全部焦点节点时完全相"
 "同。改变的是代价：一条每次迭代生成一个新焦点节点的形状规则，每次迭代只需付出"
 "一次运行的代价，而不是按迄今为止的焦点节点数各运行一次，因此一条永不停止的规"
-"则会被某个项上限拒绝——新项保持较短时为轮数上限，每个新项都比上一个更"
-"长时为固定的 16 MiB 项存储区上限——而绝不会被连接步数上限拒绝。"
+"则会被某个项上限拒绝——新项保持较短时为轮数上限，每个新项都比上一个更长时为固"
+"定的 16 MiB 项存储区上限——而绝不会被连接步数上限拒绝。"
 
 #: src/validation/shacl.md:1276
 msgid ""
@@ -17767,9 +17767,8 @@ msgstr ""
 "查询为合取模式（三元组模式、`FILTER` 与 `BIND`，不含 `OPTIONAL`、`UNION`、"
 "`MINUS`、子查询或图访问）的全局 SPARQL 规则，会以规则元素的方式运行。于是每次"
 "迭代只需为新增的内容付出代价，而不必遍历整个求值图，且推出的三元组相同。"
-"`BIND` 变量必须出现在每个"
-"模板三元组中，且模板不得含有空节点。否则，该规则仍像以前一样，作为作用于整个"
-"图的生产者运行。"
+"`BIND` 变量必须出现在每个模板三元组中，且模板不得含有空节点。否则，该规则仍像"
+"以前一样，作为作用于整个图的生产者运行。"
 
 #: src/validation/shacl.md:1288
 msgid "# the inference graph, N-Triples\n"
@@ -18337,8 +18336,7 @@ msgstr ""
 "的项构建，而不是经过 `to_ntriples()` → `parse_dataset()` 的往返（转换）。这条"
 "直接路径携带报告所含的每一个 RDF 1.2 项（包括作为焦点节点的三元组项）。以任意"
 "语法渲染报告时，需要先处理 `to_dataset()` 的结果，再把返回的数据集交给 "
-"`serialize_dataset`。这正是 "
-"`purrdf validate --format` 所做的。"
+"`serialize_dataset`。这正是 `purrdf validate --format` 所做的。"
 
 #: src/validation/shacl.md:1504
 msgid ""
@@ -27504,6 +27502,9 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid "\"SELECT ?name WHERE { \""
+#~ msgstr "\"SELECT ?name WHERE { \""
 
 #~ msgid ""
 #~ "The engine-level speed comes from the IR design ([The Interned Dataset IR]"
