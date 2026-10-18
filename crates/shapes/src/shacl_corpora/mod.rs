@@ -240,14 +240,15 @@ pub struct W3cCase {
     /// distinct produced result with the same tuple whose details are exactly
     /// the stated ones (see [`ExpectedResult`]).
     pub expected_details: Vec<ExpectedResult>,
-    /// The SHACL law the shared report grader ([`report_grading`]) loads and
-    /// validates this case under; nothing else reads it. [`parse_entry`] sets the
+    /// The SHACL law this case is loaded and validated under. [`parse_entry`] sets the
     /// compatibility law, the SHACL 1.2 discovery sets the editor's-draft law
     /// (`shacl-ed-2026-10-16`, the suite commit's texts), and the SHACL 1.0 harness
-    /// sets the 2017 Recommendation's law on the vendored W3C entries it grades. Lanes
-    /// that load shapes themselves (the SHACL 1.0 harness's own loaders, the
-    /// prepared-product, vocabulary-import and shacl-shacl lanes) ignore it by
-    /// design and always run the compatibility law.
+    /// sets the 2017 Recommendation's law on the vendored W3C entries it grades. The
+    /// shared report grader ([`report_grading`]), the prepared-product lane and the
+    /// vocabulary-import lane all load and validate each case under it. The
+    /// shacl-shacl differential lane deliberately does not: it judges structural
+    /// validity once per shapes file, which a dated law's extra refusals would
+    /// confound, so it runs the compatibility law.
     pub profile: crate::profile::ShaclProfile,
     /// Whether the case belongs to the first-party `af/` seam rather than to the
     /// vendored W3C suite. Set by [`w3c_cases`]; every other discovery path leaves
@@ -695,6 +696,46 @@ fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
         *multiset.entry(expected_tuple(g, &result)).or_insert(0) += 1;
     }
     multiset
+}
+
+/// Reduce a validation-REPORT GRAPH a host wrote (the N-Triples `purrdf validate` prints,
+/// parsed) to what [`report_grading::grade`] compares: its `sh:conforms` and the
+/// multiset of its top-level `sh:result` tuples.
+///
+/// This is the produced-side twin of the expected-report reduction the manifest reader
+/// applies to `mf:result` ([`expected_multiset`], [`expected_tuple`]): the same functions
+/// read both, so a report a host serialized and an approved expectation are compared on
+/// exactly the tuple the in-process grader uses, with blank nodes collapsed by [`norm`].
+/// It grades the tuple and the verdict, not the messages, annotations or details the
+/// in-process grader also reads.
+///
+/// # Errors
+/// A graph with no, or more than one, `sh:ValidationReport`, or one whose `sh:conforms`
+/// is not a boolean.
+pub fn report_graph_outcome(report: &RdfDataset) -> Result<(bool, Multiset), String> {
+    let roots = native_quads(
+        report,
+        None,
+        Some(&named(rdf::TYPE)),
+        Some(&named(sh::VALIDATION_REPORT)),
+        GraphFilter::AnyGraph,
+    );
+    let [(root, _, _)] = roots.as_slice() else {
+        return Err(format!(
+            "expected exactly one sh:ValidationReport in the report graph, found {}",
+            roots.len()
+        ));
+    };
+    let conforms = match object(report, root, sh::CONFORMS) {
+        Some(Term::Literal(l)) if l.value() == "true" => true,
+        Some(Term::Literal(l)) if l.value() == "false" => false,
+        other => {
+            return Err(format!(
+                "the report's sh:conforms is not a boolean: {other:?}"
+            ));
+        }
+    };
+    Ok((conforms, expected_multiset(report, root)))
 }
 
 /// Prove every `.ttl` under `af/` is REACHED by a manifest, so the corpus on disk

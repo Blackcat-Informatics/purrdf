@@ -579,6 +579,125 @@ static int regex_shape_conforms(const char *pattern_literal, const char *target,
     return conforms;
 }
 
+/* Validate `data` against `shapes` through `purrdf_shacl_validate_to_sarif_law` under
+ * the dated SHACL law `law` (NULL for the compatibility law) and XPath law `regex`
+ * (NULL for none). Returns the status; on success `*conforms_out` is the SARIF log's
+ * `shaclConforms`, and `*mentions_out` is whether the log names `needle`. On failure
+ * `message` receives the error message (empty on success). */
+static int32_t validate_under_law(const char *shapes, const char *base, const char *data,
+                                  const char *regex, const char *law, const char *needle,
+                                  int *mentions_out, char *message, size_t message_len) {
+    PurrdfBuffer *sarif = NULL;
+    PurrdfError *error = NULL;
+    message[0] = '\0';
+    int32_t rc = purrdf_shacl_validate_to_sarif_law(shapes, base, NULL, data, NULL, 0, NULL,
+                                                    NULL, 0, false, regex, law, &sarif, &error);
+    if (rc != PURRDF_STATUS_OK) {
+        if (error == NULL || sarif != NULL || purrdf_error_code(error) != rc) {
+            return -1000;
+        }
+        snprintf(message, message_len, "%s", purrdf_error_message(error));
+        purrdf_error_free(error);
+        return rc;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(sarif, &bytes, &len);
+    *mentions_out = contains_bytes(bytes, len, needle);
+    purrdf_buffer_free(sarif);
+    return rc;
+}
+
+/* The dated SHACL laws through the real header and linkage, each refusal beside its valid
+ * neighbour. `pre-binding-009` (a VALUES over a variable that is not pre-bound): the
+ * compatibility law refuses the shapes graph at load, the editor's-draft law
+ * (shacl-ed-2026-10-16) validates it. `prefixes-003` (a prefix declared through a
+ * version-IRI path): the working draft (shacl-wd-2026-09-18) refuses it at load, the
+ * editor's draft validates it. shacl-ed-2026-10-17 names no law. */
+static int check_shacl_law(void) {
+    const char *values_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix ex: <http://example.com/ns#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        "ex: sh:declare [ sh:namespace \"http://example.com/ns#\"^^xsd:anyURI ;\n"
+        "  sh:prefix \"ex\" ] .\n"
+        "ex:TestShape a sh:NodeShape ; sh:sparql ex:TestShape-sparql ;\n"
+        "  sh:targetNode ex:InvalidResource ; sh:targetNode ex:ValidResource1 .\n"
+        "ex:TestShape-sparql sh:prefixes ex: ; sh:select \"\"\"\n"
+        "  SELECT $this ?value WHERE {\n"
+        "    VALUES ?value { \"forbidden\" }\n"
+        "    $this ex:property ?value . }\"\"\" .\n";
+    const char *values_data =
+        "<http://example.com/ns#InvalidResource> <http://example.com/ns#property> "
+        "\"forbidden\" .\n"
+        "<http://example.com/ns#ValidResource1> <http://example.com/ns#property> "
+        "\"fine\" .\n";
+    const char *version_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+        "@prefix ex: <http://example.com/ns#> .\n"
+        "<http://example.com/base> owl:versionIRI <http://example.com/base/v1> ;\n"
+        "  sh:declare [ sh:namespace \"http://example.com/ns#\"^^xsd:anyURI ;\n"
+        "    sh:prefix \"ex\" ] .\n"
+        "<http://example.com/shapes> owl:imports <http://example.com/base/v1> ;\n"
+        "  owl:versionIRI <http://example.com/shapes/v2> ;\n"
+        "  sh:declare [ sh:namespace \"http://test.com/ns#\"^^xsd:anyURI ;\n"
+        "    sh:prefix \"test\" ] .\n"
+        "ex:TestSPARQL sh:prefixes <http://example.com/shapes/v2> ; sh:select \"\"\"\n"
+        "  SELECT $this ?value WHERE { $this ex:property ?value .\n"
+        "    FILTER (?value = test:Value) . }\"\"\" .\n"
+        "ex:TestShape a sh:NodeShape ; sh:sparql ex:TestSPARQL ;\n"
+        "  sh:targetNode ex:InvalidResource1 .\n";
+    const char *version_data =
+        "<http://example.com/ns#InvalidResource1> <http://example.com/ns#property> "
+        "<http://test.com/ns#Value> .\n";
+    const char *base = "https://example.org/suite/entry.ttl";
+    const char *ed = "shacl-ed-2026-10-16";
+    const char *wd = "shacl-wd-2026-09-18";
+    int mentions = 0;
+    char message[512];
+
+    int32_t rc = validate_under_law(values_shapes, base, values_data, NULL, NULL,
+                                    "InvalidResource", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && strstr(message, "VALUES is not allowed") != NULL,
+          "the compatibility law refuses pre-binding-009 at load");
+    rc = validate_under_law(values_shapes, base, values_data, NULL, ed, "InvalidResource",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1,
+          "the editor's draft validates pre-binding-009 and reports the invalid resource");
+    rc = validate_under_law(values_shapes, base, values_data, NULL, ed, "ValidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 0, "and not the valid one");
+
+    rc = validate_under_law(version_shapes, base, version_data, NULL, wd, "InvalidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && strstr(message, "undeclared prefix") != NULL,
+          "the working draft refuses prefixes-003 at load");
+    rc = validate_under_law(version_shapes, base, version_data, NULL, ed, "InvalidResource1",
+                            &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1, "the editor's draft validates prefixes-003");
+
+    const char *unknown[3] = {"shacl-ed-2026-10-17", "SHACL-ED-2026-10-16", ""};
+    for (int i = 0; i < 3; i++) {
+        rc = validate_under_law(version_shapes, base, version_data, NULL, unknown[i],
+                                "InvalidResource1", &mentions, message, sizeof message);
+        CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT &&
+                  strstr(message, "unsupported-profile") != NULL,
+              "an id no law has is the unsupported-profile status");
+    }
+    rc = validate_under_law(version_shapes, base, version_data, "xpath-2.0-2010-12-14", ed,
+                            "InvalidResource1", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && strstr(message, "requires") != NULL,
+          "a dated law refuses an XPath override of another law");
+    rc = validate_under_law(version_shapes, base, version_data, "xpath-3.1-2017-03-21", ed,
+                            "InvalidResource1", &mentions, message, sizeof message);
+    CHECK(rc == PURRDF_STATUS_OK && mentions == 1,
+          "and accepts its own XPath law beside the refused one");
+    printf("shacl_law: the dated law is selected, refused and checked against its XPath law\n");
+    return 0;
+}
+
 /* The dated regular-expression laws through the real header and linkage. `(?:a)b` is a
  * non-capturing group only XPath 3.1 defines, so under XPath 2.0 the FILTER keeps no row;
  * `^(a)\1$` is a back-reference both dated laws match against "aa" and the compatibility
@@ -2061,6 +2180,7 @@ int main(int argc, char **argv) {
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
     CHECK(check_xpath_regex() == 0, "the dated regular-expression laws");
+    CHECK(check_shacl_law() == 0, "the dated SHACL laws");
     CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
     CHECK(check_division_policy(dataset) == 0, "the division policy and expression errors");
 

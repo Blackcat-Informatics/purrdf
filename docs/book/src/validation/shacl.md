@@ -607,6 +607,14 @@ Reproduce it with:
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
+The 213 `sht:Validate` tests also run through the built `purrdf validate
+--shacl-profile shacl-ed-2026-10-16` binary, graded against the approved results by
+the same grader, so the result holds on a shipped surface:
+
+```bash
+cargo test -p purrdf-cli --test w3c12_validate_cli -- --nocapture
+```
+
 The last line of the approved suite's scoreboard is
 `W3C12 TOTAL: passed 591, spec-contradicted 0, xfailed 0, ledger 0`,
 and the unlisted files' own line is
@@ -1442,6 +1450,42 @@ Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 dict with `text` and its `language` / `direction` / `datatype` when present).
 A result that carries SHACL-SPARQL result annotations also has `annotations`, a
 list of tuples, each a property IRI and a value in N-Triples syntax.
+
+## Dated SHACL laws
+
+Unselected, SHACL validation runs under the compatibility law. A caller selects
+one exact, dated SHACL law by its stable id: `shacl-rec-2017-07-20` (the 2017
+Recommendation), `shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or
+`shacl-ed-2026-10-16` (the data-shapes editor's draft that the W3C SHACL 1.2 test
+suite is taken from, and the law the PurRDF EARL report is graded under). Every host
+selects the same law the same way, and every host decodes the id once, exactly,
+through `purrdf_validate::complete_profile`.
+
+| Host | Spelling |
+|---|---|
+| CLI | `--shacl-profile <ID>` on `validate`, with `--shapes`, `--shapes-product` (a prepared product stores no SHACL law, so the restore takes it from the request) or `--changes` |
+| Python | `shacl_profile=` on `shapes.validate` and the `Shapes` constructor |
+| WebAssembly | a trailing `shaclProfile` on `shaclValidateToSarif`; its asynchronous twin takes it in its options object |
+| C | `shacl_profile` on `purrdf_shacl_validate_to_sarif_law`, which adds it to `purrdf_shacl_validate_to_sarif_xpath_regex` and changes no existing signature |
+
+```sh
+purrdf validate --shapes shapes.ttl --shacl-profile shacl-ed-2026-10-16 data.ttl
+```
+
+An id that names no law, `shacl-ed-2026-10-17` among them, is refused with the
+`unsupported-profile` status, and no nearby edition is substituted. A shapes graph
+the selected law's text refuses is refused at load, never validated under another
+law. The same pair shows it on every host. The compatibility law refuses
+`sparql/pre-binding/pre-binding-009` at load, because it contains a `VALUES` over
+a variable that is not pre-bound, and the editor's draft validates it. The working
+draft refuses `sparql/node/prefixes-003`, which reaches a prefix declaration through
+a version IRI, and the editor's draft validates it.
+
+A dated law carries its own XPath bundle (see
+[Dated XPath regex laws](#dated-xpath-regex-laws)). Naming another XPath law beside
+it, such as `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`,
+is refused as a usage error, and naming the same law is accepted. Node-expression
+and SPARQL 1.2 RL records are law-independent and take no SHACL law.
 
 ## Dated XPath regex laws
 

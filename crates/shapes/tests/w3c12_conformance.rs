@@ -592,6 +592,7 @@ const SUITE: w3c_earl::Suite = w3c_earl::Suite {
     commit: W3C12_SUITE_COMMIT,
     profile: "shacl-1.2",
     law: ShaclProfile::ED_20261016.id(),
+    law_independent_records: true,
 };
 
 /// The EARL-scope scoreboard line's label and the name its failed count carries.
@@ -2197,6 +2198,7 @@ fn w3c12_earl_subject_and_assertor_are_exact() {
         w3c_earl::SAMPLE_COMMIT,
         "4cd469867a1cc6d2fff80e8a40723b26c695d67a",
         "shacl-ed-2026-10-16",
+        true,
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -2336,8 +2338,14 @@ fn w3c12_earl_report_is_written_when_configured() {
         &scope_entries(graded()),
     ))
     .expect("the report renders");
-    w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT, SUITE.law)
-        .unwrap_or_else(|error| panic!("{error}"));
+    w3c_earl::check_descriptions(
+        &bytes,
+        &config.commit,
+        W3C12_SUITE_COMMIT,
+        SUITE.law,
+        SUITE.law_independent_records,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
         .unwrap_or_else(|error| panic!("{error}"));
     println!(

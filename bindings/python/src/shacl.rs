@@ -62,6 +62,17 @@
 //! SPARQL method. Any other name raises `ValueError` listing the accepted ones, and `None` (the default)
 //! keeps the compatibility pattern behaviour unchanged.
 //!
+//! # The SHACL law
+//!
+//! `validate` and the `Shapes` constructor take a `shacl_profile` keyword: the stable id of one
+//! exact, dated SHACL law (`"shacl-rec-2017-07-20"`, `"shacl-wd-2026-09-18"` or
+//! `"shacl-ed-2026-10-16"`), decoded once through [`purrdf_validate::complete_profile`], the
+//! one home for that decoding. `None` (the default) keeps the compatibility law, exactly as
+//! before the keyword existed. An id that names no law raises `ValueError` carrying the
+//! `unsupported-profile` status; no nearby edition is substituted. A dated law carries its own
+//! XPath bundle, so an `xpath_regex` naming another law raises `ValueError` naming both. A
+//! shapes graph the law's text refuses is refused at load, as `ValueError`.
+//!
 //! `entail`, `apply_rules` and `eval_node_expr` take the same keyword, for every pattern a
 //! run evaluates: the `REGEX`/`REPLACE` of SHACL rules, SHACL-AF functions, node
 //! expressions and SPARQL 1.2 RL filters and assignments, and the `sh:pattern` of rule
@@ -127,8 +138,11 @@ use crate::py_store::PyStore;
 ///
 /// `xpath_regex` selects the dated native XPath pattern law — see the
 /// [module documentation](self).
+///
+/// `shacl_profile` selects the exact dated SHACL law by its stable id — see the
+/// [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None, shacl_profile=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
 #[allow(clippy::fn_params_excessive_bools)] // one keyword per validation-request option
@@ -142,10 +156,15 @@ fn validate(
     shapes_graph: Option<&str>,
     subclass_of_in_shapes_graph: bool,
     xpath_regex: Option<&str>,
+    shacl_profile: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let selection = crate::xpath_regex::selection(xpath_regex)?;
-    let base_options = engine::ValidationOptions::default()
-        .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
+    let base_options = requested_law(
+        engine::ValidationOptions::default()
+            .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
+        shacl_profile,
+        selection,
+    )?;
     let options = match conformance_disallows {
         None => base_options,
         Some(iris) => base_options.with_conformance_disallows(
@@ -236,6 +255,33 @@ fn validate(
     out.set_item("diagnostics", diagnostics_list(py, &report.diagnostics)?)?;
 
     Ok(out.into_any().unbind())
+}
+
+/// `options` under the SHACL law `shacl_profile` names, read by the one reading every host
+/// shares ([`purrdf_validate::requested_shacl_profile`]); `None` leaves the compatibility law.
+///
+/// # Errors
+///
+/// `ValueError` carrying the `unsupported-profile` status for an id no law has, and
+/// `ValueError` naming both laws when `selection` (the caller's `xpath_regex`) is not the
+/// XPath law the selected dated law requires.
+fn requested_law(
+    options: engine::ValidationOptions,
+    shacl_profile: Option<&str>,
+    selection: Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )>,
+) -> PyResult<engine::ValidationOptions> {
+    let profile =
+        purrdf_validate::requested_shacl_profile(shacl_profile, selection.map(|(law, _)| law))
+            .map_err(|message| {
+                pyo3::exceptions::PyValueError::new_err(format!("shacl_profile: {message}"))
+            })?;
+    Ok(match profile {
+        Some(profile) => options.with_profile(profile),
+        None => options,
+    })
 }
 
 /// Raise a selected-law validation failure: the shapes-graph refusals exactly as
@@ -866,7 +912,8 @@ fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, purrdf_validate::Shap
 
 #[pymethods]
 impl PyShapes {
-    /// `Shapes(shapes_ttl, *, base=None, imports=(), shapes_graph=None)`.
+    /// `Shapes(shapes_ttl, *, base=None, imports=(), shapes_graph=None,
+    /// subclass_of_in_shapes_graph=False, shacl_profile=None)`.
     ///
     /// `base` is the shapes document's own base IRI, used to resolve its relative IRI
     /// references (RFC-3986 §5.1.2). Omitted, only an in-document `@base` can establish
@@ -882,8 +929,12 @@ impl PyShapes {
     ///
     /// `subclass_of_in_shapes_graph` is SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`
     /// (see [`validate`]); every validation of these shapes and `prepare()` carry it.
+    ///
+    /// `shacl_profile` is the stable id of the exact dated SHACL law the shapes graph is
+    /// loaded and every validation of it answers under (see the [module documentation](self));
+    /// `None` is the compatibility law.
     #[new]
-    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false))]
+    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, shacl_profile=None))]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     fn new(
         py: Python<'_>,
@@ -892,19 +943,43 @@ impl PyShapes {
         imports: Vec<(String, String)>,
         shapes_graph: Option<&str>,
         subclass_of_in_shapes_graph: bool,
+        shacl_profile: Option<&str>,
     ) -> PyResult<Self> {
+        let options = requested_law(
+            engine::ValidationOptions::default()
+                .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
+            shacl_profile,
+            None,
+        )?;
         let pairs = crate::py_entail::import_list(&imports);
         // Shapes-graph parsing runs detached (GIL released).
         let mut inner = py
             .detach(|| {
                 let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
-                engine::parse_shapes_with_graph(shapes_ttl, base, None, shapes_graph, &table)
+                if shacl_profile.is_none() {
+                    return engine::parse_shapes_with_graph(
+                        shapes_ttl,
+                        base,
+                        None,
+                        shapes_graph,
+                        &table,
+                    );
+                }
+                engine::parse_shapes_with_options(
+                    shapes_ttl,
+                    base,
+                    None,
+                    shapes_graph,
+                    &table,
+                    &options,
+                )
+                .map_err(|error| match error {
+                    purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
+                    other => purrdf_validate::ShapesError::Invalid(other.to_string()),
+                })
             })
             .map_err(|error| shapes_error(py, error))?;
-        inner.set_validation_options(
-            engine::ValidationOptions::default()
-                .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
-        );
+        inner.set_validation_options(options);
         Ok(Self {
             inner: Arc::new(inner),
         })

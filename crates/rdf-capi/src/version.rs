@@ -236,6 +236,12 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
 /// signature and its behaviour, so this is additive and rides the same bump.
 ///
+/// The same additive surface includes `purrdf_shacl_validate_to_sarif_law`, the validation
+/// entry point with a nullable `shacl_profile` after `regex_profile`: the stable id of one
+/// exact, dated SHACL law (`shacl-rec-2017-07-20`, `shacl-wd-2026-09-18` or
+/// `shacl-ed-2026-10-16`), decoded by `purrdf_validate::complete_profile`. Every existing
+/// prototype keeps its signature and its behaviour.
+///
 /// The same additive surface includes the native geographic session and point-index
 /// create/call/free families and the five `*_with_geo` query/update entry points.
 /// These use opaque owned handles and an explicit selected geographic profile;

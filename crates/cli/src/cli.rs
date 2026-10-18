@@ -1273,6 +1273,20 @@ pub(crate) enum Command {
         /// compatibility pattern engine runs, exactly as before this flag existed.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// Validate under one exact, dated SHACL law, named by its stable id:
+        /// `shacl-rec-2017-07-20` (the 2017 Recommendation), `shacl-wd-2026-09-18` (the
+        /// SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the data-shapes editor's draft
+        /// the W3C SHACL 1.2 test suite is graded under). The id is decoded once, exactly,
+        /// by `purrdf_validate::complete_profile`; an id it does not know is refused with
+        /// its `unsupported-profile` status (exit 2), never mapped to a nearby edition.
+        /// A dated law carries its own XPath pattern law, so `--xpath-regex` may only name
+        /// that same law: `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`
+        /// is a usage error (exit 2). Applies to `--shapes` and `--shapes-product` alike
+        /// (a product stores no SHACL law; the restore takes it from this request) and to
+        /// the `--changes` lane. Omitted, the compatibility law runs, exactly as before this
+        /// flag existed.
+        #[arg(long = "shacl-profile", value_name = "ID")]
+        shacl_profile: Option<String>,
         /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,

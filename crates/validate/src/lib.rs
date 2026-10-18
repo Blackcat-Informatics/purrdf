@@ -95,8 +95,8 @@ pub use build::{
 };
 pub use complete::{
     CompleteValidationStatus, complete_profile, complete_report_payload, complete_report_to_json,
-    complete_report_to_sarif_string, complete_validation_status, validate_complete_documents,
-    validate_complete_product, validate_complete_sources,
+    complete_report_to_sarif_string, complete_validation_status, requested_shacl_profile,
+    validate_complete_documents, validate_complete_product, validate_complete_sources,
 };
 pub use entail::{
     EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,

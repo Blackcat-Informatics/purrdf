@@ -474,6 +474,23 @@ SPARQL 1.2 RL filter or assignment, and each `sh:pattern` of a rule condition; o
 `purrdf_shacl_lint_shapes` has no twin: it certifies a shapes graph without compiling or
 matching any of its patterns. The entailment services (`purrdf_entail_*`) take no law.
 
+### The dated SHACL law
+
+`purrdf_shacl_validate_to_sarif_law` is `purrdf_shacl_validate_to_sarif_xpath_regex` with a
+nullable `shacl_profile` after `regex_profile`, before its out-parameters. It selects one
+exact, dated SHACL law by its stable id: `shacl-rec-2017-07-20` (the 2017 Recommendation),
+`shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the
+data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under). It is the law
+`purrdf validate --shacl-profile` selects. The id is decoded once, exactly, by
+`purrdf_validate::complete_profile`; NULL runs the compatibility law, as the entry points
+without the suffix do. An id that names no law (`shacl-ed-2026-10-17`, another letter case,
+the empty string) is `PURRDF_STATUS_INVALID_ARGUMENT` whose message leads with the
+`unsupported-profile` status; no nearby edition is substituted. A dated law carries its own
+XPath bundle, so a `regex_profile` naming another law is `PURRDF_STATUS_INVALID_ARGUMENT`
+too, while the same law (or NULL) runs. A shapes graph the law's text refuses is refused at
+load as `PURRDF_STATUS_PARSE_ERROR`, never validated under another law. No existing
+signature changed: this is an additional export.
+
 ## Governed execution
 
 `purrdf_query_governed` returns either a complete query result or a typed exhausted
