@@ -220,7 +220,74 @@ fn graph_refusal_keeps_original_invalid_edge_without_rendering() {
     );
 }
 
+fn event_ingestion_retains_original_freeze_causes_and_cancellation() {
+    use core::ops::ControlFlow;
+    use purrdf_core::DatasetSink;
+    use purrdf_events::{EventError, EventQuad, EventTerm, EventTermId, RdfEventSink};
+    let mut cancelled = DatasetSink::new();
+    cancelled.mark_cancelled();
+    let error = cancelled.finish().unwrap_err();
+    assert_eq!(error, EventError::Cancelled);
+    assert_eq!(Capture::read(&error).code, "event-cancelled");
+    assert!(cancelled.into_dataset().is_none());
+
+    for invalid in [true, false] {
+        let mut sink = DatasetSink::new();
+        let s = EventTermId(10);
+        let p = EventTermId(20);
+        let o = EventTermId(30);
+        assert_eq!(
+            sink.term(s, EventTerm::Iri("https://example.org/s"))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        let predicate = if invalid {
+            EventTerm::Literal {
+                lexical: "not-a-predicate",
+                datatype: purrdf_xsd::datatype::XSD_STRING,
+                language: None,
+                direction: None,
+            }
+        } else {
+            EventTerm::Iri("https://example.org/p")
+        };
+        assert_eq!(sink.term(p, predicate).unwrap(), ControlFlow::Continue(()));
+        assert_eq!(
+            sink.term(o, EventTerm::Iri("https://example.org/o"))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(
+            sink.quad(EventQuad { s, p, o, g: None }).unwrap(),
+            ControlFlow::Continue(())
+        );
+        if invalid {
+            let error = sink.finish().unwrap_err();
+            assert!(
+                sink.into_dataset().is_none(),
+                "refused data must never freeze"
+            );
+            let original = std::error::Error::source(&error).unwrap().source().unwrap();
+            assert!(original.is::<purrdf_core::RdfDiagnostic>());
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, "event-native");
+            let freeze = fields.child("cause");
+            assert_eq!(freeze.code, "event-ingest-freeze");
+            let diagnostic = freeze.child("cause");
+            assert_eq!(diagnostic.code, "rdf-diagnostic");
+            assert!(matches!(
+                diagnostic.field("code"),
+                ErrorValue::Code("rdf-ir-predicate-not-iri")
+            ));
+        } else {
+            sink.finish().unwrap();
+            assert_eq!(sink.into_dataset().unwrap().quad_count(), 1);
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
+    event_ingestion_retains_original_freeze_causes_and_cancellation,
     graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
     native_evidence_alignment_and_answer_state_failures_remain_structured,
     xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts,
