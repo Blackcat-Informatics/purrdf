@@ -486,8 +486,122 @@ fn native_caller_refusal_keeps_full_width_fields_without_presentation() {
     ));
 }
 
+fn scalar_argument_refusal_keeps_original_term_and_native_parser() {
+    use purrdf_core::TermValue;
+    use purrdf_geo_kernel::{ArgumentInputError, ArgumentInputReason};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    let input = TermValue::typed_literal("9223372036854775808", purrdf_xsd::datatype::XSD_INTEGER);
+    let cause = "9223372036854775808".parse::<i64>().unwrap_err();
+    let error =
+        ArgumentInputError::capture(&input, ArgumentInputReason::IntegerLexical(cause), None);
+    drop(input);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    assert!(cloned.is_expression_error());
+    let record = Capture::read(cloned.original()).child("cause");
+    assert_eq!(record.code, "geo-argument-input");
+    let original = record.child("value");
+    assert_eq!(original.code, "rdf-term-literal");
+    assert!(matches!(
+        original.field("lexical_form"),
+        ErrorValue::Text("9223372036854775808")
+    ));
+    assert!(
+        matches!(original.field("datatype"), ErrorValue::Iri(value) if value == purrdf_xsd::datatype::XSD_INTEGER)
+    );
+    let reason = record.child("reason");
+    assert_eq!(reason.code, "argument-input-integer-lexical");
+    let cause = reason.child("cause");
+    assert_eq!(cause.code, "std-integer-parse");
+    let kind = cause.child("kind");
+    assert!(matches!(
+        kind.field("name"),
+        ErrorValue::Code("positive-overflow")
+    ));
+}
+
+fn preparation_work_refusal_keeps_original_counters_and_budget() {
+    use purrdf_geo_kernel::{PreparationBudget, PreparationPhase};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    for (phase, code) in [
+        (PreparationPhase::BufferRadius, "preparation-buffer-radius"),
+        (
+            PreparationPhase::OriginalValidation,
+            "preparation-original-validation",
+        ),
+    ] {
+        let policy = ExecutionPolicy::unbounded();
+        let context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        let actual_work = context.work_items();
+        let complete_peak = context.workspace_peak();
+        let mut budget = PreparationBudget::new(policy);
+        budget.retain(u64::MAX, 23).unwrap();
+        let error = budget
+            .retain_context_phase(&context, 41, phase, None)
+            .unwrap_err();
+        assert_eq!(budget.work_items(), u64::MAX);
+        assert_eq!(budget.workspace_bytes(), 23);
+        assert_eq!(budget.workspace_peak(), 23);
+        drop(context);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let cloned = error.clone();
+        let measured = window.close();
+        assert_eq!(
+            (
+                measured.allocations,
+                measured.requested_bytes,
+                measured.retained_bytes,
+                measured.peak_working_bytes
+            ),
+            (0, 0, 0, 0)
+        );
+        drop(error);
+        let record = Capture::read(cloned.original()).child("cause");
+        assert_eq!(record.code, "context-preparation-work");
+        assert_eq!(record.child("phase").code, code);
+        assert!(
+            matches!(record.field("baseline_work"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(record.field("actual_work"), ErrorValue::Unsigned(value) if value == u128::from(actual_work))
+        );
+        assert!(matches!(
+            record.field("retained_workspace"),
+            ErrorValue::ByteCount(41)
+        ));
+        assert!(
+            matches!(record.field("complete_peak"), ErrorValue::ByteCount(value) if value == u128::from(complete_peak))
+        );
+
+        let context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        let mut budget = PreparationBudget::new(policy);
+        budget
+            .retain_context_phase(&context, 0, phase, None)
+            .unwrap();
+        assert_eq!(budget.work_items(), context.work_items());
+        assert_eq!(budget.workspace_bytes(), 0);
+        assert_eq!(budget.workspace_peak(), context.workspace_peak());
+    }
+}
+
 purrdf_testkit::harness_main!(
     public_geo_capability_replay,
     wide_coordinate_refusal_keeps_original_words_after_input_and_error_drop,
     native_caller_refusal_keeps_full_width_fields_without_presentation,
+    preparation_work_refusal_keeps_original_counters_and_budget,
+    scalar_argument_refusal_keeps_original_term_and_native_parser,
 );

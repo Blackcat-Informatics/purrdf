@@ -12,7 +12,9 @@
 //! relation or an unbound value. Offline transformations use explicit compiled
 //! models and never infer a datum operation from matching ellipsoid parameters.
 
+mod argument_input;
 mod cause;
+pub use argument_input::{ArgumentInputError, ArgumentInputReason};
 pub use cause::{GeoFailureCause, RetainedGeoCause};
 mod unsupported;
 pub use unsupported::UnsupportedRefusal;
@@ -51,7 +53,7 @@ pub use source_preparation::{
     PreparationBaselineReason, PreparationReceiptConsumer, SourcePreparationError,
 };
 mod context_config;
-pub use context_config::{ContextConfigError, OutputReceiptReason};
+pub use context_config::{ContextConfigError, OutputReceiptReason, PreparationPhase};
 mod transverse;
 pub use transverse::{TransverseInputError, TransverseInputReason};
 mod affine;
@@ -91,9 +93,13 @@ pub enum GeoError {
     Arity(GeoFailureCause),
     /// Original numeric lexical failure, with its original XSD payload.
     NumericLiteral(RetainedGeoCause),
+    /// Original scalar argument term, native requirement and parser failure.
+    ArgumentInput(crate::context::Retained<ArgumentInputError>),
     /// The caller's wiring is unusable as written (an empty IRI, a vocabulary
     /// missing a term a registered function needs).
     Config(String),
+    /// The caller selected no relation families, so no registration can be made.
+    NoRelationFamilies,
     /// Original projection-construction refusal and input operands.
     IndexConfiguration(crate::context::Retained<IndexConfigError>),
     /// Original nonliteral serialization object and configured property.
@@ -331,7 +337,9 @@ impl purrdf_hash::error::StructuredError for GeoError {
         SourceRead(cause) => "geo-source-read" { "cause" => Cause(cause) },
         Arity(cause) => "geo-arity" { "cause" => Cause(cause) },
         NumericLiteral(cause) => "geo-numeric-literal" { "cause" => Cause(cause) },
+        ArgumentInput(cause) => "geo-argument-input-error" { "cause" => Cause(&**cause) },
         Config(reason) => "geo-config" { "reason" => Text(reason) },
+        NoRelationFamilies => "geo-no-relation-families" {},
         IndexConfiguration(cause) => "geo-index-configuration" { "cause" => Cause(&**cause) },
         IndexSerialization(cause) => "geo-index-serialization" { "cause" => Cause(&**cause) },
         IndexBinding(cause) => "geo-index-binding" { "cause" => Cause(&**cause) },
@@ -718,6 +726,7 @@ impl GeoError {
                 | Self::IndexSerialization(_)
                 | Self::Literal(_)
                 | Self::NumericLiteral(_)
+                | Self::ArgumentInput(_)
                 | Self::NativeMath(purrdf_xsd::math::MathError::AmbiguousRoots { .. })
                 | Self::PatternSyntax(_)
                 | Self::CoordinateOutOfRange { .. }
@@ -810,6 +819,10 @@ impl GeoError {
             Self::ModelInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
             Self::OperationValidation { context, .. } => context.detail(),
             Self::Config(msg) | Self::Literal(msg) => msg,
+            Self::ArgumentInput(cause) => return std::borrow::Cow::Owned((**cause).to_string()),
+            Self::NoRelationFamilies => {
+                "no relation families supplied to register; registering nothing and returning success would surface much later as a query whose geo: relation was parsed as an ordinary triple pattern and matched nothing"
+            }
             Self::Domain(msg) => msg,
             Self::UnregisteredCrs(msg) => msg,
             Self::InvalidExecutionPolicy(_) => "admission limits must be positive",
@@ -869,7 +882,9 @@ impl GeoError {
             Self::SourceRead(msg) => write!(f, "geometry source read error: {msg}"),
             Self::Arity(msg) => write!(f, "wrong argument count: {msg}"),
             Self::NumericLiteral(cause) => write!(f, "malformed geometry literal: {cause}"),
+            Self::ArgumentInput(cause) => write!(f, "malformed geometry literal: {}", **cause),
             Self::Config(msg) => write!(f, "invalid geo configuration: {msg}"),
+            Self::NoRelationFamilies => write!(f, "invalid geo configuration: {}", self.detail()),
             Self::CrsConfiguration(cause) => write!(f, "invalid geo configuration: {}", **cause),
             Self::CrsLiteral { cause, .. } => write!(f, "malformed geometry literal: {}", **cause),
             Self::IndexConfiguration(cause) => write!(f, "invalid geo configuration: {}", **cause),
@@ -1181,6 +1196,7 @@ purrdf_lex::error_source!(GeoError => {
     Self::SourceRead(cause) => cause,
     Self::Arity(cause) => cause,
     Self::NumericLiteral(cause) => cause,
+    Self::ArgumentInput(cause) => &**cause,
     Self::Unsupported(cause) => cause,
     Self::IndexConfiguration(cause) => &**cause,
     Self::MatrixConfiguration(cause) => &**cause,

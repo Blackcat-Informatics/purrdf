@@ -58,7 +58,7 @@ jobs:
           mkdir -p target
           cargo test --locked -p purrdf-geo-kernel --lib -- --list > target/geographic-kernel-test-inventory.txt
           result=0
-          for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests::; do
+          for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests:: cells::cover::tests::reversed_box_ metric::input::tests::radius_refusals_ operation::tests::matching_transverse_scalar_preserves_exact_ties_and_domain operation::transverse::tests::native_projection_refusals_; do
             grep -Fq -- "$prefix" target/geographic-kernel-test-inventory.txt
             cargo test --locked -p purrdf-geo-kernel --lib "$prefix" || result=$?
           done
@@ -87,9 +87,12 @@ jobs:
         if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         run: |
           cargo test --locked -p purrdf-validate --lib -- --list > target/geographic-host-test-inventory.txt
-          case=geo::tests::scale_and_configuration_refusals_keep_machine_readable_original_parameters
-          grep -Fq -- "$case" target/geographic-host-test-inventory.txt
-          cargo test --locked -p purrdf-validate --lib "$case" -- --exact
+          result=0
+          for case in geo::tests::scale_and_configuration_refusals_keep_machine_readable_original_parameters geo::tests::native_math_and_vocabulary_refusals_preserve_host_classes_and_fields; do
+            grep -Fq -- "$case" target/geographic-host-test-inventory.txt
+            cargo test --locked -p purrdf-validate --lib "$case" -- --exact || result=$?
+          done
+          exit "$result"
 
   wasm:
     name: WASM geographic replay and error inspection

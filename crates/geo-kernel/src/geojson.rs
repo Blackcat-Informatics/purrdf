@@ -1324,8 +1324,8 @@ pub(crate) fn write_admitted(
     progress: &mut crate::context::WorkProgress<'_>,
 ) -> Result<String, GeoError> {
     let mut writer = Writer::admitted(context, progress);
-    check_reference(literal, required_crs, &mut writer)?;
-    let result = write_with(literal.geometry(), coordinate_scale, &mut writer);
+    let result = check_reference(literal, required_crs, &mut writer)
+        .and_then(|()| write_with(literal.geometry(), coordinate_scale, &mut writer));
     let cleanup = writer.finish(result.is_ok());
     match result {
         Ok(output) => cleanup.map(|()| output),

@@ -244,6 +244,21 @@ native error; `GeoError::source_read` instead accepts an explicit caller message
 Presentation through `detail()` or `Display` is a separate operation and may
 allocate. Structured inspection does not turn caller messages into typed causes.
 
+An empty relation-family registration has its own `NoRelationFamilies` code and
+remains a configuration failure; it registers no functions. Preparation phases
+retain cumulative work through `PreparationBudget::retain_context_phase`. A
+context that predates the budget's baseline returns the original phase, work
+counters, retained output and observed peak in a typed refusal, leaving the
+budget unchanged. The radius and original-validation callers use this same
+receipt check before retaining a phase.
+
+Scalar unit, integer and string refusals preserve the complete original RDF
+argument under the same admitted owner. An integer-index lexical refusal also
+retains the native parser error and its kind, distinguishing overflow from an
+invalid digit without parsing presentation text. Planar distance to an empty
+set retains the ordered geometry kinds and empty-support flags and remains an
+expression error.
+
 ---
 
 ## 5. The shared JSON reader retains every coordinate lexeme

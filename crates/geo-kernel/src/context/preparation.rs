@@ -165,6 +165,37 @@ impl PreparationBudget {
         Ok(())
     }
 
+    /// Retain one context's cumulative receipt against this original baseline.
+    /// No receipt is changed when the context predates the baseline or exceeds
+    /// the invocation's limits. A diagnostic uses the supplied native observer.
+    ///
+    /// # Errors
+    /// Preserves original inconsistent counters or native admission refusal.
+    pub fn retain_context_phase(
+        &mut self,
+        context: &MetricContext,
+        workspace: u64,
+        phase: crate::PreparationPhase,
+        observer: Option<&mut dyn super::MetricWorkObserver>,
+    ) -> Result<(), GeoError> {
+        let actual_work = context.work_items();
+        let complete_peak = context.workspace_peak();
+        let work = actual_work.checked_sub(self.work).ok_or_else(|| {
+            GeoError::retained_failure(
+                crate::ContextConfigError::PreparationWork {
+                    phase,
+                    baseline_work: self.work,
+                    actual_work,
+                    retained_workspace: workspace,
+                    complete_peak,
+                },
+                GeoError::ContextConfiguration,
+                observer,
+            )
+        })?;
+        self.retain_phase(work, workspace, complete_peak)
+    }
+
     /// Admit the next phase against the same cumulative original policy.
     ///
     /// # Errors

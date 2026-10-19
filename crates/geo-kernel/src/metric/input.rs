@@ -160,8 +160,8 @@ mod tests {
         }
 
         for (lexical, datatype, code) in [
-            ("12x", XsdDatatype::Integer, "xsd-invalid-lexical"),
-            ("1.2.3", XsdDatatype::Decimal, "xsd-invalid-lexical"),
+            ("12x", XsdDatatype::Integer, "xsd-exact"),
+            ("1.2.3", XsdDatatype::Decimal, "xsd-exact"),
             ("300", XsdDatatype::Byte, "xsd-out-of-range"),
         ] {
             let original = purrdf_xsd::parse(lexical, datatype).unwrap_err();
@@ -175,9 +175,26 @@ mod tests {
             drop(error);
             let fields = Capture::read(&last).child("cause").child("cause");
             assert_eq!(fields.code, code);
-            assert!(matches!(fields.field("lexical"), ErrorValue::Text(value) if value == lexical));
+            let lexical_fields = if code == "xsd-exact" {
+                let cause = fields.child("cause");
+                assert_eq!(cause.code, "exact-invalid-lexical");
+                let kind = match datatype {
+                    XsdDatatype::Integer => purrdf_xsd::exact::ExactKind::Integer,
+                    XsdDatatype::Decimal => purrdf_xsd::exact::ExactKind::Decimal,
+                    _ => unreachable!("the fixture names an exact lexical type"),
+                };
+                assert!(
+                    matches!(cause.field("kind"), ErrorValue::Code(value) if value == kind.name())
+                );
+                cause
+            } else {
+                assert!(
+                    matches!(fields.field("datatype"), ErrorValue::Iri(value) if value == datatype.iri())
+                );
+                fields
+            };
             assert!(
-                matches!(fields.field("datatype"), ErrorValue::Iri(value) if value == datatype.iri())
+                matches!(lexical_fields.field("lexical"), ErrorValue::Text(value) if value == lexical)
             );
             let source = std::error::Error::source(&last).unwrap().source().unwrap();
             assert_eq!(

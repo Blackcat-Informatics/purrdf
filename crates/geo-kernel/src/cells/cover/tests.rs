@@ -5,6 +5,30 @@ use super::*;
 use crate::cells::{PointCellIndex, PointIndexLimits, PointIndexPoint};
 use crate::geodesic::PreparedGeodesic;
 
+#[test]
+fn reversed_box_uses_original_operand_diagnostic_factory() {
+    let calls = core::cell::Cell::new(0);
+    let refuse = |_: &Rat| {
+        calls.set(calls.get() + 1);
+        Err(GeoError::Cancelled)
+    };
+    let values = crate::numerical::ExactValues::with_diagnostics(None, &refuse);
+    assert_eq!(
+        ClosedBox::new_using(
+            Rat::zero(),
+            Rat::from_i64(2),
+            Rat::one(),
+            Rat::one(),
+            values
+        ),
+        Err(GeoError::Cancelled)
+    );
+    assert_eq!(calls.get(), 1);
+    calls.set(0);
+    assert!(ClosedBox::new_using(Rat::zero(), Rat::zero(), Rat::one(), Rat::one(), values).is_ok());
+    assert_eq!(calls.get(), 0);
+}
+
 fn grid() -> CubeHilbertQ62V1 {
     CubeHilbertQ62V1::new(NativeGridProfile::Wgs84)
 }

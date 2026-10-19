@@ -1715,6 +1715,76 @@ fn scale_and_configuration_refusals_keep_machine_readable_original_parameters() 
 }
 
 #[test]
+fn native_math_and_vocabulary_refusals_preserve_host_classes_and_fields() {
+    use purrdf_geo_kernel::{Crs, GeoVocabBuilder};
+    use purrdf_xsd::math::MathError;
+    let error = GeoError::NativeMath(MathError::Domain("original numerical domain"));
+    assert!(error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "domain");
+    assert_eq!(record["reason"], "original numerical domain");
+    let error = GeoError::NativeMath(MathError::PrecisionExhausted);
+    assert!(!error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "engine-refusal");
+    let crs = Crs::new("https://example.org/crs/planar").unwrap();
+    let vocab = GeoVocabBuilder::new(
+        "https://example.org/geo/",
+        "https://example.org/geof/",
+        crs.clone(),
+        crs.clone(),
+    )
+    .unwrap()
+    .declare_crs_unit(&crs, "https://example.org/unit/metre")
+    .unwrap()
+    .build();
+    assert!(
+        vocab
+            .require_unit(&crs, "https://example.org/unit/metre")
+            .is_ok()
+    );
+    let error = vocab
+        .require_unit(&crs, "https://example.org/unit/foot")
+        .unwrap_err();
+    assert!(error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "domain");
+    assert_eq!(record["cause"]["code"], "vocabulary-unit-mismatch");
+    assert_eq!(record["cause"]["crs"], crs.as_str());
+    assert_eq!(
+        record["cause"]["declared"],
+        "https://example.org/unit/metre"
+    );
+    assert_eq!(
+        record["cause"]["requested"],
+        "https://example.org/unit/foot"
+    );
+    let other = Crs::new("https://example.org/crs/undeclared").unwrap();
+    let error = vocab
+        .require_unit(&other, "https://example.org/unit/metre")
+        .unwrap_err();
+    assert!(!error.is_expression_error());
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "configuration");
+    assert_eq!(record["cause"]["code"], "vocabulary-undeclared-unit");
+    assert_eq!(record["cause"]["crs"], other.as_str());
+    let error =
+        GeoVocabBuilder::new("", "https://example.org/geof/", crs.clone(), crs).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "configuration");
+    assert_eq!(record["cause"]["code"], "vocabulary-empty-namespace");
+    assert_eq!(
+        record["cause"]["namespace"]["code"],
+        "vocabulary-namespace-core"
+    );
+}
+
+#[test]
 fn complete_json_output_storage_refuses_before_large_result_construction() {
     use purrdf_geo_kernel::{ExecutionLimits, cells::NativeGridProfile};
     let profile = GeoProfile::standard()

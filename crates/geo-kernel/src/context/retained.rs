@@ -3234,7 +3234,20 @@ mod tests {
                         EdgeQuotientOperation::CrossedMeridian,
                         &mut progress,
                     ),
-                    2 => GeometryDomainError::reversed_box(bounds.each_ref(), &mut progress),
+                    2 => {
+                        let captured = (|| {
+                            Ok([
+                                GeoError::diagnostic_number(&bounds[0], &mut progress)?,
+                                GeoError::diagnostic_number(&bounds[1], &mut progress)?,
+                                GeoError::diagnostic_number(&bounds[2], &mut progress)?,
+                                GeoError::diagnostic_number(&bounds[3], &mut progress)?,
+                            ])
+                        })();
+                        match captured {
+                            Ok(bounds) => GeometryDomainError::reversed_box(bounds, &mut progress),
+                            Err(error) => error,
+                        }
+                    }
                     3 => GeometryDomainError::empty_enclosure(
                         &longitude,
                         &latitude,
@@ -3710,6 +3723,54 @@ mod tests {
         assert_eq!(released.allocations, 0);
         assert_eq!(released.requested_bytes, 0);
         assert_eq!(released.retained_bytes, -i64::try_from(retained).unwrap());
+    }
+
+    #[test]
+    fn geojson_reference_refusal_releases_parked_scratch_before_return() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let (account, mut observer) = observer(usize::MAX);
+        let literal =
+            crate::wkt::parse("POINT(1 2)", crate::standard_vocabulary().default_wkt_crs())
+                .unwrap();
+        let required = crate::Crs::new("https://example.org/other-crs").unwrap();
+        let mut context = MetricContext::wgs84().unwrap();
+        {
+            let mut progress = WorkProgress::new(Some(&mut observer));
+            context
+                .prepare_integer_scratch_for_observed(512, &mut progress)
+                .unwrap();
+        }
+        assert!(context.integer_scratch().is_some());
+        assert!(account.live.load(Ordering::Relaxed) > 0);
+        let error = crate::geojson::write_in_context_metered(
+            &literal,
+            &required,
+            12,
+            &mut context,
+            &mut observer,
+        )
+        .unwrap_err();
+        assert!(context.integer_scratch().is_none());
+        assert_eq!(context.retained_workspace_bytes(), 0);
+        assert_eq!(
+            context.remaining_workspace(),
+            context.policy().limits().max_workspace_bytes
+        );
+        drop(literal);
+        drop(required);
+        drop(context);
+        assert!(error.is_expression_error());
+        let fields = Capture::read(error.original()).child("cause");
+        assert!(
+            matches!(fields.field("actual"), ErrorValue::Iri(value) if value == purrdf_iri::vocab::ogc::CRS84)
+        );
+        assert!(matches!(
+            fields.field("required"),
+            ErrorValue::Iri("https://example.org/other-crs")
+        ));
+        drop(error);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

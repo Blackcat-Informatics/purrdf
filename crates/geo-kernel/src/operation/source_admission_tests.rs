@@ -14,6 +14,77 @@ use crate::{
 };
 
 #[test]
+fn complete_grid_certification_probe_refines_without_latching_domain() {
+    use super::{BilinearGrid, BilinearGridInverse, GridNode, MetricSourceDomain};
+    use purrdf_xsd::math::{CoordinateMath, FixedInterval, MathError, MathLimits};
+    let node = GridNode {
+        x: Rat::zero(),
+        y: Rat::zero(),
+    };
+    let grid = BilinearGrid::new(
+        [Rat::zero(), Rat::zero()],
+        [Rat::one(), Rat::one()],
+        2,
+        2,
+        vec![
+            Some(node.clone()),
+            None,
+            Some(node.clone()),
+            Some(node.clone()),
+        ],
+    )
+    .unwrap();
+    let domain =
+        MetricSourceDomain::new([Rat::zero(), Rat::zero()], [Rat::one(), Rat::one()]).unwrap();
+    let output = [
+        Rat::parse_decimal("0.5").unwrap(),
+        Rat::parse_decimal("0.5").unwrap(),
+    ];
+    let inverse = BilinearGridInverse {
+        grid,
+        source_domain: domain.clone(),
+    };
+    let mut progress = WorkProgress::integer(None);
+    let mut math = CoordinateMath::new(MathLimits::DEFAULT).unwrap();
+    let one = FixedInterval::from_i64(1, &mut math).unwrap();
+    let two = FixedInterval::from_i64(2, &mut math).unwrap();
+    let half = one.div(&two, &mut math).unwrap();
+    let target = [half.clone(), half];
+    assert_eq!(
+        inverse.certify(&target, &output, &mut math, &mut progress),
+        Err(MathError::PrecisionExhausted)
+    );
+    assert!(progress.latched_error().is_none());
+    let complete = BilinearGrid::new(
+        [Rat::zero(), Rat::zero()],
+        [Rat::one(), Rat::one()],
+        2,
+        2,
+        vec![Some(node); 4],
+    )
+    .unwrap();
+    let valid = BilinearGridInverse {
+        grid: complete.clone(),
+        source_domain: domain,
+    };
+    assert!(
+        valid
+            .certify(&target, &output, &mut math, &mut progress)
+            .is_ok()
+    );
+    assert!(progress.latched_error().is_none());
+    let mut limited = CoordinateMath::new(MathLimits {
+        max_work: 1,
+        ..MathLimits::DEFAULT
+    })
+    .unwrap();
+    assert_eq!(
+        complete.contains_complete_patch_math(&output[0], &output[1], &mut limited, &mut progress),
+        Err(MathError::WorkExhausted)
+    );
+}
+
+#[test]
 fn polynomial_refusals_keep_original_scales_and_sorted_coefficients() {
     use super::{Polynomial2d, PolynomialTerm};
     use crate::PolynomialInputError;

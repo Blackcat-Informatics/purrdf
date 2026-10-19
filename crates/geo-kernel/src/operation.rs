@@ -2544,11 +2544,14 @@ mod tests {
             assert_eq!(output.law_id(), chain.law);
             assert!(context.work_items() < ExecutionLimits::GEOMETRY.max_work_items);
         }
-        for source in [point("121", "31.23"), point("117", "-1")] {
-            assert!(matches!(
-                chain.apply(&source, &mut context),
-                Err(GeoError::Domain { .. })
-            ));
+        for (source, reason) in [
+            (point("121", "31.23"), crate::TransverseInputReason::Zone),
+            (point("117", "-1"), crate::TransverseInputReason::Hemisphere),
+        ] {
+            let error = chain.apply(&source, &mut context).unwrap_err();
+            assert!(error.is_domain_error());
+            assert!(matches!(error.original(), GeoError::TransverseInput(cause)
+                if cause.reason == reason && cause.point.as_ref().is_some_and(|point| *point == source)));
         }
         for source_axes in [false, true] {
             for projected_axes in [false, true] {

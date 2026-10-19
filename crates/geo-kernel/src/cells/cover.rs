@@ -311,7 +311,12 @@ impl ClosedBox {
             .is_gt()
         {
             return Err(crate::GeometryDomainError::reversed_box(
-                [&west, &south, &east, &north],
+                [
+                    values.diagnostic_number(&west)?,
+                    values.diagnostic_number(&south)?,
+                    values.diagnostic_number(&east)?,
+                    values.diagnostic_number(&north)?,
+                ],
                 &mut WorkProgress::integer(None),
             ));
         }

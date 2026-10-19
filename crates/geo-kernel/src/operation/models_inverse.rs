@@ -623,14 +623,9 @@ impl BilinearGridInverse {
         let inside = self
             .source_domain
             .contains_math([&point.x, &point.y], math, progress)?
-            && match self
+            && self
                 .grid
-                .location_math(&point.x, &point.y, true, math, progress)
-            {
-                Ok(_) => true,
-                Err(MathError::Domain(_)) => false,
-                Err(error) => return Err(error),
-            };
+                .contains_complete_patch_math(&point.x, &point.y, math, progress)?;
         certify(
             inside,
             target,

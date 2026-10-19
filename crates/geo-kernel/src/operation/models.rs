@@ -1072,6 +1072,53 @@ impl BilinearGrid {
         math: &mut CoordinateMath,
         progress: &mut WorkProgress<'_>,
     ) -> Result<(u32, u32), MathError> {
+        match self.location_result_math(x, y, complete, math, progress)? {
+            Ok(location) => Ok(location),
+            // Trial-panel uncertainty requests refinement, not a latched failure.
+            Err(GridLocationFailure::Domain(_)) if !complete => Err(MathError::PrecisionExhausted),
+            Err(error) => Err(self.location_error_math(error, x, y, progress)),
+        }
+    }
+
+    /// Certification may reject a trial point without rejecting the operation.
+    /// Cost admission and both polling boundaries are the declared path's.
+    pub(super) fn contains_complete_patch_math(
+        &self,
+        x: &Rat,
+        y: &Rat,
+        math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<bool, MathError> {
+        match self.location_result_math(x, y, true, math, progress)? {
+            Ok(_) => Ok(true),
+            Err(GridLocationFailure::Domain(_)) => Ok(false),
+            Err(error) => Err(self.location_error_math(error, x, y, progress)),
+        }
+    }
+
+    fn location_error_math(
+        &self,
+        error: GridLocationFailure,
+        x: &Rat,
+        y: &Rat,
+        progress: &mut WorkProgress<'_>,
+    ) -> MathError {
+        let error = error.into_geo(self, [x, y], progress);
+        GeoError::math_validation_failure(
+            error,
+            crate::OperationValidationContext::GridLocation,
+            progress,
+        )
+    }
+
+    fn location_result_math(
+        &self,
+        x: &Rat,
+        y: &Rat,
+        complete: bool,
+        math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<Result<(u32, u32), GridLocationFailure>, MathError> {
         let cost = self
             .location_cost(x, y, complete)
             .ok_or(MathError::WorkExhausted)?;
@@ -1083,20 +1130,7 @@ impl BilinearGrid {
             self.cell(x, y)
         };
         progress.math_poll(math)?;
-        match location {
-            Ok(location) => Ok(location),
-            // The two trial-panel callers previously converted this domain
-            // signal to PrecisionExhausted. Do not latch a recoverable probe.
-            Err(GridLocationFailure::Domain(_)) if !complete => Err(MathError::PrecisionExhausted),
-            Err(error) => {
-                let error = error.into_geo(self, [x, y], progress);
-                Err(GeoError::math_validation_failure(
-                    error,
-                    crate::OperationValidationContext::GridLocation,
-                    progress,
-                ))
-            }
-        }
+        Ok(location)
     }
     pub(super) fn corners(&self, column: u32, row: u32) -> Result<[&GridNode; 4], GridMissingNode> {
         let get = |x: u32, y: u32| {

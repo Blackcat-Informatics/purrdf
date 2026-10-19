@@ -22,6 +22,7 @@ impl core::fmt::Display for GeographicFailure {
                 core::fmt::Display::fmt(cause, f)
             }
             GeoError::Config(message) => f.write_str(message),
+            GeoError::NoRelationFamilies => f.write_str(&self.0.detail()),
             GeoError::MissingNativeObserver { .. } => {
                 f.write_str("native entry requires its owned observer")
             }
@@ -98,6 +99,7 @@ fn convert(
         }
         GeoError::SourceRead(_) => NativeDiagnosticKind::SourceRead,
         GeoError::Config(_)
+        | GeoError::NoRelationFamilies
         | GeoError::CrsConfiguration(_)
         | GeoError::IndexConfiguration(_)
         | GeoError::IndexBinding(_)
@@ -124,6 +126,7 @@ fn convert(
         }
         GeoError::ModelInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
         GeoError::Literal(_)
+        | GeoError::ArgumentInput(_)
         | GeoError::NumericLiteral(_)
         | GeoError::IndexSerialization(_)
         | GeoError::GeometryShape(_)
@@ -140,20 +143,14 @@ fn convert(
 impl From<GeoError> for EvalError {
     /// The single site that decides which evaluator label a geo failure wears.
     ///
-    /// * `Arity` becomes [`EvalError::function`]: the call could not be invoked as
-    ///   written, which is the same thing the evaluator's own pre-dispatch arity
-    ///   check reports through that label.
-    /// * `Config` keeps its name: it is a statement about the host's wiring, which
-    ///   is exactly what [`EvalError::config`] means.
-    /// * `Literal` becomes [`EvalError::data`]: a geometry literal is *dataset
-    ///   content*, and a malformed one is bad data rather than a bad query or a
-    ///   bad registration — even when it arrives as a constant written in the
-    ///   query text, because the same lexical form would have been equally
-    ///   malformed had it come from a triple.
-    /// * `Unsupported` and `Domain` become [`EvalError::function`], which is the
-    ///   evaluator's label for "the callee could not be invoked as written". The
-    ///   message is re-prefixed because `EvalError::function` supplies its own
-    ///   framing rather than this type's `Display`.
+    /// Non-storage refusals become [`EvalError::RetainedNativeFailure`], retaining
+    /// the original [`GeoError`] in the geographic adapter. The diagnostic kind
+    /// records configuration, malformed data, source-read or function failure;
+    /// an already-retained function refusal uses `FunctionOperational`.
+    ///
+    /// Native storage refusals, including integer scratch storage, keep the
+    /// evaluator's original storage failure. Presentation is separate from the
+    /// retained cause and does not replace it with a rendered message.
     fn from(err: GeoError) -> Self {
         let function = if matches!(&err, GeoError::Retained(_)) {
             crate::NativeDiagnosticKind::FunctionOperational

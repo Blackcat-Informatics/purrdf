@@ -908,9 +908,14 @@ mod tests {
         math.set_cancellation(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
             true,
         )));
+        let cancelled = parameters
+            .differential_enclosure(&source, &mut math)
+            .unwrap_err();
+        assert_eq!(cancelled, GeoError::NativeMath(MathError::Cancelled));
+        assert!(!cancelled.is_expression_error());
         assert_eq!(
-            parameters.differential_enclosure(&source, &mut math),
-            Err(GeoError::Cancelled)
+            Capture::read(&cancelled).child("cause").code,
+            "math-cancelled"
         );
     }
 
