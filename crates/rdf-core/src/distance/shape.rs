@@ -298,6 +298,15 @@ pub struct BuildShape {
     identity: BuildIdentity,
 }
 
+impl purrdf_hash::error::StructuredError for BuildShape {
+    purrdf_hash::error_visit! {
+        @record self { bits, identity } => "distance-build-shape" {
+            "bits" => Unsigned(u128::from(self.bits)),
+            "identity" => Record(&self.identity),
+        }
+    }
+}
+
 impl BuildShape {
     /// The layout version this build writes, in the low byte of every shape's bits.
     pub const LAYOUT: u8 = 2;
@@ -509,6 +518,14 @@ const HERE_TEXT: &str = concat!(env!("PURRDF_BUILD_IDENTITY"), "; debug-assertio
 /// other's is answered as a result that differs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BuildIdentity(u64);
+
+impl purrdf_hash::error::StructuredError for BuildIdentity {
+    purrdf_hash::error_visit! {
+        @tuple self (_digest) => "distance-build-identity" {
+            "digest" => Unsigned(u128::from(self.0)),
+        }
+    }
+}
 
 impl BuildIdentity {
     /// This build's identity.

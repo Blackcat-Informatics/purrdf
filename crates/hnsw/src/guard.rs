@@ -50,6 +50,7 @@ use purrdf_core::{
 
 use purrdf_core::distance::{Exact, Reassociated, Resolved};
 
+use crate::error::{CoordinateValue, ProfileRefusal};
 use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
 use crate::profile::{Published, profile_error};
@@ -205,11 +206,7 @@ pub fn select<'a>(view: &EmbeddingView<'a>) -> Result<IndexGuardView<'a>> {
     }
     match count {
         0 => Err(HnswError::MissingIndexGuard {
-            description: format!(
-                "the artifact holds no derived index whose implementation is \
-                 `{IMPLEMENTATION_ID}` or `{IMPLEMENTATION_ID_REASSOCIATED}`; register one \
-                 with `guard::derived_index`"
-            ),
+            implementations: [IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED],
         }),
         1 => Ok(selected.expect("count one implies a selected guard")),
         count => Err(HnswError::AmbiguousIndexGuard { count }),
@@ -247,22 +244,26 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
     let entries = guard_entries(guard)?;
     let identity = required(&entries, 1, "the implementation identity")?;
     if identity.wire_type != TlvWireType::Block {
-        return Err(profile_error("the implementation identity is not a block"));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: "the implementation identity",
+            actual: identity.wire_type,
+            expected: TlvWireType::Block,
+            description: "a block",
+        }));
     }
     let (identifier, media_type, revision) = identity_block_fields(identity.value)?;
     let published = profile::published();
     if !published.iter().any(|row| row.implementation == identifier) {
-        return Err(profile_error(format!(
-            "the implementation identifier is `{identifier}`, not `{IMPLEMENTATION_ID}` or \
-             `{IMPLEMENTATION_ID_REASSOCIATED}`"
-        )));
+        return Err(profile_error(ProfileRefusal::Implementation {
+            actual: identifier,
+        }));
     }
     if media_type != profile::IMPLEMENTATION_MEDIA_TYPE {
-        return Err(profile_error(format!(
-            "the implementation media type is `{media_type}`, not \
-             `{}`",
-            profile::IMPLEMENTATION_MEDIA_TYPE
-        )));
+        return Err(profile_error(ProfileRefusal::TextMismatch {
+            field: "the implementation media type",
+            actual: media_type,
+            expected: profile::IMPLEMENTATION_MEDIA_TYPE,
+        }));
     }
     let matching = published.into_iter().find(|row| {
         row.implementation == identifier && revision.as_deref() == Some(row.revision.as_bytes())
@@ -273,15 +274,21 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
 
     let encoding = required_utf8(&entries, 2, "the parameter encoding")?;
     if encoding != profile::PARAMETER_ENCODING {
-        return Err(profile_error(format!(
-            "the parameter encoding is `{encoding}`, not `{}`",
-            profile::PARAMETER_ENCODING
-        )));
+        return Err(profile_error(ProfileRefusal::TextMismatch {
+            field: "the parameter encoding",
+            actual: encoding.to_owned(),
+            expected: profile::PARAMETER_ENCODING,
+        }));
     }
 
     let parameters = required(&entries, 3, "the parameter block")?;
     if parameters.wire_type != TlvWireType::Bytes {
-        return Err(profile_error("the parameter block is not a byte string"));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: "the parameter block",
+            actual: parameters.wire_type,
+            expected: TlvWireType::Bytes,
+            description: "a byte string",
+        }));
     }
     let params = profile::parse_parameters(parameters.value)?;
 
@@ -289,21 +296,31 @@ pub(crate) fn validate_profile(guard: &IndexGuardView<'_>) -> Result<(Params, Pu
 
     let media_type = required_utf8(&entries, 7, "the payload media type")?;
     if media_type != INDEX_MEDIA_TYPE {
-        return Err(profile_error(format!(
-            "the payload media type is `{media_type}`, not `{INDEX_MEDIA_TYPE}`"
-        )));
+        return Err(profile_error(ProfileRefusal::TextMismatch {
+            field: "the payload media type",
+            actual: media_type.to_owned(),
+            expected: INDEX_MEDIA_TYPE,
+        }));
     }
 
     let role = required(&entries, 6, "the index use role")?;
     if role.wire_type != TlvWireType::U32 {
-        return Err(profile_error("the index use role is not a u32"));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: "the index use role",
+            actual: role.wire_type,
+            expected: TlvWireType::U32,
+            description: "a u32",
+        }));
     }
     if role.value.len() != 4 {
-        return Err(profile_error("the index use role is not four bytes"));
+        return Err(profile_error(ProfileRefusal::RoleLength {
+            field: "the index use role",
+            actual: role.value.to_vec(),
+        }));
     }
     let role = u32::from_le_bytes(role.value.try_into().expect("checked length"));
     if !matches!(role, 1..=3) {
-        return Err(profile_error(format!("unknown index use role {role}")));
+        return Err(profile_error(ProfileRefusal::UnknownIndexUseRole(role)));
     }
 
     Ok((params, row))
@@ -317,37 +334,37 @@ fn foreign_revision(identifier: &str, revision: Option<&[u8]>) -> HnswError {
     let other = profile::published()
         .into_iter()
         .find(|row| row.implementation != identifier && revision == Some(row.revision.as_bytes()));
-    match other {
-        Some(row) => profile_error(format!(
-            "the implementation `{identifier}` carries the evidence revision `{}` publishes \
-             for the {} arithmetic; an implementation must publish its own arithmetic's \
-             evidence, so the pairing is refused",
-            row.implementation, row.arithmetic
-        )),
-        None => profile_error(
-            "the implementation evidence revision is not the profile's approximation \
-             statement; an HNSW guard must publish what it does not promise",
-        ),
-    }
+    profile_error(ProfileRefusal::Revision {
+        identifier: identifier.to_owned(),
+        revision: revision.map(<[u8]>::to_vec),
+        other_implementation: other.as_ref().map(|row| row.implementation),
+        other_arithmetic: other.as_ref().map(|row| row.arithmetic),
+    })
 }
 
 /// Validate the loss block: approximate, and no vector transform.
 fn validate_loss(loss: TlvEntryRef<'_>) -> Result<()> {
     if loss.wire_type != TlvWireType::Block {
-        return Err(profile_error("the loss contract is not a block"));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: "the loss contract",
+            actual: loss.wire_type,
+            expected: TlvWireType::Block,
+            description: "a block",
+        }));
     }
     let entries = canonical_tlv(loss.value)?;
     let entries: Vec<TlvEntryRef<'_>> = entries.collect();
     let approximate = required(&entries, 1, "the approximation flag")?;
     if approximate.value != [1] {
-        return Err(profile_error("the loss contract is not approximate"));
+        return Err(profile_error(ProfileRefusal::Approximation {
+            actual: approximate.value.to_vec(),
+        }));
     }
     let transforms = required(&entries, 2, "the vector-transform flag")?;
     if transforms.value != [0] {
-        return Err(profile_error(
-            "the loss contract claims an HNSW payload transforms vectors; this profile \
-             stores no vectors, so the claim is false",
-        ));
+        return Err(profile_error(ProfileRefusal::Transforms {
+            actual: transforms.value.to_vec(),
+        }));
     }
     Ok(())
 }
@@ -373,22 +390,20 @@ pub fn coordinates(
 ) -> Result<IndexCoordinates> {
     let space = view
         .vector_space(vector_space)
-        .ok_or_else(|| HnswError::Embedding {
-            description: format!("the artifact declares no vector space {vector_space}"),
+        .ok_or(HnswError::Embedding {
+            cause: crate::error::EmbeddingFailure::MissingVectorSpace(vector_space),
         })?;
-    let set = view
-        .target_set(target_set)
-        .ok_or_else(|| HnswError::Embedding {
-            description: format!("the artifact declares no target set {target_set}"),
-        })?;
-    let effective = view
-        .effective_matrix(target_set, vector_space)?
-        .ok_or_else(|| HnswError::Embedding {
-            description: format!(
-                "the artifact holds no matrix joining target set {target_set} to vector \
-                 space {vector_space}"
-            ),
-        })?;
+    let set = view.target_set(target_set).ok_or(HnswError::Embedding {
+        cause: crate::error::EmbeddingFailure::MissingTargetSet(target_set),
+    })?;
+    let effective =
+        view.effective_matrix(target_set, vector_space)?
+            .ok_or(HnswError::Embedding {
+                cause: crate::error::EmbeddingFailure::MissingMatrix {
+                    target_set,
+                    vector_space,
+                },
+            })?;
     Ok(IndexCoordinates {
         source_exact_digest: view.source().source_exact_digest(),
         family_id: space.family_id(),
@@ -419,36 +434,67 @@ pub fn check_coordinates(
 ) -> Result<()> {
     let matrix = effective.matrix();
     let projection = effective.projection();
-    let mismatch = |field: &str| {
-        profile_error(format!(
-            "guard {} is stale or substituted: its {field} does not name the searched \
-             effective matrix",
-            guard.id()
-        ))
+    let mismatch = |field: &'static str, actual: CoordinateValue, expected: CoordinateValue| {
+        profile_error(ProfileRefusal::Coordinate {
+            guard: guard.id(),
+            field,
+            actual,
+            expected,
+        })
     };
     if guard.target_set_id() != target_set {
-        return Err(mismatch("target set"));
+        return Err(mismatch(
+            "target set",
+            CoordinateValue::Digest(*guard.target_set_id().as_bytes()),
+            CoordinateValue::Digest(*target_set.as_bytes()),
+        ));
     }
     if guard.vector_space_id() != vector_space {
-        return Err(mismatch("vector space"));
+        return Err(mismatch(
+            "vector space",
+            CoordinateValue::Digest(*guard.vector_space_id().as_bytes()),
+            CoordinateValue::Digest(*vector_space.as_bytes()),
+        ));
     }
     if guard.matrix_id() != matrix.id() {
-        return Err(mismatch("matrix"));
+        return Err(mismatch(
+            "matrix",
+            CoordinateValue::Digest(*guard.matrix_id().as_bytes()),
+            CoordinateValue::Digest(*matrix.id().as_bytes()),
+        ));
     }
     if guard.projection_id() != projection.id() {
-        return Err(mismatch("projection"));
+        return Err(mismatch(
+            "projection",
+            CoordinateValue::Digest(*guard.projection_id().as_bytes()),
+            CoordinateValue::Digest(*projection.id().as_bytes()),
+        ));
     }
     if guard.family_id() != matrix.family_id() {
-        return Err(mismatch("family"));
+        return Err(mismatch(
+            "family",
+            CoordinateValue::Digest(*guard.family_id().as_bytes()),
+            CoordinateValue::Digest(*matrix.family_id().as_bytes()),
+        ));
     }
     if guard.prefix_dimension() != projection.effective_dimension() {
-        return Err(mismatch("prefix dimension"));
+        return Err(mismatch(
+            "prefix dimension",
+            CoordinateValue::Counter(guard.prefix_dimension()),
+            CoordinateValue::Counter(projection.effective_dimension()),
+        ));
     }
     // The role is checked, not merely carried. A guard declaring a general-purpose index
     // over a truncated projection understates its own loss, and a consumer that reads the
     // role to decide whether a rerank is owed would act on the wrong answer.
-    if declared_use_role(guard)? != use_role(effective) {
-        return Err(mismatch("use role"));
+    let declared_role = declared_use_role(guard)?;
+    let expected_role = use_role(effective);
+    if declared_role != expected_role {
+        return Err(mismatch(
+            "use role",
+            CoordinateValue::Counter(declared_role as u32),
+            CoordinateValue::Counter(expected_role as u32),
+        ));
     }
     Ok(())
 }
@@ -465,22 +511,11 @@ pub fn check_coordinates(
 /// binding this function is not given) or an absent inline section.
 pub fn payload_bytes<'a>(guard: &IndexGuardView<'a>) -> Result<&'a [u8]> {
     match guard.storage()? {
-        IndexStorage::Inline => {
-            guard
-                .payload_bytes()
-                .ok_or_else(|| HnswError::PayloadUnavailable {
-                    description: format!(
-                        "guard {} declares an inline payload but the artifact lends no bytes",
-                        guard.id()
-                    ),
-                })
-        }
+        IndexStorage::Inline => guard.payload_bytes().ok_or(HnswError::PayloadUnavailable {
+            cause: crate::error::GuardPayloadRefusal::InlineMissing { guard: guard.id() },
+        }),
         IndexStorage::Detached => Err(HnswError::PayloadUnavailable {
-            description: format!(
-                "guard {} stores its payload in an external binding; resolve that binding \
-                 and verify it before searching",
-                guard.id()
-            ),
+            cause: crate::error::GuardPayloadRefusal::Detached { guard: guard.id() },
         }),
     }
 }
@@ -496,27 +531,29 @@ pub fn payload_bytes<'a>(guard: &IndexGuardView<'a>) -> Result<&'a [u8]> {
 /// [`HnswError::PayloadCommitment`] if either the length or the digest disagrees.
 pub fn verify_payload_commitment(guard: &IndexGuardView<'_>, bytes: &[u8]) -> Result<()> {
     let length = u64::try_from(bytes.len()).map_err(|_| HnswError::PayloadCommitment {
-        description: format!("guard {} payload length does not fit u64", guard.id()),
+        cause: crate::error::GuardPayloadRefusal::LengthPlatform {
+            guard: guard.id(),
+            actual: bytes.len(),
+            maximum: u64::MAX,
+        },
     })?;
     if length != guard.payload_length() {
         return Err(HnswError::PayloadCommitment {
-            description: format!(
-                "guard {} commits {} payload byte(s) but {} are present",
-                guard.id(),
-                guard.payload_length(),
-                length
-            ),
+            cause: crate::error::GuardPayloadRefusal::Length {
+                guard: guard.id(),
+                expected: guard.payload_length(),
+                actual: length,
+            },
         });
     }
     let digest = ContentDigest::of(bytes);
     if digest != guard.payload_sha256() {
         return Err(HnswError::PayloadCommitment {
-            description: format!(
-                "guard {} commits payload SHA-256 {} but the bytes hash to {}",
-                guard.id(),
-                guard.payload_sha256(),
-                digest
-            ),
+            cause: crate::error::GuardPayloadRefusal::Digest {
+                guard: guard.id(),
+                expected: guard.payload_sha256(),
+                actual: digest,
+            },
         });
     }
     Ok(())
@@ -544,31 +581,27 @@ pub fn load<A: IndexArithmetic>(
 ) -> Result<HnswIndex<A>> {
     let (params, row) = validate_profile(guard)?;
     if row.arithmetic != A::ID {
-        return Err(profile_error(format!(
-            "the guard names the `{}` implementation, whose distances are computed under the \
-             {} arithmetic, and it is being loaded as an index computed under {}",
-            row.implementation,
-            row.arithmetic,
-            A::ID
-        )));
+        return Err(profile_error(ProfileRefusal::Arithmetic {
+            implementation: row.implementation,
+            actual: row.arithmetic,
+            expected: A::ID,
+        }));
     }
     let bytes = payload_bytes(guard)?;
     verify_payload_commitment(guard, bytes)?;
     let index = HnswIndex::<A>::decode(matrix, bytes)?;
     let recorded = index.arithmetic().image_code();
     if !row.codes.contains(&recorded) {
-        return Err(profile_error(format!(
-            "the guard's evidence revision names the dispatch path of arithmetic code(s) \
-             {:?}, and the payload records code {recorded} ({}); the guard and the payload \
-             describe two different compilations",
-            row.codes,
-            profile::path_label(recorded)
-        )));
+        return Err(profile_error(ProfileRefusal::Codes {
+            expected: row.codes,
+            actual: recorded,
+        }));
     }
     if index.params() != params {
-        return Err(profile_error(
-            "the guard's parameter block and the payload's embedded parameters disagree",
-        ));
+        return Err(profile_error(ProfileRefusal::Parameters {
+            expected: params,
+            actual: index.params(),
+        }));
     }
     Ok(index)
 }
@@ -596,13 +629,18 @@ pub fn read_effective_matrix(
     let dtype = effective.matrix().dtype()?;
     let row_count =
         usize::try_from(effective.matrix().row_count()).map_err(|_| HnswError::Embedding {
-            description: "the matrix row count does not fit this platform's index range".to_owned(),
+            cause: crate::error::EmbeddingFailure::RowCount {
+                value: effective.matrix().row_count(),
+                maximum: usize::MAX,
+            },
         })?;
     let dimension =
         usize::try_from(effective.projection().effective_dimension()).map_err(|_| {
             HnswError::Embedding {
-                description: "the effective dimension does not fit this platform's index range"
-                    .to_owned(),
+                cause: crate::error::EmbeddingFailure::Dimension {
+                    value: effective.projection().effective_dimension(),
+                    maximum: usize::MAX,
+                },
             }
         })?;
     let expected = row_count.saturating_mul(dimension);
@@ -646,9 +684,11 @@ fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
         return Ok(());
     }
     Err(HnswError::ParameterValidation {
-        description: format!(
-            "row {row} decoded {decoded} component(s); the effective dimension is {dimension}"
-        ),
+        cause: crate::error::MatrixRefusal::RowWidth {
+            row,
+            actual: decoded,
+            expected: dimension,
+        },
     })
 }
 
@@ -725,18 +765,33 @@ fn guard_entries<'a>(guard: &IndexGuardView<'a>) -> Result<Vec<TlvEntryRef<'a>>>
 }
 
 /// One required entry by tag, with a profile-shaped error on absence.
-fn required<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &str) -> Result<TlvEntryRef<'a>> {
-    find(entries, tag).ok_or_else(|| profile_error(format!("{what} is missing")))
+fn required<'a>(
+    entries: &[TlvEntryRef<'a>],
+    tag: u16,
+    what: &'static str,
+) -> Result<TlvEntryRef<'a>> {
+    find(entries, tag)
+        .ok_or_else(|| profile_error(ProfileRefusal::MissingField { tag, field: what }))
 }
 
 /// One required UTF-8 entry by tag.
-fn required_utf8<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &str) -> Result<&'a str> {
+fn required_utf8<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &'static str) -> Result<&'a str> {
     let entry = required(entries, tag, what)?;
     if entry.wire_type != TlvWireType::Utf8 {
-        return Err(profile_error(format!("{what} is not UTF-8")));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: what,
+            actual: entry.wire_type,
+            expected: TlvWireType::Utf8,
+            description: "UTF-8",
+        }));
     }
-    core::str::from_utf8(entry.value)
-        .map_err(|_| profile_error(format!("{what} is not valid UTF-8")))
+    core::str::from_utf8(entry.value).map_err(|cause| {
+        profile_error(ProfileRefusal::Utf8 {
+            field: what,
+            actual: entry.value.to_vec(),
+            cause,
+        })
+    })
 }
 
 /// The use role a guard declares, read from its canonical block.
@@ -748,19 +803,24 @@ fn declared_use_role(guard: &IndexGuardView<'_>) -> Result<IndexUseRole> {
     let entries = guard_entries(guard)?;
     let entry = required(&entries, 6, "the use role")?;
     if entry.wire_type != TlvWireType::U32 {
-        return Err(profile_error("the use role is not a u32"));
+        return Err(profile_error(ProfileRefusal::WireType {
+            field: "the use role",
+            actual: entry.wire_type,
+            expected: TlvWireType::U32,
+            description: "a u32",
+        }));
     }
-    let bytes: [u8; 4] = entry
-        .value
-        .try_into()
-        .map_err(|_| profile_error("the use role is not four bytes"))?;
+    let bytes: [u8; 4] = entry.value.try_into().map_err(|_| {
+        profile_error(ProfileRefusal::RoleLength {
+            field: "the use role",
+            actual: entry.value.to_vec(),
+        })
+    })?;
     match u32::from_le_bytes(bytes) {
         1 => Ok(IndexUseRole::Generic),
         2 => Ok(IndexUseRole::CoarsePrefixRetrieval),
         3 => Ok(IndexUseRole::FullPrefixReranking),
-        other => Err(profile_error(format!(
-            "the use role is {other}, which PURREMB does not define"
-        ))),
+        other => Err(profile_error(ProfileRefusal::UnknownUseRole(other))),
     }
 }
 
@@ -772,13 +832,7 @@ fn find<'a>(entries: &[TlvEntryRef<'a>], tag: u16) -> Option<TlvEntryRef<'a>> {
 /// The stable identifier of an implementation identity block.
 fn identity_block_identifier(block: &[u8]) -> Result<String> {
     let entries: Vec<TlvEntryRef<'_>> = canonical_tlv(block)?.collect();
-    let identifier = required(&entries, 1, "the implementation identifier")?;
-    if identifier.wire_type != TlvWireType::Utf8 {
-        return Err(profile_error("the implementation identifier is not UTF-8"));
-    }
-    core::str::from_utf8(identifier.value)
-        .map(str::to_owned)
-        .map_err(|_| profile_error("the implementation identifier is not valid UTF-8"))
+    required_utf8(&entries, 1, "the implementation identifier").map(str::to_owned)
 }
 
 /// The identifier, media type, and optional revision of an implementation identity block.
@@ -788,10 +842,13 @@ fn identity_block_fields(block: &[u8]) -> Result<(String, String, Option<Vec<u8>
     let media_type = required_utf8(&entries, 2, "the implementation media type")?.to_owned();
     let revision = match find(&entries, 4) {
         Some(entry) if entry.wire_type == TlvWireType::Bytes => Some(entry.value.to_vec()),
-        Some(_) => {
-            return Err(profile_error(
-                "the implementation revision is not a byte string",
-            ));
+        Some(entry) => {
+            return Err(profile_error(ProfileRefusal::WireType {
+                field: "the implementation revision",
+                actual: entry.wire_type,
+                expected: TlvWireType::Bytes,
+                description: "a byte string",
+            }));
         }
         None => None,
     };

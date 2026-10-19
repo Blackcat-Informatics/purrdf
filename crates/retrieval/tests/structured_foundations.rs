@@ -193,6 +193,26 @@ fn retrieval_actual_iri_failures_keep_original_nested_cause() {
 
 fn retrieval_protocol_lists_preserve_order_and_full_width_counts() {
     use purrdf_testkit::error_capture::Event;
+    let stratum = "https://example.org/offending-stratum";
+    let named_by = "https://example.org/witness-stratum";
+    for error in [
+        purrdf_retrieval::ProtocolError::OutsideDeclaredDomain {
+            item: "original candidate".into(),
+            stratum: stratum.into(),
+            named_by: named_by.into(),
+        },
+        purrdf_retrieval::ProtocolError::CandidateInTwoBlocks {
+            item: "original candidate".into(),
+            stratum: stratum.into(),
+            block: "offending block".into(),
+            named_by: named_by.into(),
+            named_by_block: "witness block".into(),
+        },
+    ] {
+        let fields = Capture::read(&error);
+        assert!(matches!(fields.field("stratum"), ErrorValue::Iri(value) if value == stratum));
+        assert!(matches!(fields.field("named_by"), ErrorValue::Iri(value) if value == named_by));
+    }
     let error = purrdf_retrieval::ProtocolError::UnbackedDomainDeclaration {
         stratum: "https://example.org/stratum".into(),
         declared: vec!["second λ".into(), "first β".into(), "second λ".into()],

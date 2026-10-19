@@ -31,6 +31,15 @@ pub struct Params {
     ef_search: usize,
 }
 
+impl purrdf_hash::error::StructuredError for Params {
+    purrdf_hash::error_visit! {
+        @record self { m, m0, ef_construction, ef_search } => "hnsw-parameters" {
+            "m" => Unsigned(self.m as u128), "m0" => Unsigned(self.m0 as u128),
+            "ef_construction" => Unsigned(self.ef_construction as u128), "ef_search" => Unsigned(self.ef_search as u128),
+        }
+    }
+}
+
 impl Params {
     /// The only constructor, applying the full validation matrix.
     ///
@@ -52,28 +61,32 @@ impl Params {
         if m < 2 {
             return Err(HnswError::InvalidParameter {
                 name: "M",
-                value: m.to_string(),
+                value: m,
+                minimum: 2,
                 reason: "must be at least 2",
             });
         }
         if m0 < m {
             return Err(HnswError::InvalidParameter {
                 name: "M0",
-                value: m0.to_string(),
+                value: m0,
+                minimum: m,
                 reason: "must be at least M",
             });
         }
         if ef_construction < m0 {
             return Err(HnswError::InvalidParameter {
                 name: "ef_construction",
-                value: ef_construction.to_string(),
+                value: ef_construction,
+                minimum: m0,
                 reason: "must be at least M0",
             });
         }
         if ef_search < 1 {
             return Err(HnswError::InvalidParameter {
                 name: "ef_search",
-                value: ef_search.to_string(),
+                value: ef_search,
+                minimum: 1,
                 reason: "must be at least 1",
             });
         }
@@ -133,12 +146,12 @@ impl Params {
     pub fn validate_against(&self, rows: usize, dims: usize) -> Result<()> {
         if rows == 0 {
             return Err(HnswError::ParameterValidation {
-                description: "the matrix has zero rows".to_owned(),
+                cause: crate::error::MatrixRefusal::ZeroRows { dimensions: dims },
             });
         }
         if dims == 0 {
             return Err(HnswError::ParameterValidation {
-                description: "the matrix has zero dimensions".to_owned(),
+                cause: crate::error::MatrixRefusal::ZeroDimensions { rows },
             });
         }
         // Every product the build performs, checked once, here.
@@ -272,6 +285,15 @@ mod tests {
     #[test]
     fn m0_below_m_is_refused() {
         let error = Params::new(16, 8, 100, 64).expect_err("M0 < M");
+        let fields = purrdf_testkit::error_capture::Capture::read(&error);
+        assert!(matches!(
+            fields.field("value"),
+            purrdf_hash::error::ErrorValue::Unsigned(8)
+        ));
+        assert!(matches!(
+            fields.field("minimum"),
+            purrdf_hash::error::ErrorValue::Unsigned(16)
+        ));
         assert!(matches!(
             error,
             HnswError::InvalidParameter { name: "M0", .. }

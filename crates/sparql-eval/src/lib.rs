@@ -378,4 +378,4 @@ pub(crate) type DetHashMap<K, V> = std::collections::HashMap<K, V, DetHasher>;
 pub(crate) type DetHashSet<K> = std::collections::HashSet<K, DetHasher>;
 
 /// Immutable admission-carrying native producer diagnostics.
-pub use error::{NativeDiagnostic, NativeDiagnosticKind};
+pub use error::{NativeDiagnostic, NativeDiagnosticKind, RetainedNativeFailure};

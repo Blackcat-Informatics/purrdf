@@ -1252,6 +1252,7 @@ impl From<&EvalError> for FailureCode {
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
             EvalError::SourceRead(_)
             | EvalError::NativeDiagnostic(_)
+            | EvalError::RetainedNativeFailure(_)
             | EvalError::UnstableNativeDiagnostic
             | EvalError::WorkspaceStopped
             | EvalError::XPathRegex(_)

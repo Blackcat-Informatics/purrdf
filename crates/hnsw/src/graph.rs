@@ -161,7 +161,10 @@ impl VectorMatrix {
     fn assemble(rows: usize, dims: usize, data: Vectors) -> Result<Self> {
         if rows == 0 || dims == 0 {
             return Err(HnswError::ParameterValidation {
-                description: format!("a {rows}x{dims} matrix has an empty axis"),
+                cause: crate::error::MatrixRefusal::EmptyAxis {
+                    rows,
+                    dimensions: dims,
+                },
             });
         }
         let expected = rows
@@ -169,10 +172,12 @@ impl VectorMatrix {
             .ok_or(HnswError::ArithmeticOverflow)?;
         if data.len() != expected {
             return Err(HnswError::ParameterValidation {
-                description: format!(
-                    "a {rows}x{dims} matrix holds {expected} values, but {} were supplied",
-                    data.len()
-                ),
+                cause: crate::error::MatrixRefusal::ValueCount {
+                    rows,
+                    dimensions: dims,
+                    expected,
+                    actual: data.len(),
+                },
             });
         }
         if let Some(index) = data.first_non_finite() {
@@ -195,11 +200,11 @@ impl VectorMatrix {
         for (index, row) in rows.iter().enumerate() {
             if row.len() != dims {
                 return Err(HnswError::ParameterValidation {
-                    description: format!(
-                        "row {index} holds {} values while row 0 holds {dims}; the matrix \
-                         would be ragged",
-                        row.len()
-                    ),
+                    cause: crate::error::MatrixRefusal::Ragged {
+                        row: index,
+                        actual: row.len(),
+                        expected: dims,
+                    },
                 });
             }
         }
@@ -808,38 +813,46 @@ impl Graph {
         let n = levels.len();
         if layers.len() != n {
             return Err(HnswError::InvalidPayload {
-                reason: format!("payload holds {n} levels but {} node records", layers.len()),
+                reason: crate::error::PayloadRefusal::NodeCount {
+                    levels: n,
+                    records: layers.len(),
+                },
             });
         }
         for row in 0..n {
             if layers[row].len() != levels[row] as usize + 1 {
                 return Err(HnswError::InvalidPayload {
-                    reason: format!(
-                        "node {row} has level {} but {} layer(s)",
-                        levels[row],
-                        layers[row].len()
-                    ),
+                    reason: crate::error::PayloadRefusal::LayerCount {
+                        row,
+                        level: levels[row],
+                        layers: layers[row].len(),
+                    },
                 });
             }
             for (layer, neighbors) in layers[row].iter().enumerate() {
                 for neighbor in neighbors {
                     if neighbor.row >= n {
                         return Err(HnswError::InvalidPayload {
-                            reason: format!(
-                                "node {row} layer {layer} names row {}, beyond the {n} rows \
-                                 the payload holds",
-                                neighbor.row
-                            ),
+                            reason: crate::error::PayloadRefusal::Neighbor {
+                                row,
+                                layer,
+                                neighbor: neighbor.row,
+                                rows: n,
+                            },
                         });
                     }
                     if neighbor.row == row {
                         return Err(HnswError::InvalidPayload {
-                            reason: format!("node {row} links to itself at layer {layer}"),
+                            reason: crate::error::PayloadRefusal::SelfLink { row, layer },
                         });
                     }
                     if !neighbor.distance.is_finite() {
                         return Err(HnswError::InvalidPayload {
-                            reason: format!("node {row} layer {layer} holds a non-finite distance"),
+                            reason: crate::error::PayloadRefusal::NonFinite {
+                                row,
+                                layer,
+                                bits: neighbor.distance.to_bits(),
+                            },
                         });
                     }
                     // Row ordering is an encoding-time property, checked against the raw
@@ -853,10 +866,10 @@ impl Graph {
         let (entry, max_level) = Self::recompute_entry(&levels);
         if recorded_entry != entry {
             return Err(HnswError::InvalidPayload {
-                reason: format!(
-                    "payload records entry point {recorded_entry:?}, but the minimum row at \
-                     the maximum level is {entry:?}"
-                ),
+                reason: crate::error::PayloadRefusal::EntryMismatch {
+                    recorded: recorded_entry,
+                    expected: entry,
+                },
             });
         }
         Ok(Self {
@@ -875,10 +888,12 @@ impl Graph {
                 let degree = self.neighbors(row, layer).len();
                 if degree > bound {
                     return Err(HnswError::InvalidPayload {
-                        reason: format!(
-                            "node {row} layer {layer} holds {degree} neighbours, over the \
-                             {bound} the parameters admit"
-                        ),
+                        reason: crate::error::PayloadRefusal::Degree {
+                            row,
+                            layer,
+                            degree,
+                            bound,
+                        },
                     });
                 }
             }
@@ -906,9 +921,13 @@ pub(crate) struct GraphImage {
 /// returned for the caller to hold against the path it runs and the build it is.
 pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     let mut cursor = Cursor::new(bytes);
-    if cursor.take(IMAGE_MAGIC.len())? != IMAGE_MAGIC.as_slice() {
+    let marker = cursor.take(IMAGE_MAGIC.len())?;
+    if marker != IMAGE_MAGIC.as_slice() {
         return Err(HnswError::InvalidPayload {
-            reason: "the payload does not begin with the HNSW image marker".to_owned(),
+            reason: crate::error::PayloadRefusal::Magic {
+                actual: marker.to_vec(),
+                expected: IMAGE_MAGIC.as_slice(),
+            },
         });
     }
     let version = cursor.u32()?;
@@ -956,11 +975,11 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     const MIN_NODE_BYTES: usize = 16 + 16;
     if node_count > cursor.remaining() / MIN_NODE_BYTES {
         return Err(HnswError::InvalidPayload {
-            reason: format!(
-                "the payload claims {node_count} node(s) but holds only {} byte(s) after the \
-                 header",
-                cursor.remaining()
-            ),
+            reason: crate::error::PayloadRefusal::NodeBytes {
+                nodes: node_count,
+                remaining: cursor.remaining(),
+                minimum: MIN_NODE_BYTES,
+            },
         });
     }
     // The level cap is a function of the node count and M, and the encoder cannot record a
@@ -968,10 +987,12 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
     let level_ceiling = crate::level::level_cap(node_count, params.m());
     if max_level > level_ceiling {
         return Err(HnswError::InvalidPayload {
-            reason: format!(
-                "the header records max level {max_level}, above the {level_ceiling} the node \
-                 count and M admit"
-            ),
+            reason: crate::error::PayloadRefusal::MaximumLevel {
+                actual: max_level,
+                maximum: level_ceiling,
+                nodes: node_count,
+                m: params.m(),
+            },
         });
     }
 
@@ -981,19 +1002,29 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
         let recorded_row = cursor.usize()?;
         if recorded_row != row {
             return Err(HnswError::InvalidPayload {
-                reason: format!("node record {row} carries row index {recorded_row}"),
+                reason: crate::error::PayloadRefusal::RowIndex {
+                    expected: row,
+                    actual: recorded_row,
+                },
             });
         }
         let level = cursor.u32()?;
         if level > max_level {
             return Err(HnswError::InvalidPayload {
-                reason: format!("node {row} declares level {level}, above the cap {max_level}"),
+                reason: crate::error::PayloadRefusal::NodeLevel {
+                    row,
+                    actual: level,
+                    maximum: max_level,
+                },
             });
         }
         let reserved = cursor.u32()?;
         if reserved != 0 {
             return Err(HnswError::InvalidPayload {
-                reason: format!("node {row}'s reserved field is {reserved}, not zero"),
+                reason: crate::error::PayloadRefusal::ReservedNode {
+                    row,
+                    value: reserved,
+                },
             });
         }
         let mut node_layers = Vec::with_capacity(level as usize + 1);
@@ -1001,15 +1032,21 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
             let recorded_layer = cursor.u32()?;
             if recorded_layer != layer {
                 return Err(HnswError::InvalidPayload {
-                    reason: format!(
-                        "node {row} layer record {layer} carries layer index {recorded_layer}"
-                    ),
+                    reason: crate::error::PayloadRefusal::LayerIndex {
+                        row,
+                        expected: layer,
+                        actual: recorded_layer,
+                    },
                 });
             }
             let reserved = cursor.u32()?;
             if reserved != 0 {
                 return Err(HnswError::InvalidPayload {
-                    reason: format!("node {row} layer {layer}'s reserved field is not zero"),
+                    reason: crate::error::PayloadRefusal::ReservedLayer {
+                        row,
+                        layer,
+                        value: reserved,
+                    },
                 });
             }
             let count = cursor.usize()?;
@@ -1017,11 +1054,12 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
             // the remaining payload cannot possibly hold before allocating.
             if count > cursor.remaining() / 16 {
                 return Err(HnswError::InvalidPayload {
-                    reason: format!(
-                        "node {row} layer {layer} claims {count} neighbour(s) but only {} \
-                         byte(s) remain",
-                        cursor.remaining()
-                    ),
+                    reason: crate::error::PayloadRefusal::NeighborBytes {
+                        row,
+                        layer,
+                        count,
+                        remaining: cursor.remaining(),
+                    },
                 });
             }
             let mut neighbors = Vec::with_capacity(count);
@@ -1031,23 +1069,34 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
                 let distance = f64::from_bits(cursor.u64()?);
                 if neighbor_row >= node_count {
                     return Err(HnswError::InvalidPayload {
-                        reason: format!(
-                            "node {row} layer {layer} names row {neighbor_row}, beyond the \
-                             {node_count} rows the payload holds"
-                        ),
+                        reason: crate::error::PayloadRefusal::Neighbor {
+                            row,
+                            layer: layer as usize,
+                            neighbor: neighbor_row,
+                            rows: node_count,
+                        },
                     });
                 }
-                if previous.is_some_and(|p| neighbor_row <= p) {
+                if let Some(previous) = previous
+                    && neighbor_row <= previous
+                {
                     return Err(HnswError::InvalidPayload {
-                        reason: format!(
-                            "node {row} layer {layer} is not sorted strictly by neighbour row"
-                        ),
+                        reason: crate::error::PayloadRefusal::NeighborOrder {
+                            row,
+                            layer,
+                            previous,
+                            actual: neighbor_row,
+                        },
                     });
                 }
                 previous = Some(neighbor_row);
                 if !distance.is_finite() {
                     return Err(HnswError::InvalidPayload {
-                        reason: format!("node {row} layer {layer} holds a non-finite distance"),
+                        reason: crate::error::PayloadRefusal::NonFinite {
+                            row,
+                            layer: layer as usize,
+                            bits: distance.to_bits(),
+                        },
                     });
                 }
                 // Re-sort into the in-memory rank order.
@@ -1068,11 +1117,17 @@ pub(crate) fn decode_image<A: Arithmetic>(bytes: &[u8]) -> Result<GraphImage> {
         None
     } else {
         let entry = usize::try_from(entry_raw).map_err(|_| HnswError::InvalidPayload {
-            reason: format!("entry point {entry_raw} does not fit this platform"),
+            reason: crate::error::PayloadRefusal::EntryPlatform {
+                value: entry_raw,
+                maximum: usize::MAX,
+            },
         })?;
         if entry >= node_count {
             return Err(HnswError::InvalidPayload {
-                reason: format!("entry point {entry} is beyond the {node_count} rows"),
+                reason: crate::error::PayloadRefusal::EntryRows {
+                    entry,
+                    rows: node_count,
+                },
             });
         }
         Some(entry)
@@ -1104,7 +1159,7 @@ fn kernel_of_tag(tag: u32) -> Result<Kernel> {
         1 => Ok(Kernel::NegativeDot),
         2 => Ok(Kernel::SquaredEuclidean),
         other => Err(HnswError::InvalidPayload {
-            reason: format!("unknown distance kernel tag {other}"),
+            reason: crate::error::PayloadRefusal::KernelTag(other),
         }),
     }
 }
@@ -1124,17 +1179,16 @@ impl<'a> Cursor<'a> {
         let end = self
             .at
             .checked_add(count)
-            .ok_or_else(|| HnswError::InvalidPayload {
-                reason: "payload offset overflowed".to_owned(),
+            .ok_or(HnswError::InvalidPayload {
+                reason: crate::error::PayloadRefusal::Offset { at: self.at, count },
             })?;
         if end > self.bytes.len() {
             return Err(HnswError::InvalidPayload {
-                reason: format!(
-                    "payload ends after {} bytes but a {count}-byte field was expected at \
-                     offset {}",
-                    self.bytes.len(),
-                    self.at
-                ),
+                reason: crate::error::PayloadRefusal::Truncated {
+                    available: self.bytes.len(),
+                    at: self.at,
+                    count,
+                },
             });
         }
         let slice = &self.bytes[self.at..end];
@@ -1159,7 +1213,10 @@ impl<'a> Cursor<'a> {
     fn usize(&mut self) -> Result<usize> {
         let value = self.u64()?;
         usize::try_from(value).map_err(|_| HnswError::InvalidPayload {
-            reason: format!("payload value {value} does not fit this platform's index range"),
+            reason: crate::error::PayloadRefusal::ValuePlatform {
+                value,
+                maximum: usize::MAX,
+            },
         })
     }
 
@@ -1174,10 +1231,9 @@ impl<'a> Cursor<'a> {
     fn finish(&self) -> Result<()> {
         if self.at != self.bytes.len() {
             return Err(HnswError::InvalidPayload {
-                reason: format!(
-                    "payload holds {} trailing byte(s) after the last node record",
-                    self.bytes.len() - self.at
-                ),
+                reason: crate::error::PayloadRefusal::Trailing {
+                    count: self.bytes.len() - self.at,
+                },
             });
         }
         Ok(())
@@ -1247,10 +1303,23 @@ mod tests {
 
     #[test]
     fn a_matrix_rejects_ragged_and_non_finite_input() {
-        assert!(VectorMatrix::new(2, 2, vec![1.0, 2.0, 3.0]).is_err());
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let error = VectorMatrix::new(2, 2, vec![1.0, 2.0, 3.0]).unwrap_err();
+        let fields = Capture::read(&error);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "hnsw-matrix-value-count");
+        assert!(matches!(cause.field("expected"), ErrorValue::Unsigned(4)));
+        assert!(matches!(cause.field("actual"), ErrorValue::Unsigned(3)));
         assert!(VectorMatrix::new(2, 2, vec![1.0, 2.0, 3.0, f64::NAN]).is_err());
         assert!(VectorMatrix::new(0, 2, Vec::new()).is_err());
-        assert!(VectorMatrix::from_rows(&[vec![1.0, 2.0], vec![3.0]]).is_err());
+        let error = VectorMatrix::from_rows(&[vec![1.0, 2.0], vec![3.0]]).unwrap_err();
+        let fields = Capture::read(&error);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "hnsw-matrix-ragged");
+        assert!(matches!(cause.field("row"), ErrorValue::Unsigned(1)));
+        assert!(matches!(cause.field("expected"), ErrorValue::Unsigned(2)));
+        assert!(matches!(cause.field("actual"), ErrorValue::Unsigned(1)));
         assert!(VectorMatrix::from_rows(&[vec![1.0, 2.0], vec![3.0, 4.0]]).is_ok());
     }
 

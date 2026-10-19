@@ -78,6 +78,43 @@ fn the_payload_round_trips_through_the_real_sections() {
 }
 
 #[test]
+fn embedding_adapter_retains_native_causes_and_requested_coordinates() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let fixture = purremb::Fixture::new(8, 4, params());
+    let absent = purrdf_core::VectorSpaceId::from_raw([0xff; 32]);
+    let error = {
+        let view = EmbeddingView::from_bytes(&fixture.bytes).expect("artifact opens");
+        guard::coordinates(&view, fixture.target_set, absent).unwrap_err()
+    };
+    let retained = error.clone();
+    drop(error);
+    drop(fixture);
+    let fields = Capture::read(&retained);
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "hnsw-embedding-missing-vector-space");
+    assert!(
+        matches!(cause.child("id").field("bytes"), ErrorValue::Bytes(bytes) if bytes == [0xff; 32])
+    );
+
+    let original = EmbeddingView::from_bytes(&[]).unwrap_err();
+    let error = HnswError::from(original);
+    let fields = Capture::read(&error);
+    assert_eq!(
+        fields.child("cause").child("cause").code,
+        "purremb-truncated"
+    );
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_core::EmbeddingError>()
+    );
+}
+
+#[test]
 fn a_reloaded_space_searches_over_the_target_row_order() {
     let fixture = purremb::Fixture::new(32, 4, params());
     let space = std::sync::Arc::new(
@@ -126,6 +163,15 @@ fn a_substituted_payload_is_refused_before_any_search() {
     let selected = guard::select(&view).expect("the guard still names the profile");
     let error = guard::load::<Exact>(&selected, fixture.matrix.clone())
         .expect_err("the substituted payload must not decode");
+    let fields = purrdf_testkit::error_capture::Capture::read(&error);
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "hnsw-payload-digest-mismatch");
+    assert!(
+        matches!(cause.field("expected"), purrdf_hash::error::ErrorValue::Bytes(value) if value == selected.payload_sha256().as_bytes())
+    );
+    assert!(
+        matches!(cause.field("actual"), purrdf_hash::error::ErrorValue::Bytes(value) if value == purrdf_core::ContentDigest::of(selected.payload_bytes().unwrap()).as_bytes())
+    );
     assert!(
         matches!(error, HnswError::PayloadCommitment { .. }),
         "expected a commitment failure, got {error}"
@@ -285,8 +331,14 @@ fn a_foreign_evidence_revision_is_refused_at_bind_time() {
     verify_embedding(&mut view).expect("the artifact verifies");
     let selected = guard::select(&view).expect("the guard still names the profile");
     let error = guard::validate_guard(&selected).expect_err("a foreign revision must be refused");
+    let fields = purrdf_testkit::error_capture::Capture::read(&error);
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "hnsw-profile-revision");
     assert!(
-        matches!(&error, HnswError::GuardProfile { description } if description == FOREIGN_REVISION_REFUSAL),
+        matches!(cause.field("revision"), purrdf_hash::error::ErrorValue::Bytes(value) if value == b"approximate: recall is exact at every scale and absence is proven")
+    );
+    assert!(
+        matches!(&error, HnswError::GuardProfile { cause } if cause.to_string() == FOREIGN_REVISION_REFUSAL),
         "the refusal must name the evidence revision, got {error}"
     );
 
@@ -319,8 +371,14 @@ fn a_guard_claiming_transformed_vectors_is_refused_at_bind_time() {
     let selected = guard::select(&view).expect("the guard still names the profile");
     let error =
         guard::validate_guard(&selected).expect_err("a transforming loss contract is refused");
+    let fields = purrdf_testkit::error_capture::Capture::read(&error);
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "hnsw-profile-transforms");
     assert!(
-        matches!(&error, HnswError::GuardProfile { description } if description == TRANSFORMING_LOSS_REFUSAL),
+        matches!(cause.field("actual"), purrdf_hash::error::ErrorValue::Bytes(value) if value == [1])
+    );
+    assert!(
+        matches!(&error, HnswError::GuardProfile { cause } if cause.to_string() == TRANSFORMING_LOSS_REFUSAL),
         "the refusal must name the loss contract, got {error}"
     );
 
@@ -388,7 +446,7 @@ fn validated(artifact: &[u8]) -> purrdf_hnsw::Result<Params> {
 /// The description of a `GuardProfile` refusal, or a panic naming what was raised instead.
 fn profile_refusal(error: HnswError) -> String {
     match error {
-        HnswError::GuardProfile { description } => description,
+        HnswError::GuardProfile { cause } => cause.to_string(),
         other => panic!("expected a profile refusal, got {other}"),
     }
 }

@@ -45,6 +45,14 @@ macro_rules! identity_type {
         #[repr(transparent)]
         pub struct $name(Digest32);
 
+        impl purrdf_hash::error::StructuredError for $name {
+            fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+                let Self(digest) = self;
+                visitor.variant(concat!("embedding-", stringify!($name)));
+                visitor.value(Some("bytes"), purrdf_hash::error::ErrorValue::Bytes(digest.as_bytes()));
+            }
+        }
+
         impl $name {
             /// Adopts already-decoded identity bytes without hashing them.
             #[must_use]
