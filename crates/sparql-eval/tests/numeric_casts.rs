@@ -59,6 +59,16 @@ fn typed(lexical: &str, datatype: &str) -> Option<(String, String)> {
     Some((lexical.to_owned(), format!("{XSD}{datatype}")))
 }
 
+/// A decimal an operator COMPUTED: spelled with a point and a fractional digit.
+fn computed(lexical: &str) -> Option<(String, String)> {
+    let spelled = if lexical.contains('.') {
+        lexical.to_owned()
+    } else {
+        format!("{lexical}.0")
+    };
+    typed(&spelled, "decimal")
+}
+
 fn check(expression: &str, expected: Option<(String, String)>) {
     let cast = Cast {
         actual: select(expression),
@@ -276,10 +286,7 @@ fn integer_and_decimal_sources_cast_to_decimal_exactly() {
         &format!(r#"xsd:decimal("{min}"^^xsd:integer)"#),
         typed(&min, "decimal"),
     );
-    check(
-        &format!(r#"("{min}"^^xsd:decimal + 0)"#),
-        typed(&min, "decimal"),
-    );
+    check(&format!(r#"("{min}"^^xsd:decimal + 0)"#), computed(&min));
     check(
         r#"xsd:integer("12345678901234567.9"^^xsd:decimal)"#,
         typed("12345678901234567", "integer"),
@@ -421,60 +428,60 @@ fn decimal_division_keeps_terminating_quotients_and_rounds_repeating_ones() {
     let two_pow_127 = "170141183460469231731687303715884105728";
     check(
         r#"("1000000000000000000000"^^xsd:decimal / 2)"#,
-        typed("500000000000000000000", "decimal"),
+        computed("500000000000000000000"),
     );
     check(
         r#"("100000000000000000000"^^xsd:decimal / 2)"#,
-        typed("50000000000000000000", "decimal"),
+        computed("50000000000000000000"),
     );
     check(
         &format!(r#"("{min}"^^xsd:decimal / 2)"#),
-        typed(&(min / 2).to_string(), "decimal"),
+        computed(&(min / 2).to_string()),
     );
     // MAX / 2 terminates at one fractional digit, which the quotient keeps.
     check(
         &format!(r#"("{max}"^^xsd:decimal / 2)"#),
-        typed(&format!("{}.5", max / 2), "decimal"),
+        computed(&format!("{}.5", max / 2)),
     );
-    check("(1 / 3)", typed("0.333333333333333333", "decimal"));
-    check("(-2 / 3.0)", typed("-0.666666666666666667", "decimal"));
-    check("(1 / 1048576)", typed("0.00000095367431640625", "decimal"));
+    check("(1 / 3)", computed("0.333333333333333333"));
+    check("(-2 / 3.0)", computed("-0.666666666666666667"));
+    check("(1 / 1048576)", computed("0.00000095367431640625"));
     let fits = max / 10;
     check(
         &format!(r#"("{fits}"^^xsd:decimal / 0.1)"#),
-        typed(&(fits * 10).to_string(), "decimal"),
+        computed(&(fits * 10).to_string()),
     );
     check(
         &format!(r#"("{max}"^^xsd:decimal / 0.1)"#),
-        typed(&format!("{max}0"), "decimal"),
+        computed(&format!("{max}0")),
     );
     check(
         &format!(r#"("{min}"^^xsd:integer / 1)"#),
-        typed(&min.to_string(), "decimal"),
+        computed(&min.to_string()),
     );
     check(
         &format!(r#"("{min}"^^xsd:integer / -1)"#),
-        typed(two_pow_127, "decimal"),
+        computed(two_pow_127),
     );
     check("(1 / 0.0)", None);
     check("(1 / 0)", None);
-    check("(0 / 1)", typed("0", "decimal"));
+    check("(0 / 1)", computed("0"));
     // The absolute value and negation of the smallest i128 are 2^127, exactly.
     check(
         &format!(r#"ABS("{min}"^^xsd:decimal)"#),
-        typed(two_pow_127, "decimal"),
+        computed(two_pow_127),
     );
     check(
         &format!(r#"(-"{min}"^^xsd:decimal)"#),
-        typed(two_pow_127, "decimal"),
+        computed(two_pow_127),
     );
     let next = min + 1;
     check(
         &format!(r#"ABS("{next}"^^xsd:decimal)"#),
-        typed(&max.to_string(), "decimal"),
+        computed(&max.to_string()),
     );
     check(
         &format!(r#"(-"{next}"^^xsd:decimal)"#),
-        typed(&max.to_string(), "decimal"),
+        computed(&max.to_string()),
     );
 }

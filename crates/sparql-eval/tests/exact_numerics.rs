@@ -245,15 +245,15 @@ fn numeric_functions_and_promotion_are_exact() {
     let big = format!("{}.5", "1".repeat(40));
     assert_eq!(
         eval(&format!("ROUND({big})")),
-        format!("{}2^^decimal", "1".repeat(39))
+        format!("{}2.0^^decimal", "1".repeat(39))
     );
     assert_eq!(
         eval(&format!("FLOOR({big})")),
-        format!("{}^^decimal", "1".repeat(40))
+        format!("{}.0^^decimal", "1".repeat(40))
     );
     assert_eq!(
         eval(&format!("CEIL({big})")),
-        format!("{}2^^decimal", "1".repeat(39))
+        format!("{}2.0^^decimal", "1".repeat(39))
     );
     assert_eq!(eval(&format!("ABS(-{big})")), format!("{big}^^decimal"));
     assert_eq!(

@@ -342,7 +342,7 @@ def test_py_lint_shapes() -> None:
 
     by_types = purrdf.shapes.lint_shapes(_PREFIXES + _SNIPPET + "ex:S a sh:NodeShape ; sh:closed sh:ByTypes .\n")
     assert by_types["clean"] is True
-    assert [result["superseded"] for result in by_types["shacl_shacl"]] == ["closed-by-types"]
+    assert by_types["shacl_shacl"] == []  # the SHACL 1.2 shapes graph accepts sh:ByTypes
 
     with pytest.raises(ValueError):
         purrdf.shapes.lint_shapes("@@@ not turtle")

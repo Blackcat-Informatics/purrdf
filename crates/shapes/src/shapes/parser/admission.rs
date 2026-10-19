@@ -211,7 +211,11 @@ mod tests {
 
     const PREFIXES: &str =
         "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix ex: <http://example.org/> .";
-    const DATED: [ShaclProfile; 2] = [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918];
+    const DATED: [ShaclProfile; 3] = [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ];
 
     #[derive(Debug)]
     struct ParseFailure {
@@ -563,7 +567,9 @@ mod tests {
         let local = constraint("SELECT $this WHERE { VALUES ?local { 1 } }");
         let rejected = refusal(DATED[0], &local, QueryPurpose::SelectConstraint);
         assert_eq!(rejected.reason(), AdmissionReason::Values);
-        parse(DATED[1], &local).expect("draft local VALUES is admitted by the actual parser");
+        for draft in [DATED[1], DATED[2]] {
+            parse(draft, &local).expect("draft local VALUES is admitted by the actual parser");
+        }
         let compatibility = parse(ShaclProfile::LEGACY, &local).unwrap_err();
         assert!(compatibility.error.as_prebinding().is_some());
         assert!(compatibility.admission.is_none());
@@ -572,7 +578,9 @@ mod tests {
         let rejected = refusal(DATED[0], &hidden, QueryPurpose::SelectConstraint);
         assert_eq!(rejected.reason(), AdmissionReason::SubqueryProjection);
         assert_eq!(rejected.variable(), Some("this"));
-        parse(DATED[1], &hidden).unwrap();
+        for draft in [DATED[1], DATED[2]] {
+            parse(draft, &hidden).unwrap();
+        }
         for profile in DATED {
             parse(
                 profile,
@@ -590,7 +598,9 @@ mod tests {
         "#;
         let declared = refusal(DATED[0], declaration, QueryPurpose::SelectValidator);
         assert_eq!(declared.reason(), AdmissionReason::Values);
-        parse(DATED[1], declaration).expect("draft unused validators are not executed");
+        for draft in [DATED[1], DATED[2]] {
+            parse(draft, declaration).expect("draft unused validators are not executed");
+        }
         parse(ShaclProfile::LEGACY, declaration).expect("compatibility admission is unchanged");
         for profile in DATED {
             let selected = format!(
@@ -600,7 +610,7 @@ mod tests {
             assert_eq!(rejected.reason(), AdmissionReason::Values);
             assert_eq!(
                 rejected.variable(),
-                (profile == DATED[1]).then_some("argument")
+                profile.is_shacl12().then_some("argument")
             );
             let neighbor = selected.replace("VALUES ?argument { true }", "FILTER(?argument)");
             validate(profile, &neighbor)
@@ -638,10 +648,7 @@ mod tests {
         for profile in DATED {
             let rejected = execution_refusal(profile, selected, QueryPurpose::AskValidator);
             assert_eq!(rejected.reason(), AdmissionReason::Values);
-            assert_eq!(
-                rejected.variable(),
-                (profile == DATED[1]).then_some("value")
-            );
+            assert_eq!(rejected.variable(), profile.is_shacl12().then_some("value"));
             validate(
                 profile,
                 &selected.replace("VALUES ?value { true }", "FILTER(BOUND(?value))"),
@@ -739,16 +746,18 @@ mod tests {
         // variable and its row is a result. The Recommendation refuses it.
         let assigns =
             constraint("SELECT $this WHERE { BIND(<http://example.org/g> AS ?shapesGraph) }");
-        let [rec, wd] = DATED;
+        let [rec, wd, ed] = DATED;
         let refused = execution_refusal(rec, &assigns, QueryPurpose::SelectConstraint);
         assert_eq!(refused.reason(), AdmissionReason::Assignment);
         assert_eq!(refused.variable(), Some("shapesGraph"));
-        let report = validate(wd, &assigns).expect("the draft admits the assignment");
-        assert_eq!(
-            report.legacy().results.len(),
-            1,
-            "the assigned row is a result"
-        );
+        for draft in [wd, ed] {
+            let report = validate(draft, &assigns).expect("the draft admits the assignment");
+            assert_eq!(
+                report.legacy().results.len(),
+                1,
+                "the assigned row is a result under {draft}"
+            );
+        }
         // Its reading neighbour: the unvalued name is unbound under both laws.
         let reads = constraint("SELECT $this WHERE { FILTER(!BOUND(?shapesGraph)) }");
         for profile in DATED {
@@ -785,15 +794,17 @@ mod tests {
         let unbound = constraint("SELECT $this WHERE { FILTER(!BOUND(?shapesGraph)) }");
         let bound =
             constraint("SELECT $this WHERE { FILTER(?shapesGraph = <http://example.org/shapes>) }");
-        let [rec, wd] = DATED;
-        let report = validate_named(wd, &assigns, GRAPH).expect("the draft admits it");
-        assert_eq!(
-            report.legacy().results.len(),
-            1,
-            "the assigned row is a result"
-        );
-        let report = validate_named(wd, &unbound, GRAPH).expect("the draft reads it");
-        assert_eq!(report.legacy().results.len(), 1, "the draft binds no value");
+        let [rec, wd, ed] = DATED;
+        for draft in [wd, ed] {
+            let report = validate_named(draft, &assigns, GRAPH).expect("the draft admits it");
+            assert_eq!(
+                report.legacy().results.len(),
+                1,
+                "the assigned row is a result under {draft}"
+            );
+            let report = validate_named(draft, &unbound, GRAPH).expect("the draft reads it");
+            assert_eq!(report.legacy().results.len(), 1, "{draft} binds no value");
+        }
         // The Recommendation and the compatibility law keep pre-binding it.
         let refused = execution_refusal(rec, &assigns, QueryPurpose::SelectConstraint);
         assert_eq!(refused.reason(), AdmissionReason::Assignment);
@@ -1117,7 +1128,9 @@ mod tests {
         "#;
         let rejected = refusal(DATED[0], declaration, QueryPurpose::SelectConstraint);
         assert_eq!(rejected.reason(), AdmissionReason::Values);
-        parse(DATED[1], declaration).expect("the draft restriction applies to executed queries");
+        for draft in [DATED[1], DATED[2]] {
+            parse(draft, declaration).expect("the draft restriction applies to executed queries");
+        }
         parse(ShaclProfile::LEGACY, declaration).expect("compatibility discovery is unchanged");
         parse(
             DATED[0],

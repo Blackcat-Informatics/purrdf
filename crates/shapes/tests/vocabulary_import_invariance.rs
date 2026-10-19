@@ -28,9 +28,9 @@
 //! the document prefix map a SPARQL body falls back on is the original
 //! document's, because a graph-level merge carries no prefix declarations.
 //!
-//! [`INVARIANCE_EXCEPTIONS`] ledgers any case whose answer legitimately depends on
-//! the vocabulary being present — a SPARQL constraint that reads `$shapesGraph` —
-//! with its reason; it is pinned by count and runs both ways.
+//! A case that ends in an error is compared on the error text with the byte offsets
+//! it names normalized ([`normalize_offsets`]): the merge lengthens the prologue before a
+//! SPARQL body, which moves the offset of a syntax error and nothing else.
 
 use purrdf_shapes::shacl_corpora;
 
@@ -38,10 +38,11 @@ use std::fs;
 use std::sync::Arc;
 
 use purrdf_rdf::RdfDataset;
+use purrdf_shapes::ShaclProfile;
 use purrdf_shapes::engine::{PreparedShapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
-use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_base};
+use purrdf_shapes::shapes::{__linked_declarations, Shapes, from_dataset_with_options};
 use purrdf_shapes::text_ingest::{
     parse_ntriples_to_dataset, parse_turtle_document, parse_turtle_to_dataset,
 };
@@ -62,13 +63,31 @@ const VOCABULARY: [&str; 3] = [
 /// `shnex:conformsToShape` and 77 `sparql:` functions.
 const VOCABULARY_LIST_FUNCTIONS: usize = 78;
 
-/// Cases whose answer legitimately changes when the vocabulary is merged, as
-/// `(case id, reason)`. Empty: no case in the three corpora reads the shapes graph
-/// in a way the vocabulary's declarations can reach.
-const INVARIANCE_EXCEPTIONS: &[(&str, &str)] = &[];
+/// An error message with the byte offsets it names replaced by a placeholder.
+///
+/// The merged vocabulary's implicit prefix declarations lengthen the prologue the
+/// engine puts before a SPARQL body, so a body that does not parse is refused for the
+/// same syntax error at a different byte offset. Only the offset is normalized: the
+/// rest of the message, which names the shape, the construct and the error, is compared
+/// exactly, so a change of the answer on such a case is still seen.
+fn normalize_offsets(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(at) = rest.find("at byte ") {
+        let (head, tail) = rest.split_at(at + "at byte ".len());
+        out.push_str(head);
+        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            out.push_str("<offset>");
+        }
+        rest = &tail[digits..];
+    }
+    out.push_str(rest);
+    out
+}
 
-/// Every case the three corpora contribute (129 + 73 + 174).
-const TOTAL_CASES: usize = 376;
+/// Every case the three corpora contribute (129 + 73 + 213).
+const TOTAL_CASES: usize = 415;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
@@ -95,18 +114,22 @@ const TOTAL_CASES: usize = 376;
 /// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
 /// so the triple is data; both runs load it with an empty import table, and it is
 /// compared on a report like every other case.
-const COMPARED_ON_REPORT: usize = 364;
+const COMPARED_ON_REPORT: usize = 401;
 
-/// The inputs among [`TOTAL_CASES`] that must be refused at load: the 12 declared
-/// `sht:Failure` inputs. With [`COMPARED_ON_REPORT`] they account for every case, so
-/// the refused-at-load gap is 0.
-const DECLARED_REFUSAL_CASES: usize = 12;
+/// The inputs among [`TOTAL_CASES`] that must end in an error under their own law and are
+/// compared on an identical error: the declared `sht:Failure` inputs (14; some are
+/// refused at load, the SHACL 1.2 pre-binding ones at validation). With
+/// [`COMPARED_ON_REPORT`] they account for every case.
+const DECLARED_REFUSAL_CASES: usize = 14;
 
 /// One case, reduced to what both parses need.
 struct Input {
     id: String,
     shapes_text: String,
     base: Option<String>,
+    /// The law the case is graded under (`tc.profile`); the first-party corpus runs the
+    /// compatibility law.
+    profile: ShaclProfile,
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
     /// The manifest expects `sht:Failure`: the one reason a case may be compared on an
@@ -127,13 +150,14 @@ fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String>
     let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?
         .prefixes;
-    let shapes = from_dataset_with_base(
+    let shapes = from_dataset_with_options(
         &dataset,
         None,
         &prefixes,
         input.box_role_vocab.clone(),
         input.shapes_graph.clone(),
         &purrdf_shapes::ShapesImports::new(),
+        &purrdf_shapes::engine::ValidationOptions::default().with_profile(input.profile),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     Ok((dataset, shapes))
@@ -157,6 +181,7 @@ fn inputs() -> Vec<Input> {
             id: format!("corpus/{}", case.name),
             shapes_text,
             base: None,
+            profile: ShaclProfile::LEGACY,
             box_role_vocab: Some(first_party_box_role_vocab()),
             shapes_graph: None,
             declared_failure: false,
@@ -181,6 +206,7 @@ fn inputs() -> Vec<Input> {
             id,
             shapes_text,
             base: Some(file_iri(&case.shapes_path)),
+            profile: case.profile,
             box_role_vocab: None,
             shapes_graph: case.shapes_graph_iri.clone(),
             declared_failure: matches!(case.expected, Expected::Failure),
@@ -263,7 +289,9 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
             ));
         }
     };
-    if original_report != merged_report {
+    if original_report.clone().map_err(|e| normalize_offsets(&e))
+        != merged_report.clone().map_err(|e| normalize_offsets(&e))
+    {
         return Err(format!(
             "the report changed:\n  without the vocabulary: {}\n  with it:                {}",
             summary(&original_report),
@@ -279,12 +307,14 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
             .to_product(&ShapesProfile::CORE)
             .map_err(|e| format!("the merged shapes graph does not pack: {e}"))?;
         let host = HostBindings::empty();
+        let options =
+            purrdf_shapes::engine::ValidationOptions::default().with_profile(input.profile);
         for lane in ["admit", "rebuild"] {
             let view = ShapesProduct::open(&bytes).map_err(|e| format!("{lane}: open: {e}"))?;
             let restored = if lane == "admit" {
-                view.admit(&ShapesProfile::CORE, &host)
+                view.admit_with_options(&ShapesProfile::CORE, &host, &options)
             } else {
-                view.rebuild(&ShapesProfile::CORE, &host)
+                view.rebuild_with_options(&ShapesProfile::CORE, &host, &options)
             }
             .map_err(|e| format!("{lane}: {e}"))?;
             let restored_report = report(input, restored.shapes());
@@ -320,21 +350,13 @@ fn merging_the_vocabulary_changes_no_answer() {
     assert_eq!(inputs.len(), TOTAL_CASES, "discovered case count");
 
     let mut failures: Vec<String> = Vec::new();
-    let mut excepted = 0usize;
     let mut compared_on_report = 0usize;
     let mut not_on_report: Vec<&Input> = Vec::new();
     for input in &inputs {
-        let outcome = check(input, &vocabulary);
-        let exception = INVARIANCE_EXCEPTIONS.iter().find(|(id, _)| *id == input.id);
-        match (outcome, exception) {
-            (Ok(true), None) => compared_on_report += 1,
-            (Ok(false), None) => not_on_report.push(input),
-            (Err(_), Some(_)) => excepted += 1,
-            (Ok(_), Some((_, reason))) => failures.push(format!(
-                "[{}] is ledgered in INVARIANCE_EXCEPTIONS ({reason}) but is invariant; remove it",
-                input.id
-            )),
-            (Err(why), None) => failures.push(format!("[{}] {why}", input.id)),
+        match check(input, &vocabulary) {
+            Ok(true) => compared_on_report += 1,
+            Ok(false) => not_on_report.push(input),
+            Err(why) => failures.push(format!("[{}] {why}", input.id)),
         }
     }
     assert!(
@@ -343,18 +365,12 @@ fn merging_the_vocabulary_changes_no_answer() {
         failures.len(),
         failures.join("\n\n")
     );
-    assert_eq!(
-        excepted,
-        INVARIANCE_EXCEPTIONS.len(),
-        "the exception ledger is exact"
-    );
     println!(
         "VOCABULARY-INVARIANCE: {compared_on_report} compared on a report of {}",
         inputs.len()
     );
-    // The ratchet gap: a case compared only on an identical load error is a
-    // declared `sht:Failure` input or an expected import refusal, never an entry
-    // the engine refuses at load otherwise.
+    // The ratchet gap: a case compared only on an identical error is a declared
+    // `sht:Failure` input, never an entry that errors under its own law otherwise.
     let refused_at_load: Vec<&str> = not_on_report
         .iter()
         .filter(|input| !input.declared_failure)
@@ -362,7 +378,8 @@ fn merging_the_vocabulary_changes_no_answer() {
         .collect();
     assert!(
         refused_at_load.is_empty(),
-        "entries the engine refuses at load (the gap must be exactly empty): {refused_at_load:?}"
+        "entries that end in an error under their own law must be declared `sht:Failure`: \
+         {refused_at_load:?}"
     );
     assert_eq!(
         not_on_report.len(),
@@ -395,4 +412,24 @@ fn the_vocabulary_alone_indexes_and_registers_nothing() {
         shapes.node_shapes.is_empty(),
         "the vocabulary's sh:Parameter nodes are not shapes"
     );
+}
+
+/// The offset normalization hides the offset and only the offset: two errors that
+/// differ in it alone compare equal, and any other difference still shows.
+#[test]
+fn the_offset_normalization_hides_only_the_offset() {
+    let at = |offset: u32, rest: &str| {
+        format!(
+            "shapes parse error: unparsable sh:select: SPARQL syntax error at byte {offset}: {rest}"
+        )
+    };
+    assert_eq!(
+        normalize_offsets(&at(536, "expected an RDF term, found None")),
+        normalize_offsets(&at(650, "expected an RDF term, found None"))
+    );
+    assert_ne!(
+        normalize_offsets(&at(536, "expected an RDF term, found None")),
+        normalize_offsets(&at(536, "expected a variable, found None"))
+    );
+    assert_eq!(normalize_offsets("no offset here"), "no offset here");
 }

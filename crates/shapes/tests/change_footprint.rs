@@ -94,6 +94,10 @@ enum Obj {
     Ex(&'static str),
     /// A plain literal.
     Lit(&'static str),
+    /// The literal `"true"^^xsd:boolean`.
+    True,
+    /// The literal `"false"^^xsd:boolean`.
+    False,
     /// A triple term `<<( ex:s <p> ex:o )>>`, by `(subject local name, predicate
     /// IRI, object local name)` — the object a reifier declaration takes.
     Triple(&'static str, &'static str, &'static str),
@@ -145,6 +149,8 @@ fn object(obj: Obj) -> TermValue {
     match obj {
         Obj::Ex(local) => TermValue::iri(ex(local)),
         Obj::Lit(lexical) => TermValue::simple_literal(lexical),
+        Obj::True => TermValue::typed_literal("true", "http://www.w3.org/2001/XMLSchema#boolean"),
+        Obj::False => TermValue::typed_literal("false", "http://www.w3.org/2001/XMLSchema#boolean"),
         Obj::Triple(s, p, o) => TermValue::Triple {
             s: TermBox::new(TermValue::iri(ex(s))),
             p: TermBox::new(TermValue::iri(p)),
@@ -699,6 +705,169 @@ ex:PersonShape a sh:NodeShape ;
     naive_misses: false,
 };
 
+/// `sh:closed` on a PROPERTY shape: the value nodes of `ex:address` are checked for
+/// predicates the shape does not list, and the result's focus node is the property
+/// shape's. The predicate that moves the verdict is a triple of the VALUE node, the
+/// subject of the changed row, and the focus node it moves is `ex:alice`.
+const CLOSED_PROPERTY_SHAPE: Case = Case {
+    name: "sh:closed on a property shape",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:address ; sh:closed true ; sh:ignoredProperties ( ex:city ) ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#address> <http://example.org/ns#addr1> .\n",
+        "<http://example.org/ns#addr1> <http://example.org/ns#city> \"Ottawa\" .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#address> <http://example.org/ns#addr2> .\n",
+        "<http://example.org/ns#addr2> <http://example.org/ns#city> \"Halifax\" .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("addr1", "http://example.org/ns#zip", Obj::Lit("K1A"))],
+    removals: &[],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+// ── Node-expression `sh:deactivated` ────────────────────────────────────────────
+//
+// `sh:deactivated` is a node expression evaluated at the focus node, so the verdict of
+// a shape it guards depends on what the expression READS, two hops from the focus node
+// here (`ex:alice ex:owner ex:o1`, `ex:o1 ex:muted true`). The expression must yield a
+// boolean at every focus node, so the delta replaces the `true` with `false`: the shape
+// is active again and `ex:alice` starts to violate. The changed rows' subject is
+// `ex:o1`, no person, so the subjects-of-delta expansion misses her. The same
+// expression sits at each place the Core text allows it.
+
+/// `ex:alice` is deactivated by the expression and conforms; without the `true` she
+/// has no `ex:name`. Here the expression is on the node shape itself.
+const DEACTIVATED_SHAPE: Case = Case {
+    name: "sh:deactivated expression on a shape",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:deactivated [ sh:path ( ex:owner ex:muted ) ] ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#owner> <http://example.org/ns#o1> .\n",
+        "<http://example.org/ns#o1> <http://example.org/ns#muted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#owner> <http://example.org/ns#o2> .\n",
+        "<http://example.org/ns#o2> <http://example.org/ns#muted> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("o1", "http://example.org/ns#muted", Obj::False)],
+    removals: &[("o1", "http://example.org/ns#muted", Obj::True)],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// On a property shape of the shape.
+const DEACTIVATED_PROPERTY_SHAPE: Case = Case {
+    name: "sh:deactivated expression on a property shape",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ; sh:deactivated [ sh:path ( ex:owner ex:muted ) ] ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#owner> <http://example.org/ns#o1> .\n",
+        "<http://example.org/ns#o1> <http://example.org/ns#muted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#owner> <http://example.org/ns#o2> .\n",
+        "<http://example.org/ns#o2> <http://example.org/ns#muted> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("o1", "http://example.org/ns#muted", Obj::False)],
+    removals: &[("o1", "http://example.org/ns#muted", Obj::True)],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// On a reifier of the `sh:property` statement, which deactivates the reach.
+const DEACTIVATED_REIFIER: Case = Case {
+    name: "sh:deactivated expression on an sh:property reifier",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] {| sh:deactivated [ sh:path ( ex:owner ex:muted ) ] |} .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#owner> <http://example.org/ns#o1> .\n",
+        "<http://example.org/ns#o1> <http://example.org/ns#muted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#owner> <http://example.org/ns#o2> .\n",
+        "<http://example.org/ns#o2> <http://example.org/ns#muted> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("o1", "http://example.org/ns#muted", Obj::False)],
+    removals: &[("o1", "http://example.org/ns#muted", Obj::True)],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// On a reifier of one constraint statement of a property shape.
+const DEACTIVATED_CONSTRAINT_REIFIER: Case = Case {
+    name: "sh:deactivated expression on a constraint reifier",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 {| sh:deactivated [ sh:path ( ex:owner ex:muted ) ] |} ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#owner> <http://example.org/ns#o1> .\n",
+        "<http://example.org/ns#o1> <http://example.org/ns#muted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#owner> <http://example.org/ns#o2> .\n",
+        "<http://example.org/ns#o2> <http://example.org/ns#muted> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("o1", "http://example.org/ns#muted", Obj::False)],
+    removals: &[("o1", "http://example.org/ns#muted", Obj::True)],
+    untouched: "bob",
+    naive_misses: true,
+};
+
+/// On a shape the targeted shape reaches through `sh:node`: the same focus node is
+/// judged against it, and the expression still reads the focus node's `ex:owner`.
+const DEACTIVATED_SHAPE_UNDER_NODE: Case = Case {
+    name: "a deactivated shape reached through sh:node",
+    shapes: r"
+ex:PersonShape a sh:NodeShape ;
+    sh:targetClass ex:Person ;
+    sh:node ex:NamedShape .
+
+ex:NamedShape a sh:NodeShape ;
+    sh:deactivated [ sh:path ( ex:owner ex:muted ) ] ;
+    sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+",
+    data: concat!(
+        "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#owner> <http://example.org/ns#o1> .\n",
+        "<http://example.org/ns#o1> <http://example.org/ns#muted> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+        "<http://example.org/ns#bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#name> \"Bob\" .\n",
+        "<http://example.org/ns#bob> <http://example.org/ns#owner> <http://example.org/ns#o2> .\n",
+        "<http://example.org/ns#o2> <http://example.org/ns#muted> \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n",
+    ),
+    base_overlay: &[],
+    inserts: &[("o1", "http://example.org/ns#muted", Obj::False)],
+    removals: &[("o1", "http://example.org/ns#muted", Obj::True)],
+    untouched: "bob",
+    naive_misses: true,
+};
+
 // ── The RDF 1.2 statement layer ─────────────────────────────────────────────────
 //
 // A delta may change the statement layer instead of the plain one, and those rows
@@ -974,6 +1143,12 @@ const CASES: &[&Case] = &[
     &PROPERTY_PAIR_COMPARAND,
     &CLASS_CONSTRAINT,
     &CLOSED_SHAPE,
+    &CLOSED_PROPERTY_SHAPE,
+    &DEACTIVATED_SHAPE,
+    &DEACTIVATED_PROPERTY_SHAPE,
+    &DEACTIVATED_REIFIER,
+    &DEACTIVATED_CONSTRAINT_REIFIER,
+    &DEACTIVATED_SHAPE_UNDER_NODE,
     &UNIQUE_VALUES_FOR_VALUE,
     &UNIQUE_VALUES_FOR_TARGET_SET,
     &COMPUTED_VALUES,

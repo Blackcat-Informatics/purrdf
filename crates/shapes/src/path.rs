@@ -224,7 +224,7 @@ pub(crate) fn eval_planned_ids_from_id(
     focus_id: TermId,
     path: &LoweredPath,
     binding: &DatasetBinding,
-) -> Result<IdVec, String> {
+) -> Result<IdVec, crate::error::ShapesError> {
     let ids = eval_planned_inner_ids(ds, focus_id, path, binding)?;
     let mut seen = FrontierDedup::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
@@ -246,7 +246,7 @@ pub(crate) fn eval_planned(
     focus: &Term,
     path: &LoweredPath,
     binding: &DatasetBinding,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let Some(focus_id) = resolve_id(ds, focus) else {
         // Non-interned focus: it has no id and therefore no incoming/outgoing
         // quads, so every predicate/inverse STEP is empty. The only value a path
@@ -293,7 +293,7 @@ fn eval_planned_inner_ids(
     focus: TermId,
     path: &LoweredPath,
     binding: &DatasetBinding,
-) -> Result<IdVec, String> {
+) -> Result<IdVec, crate::error::ShapesError> {
     Ok(match path {
         LoweredPath::Predicate(slot) => match binding.term(*slot)? {
             Some(p_id) => {
@@ -364,7 +364,7 @@ fn planned_closure_ids(
     inner: &LoweredPath,
     binding: &DatasetBinding,
     reflexive: bool,
-) -> Result<IdVec, String> {
+) -> Result<IdVec, crate::error::ShapesError> {
     // `order` IS the visited set: every id the dedup admits is pushed to it, and
     // it is never popped, so the closure's membership question is answered against
     // the output it is already building rather than against a second copy of it.

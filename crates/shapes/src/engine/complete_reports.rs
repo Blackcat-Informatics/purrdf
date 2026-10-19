@@ -90,7 +90,11 @@ fn row_message_precedes_declared_messages_and_preserves_literal_identity() {
         binding.validate().unwrap().legacy().results[0].messages[0].value(),
         "constraint"
     );
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let report = binding
             .validate_report_with_focus_filter(profile, |_, _| true)
             .unwrap();
@@ -114,6 +118,7 @@ fn constraint_messages_precede_only_the_draft_core_fallback() {
         for (profile, expected) in [
             (ShaclProfile::REC_20170720, rec),
             (ShaclProfile::WD_20260918, draft),
+            (ShaclProfile::ED_20261016, draft),
         ] {
             let report = binding
                 .validate_report_with_focus_filter(profile, |_, _| true)
@@ -153,7 +158,11 @@ fn selected_row_message_keeps_datatype_language_direction_and_template_bindings(
              ex:C sh:message 'constraint'; sh:select \"SELECT $this ?message ?bound WHERE {{ \
              BIND({expression} AS ?message) BIND('actual' AS ?bound) }}\" ."
         ));
-        for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+        for profile in [
+            ShaclProfile::REC_20170720,
+            ShaclProfile::WD_20260918,
+            ShaclProfile::ED_20261016,
+        ] {
             let report = binding
                 .validate_report_with_focus_filter(profile, |_, _| true)
                 .unwrap();
@@ -200,6 +209,7 @@ fn component_message_order_is_validator_then_component_then_draft_core() {
         for (profile, expected) in [
             (ShaclProfile::REC_20170720, rec),
             (ShaclProfile::WD_20260918, draft),
+            (ShaclProfile::ED_20261016, draft),
         ] {
             let report = binding
                 .validate_report_with_focus_filter(profile, |_, _| true)
@@ -225,7 +235,11 @@ fn explicit_solution_failure_is_distinct_from_a_violation_and_resource_trip() {
         "#,
     );
     assert_eq!(binding.validate().unwrap().results().len(), 1);
-    for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+    for profile in [
+        ShaclProfile::REC_20170720,
+        ShaclProfile::WD_20260918,
+        ShaclProfile::ED_20261016,
+    ] {
         let error = binding
             .validate_report_with_focus_filter(profile, |_, _| true)
             .unwrap_err();
@@ -258,6 +272,7 @@ fn rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them() {
         constraint: AnnotatedConstraint::Constraint(0),
         severity: Some(Severity::Info),
         messages: vec![Literal::new_simple_literal("reifier")],
+        deactivated_when: Vec::new(),
     }];
     let binding = PreparedShapes::new(Arc::new(shapes))
         .bind_complete_shared_dataset(RdfDatasetBuilder::new().freeze().unwrap())
@@ -265,6 +280,7 @@ fn rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them() {
     for (profile, message, severity) in [
         (ShaclProfile::LEGACY, "reifier", Severity::Info),
         (ShaclProfile::WD_20260918, "reifier", Severity::Info),
+        (ShaclProfile::ED_20261016, "reifier", Severity::Info),
         (ShaclProfile::REC_20170720, "shape", Severity::Violation),
     ] {
         let report = binding

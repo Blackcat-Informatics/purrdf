@@ -491,10 +491,12 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_remote_requests,
             no_ceiling,
             xpath_regex,
+            shacl_profile,
             input,
             output,
         } => validate::run(
             &validate::ValidateOptions {
+                shacl_profile: shacl_profile.as_deref(),
                 input,
                 output,
                 changes: changes.as_deref(),

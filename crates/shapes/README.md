@@ -139,11 +139,12 @@ validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
 ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
 whether or not a shape uses the component.
 
-**Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
-`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
-tests) runs, and of the 544 an upstream manifest lists, 538 pass as approved
-and 6 are counted apart as non-canonical expected decimals, with an empty
-expected-failure ledger:
+**Conformance.** The whole W3C `shacl12-test-suite` (592 tests: 213
+`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 209 SPARQL 1.2 RL
+tests) runs, and of the 591 an upstream manifest lists, 590 pass as approved,
+with an empty expected-failure ledger; the one other, `node-expr/shnex-sparql/hasLang-example`,
+is reported failed because it calls `sparql:hasLang` with two arguments where the SPARQL 1.2
+grammar's `hasLANG` takes one:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
@@ -157,12 +158,11 @@ results carry the value node as `sh:value`, as the approved
 `core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
 names both the triple term and the reifier `t`); a non-conforming reifier's own
 results ride along as `sh:detail`. In six node-expression tests the approved
-result spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`,
-`"42.0"`, `"00"` for the XSD 1.1 canonical `"4"`, `"3"`, `"42"`, `"0"`); the
-expected value is correct, and the suite does not say whether "equal" means term
-or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six by
-substituting the canonical spelling, which for them equals value comparison. They
-are counted apart from the passes. `sparql/component/validator-001` passes by
+result spells a computed `xsd:decimal` as `"4.0"`, `"3.0"`, `"42.0"` and `"00"`;
+the specifications leave the lexical form of a computed literal to the processor,
+so PurRDF computes a decimal with a point and a fractional digit and `SECONDS` as
+the seconds part of its argument's lexical form, and all six pass term for term.
+`sparql/component/validator-001` passes by
 name with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits
 on a node that is neither the document's own IRI nor an `owl:Ontology` nor a
 `sh:ShapesGraph`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the
@@ -257,6 +257,15 @@ admission law with the native XPath law required for `sh:pattern`, `REGEX` and
 | --- | --- |
 | `REC_20170720` | [F&O 2.0 Second Edition, 2010-12-14](https://www.w3.org/TR/2010/REC-xpath-functions-20101214/), including incorporated errata |
 | `WD_20260918` | [F&O 3.1 Recommendation, 2017-03-21](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/) |
+| `ED_20261016` | [F&O 3.1 Recommendation, 2017-03-21](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/) |
+
+`ED_20261016` (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at
+commit `4cd469867a1cc6d2fff80e8a40723b26c695d67a`. It is `WD_20260918` plus the semantics
+first published after that working draft: a node expression as `sh:deactivated` on a
+SPARQL-based or `sh:expression` constraint, the `owl:versionIRI` steps of the `sh:prefixes`
+path, a blank node as a custom SPARQL function argument being an error, and rule sets as
+`sh:entailment` values. `WD_20260918` refuses or ignores each as the working draft's text
+says, and `REC_20170720` follows the 2017 text (`sh:prefixes/owl:imports*/sh:declare`).
 
 The Recommendation's recognized constraint/component declarations receive its
 graph-wide pre-binding checks. The draft's execution restrictions apply when

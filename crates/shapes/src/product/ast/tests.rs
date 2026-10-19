@@ -89,6 +89,7 @@ fn leaf_shape(id: &str) -> Shape {
         messages: vec![],
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     }
@@ -674,6 +675,7 @@ fn full_fixture() -> Shapes {
             messages: vec![Literal::new_simple_literal("nested")],
             constraint_annotations: vec![],
             deactivated: true,
+            deactivated_when: Vec::new(),
             box_roles: vec![ex("role/abox")],
         }],
         reifier_shapes: vec![leaf_shape("ReifierShape")],
@@ -688,19 +690,26 @@ fn full_fixture() -> Shapes {
                     Literal::new_language_tagged_literal_unchecked("erste", "de"),
                     Literal::new_simple_literal("first"),
                 ],
+                deactivated_when: Vec::new(),
             },
             ConstraintAnnotation {
                 constraint: AnnotatedConstraint::Constraint(2),
                 severity: None,
                 messages: vec![Literal::new_simple_literal("third")],
+                deactivated_when: vec![NodeExpr::Path(Path::Predicate(ex("muted")))],
             },
             ConstraintAnnotation {
                 constraint: AnnotatedConstraint::Reifier,
                 severity: Some(Severity::Trace),
                 messages: vec![],
+                deactivated_when: vec![
+                    NodeExpr::Path(Path::Predicate(ex("muted"))),
+                    NodeExpr::Path(Path::Predicate(ex("paused"))),
+                ],
             },
         ],
         deactivated: false,
+        deactivated_when: vec![NodeExpr::Path(Path::Predicate(ex("muted")))],
         box_roles: vec![ex("role/tbox"), ex("role/rbox")],
     };
 
@@ -836,8 +845,10 @@ fn full_fixture() -> Shapes {
             constraint: AnnotatedConstraint::Constraint(1),
             severity: Some(Severity::Other(ex("Critical"))),
             messages: vec![],
+            deactivated_when: Vec::new(),
         }],
         deactivated: false,
+        deactivated_when: vec![NodeExpr::Path(Path::Predicate(ex("muted")))],
         box_roles: vec![ex("role/cbox")],
         rules,
     };
@@ -1566,6 +1577,7 @@ fn rule_graph_round_trips() {
                 processors: vec![ex_term("processor")],
             }],
             entailment: true,
+            entailment_rule_sets: vec![ex("set")],
         },
         ..shapes_of(vec![leaf_shape("S")])
     };
@@ -1579,6 +1591,7 @@ fn rule_graph_round_trips() {
     );
     assert_eq!(parts.rules.rule_sets, shapes.rules.rule_sets);
     assert!(parts.rules.entailment);
+    assert_eq!(parts.rules.entailment_rule_sets, [ex("set")]);
     let without = Shapes {
         rules: RuleGraph::default(),
         ..shapes_of(vec![leaf_shape("S")])
@@ -2096,6 +2109,7 @@ fn a_non_canonical_constraint_annotation_list_is_malformed_and_the_canonical_one
                 .map(|m| Literal::new_simple_literal(*m))
                 .collect();
             writer.messages(&messages);
+            writer.count(0);
         }
         writer.out
     };

@@ -341,7 +341,7 @@ impl BoundShapes {
     }
 
     /// The plan for the `position`-th shape, with its prepared target index.
-    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, String> {
+    fn plan<'a>(&'a self, shape: &'a Shape, position: usize) -> Result<ShapePlan<'a>, ShapesError> {
         let targets = self
             .targets
             .get(position)
@@ -977,7 +977,7 @@ fn instances_of_class(
     class_iri: &NamedNode,
     binding: &DatasetBinding,
     classes: &ClassCatalog,
-) -> Result<Vec<TermId>, String> {
+) -> Result<Vec<TermId>, ShapesError> {
     // A class the data graph never names has no instances — an ordinary empty
     // target, not a failure.
     let Some(class) = binding.class_id(classes, class_iri)? else {
@@ -2950,7 +2950,10 @@ impl PreparedValidator {
     /// answers [`FocusExpansion::Everything`], carrying the reason, and the caller
     /// must run [`Self::validate`]. It is reported rather than silently
     /// under-approximated because a short answer here is indistinguishable from a
-    /// clean bill of health.
+    /// clean bill of health. A shapes graph that declares `sh:entailment` answers
+    /// the same, with the reason `"rules entailment"`: the entailed dataset a rule
+    /// derives from replaces the bound snapshot, and a change to any triple a rule
+    /// reads can derive or retract a triple anywhere.
     ///
     /// # Errors
     ///
@@ -2981,6 +2984,15 @@ impl PreparedValidator {
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, String> {
+        // The rules entailment regime replaces the bound data with the entailed dataset
+        // (`entailed_for_validation`), which carries no mutation snapshot, and a rule
+        // derives triples from any read the rules make, so no bounded superset exists:
+        // the opaque-construct route, with the true reason.
+        if self.shapes.rules.entailment || !self.shapes.rules.entailment_rule_sets.is_empty() {
+            return Ok(FocusExpansion::Everything {
+                reason: "rules entailment",
+            });
+        }
         let core = self.data.core_view();
         let bound = core.delta_source().ok_or_else(|| {
             "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
@@ -3096,7 +3108,8 @@ impl PreparedValidator {
                     }
                     Some(path) => {
                         for id in
-                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)?
+                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)
+                                .map_err(|error| error.to_string())?
                         {
                             if seen.insert(id) {
                                 affected.push(FocusId::new(dataset, id));
@@ -3758,17 +3771,25 @@ pub(crate) fn validate_dataset_as_document(
 /// A rules-engine failure: validation of a graph whose rules could not be executed
 /// has no answer.
 fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
-    if !shapes.rules.entailment {
+    // `sh:RulesEntailment` executes the default rule set, which holds every rule of the
+    // shapes graph, so a rule set named beside it adds nothing; rule sets alone execute
+    // together as a single rule set.
+    let options = if shapes.rules.entailment {
+        crate::rules::RuleOptions::default()
+    } else if shapes.rules.entailment_rule_sets.is_empty() {
         return Ok(None);
-    }
+    } else {
+        crate::rules::RuleOptions::default()
+            .with_rule_sets(shapes.rules.entailment_rule_sets.iter().cloned())
+    };
     let entailed = crate::rules::infer_with(
         data,
         shapes,
-        &crate::rules::RuleOptions::default(),
+        &options,
         crate::srl::eval::Reexecution::Incremental,
     )
     .map(|inference| Arc::clone(inference.dataset()))
-    .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
+    .map_err(|e| format!("the sh:entailment regime could not execute the rules: {e}"))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
 }
 
@@ -5943,7 +5964,8 @@ mod tests {
                 classes,
                 &NamedNode::from("http://example.org/ns#NotInTheCatalog"),
             )
-            .expect_err("a class outside the catalog is a plan defect");
+            .expect_err("a class outside the catalog is a plan defect")
+            .to_string();
         assert!(
             error.contains("NotInTheCatalog") && error.contains("class-planning walk"),
             "the error must name the class and the walk that missed it, got: {error}"
@@ -8101,6 +8123,77 @@ mod tests {
                 .to_ntriples()
                 .expect("authored report emits"),
             "the fallback must BE the full validation, not a short answer wearing its name",
+        );
+    }
+
+    /// **A shapes graph that declares `sh:entailment` answers `Everything` with the
+    /// reason "rules entailment", not a false "not bound" diagnosis.**
+    ///
+    /// The entailed dataset replaces the bound snapshot, so the binding carries no
+    /// delta source; the expansion must not blame the caller's binding. Both regimes
+    /// (`sh:RulesEntailment` and a rule set, which the default law reads as the editor's draft does) are
+    /// executed, beside the neighbour without a declaration, which stays bounded.
+    #[test]
+    fn a_declared_entailment_answers_everything_with_its_reason() {
+        let rules = "ex:R a sh:TripleRule ; sh:subject ex:n1 ; sh:predicate ex:p ; sh:object ex:o .
+             ex:Shape sh:rule ex:R .";
+        for (name, declaration) in [
+            (
+                "rules entailment",
+                "ex:G sh:entailment sh:RulesEntailment .",
+            ),
+            (
+                "rule set",
+                "ex:G sh:entailment ex:RS . ex:RS a sh:RuleSet ; sh:hasRule ex:R .",
+            ),
+        ] {
+            let shapes = Arc::new(load_shapes_ttl(&format!(
+                "{PREFIXES}
+                    ex:Shape a sh:NodeShape ; sh:targetClass ex:Focus ;
+                        sh:property [ sh:path ex:absent ; sh:minCount 1 ] .
+                    {rules} {declaration}"
+            )));
+            let (snapshot, validator) = change_fixture(shapes);
+            let expansion = validator
+                .affected_focus_node_ids(&snapshot)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                matches!(
+                    expansion,
+                    FocusExpansion::Everything {
+                        reason: "rules entailment"
+                    }
+                ),
+                "{name}: {expansion:?}"
+            );
+            let validation = validate_change(&validator, &snapshot)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                validation.scope,
+                ChangeScope::Everything {
+                    reason: "rules entailment"
+                },
+                "{name}"
+            );
+            assert_eq!(
+                validation.report.to_ntriples().expect("report emits"),
+                validator
+                    .validate()
+                    .expect("the full validation succeeds")
+                    .to_ntriples()
+                    .expect("report emits"),
+                "{name}: the fallback is the full validation"
+            );
+        }
+        let (snapshot, validator) = change_fixture(focus_provenance_shapes());
+        assert_eq!(
+            validator
+                .affected_focus_node_ids(&snapshot)
+                .expect("the neighbour expands")
+                .ids()
+                .map(<[FocusId]>::len),
+            Some(1),
+            "a shapes graph that declares no entailment stays bounded"
         );
     }
 

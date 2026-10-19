@@ -37,6 +37,7 @@ crates/iri/unicode/*.*.*/*.txt -text -diff
 # Preserve the pinned W3C SHACL 1.2 vocabularies and shacl12-test-suite
 # byte-for-byte, including the crate-local runtime copy of the vocabularies.
 vectors/shacl12/** -text -diff
+vectors/shacl-reports/** -text -diff
 crates/shapes/spec/** -text -diff
 
 # The vendored W3C XML Conformance Test Suite is frozen by digest and kept

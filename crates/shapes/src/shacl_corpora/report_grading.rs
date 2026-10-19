@@ -101,14 +101,30 @@ fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
         ..
     } = crate::text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
         .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = crate::shapes::from_dataset_with_base(
-        &shapes_dataset,
-        None,
-        &doc_prefixes,
-        None,
-        tc.shapes_graph_iri.clone(),
-        &crate::ShapesImports::new(),
-    );
+    let shapes = if tc.profile == crate::profile::ShaclProfile::LEGACY {
+        crate::shapes::from_dataset_with_base(
+            &shapes_dataset,
+            None,
+            &doc_prefixes,
+            None,
+            tc.shapes_graph_iri.clone(),
+            &crate::ShapesImports::new(),
+        )
+    } else {
+        crate::shapes::from_dataset_with_options(
+            &shapes_dataset,
+            None,
+            &doc_prefixes,
+            None,
+            tc.shapes_graph_iri.clone(),
+            &crate::ShapesImports::new(),
+            &ValidationOptions::default().with_profile(tc.profile),
+        )
+        .map_err(|error| match error {
+            crate::report::CompleteValidationError::Shapes(error) => error,
+            other => crate::ShapesError::Invalid(other.to_string()),
+        })
+    };
     Ok((shapes_dataset, shapes))
 }
 
@@ -130,7 +146,9 @@ pub fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
         let disallows = ConformanceDisallows::from_iris(&tc.conformance_disallows)
             .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;
         shapes.set_validation_options(
-            ValidationOptions::default().with_conformance_disallows(disallows),
+            ValidationOptions::default()
+                .with_profile(tc.profile)
+                .with_conformance_disallows(disallows),
         );
     }
 

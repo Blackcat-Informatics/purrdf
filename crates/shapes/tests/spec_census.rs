@@ -200,14 +200,14 @@ fn census_counts_per_class_are_pinned() {
 /// are the SHACL JavaScript Extensions, which are not SHACL 1.2.
 const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("constraint-parameter", 47),
-    ("non-validating", 10),
+    ("non-validating", 11),
     ("rule", 19),
     ("structural/builtin", 68),
     ("structural/computed-values", 2),
     ("structural/declaration", 39),
     ("structural/node-expression", 48),
-    ("structural/report", 21),
-    ("structural/shape-path-prefix-graph", 17),
+    ("structural/report", 22),
+    ("structural/shape-path-prefix-graph", 19),
     ("structural/vocabulary", 25),
     ("target", 9),
     ("refused", 13),

@@ -832,6 +832,30 @@ except ValueError as refusal:
                           #  'parameters': {}, 'detail': None}
 ```
 
+## SHACL law
+
+Unselected, SHACL validation runs under the compatibility law. The
+`shacl_profile` keyword selects one exact, dated SHACL law by its stable id, on
+`shapes.validate` and the `shapes.Shapes` constructor:
+
+```python
+# The SHACL 1.2 editor's draft the W3C SHACL 1.2 test suite is graded under.
+report = shapes.validate(my_shapes, my_data, shacl_profile="shacl-ed-2026-10-16")
+```
+
+The ids are `shacl-rec-2017-07-20` (the 2017 Recommendation),
+`shacl-wd-2026-09-18` (the SHACL 1.2 working draft) and `shacl-ed-2026-10-16`
+(the data-shapes editor's draft the suite is taken from). It is the same law the
+CLI selects as `purrdf validate --shacl-profile`, and the same law the PurRDF
+EARL report is graded under. A shapes graph the selected law's text refuses, such
+as one that declares its SPARQL prefixes through a version-IRI path under the
+working draft, raises `ValueError` at load rather than validating under another
+law. An id that names no law (`"shacl-ed-2026-10-17"`) raises `ValueError`
+carrying the `unsupported-profile` status; no nearby edition is substituted. A
+dated law carries its own XPath law, so an `xpath_regex` that names another one
+raises `ValueError` naming both. Node-expression and SPARQL 1.2 RL records are
+law-independent.
+
 ## Base IRIs
 
 A document that spells a relative IRI needs a base. Every parse entry point

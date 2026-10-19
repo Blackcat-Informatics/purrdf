@@ -234,6 +234,15 @@ notices = ["LICENSES/W3C-software-document-2015.html", "vectors/shacl12/LICENSE.
 provenance = ["vectors/shacl/README.md"]
 
 [[material]]
+id = "shacl-reports"
+license = "W3C-20150513"
+source = "https://github.com/w3c/data-shapes/tree/4cd469867a1cc6d2fff80e8a40723b26c695d67a"
+scope = "source-only conformance data; original notices remain authoritative"
+paths = ["vectors/shacl-reports/alltests.ttl"]
+notices = ["LICENSES/W3C-software-document-2015.html", "vectors/shacl12/LICENSE.md"]
+provenance = ["vectors/shacl-reports/README.md"]
+
+[[material]]
 id = "shacl-af"
 license = "Apache-2.0"
 source = "https://github.com/RDFLib/pySHACL/tree/5b46638cadde2e32efaed0ee53fc2545d5c0a179"

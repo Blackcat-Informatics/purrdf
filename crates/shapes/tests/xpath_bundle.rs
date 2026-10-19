@@ -6,9 +6,10 @@
 use purrdf_core::xsd_regex::xpath::{self, Error, Limits, Profile, Resource};
 use purrdf_shapes::ShaclProfile;
 
-const BUNDLES: [(ShaclProfile, Profile); 2] = [
+const BUNDLES: [(ShaclProfile, Profile); 3] = [
     (ShaclProfile::REC_20170720, Profile::Xpath20),
     (ShaclProfile::WD_20260918, Profile::Xpath31),
+    (ShaclProfile::ED_20261016, Profile::Xpath31),
 ];
 
 #[test]

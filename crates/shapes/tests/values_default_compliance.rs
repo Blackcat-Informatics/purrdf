@@ -606,3 +606,98 @@ fn a_prepared_product_carries_computed_values() {
     assert!(entailed.contains(&is_small("Incomplete")), "{entailed}");
     assert_eq!(entailed, entail_with(&restored));
 }
+
+// ── sh:deactivated as a node expression (rules) ───────────────────────────────
+
+/// "Derived value nodes are all value nodes that can be computed [...] in any
+/// (non-deactivated) property shape": a property shape whose `sh:deactivated` is a
+/// node expression is deactivated at the focus nodes where it produces `true`, and
+/// only there. `ex:Small` is skipped, so it derives no `ex:area` and the rule infers
+/// nothing for it; `ex:Incomplete`, where the expression produces `false`, still
+/// derives its default and is inferred small. The control deactivates nothing and
+/// infers both.
+#[test]
+fn a_property_shape_deactivated_by_an_expression_derives_nothing_at_that_focus_node() {
+    let rectangles = "ex:Incomplete a ex:Rectangle ; ex:skip false .
+        ex:Small a ex:Rectangle ; ex:width 4 ; ex:height 5 ; ex:skip true .
+        ex:Large a ex:Rectangle ; ex:width 11 ; ex:height 10 ; ex:skip false .";
+    let shapes = |deactivated: &str| {
+        rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1").replace(
+            "a sh:PropertyShape ;",
+            &format!("a sh:PropertyShape ; {deactivated}"),
+        )
+    };
+    let skipping = entail(&shapes("sh:deactivated [ sh:path ex:skip ] ;"), rectangles);
+    assert!(skipping.contains(&is_small("Incomplete")), "{skipping}");
+    assert!(!skipping.contains(&is_small("Small")), "{skipping}");
+    assert!(!skipping.contains(&is_small("Large")), "{skipping}");
+    let control = entail(&shapes("sh:deactivated false ;"), rectangles);
+    assert!(control.contains(&is_small("Incomplete")), "{control}");
+    assert!(control.contains(&is_small("Small")), "{control}");
+}
+
+/// SHACL 1.2 Inference Rules: a shape rule is executed "for each target node of each
+/// of the linked and non-deactivated shapes", and Core decides a shape's deactivation
+/// per focus node when its `sh:deactivated` is a node expression. So the rule runs at
+/// the target nodes where the expression produces `false`, and not where it produces
+/// `true`. The neighbours: the same shape with `sh:deactivated true` runs the rule at no
+/// node, and with `sh:deactivated false` at every node.
+#[test]
+fn a_rule_runs_at_the_focus_nodes_where_its_shape_is_not_deactivated_by_an_expression() {
+    let shapes = |deactivated: &str| {
+        format!(
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:deactivated {deactivated} ;
+               sh:rule [ a sh:SPARQLRule ;
+                 sh:construct \"\"\"CONSTRUCT {{ $this <http://example.org/ns#seen> true }}
+                                WHERE {{}}\"\"\" ] ."
+        )
+    };
+    let data = "ex:a a ex:C ; ex:skip true . ex:b a ex:C ; ex:skip false .";
+    let seen = |local: &str| {
+        format!(
+            "{} <http://example.org/ns#seen> \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .",
+            ex(local)
+        )
+    };
+    let skipping = entail(&shapes("[ sh:path ex:skip ]"), data);
+    assert!(skipping.contains(&seen("b")), "{skipping}");
+    assert!(!skipping.contains(&seen("a")), "{skipping}");
+    let off = entail(&shapes("true"), data);
+    assert!(!off.contains("seen"), "{off}");
+    let on = entail(&shapes("false"), data);
+    assert!(on.contains(&seen("a")) && on.contains(&seen("b")), "{on}");
+}
+
+/// SHACL 1.2 Inference Rules, "Deactivated Rules": "The values of `sh:deactivated` are
+/// either of the `xsd:boolean` literals `true` or `false`." A rule's own
+/// `sh:deactivated` is therefore no node expression, and one is refused; the booleans
+/// load, and `true` switches the rule off.
+#[test]
+fn a_rule_s_own_sh_deactivated_is_a_boolean() {
+    let shapes = |deactivated: &str| {
+        format!(
+            "ex:S a sh:NodeShape ; sh:targetClass ex:C ;
+               sh:rule [ a sh:SPARQLRule ; sh:deactivated {deactivated} ;
+                 sh:construct \"\"\"CONSTRUCT {{ $this <http://example.org/ns#seen> true }}
+                                WHERE {{}}\"\"\" ] ."
+        )
+    };
+    let run = |deactivated: &str| -> Result<_, String> {
+        let shapes = purrdf_shapes::engine::parse_shapes(
+            &format!("{PREFIXES}{}", shapes(deactivated)),
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+        entail_dataset(
+            turtle::data(PREFIXES, "ex:a a ex:C ; ex:skip true .").as_ref(),
+            &shapes,
+        )
+        .map_err(|error| error.to_string())
+    };
+    let error = run("[ sh:path ex:skip ]").expect_err("a node expression is no boolean literal");
+    assert!(error.contains("Inference Rules"), "{error}");
+    let off = canonicalize(run("true").expect("a boolean loads").as_ref()).nquads;
+    assert!(!off.contains("seen"), "{off}");
+    let on = canonicalize(run("false").expect("a boolean loads").as_ref()).nquads;
+    assert!(on.contains("seen"), "{on}");
+}

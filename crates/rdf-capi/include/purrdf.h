@@ -268,6 +268,12 @@
  * APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
  * signature and its behaviour, so this is additive and rides the same bump.
  *
+ * The same additive surface includes `purrdf_shacl_validate_to_sarif_law`, the validation
+ * entry point with a nullable `shacl_profile` after `regex_profile`: the stable id of one
+ * exact, dated SHACL law (`shacl-rec-2017-07-20`, `shacl-wd-2026-09-18` or
+ * `shacl-ed-2026-10-16`), decoded by `purrdf_validate::complete_profile`. Every existing
+ * prototype keeps its signature and its behaviour.
+ *
  * The same additive surface includes the native geographic session and point-index
  * create/call/free families and the five `*_with_geo` query/update entry points.
  * These use opaque owned handles and an explicit selected geographic profile;
@@ -3561,6 +3567,45 @@ int32_t purrdf_shacl_validate_to_sarif_xpath_regex(const char *shapes_ttl,
                                                    const char *regex_profile,
                                                    PurrdfBuffer **out_buffer,
                                                    PurrdfError **out_error);
+
+/**
+ * [`purrdf_shacl_validate_to_sarif_xpath_regex`] under a caller-selected SHACL law.
+ *
+ * `shacl_profile` (nullable, NUL-terminated UTF-8) is the stable id of one exact, dated
+ * SHACL law the validation runs under: `shacl-rec-2017-07-20` (the 2017 Recommendation),
+ * `shacl-wd-2026-09-18` (the SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the
+ * data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under). The id is
+ * decoded once, exactly, by `purrdf_validate::complete_profile`, the one home for that
+ * decoding, and it is the law `purrdf validate --shacl-profile` selects. NULL is
+ * [`purrdf_shacl_validate_to_sarif_xpath_regex`]: the compatibility law, unchanged.
+ *
+ * An id that names no law (`shacl-ed-2026-10-17`, another letter case, the empty string)
+ * is `PURRDF_STATUS_INVALID_ARGUMENT` whose message leads with the `unsupported-profile`
+ * status; no nearby edition is substituted. A dated law carries its own XPath bundle, so a
+ * `regex_profile` naming another law is `PURRDF_STATUS_INVALID_ARGUMENT`; naming the same
+ * law, or NULL, runs the dated law under its own. A shapes graph the law's text refuses
+ * (the working draft refuses a prefix declared through a version-IRI path that the
+ * editor's draft admits) is refused at load with the shapes-graph status, never validated
+ * under another law.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_to_sarif_xpath_regex`]; `shacl_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shacl_validate_to_sarif_law(const char *shapes_ttl,
+                                           const char *shapes_base_iri,
+                                           const char *shapes_graph_iri,
+                                           const char *data_nt,
+                                           const char *const *conformance_disallows,
+                                           size_t conformance_disallows_count,
+                                           const char *const *import_iris,
+                                           const char *const *import_documents,
+                                           size_t import_count,
+                                           bool subclass_of_in_shapes_graph,
+                                           const char *regex_profile,
+                                           const char *shacl_profile,
+                                           PurrdfBuffer **out_buffer,
+                                           PurrdfError **out_error);
 
 /**
  * Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),

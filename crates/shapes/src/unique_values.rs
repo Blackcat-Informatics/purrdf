@@ -108,7 +108,7 @@ impl UniqueGroups {
             .properties
             .iter()
             .map(|slot| binding.term(*slot))
-            .collect::<Result<SmallVec<[Option<TermId>; 4]>, String>>()?;
+            .collect::<Result<SmallVec<[Option<TermId>; 4]>, crate::error::ShapesError>>()?;
         let mut groups = Self {
             predicates,
             ..Self::default()

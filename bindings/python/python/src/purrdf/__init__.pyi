@@ -1651,7 +1651,9 @@ class _Shapes:
     # under (see `shapes.validate`), resolved against `base`; every validation,
     # `prepare()` and `to_product()` carry it. `subclass_of_in_shapes_graph` is SHACL
     # 1.2 Core section 6.3's `subClassOfInShapesGraph` (see `shapes.validate`); every
-    # validation and `prepare()` carry it.
+    # validation and `prepare()` carry it. `shacl_profile` is the stable id of the exact
+    # dated SHACL law the shapes graph is loaded and every validation answers under (see
+    # `shapes.validate`); None is the compatibility law.
     def __init__(
         self,
         shapes_ttl: str,
@@ -1660,6 +1662,7 @@ class _Shapes:
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
+        shacl_profile: str | None = None,
     ) -> None: ...
     # `xpath_regex` (here, on `validate_store`, on `PreparedShapes.validate_nt` and
     # `validate_store_changes`, and on `shapes.validate`) selects the dated XPath law sh:pattern and every SHACL-SPARQL
@@ -1914,6 +1917,14 @@ class shapes:
     # pattern or flag the law refuses is reported as the ordinary sh:pattern result;
     # a native resource refusal raises ValueError carrying its `xpath-*` code and no
     # partial report.
+    #
+    # `shacl_profile` selects one exact, dated SHACL law by its stable id:
+    # "shacl-rec-2017-07-20" (the 2017 Recommendation), "shacl-wd-2026-09-18" (the SHACL
+    # 1.2 working draft) or "shacl-ed-2026-10-16" (the data-shapes editor's draft the W3C
+    # SHACL 1.2 test suite is graded under). None keeps the compatibility law. An id that
+    # names no law raises ValueError carrying the `unsupported-profile` status, and a
+    # shapes graph the selected law's text refuses raises ValueError at load. A dated law
+    # carries its own XPath law, so an `xpath_regex` naming another raises ValueError.
     @staticmethod
     def validate(
         shapes_ttl: str,
@@ -1925,6 +1936,7 @@ class shapes:
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
         xpath_regex: str | None = None,
+        shacl_profile: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by

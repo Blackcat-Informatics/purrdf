@@ -381,6 +381,13 @@ Evidence: vectors/shacl/af/README.md
 Notice: third-party/shacl-af/0-LICENSE-APACHE
 Notice: third-party/shacl-af/1-README.md
 
+shacl-reports: W3C-20150513
+Scope: source-only conformance data; original notices remain authoritative
+Source: https://github.com/w3c/data-shapes/tree/4cd469867a1cc6d2fff80e8a40723b26c695d67a
+Evidence: vectors/shacl-reports/README.md
+Notice: third-party/shacl-reports/0-W3C-software-document-2015.html
+Notice: third-party/shacl-reports/1-LICENSE.md
+
 shacl12: W3C-20150513
 Scope: source-only conformance data; original notices remain authoritative
 Source: https://github.com/w3c/data-shapes

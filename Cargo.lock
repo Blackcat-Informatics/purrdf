@@ -836,6 +836,7 @@ version = "3.0.1"
 dependencies = [
  "proc-macro2",
  "purrdf-alloc-probe",
+ "purrdf-conformance-kit",
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-deflate",

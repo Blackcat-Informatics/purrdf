@@ -178,10 +178,11 @@
 
 use std::sync::Arc;
 
+use purrdf::shapes::ShaclProfile;
 use purrdf::shapes::ShapesError;
 use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::provenance::ValidatorProvenance;
-use purrdf::shapes::report::ValidationReport;
+use purrdf::shapes::report::{CompleteValidationError, ValidationReport};
 use purrdf::shapes::shapes::Shapes;
 use purrdf::shapes::xpath::{XPathPreparedShapes, XPathPreparedValidator, XPathValidationError};
 use purrdf_core::dataset_view::DatasetView;
@@ -270,6 +271,10 @@ pub(crate) struct ValidateOptions<'a> {
     /// decides is evaluated under. `None` keeps the compatibility pattern engine, exactly
     /// as before this flag existed. See [`ShapesSource::native_xpath`].
     pub(crate) xpath_regex: Option<Profile>,
+    /// `--shacl-profile`: the exact dated SHACL law, as the operator wrote its id.
+    /// [`validation_options`] decodes it once through
+    /// [`purrdf_validate::complete_profile`]. `None` keeps the compatibility law.
+    pub(crate) shacl_profile: Option<&'a str>,
     /// Explicit JSON-LD/YAML-LD serialization configuration for a JSON-LD/YAML-LD `--format`.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
@@ -388,18 +393,33 @@ impl ShapesSource {
     }
 }
 
-/// The validation-request options: `--conformance-disallows` — SHACL's default set
-/// when the flag is absent, exactly the named IRIs otherwise — and
-/// `--subclass-of-in-shapes-graph`.
+/// The validation-request options: `--shacl-profile` — the compatibility law when the
+/// flag is absent, the one exact dated law it names otherwise —
+/// `--conformance-disallows` — SHACL's default set when the flag is absent, exactly the
+/// named IRIs otherwise — and `--subclass-of-in-shapes-graph`.
 ///
 /// # Errors
 ///
-/// A usage error when a value is not an absolute IRI.
+/// A usage error when `--shacl-profile` names no supported law (the
+/// `unsupported-profile` status of [`purrdf_validate::complete_profile`]), when
+/// `--xpath-regex` names a law other than the one the selected dated law requires, or
+/// when a `--conformance-disallows` value is not an absolute IRI.
 fn validation_options(
     options: &ValidateOptions<'_>,
 ) -> Result<engine::ValidationOptions, CliError> {
-    let validation = engine::ValidationOptions::default()
+    let mut validation = engine::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(options.subclass_of_in_shapes_graph);
+    if let Some(id) = options.shacl_profile {
+        // The one reading every host shares: the id decoded once through
+        // `complete_profile`, and the dated law's XPath bundle checked against
+        // `--xpath-regex`.
+        if let Some(profile) =
+            purrdf_validate::requested_shacl_profile(Some(id), options.xpath_regex)
+                .map_err(|message| CliError::Usage(format!("--shacl-profile {id}: {message}")))?
+        {
+            validation = validation.with_profile(profile);
+        }
+    }
     if options.conformance_disallows.is_empty() {
         return Ok(validation);
     }
@@ -471,8 +491,8 @@ pub(crate) fn run(
     let data_iris = data_graph_iris(options, data_format)?;
     let data_iris: Vec<&str> = data_iris.iter().map(String::as_str).collect();
     let source = match &snapshot {
-        None => plan.load(options, data.as_ref(), &data_iris)?,
-        Some(snapshot) => plan.load(options, snapshot.as_ref(), &data_iris)?,
+        None => plan.load(options, &validation, data.as_ref(), &data_iris)?,
+        Some(snapshot) => plan.load(options, &validation, snapshot.as_ref(), &data_iris)?,
     }
     .with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
@@ -907,6 +927,7 @@ fn emit(
 /// `owl:imports` resolves through and unions it into the shapes graph — or refuses it by name.
 fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     options: &ValidateOptions<'_>,
+    validation: &engine::ValidationOptions,
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
@@ -926,15 +947,31 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     let box_role_vocab = options
         .box_role_vocab
         .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
-    purrdf::shapes::shapes::from_dataset_with_base(
-        &root.dataset,
-        None,
-        &root.prefixes,
-        box_role_vocab,
-        None,
-        &table,
-    )
-    .map_err(|error| {
+    let parsed = if validation.shacl_profile == ShaclProfile::LEGACY {
+        purrdf::shapes::shapes::from_dataset_with_base(
+            &root.dataset,
+            None,
+            &root.prefixes,
+            box_role_vocab,
+            None,
+            &table,
+        )
+    } else {
+        purrdf::shapes::shapes::from_dataset_with_options(
+            &root.dataset,
+            None,
+            &root.prefixes,
+            box_role_vocab,
+            None,
+            &table,
+            validation,
+        )
+        .map_err(|error| match error {
+            CompleteValidationError::Shapes(error) => error,
+            other => ShapesError::Invalid(other.to_string()),
+        })
+    };
+    parsed.map_err(|error| {
         crate::shapes_source::shapes_error(
             error,
             &format!("--shapes {path}"),
@@ -1080,6 +1117,7 @@ impl<'a> ShapesPlan<'a> {
     fn load<D: DatasetView<ReadError = std::convert::Infallible>>(
         &self,
         options: &ValidateOptions<'_>,
+        validation: &engine::ValidationOptions,
         data: &D,
         data_iris: &[&str],
     ) -> Result<ShapesSource, CliError> {
@@ -1089,14 +1127,42 @@ impl<'a> ShapesPlan<'a> {
                 format,
                 ref base,
                 ..
-            } => load_shapes(options, path, format, base.as_deref(), data, data_iris)
-                .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
+            } => load_shapes(
+                options,
+                validation,
+                path,
+                format,
+                base.as_deref(),
+                data,
+                data_iris,
+            )
+            .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
             Self::Product {
                 path,
                 expect_identity,
                 rebuild,
             } => {
                 let owner = source::acquire_product_input(path)?;
+                if validation.shacl_profile != ShaclProfile::LEGACY {
+                    // A prepared product stores no SHACL law: the restore takes the
+                    // law from this request, so one product answers under any of them.
+                    let prepared = purrdf_validate::restore_shapes_product_with_options(
+                        owner.as_bytes(),
+                        validation,
+                        expect_identity.as_ref(),
+                        rebuild,
+                    )
+                    .map_err(|error| restore_error(path, error))?;
+                    purrdf::shapes::imports::check_data_graph_links(
+                        data,
+                        data_iris,
+                        prepared.shapes(),
+                    )
+                    .map_err(|error| {
+                        CliError::Runtime(format!("--shapes-product {path}: {error}"))
+                    })?;
+                    return Ok(ShapesSource::Restored(prepared));
+                }
                 let admitted = match (rebuild, expect_identity) {
                     (false, None) => purrdf_validate::admit_shapes_product(owner.as_bytes()),
                     (false, Some(ref expected)) => {
@@ -1120,6 +1186,17 @@ impl<'a> ShapesPlan<'a> {
                 Ok(ShapesSource::Restored(prepared))
             }
         }
+    }
+}
+
+/// A refused restore of `--shapes-product` under a dated law, as the runtime failure
+/// (exit 1) it reports. A product-boundary refusal names its dimension first, exactly as the
+/// compatibility restore does.
+fn restore_error(path: &str, error: CompleteValidationError) -> CliError {
+    let what = format!("--shapes-product {path}");
+    match error {
+        CompleteValidationError::Preparation(error) => crate::shacl::admission_error(&what, &error),
+        other => CliError::Runtime(format!("{what}: {other}")),
     }
 }
 

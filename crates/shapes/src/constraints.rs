@@ -634,17 +634,25 @@ impl DetailResults {
 /// after it is work whose answer is already known; a result whose severity is not
 /// in the set (an `sh:Debug` one, under the default set) leaves the verdict open
 /// and the traversal continues.
+///
+/// An EXHAUSTIVE probe (see [`ShapePlan::exhaustive`]) records the same first
+/// disallowed violation but lets the traversal continue: the shape's closure holds a
+/// node-expression `sh:deactivated`, which fails the validation where it is
+/// ill-formed, so every constraint, property shape and nested shape the data reaches
+/// is walked exactly as a full validation walks it.
 struct AnyViolation<'d> {
     seen: bool,
+    exhaustive: bool,
     disallows: &'d ConformanceDisallows,
 }
 
 impl<'d> AnyViolation<'d> {
-    /// A probe that judges results against `disallows`.
+    /// A probe that judges results against `disallows`, over the closure of `plan`.
     #[inline]
-    const fn new(disallows: &'d ConformanceDisallows) -> Self {
+    fn new(disallows: &'d ConformanceDisallows, plan: ShapePlan<'_>) -> Self {
         Self {
             seen: false,
+            exhaustive: plan.exhaustive(),
             disallows,
         }
     }
@@ -664,7 +672,11 @@ impl ResultSink for AnyViolation<'_> {
     fn violation(&mut self, severity: &Severity, _build: impl FnOnce() -> ResultRecord) -> Flow {
         if self.disallows.contains(severity) {
             self.seen = true;
-            Flow::Stop
+            if self.exhaustive {
+                Flow::Continue
+            } else {
+                Flow::Stop
+            }
         } else {
             Flow::Continue
         }
@@ -768,7 +780,15 @@ impl PropertyStamp<'_> {
         // THE materialization boundary for the focus node on the property path:
         // a result is being built, so the owned term is finally needed.
         result.focus_node = self.focus.to_term(self.store.core_view());
-        result.apply_box_roles(self.source_roles(), self.path_roles());
+        // A `sh:closed` result's path is the OFFENDING predicate (§7.9.1), and the
+        // constraint resolved that predicate's roles when it built the result; they
+        // are kept, where every other result takes the roles of the shape's path.
+        if result.source_constraint_component.as_str() == sh::CLOSED_CONSTRAINT_COMPONENT {
+            let offending = std::mem::take(&mut result.path_box_roles);
+            result.apply_box_roles(self.source_roles(), &offending);
+        } else {
+            result.apply_box_roles(self.source_roles(), self.path_roles());
+        }
     }
 }
 
@@ -945,7 +965,7 @@ fn conforms_memoized<'a>(
     {
         return Ok(recorded);
     }
-    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows(), plan);
     walk_shape(context.inner(plan), focus, &mut probe)?;
     let verdict = probe.conforms();
     if let Some(key) = key {
@@ -1058,14 +1078,8 @@ impl<'a> OneShotLowering<'a> {
     ///
     /// Returns an error when the lowering and the shape it lowered disagree,
     /// which is a defect in this crate rather than in any input.
-    fn plan(&self) -> Result<ShapePlan<'_>, String> {
-        self.lowered.plan(
-            self.shape,
-            0,
-            &self.binding,
-            self.lowered.classes(),
-            self.lowered.no_targets(),
-        )
+    fn plan(&self) -> Result<ShapePlan<'_>, crate::error::ShapesError> {
+        self.lowered.untargeted_plan(self.shape, 0, &self.binding)
     }
 }
 
@@ -1216,6 +1230,16 @@ fn walk_shape<S: ResultSink>(
     if shape.deactivated {
         return Ok(Flow::Continue);
     }
+    if deactivated_at(
+        context.store,
+        plan,
+        context.depth,
+        focus,
+        &shape.id,
+        plan.deactivated_when()?,
+    )? {
+        return Ok(Flow::Continue);
+    }
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
     // The single value node IS the focus term. Keep an interned focus id-native;
@@ -1228,6 +1252,18 @@ fn walk_shape<S: ResultSink>(
             roles: &shape.box_roles,
         };
         for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+            if !shape.constraint_annotations.is_empty()
+                && deactivated_at(
+                    context.store,
+                    plan,
+                    context.depth,
+                    focus,
+                    &shape.id,
+                    plan.constraint_deactivation(AnnotatedConstraint::Constraint(index))?,
+                )?
+            {
+                continue;
+            }
             if eval_constraint(
                 context,
                 focus,
@@ -1258,20 +1294,35 @@ fn walk_shape<S: ResultSink>(
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
     for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
-        if let PlannedConstraint::Closed {
+        let PlannedConstraint::Closed {
             permitted,
             by_types,
         } = plan.planned(constraint, lowered)?
-            && eval_closed(
-                context,
+        else {
+            continue;
+        };
+        if !shape.constraint_annotations.is_empty()
+            && deactivated_at(
+                context.store,
+                plan,
+                context.depth,
                 focus,
-                shape,
-                ConstraintSource::of_shape(shape, index, context.report_profile()),
-                permitted,
-                by_types,
-                sink,
-            )
-            .stopped()
+                &shape.id,
+                plan.constraint_deactivation(AnnotatedConstraint::Constraint(index))?,
+            )?
+        {
+            continue;
+        }
+        if eval_closed(
+            context,
+            focus,
+            &shape.box_roles,
+            ConstraintSource::of_shape(shape, index, context.report_profile()),
+            permitted,
+            by_types,
+            sink,
+        )
+        .stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -1280,7 +1331,12 @@ fn walk_shape<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
-/// Evaluate `sh:closed` against a focus node (SHACL 1.2 Core §7.9.1).
+/// Evaluate `sh:closed` against one value node (SHACL 1.2 Core §7.9.1).
+///
+/// `focus` is the node whose outgoing triples are checked: the focus node of a
+/// node shape, or one value node of a property shape. For a property shape the
+/// caller's stamp supplies its focus node and source roles; the result keeps the
+/// offending predicate as its `sh:resultPath` and that predicate's path roles.
 ///
 /// Under `sh:closed true` the permitted predicate set is the union of:
 /// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
@@ -1323,7 +1379,7 @@ fn walk_shape<S: ResultSink>(
 fn eval_closed<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
-    shape: &Shape,
+    source_roles: &[NamedNode],
     source: ConstraintSource<'_>,
     permitted: &FastSet<TermId>,
     by_types: Option<crate::plan::ClosedByTypes<'_>>,
@@ -1365,7 +1421,7 @@ fn eval_closed<S: ResultSink>(
                 path_structure: None,
                 value: Some(term_id_to_native(ds, quad.o)),
                 source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
-                source_shape: shape.id.clone(),
+                source_shape: source.id.clone(),
                 severity: source.severity.clone(),
                 messages: source.messages.to_vec(),
                 source_box_roles: vec![],
@@ -1375,7 +1431,7 @@ fn eval_closed<S: ResultSink>(
                 details: vec![],
                 annotations: vec![],
             };
-            result.apply_box_roles(&shape.box_roles, &path_roles);
+            result.apply_box_roles(source_roles, &path_roles);
             ResultRecord::plain(result)
         });
         if flow.stopped() {
@@ -1481,12 +1537,87 @@ pub(crate) fn conforms_with_id_depth(
         capture: None,
         report_run: None,
     };
-    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows(), plan);
     walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
 }
 
 // ── Property shape evaluator ───────────────────────────────────────────────────
+
+/// Whether one of the `sh:deactivated` node expressions `exprs` of the shape
+/// `owner`, or of one of its constraints, deactivates it at `focus`.
+///
+/// SHACL 1.2 Core, "Deactivating Shapes and Constraints": "The value of
+/// `sh:deactivated` is a node expression that must have either `true` or `false` as
+/// the (only) output node. [...] If `evalExpr(expr, data graph, focus node, {})`
+/// produces `true` as its only output node, the shape is called deactivated." The
+/// reifier form and SHACL SPARQL Extensions' SPARQL-based constraint say the same of
+/// the constraint. Only the term `true` deactivates, as for the constant spelling
+/// (see [`crate::shapes::parser_boolean`]); the expressions are evaluated in order
+/// and the first `true` ends the search.
+///
+/// An expression that produces anything but exactly one boolean literal breaks the
+/// rule the value must satisfy. That makes the shapes graph ill-formed at this focus
+/// node, which Core says a processor SHOULD report as a failure — "If the shapes
+/// graph contains ill-formed nodes, then the result of the validation process is
+/// undefined. A SHACL processor SHOULD produce a failure in this case" — rather than
+/// read the shape as active, which would validate against a shape its author may have
+/// meant to switch off.
+///
+/// # Errors
+///
+/// Returns an error when an expression's evaluation fails, or when it produces no
+/// node, several, or one that is no `xsd:boolean` literal.
+pub(crate) fn deactivated_at<'e>(
+    store: &ShaclData,
+    plan: ShapePlan<'_>,
+    depth: u32,
+    focus: &FocusNode,
+    owner: &Term,
+    exprs: impl Iterator<
+        Item = (
+            &'e crate::expression::NodeExpr,
+            &'e crate::plan::LoweredExpr,
+        ),
+    >,
+) -> Result<bool, crate::error::ShapesError> {
+    let mut focus_term: Option<Term> = None;
+    for (expr, lowered) in exprs {
+        let focus_term = focus_term.get_or_insert_with(|| focus.to_term(store.core_view()));
+        let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+        let output = crate::expression::eval_planned_node_expr(
+            store, focus_term, expr, lowered, plan, &mut guard,
+        )
+        .map_err(|error| {
+            error.context(&format!(
+                "sh:deactivated of shape {owner} at {focus_term}: "
+            ))
+        })?;
+        let deactivated = match output.as_slice() {
+            [only] => crate::shapes::parser_boolean(only).ok_or_else(|| {
+                format!(
+                    "sh:deactivated of shape {owner} produced {only} at {focus_term}, which is \
+                     no xsd:boolean literal; SHACL 1.2 Core: \"The value of sh:deactivated is a \
+                     node expression that must have either true or false as the (only) output \
+                     node\""
+                )
+            })?,
+            nodes => {
+                return Err(format!(
+                    "sh:deactivated of shape {owner} produced {} output nodes at {focus_term}; \
+                     SHACL 1.2 Core: \"The value of sh:deactivated is a node expression that \
+                     must have either true or false as the (only) output node\"",
+                    nodes.len()
+                )
+                .into());
+            }
+        };
+        if deactivated {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// Evaluate one property shape at `focus`, sending what it finds to `sink`.
 ///
@@ -1523,6 +1654,16 @@ fn eval_property_shape<'a, S: ResultSink>(
     if ps.deactivated {
         return Ok(Flow::Continue);
     }
+    if deactivated_at(
+        store,
+        property_plan.parent(),
+        context.depth,
+        focus,
+        &ps.id,
+        property_plan.deactivated_when(ps)?,
+    )? {
+        return Ok(Flow::Continue);
+    }
     // The value nodes: the path's, plus `sh:values` / `sh:defaultValue` output
     // (see `property_value_nodes`), id-native wherever the data graph interns them.
     let value_nodes = property_value_nodes(store, focus, ps, property_plan, context.depth)?;
@@ -1541,6 +1682,19 @@ fn eval_property_shape<'a, S: ResultSink>(
         lazy: &lazy,
     };
     for (index, (constraint, lowered)) in property_plan.constraints(ps)?.enumerate() {
+        if !ps.constraint_annotations.is_empty()
+            && deactivated_at(
+                store,
+                property_plan.parent(),
+                context.depth,
+                focus,
+                &ps.id,
+                property_plan
+                    .constraint_deactivation(ps, AnnotatedConstraint::Constraint(index))?,
+            )?
+        {
+            continue;
+        }
         // The stamp travels with the sink rather than being applied to a returned
         // vector, so the property shape's path, focus and roles are resolved
         // inside the result builder — which a conformance-only traversal never
@@ -1833,6 +1987,18 @@ fn eval_reifier_shapes<S: ResultSink>(
     };
     let store = context.store;
     let ds = store.core_view();
+    if !ps.constraint_annotations.is_empty()
+        && deactivated_at(
+            store,
+            property_plan.parent(),
+            context.depth,
+            focus,
+            &ps.id,
+            property_plan.constraint_deactivation(ps, AnnotatedConstraint::Reifier)?,
+        )?
+    {
+        return Ok(Flow::Continue);
+    }
 
     // A quoted triple's subject must be an IRI or a blank node — a fact about the
     // FOCUS node, which every value node reached along this path shares. Settled
@@ -1949,7 +2115,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     // this result's message, and this sink keeps no message. Probe
                     // for the first inner violation and stop there rather than
                     // collecting the rest.
-                    let mut probe = AnyViolation::new(disallows);
+                    let mut probe = AnyViolation::new(disallows, reifier_plan);
                     walk_shape(reifier_context, &reifier_focus, &mut probe)?;
                     if probe.conforms() {
                         continue;
@@ -2199,7 +2365,7 @@ fn indexed_shape_by_id<'a>(
     resolved: &'a FastMap<Term, Shape>,
     ds: &impl ShaclRead,
     id: TermId,
-) -> Result<Option<ShapePlan<'a>>, String> {
+) -> Result<Option<ShapePlan<'a>>, crate::error::ShapesError> {
     if let Some(node) = plan.binding().indexed_node(index, id)? {
         return plan.indexed(index, node, resolved);
     }
@@ -2502,11 +2668,14 @@ fn eval_constraint<'a, S: ResultSink>(
                     ));
                     continue;
                 };
+                let exhaustive = context.plan.exhaustive();
                 let mut conforms = true;
                 for member in list.members(ds) {
                     if !conforms_memoized(context, member_shape, &FocusNode::Interned(member))? {
                         conforms = false;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if conforms {
@@ -2902,12 +3071,37 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Closed (node-shape-level; evaluated in validate_shape) ─────────────
-        // The closed-world check needs the SET of permitted predicates, derived
-        // from the sibling property shapes — data `eval_constraint` does not
-        // receive. It is evaluated directly in `validate_shape`; here it is a
-        // no-op so the match stays exhaustive.
-        PlannedConstraint::Closed { .. } => Flow::Continue,
+        // ── Closed ─────────────────────────────────────────────────────────────
+        // The permitted set is lowered with the declaring shape's `sh:property`
+        // children. A node shape evaluates it directly in `validate_shape`; a
+        // property shape evaluates it here, over its value nodes.
+        PlannedConstraint::Closed {
+            permitted,
+            by_types,
+        } => {
+            // On a node shape the value node is the focus node and
+            // `validate_shape` has already evaluated this. On a property shape
+            // the constraint applies to each value node (§7.9.1: "a validation
+            // result for each triple that has a value node as its subject").
+            if path.is_some() {
+                for value in value_nodes {
+                    if eval_closed(
+                        context,
+                        &value.as_focus(ds),
+                        &[],
+                        source,
+                        permitted,
+                        by_types,
+                        sink,
+                    )
+                    .stopped()
+                    {
+                        return Ok(Flow::Stop);
+                    }
+                }
+            }
+            Flow::Continue
+        }
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         PlannedConstraint::UniqueLang(true) => {
@@ -3067,11 +3261,16 @@ fn eval_constraint<'a, S: ResultSink>(
                 // The recursion focus keeps the value node's own representation,
                 // so an interned one is never materialized to be recursed into.
                 let focus = value.as_focus(ds);
+                // Inside a closure holding a deactivation expression every member is
+                // asked, so the expressions evaluated do not depend on member order.
+                let exhaustive = context.plan.exhaustive();
                 let mut all_conform = true;
                 for member in members.iter(context.plan) {
                     if !conforms_memoized(context, member, &focus)? {
                         all_conform = false;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if !all_conform {
@@ -3090,11 +3289,15 @@ fn eval_constraint<'a, S: ResultSink>(
                 // As `sh:and`: the recursion focus keeps the value node's own
                 // representation.
                 let focus = value.as_focus(ds);
+                // As `sh:and`: every member is asked inside such a closure.
+                let exhaustive = context.plan.exhaustive();
                 let mut any_conforms = false;
                 for member in members.iter(context.plan) {
                     if conforms_memoized(context, member, &focus)? {
                         any_conforms = true;
-                        break;
+                        if !exhaustive {
+                            break;
+                        }
                     }
                 }
                 if !any_conforms {
@@ -3289,10 +3492,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 }
                 let mut sibling_conforms = false;
                 if disjoint {
+                    let exhaustive = context.plan.exhaustive();
                     for sibling in siblings.iter(context.plan) {
                         if conforms_memoized(context, sibling, &focus)? {
                             sibling_conforms = true;
-                            break;
+                            if !exhaustive {
+                                break;
+                            }
                         }
                     }
                 }
@@ -3347,7 +3553,7 @@ fn eval_constraint<'a, S: ResultSink>(
             let sev = source.severity_over(csev.as_ref());
             let msg = match context.capture.map(|capture| capture.profile) {
                 Some(crate::profile::ShaclProfile::REC_20170720) => cmsg,
-                Some(crate::profile::ShaclProfile::WD_20260918) if !cmsg.is_empty() => cmsg,
+                Some(profile) if profile.is_shacl12() && !cmsg.is_empty() => cmsg,
                 _ => source.messages_over(cmsg),
             };
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
@@ -3498,10 +3704,10 @@ fn eval_constraint<'a, S: ResultSink>(
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
             let resolved = shapes.get().ok_or_else(|| {
-                format!(
+                crate::error::ShapesError::internal(format!(
                     "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
                      shape index was never filled"
-                )
+                ))
             })?;
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
@@ -4334,7 +4540,7 @@ impl PairComparands {
         focus: &FocusNode,
         other: PairPath<'_>,
         binding: &DatasetBinding,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::error::ShapesError> {
         match other {
             PairPath::Predicate(pred) => Ok(Self::collect_predicate(ds, focus, pred)),
             PairPath::Path(lowered) => {
@@ -4838,6 +5044,7 @@ mod tests {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         }
@@ -4862,12 +5069,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         }
@@ -5275,12 +5484,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![named_role(&vocab.box_config_box)],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
         };
@@ -5330,12 +5541,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -5369,6 +5582,7 @@ mod tests {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![named_role(&vocab.box_config_box)],
             rules: vec![],
         };
@@ -5389,12 +5603,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
         };
@@ -6679,12 +6895,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -6738,12 +6956,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -6799,12 +7019,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -6968,6 +7190,7 @@ mod tests {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: true,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -7092,6 +7315,7 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             })
             .collect();
@@ -7107,6 +7331,7 @@ mod tests {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         }
@@ -7519,12 +7744,14 @@ mod tests {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: true,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };
@@ -7554,12 +7781,14 @@ mod tests {
                 messages: vec![Literal::new_simple_literal("p is recommended")],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
             messages: vec![],
             constraint_annotations: vec![],
             deactivated: false,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules: vec![],
         };

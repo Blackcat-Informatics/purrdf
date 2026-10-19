@@ -167,25 +167,35 @@ fn lint_reports_a_malformed_graph_and_not_its_well_formed_neighbour() {
     assert!(well_formed.is_clean(), "{}", well_formed.render());
 }
 
-/// `sh:closed sh:ByTypes` is well-formed SHACL 1.2 Core that the vendored
+/// A list-valued `sh:nodeKind` is well-formed SHACL 1.2 Core that the vendored
 /// `shacl-shacl.ttl` still flags: reported, marked superseded, not a finding. Beside a
 /// refusal the same result counts, because the supersession's premise — the loader
-/// agrees with the specification — does not hold for a graph it refused.
+/// agrees with the specification — does not hold for a graph it refused. `sh:closed
+/// sh:ByTypes`, which the vendored file used to flag, it now accepts: no result, so
+/// nothing to supersede.
 #[test]
 fn lint_supersedes_what_shacl_1_2_core_makes_well_formed() {
     let by_types = linted("ex:S a sh:NodeShape ; sh:closed sh:ByTypes .");
-    let [result] = by_types.shacl_shacl() else {
-        panic!("one shacl-shacl result: {}", by_types.render());
+    assert!(by_types.shacl_shacl().is_empty(), "{}", by_types.render());
+    assert!(by_types.is_clean(), "{}", by_types.render());
+
+    let list_kind = linted("ex:S a sh:NodeShape ; sh:nodeKind ( sh:IRI sh:Literal ) .");
+    let [result] = list_kind.shacl_shacl() else {
+        panic!("one shacl-shacl result: {}", list_kind.render());
     };
     assert_eq!(
         result.superseded.map(|rule| rule.name),
-        Some("closed-by-types")
+        Some("list-valued-node-kind")
     );
-    assert!(by_types.is_clean(), "{}", by_types.render());
-    assert!(by_types.render().contains(" superseded closed-by-types\n"));
+    assert!(list_kind.is_clean(), "{}", list_kind.render());
+    assert!(
+        list_kind
+            .render()
+            .contains(" superseded list-valued-node-kind\n")
+    );
 
     let refused = linted(
-        "ex:S a sh:NodeShape ; sh:closed sh:ByTypes ;
+        "ex:S a sh:NodeShape ; sh:nodeKind ( sh:IRI sh:Literal ) ;
            sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .",
     );
     assert!(refused.load_error().is_some());

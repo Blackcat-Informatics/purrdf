@@ -107,10 +107,10 @@ impl Parser<'_> {
     ///
     /// # Errors
     ///
-    /// A malformed global rule, rule set or template; an `sh:entailment` value other than
-    /// `sh:RulesEntailment`.
+    /// A malformed global rule, rule set or template; an `sh:entailment` value that is neither
+    /// `sh:RulesEntailment` nor a declared rule set.
     pub(crate) fn parse_rule_graph(&mut self) -> Result<RuleGraph, String> {
-        let entailment = self.parse_entailment()?;
+        let (entailment, entailment_rule_sets) = self.parse_entailment()?;
         let linked: FastSet<Term> = self
             .quads_with(None, Some(sh::RULE), None)
             .into_iter()
@@ -140,32 +140,75 @@ impl Parser<'_> {
             global_rules,
             rule_sets,
             entailment,
+            entailment_rule_sets,
         })
     }
 
-    /// Whether the shapes graph declares the SHACL rules entailment regime.
+    /// The entailment regimes the shapes graph declares: whether it names
+    /// `sh:RulesEntailment`, and the rule sets it names, in IRI order.
     ///
     /// SHACL 1.2 Core: "If a shapes graph contains any triple with the predicate
     /// sh:entailment and the object E and the SHACL processor does not support E as an
     /// entailment regime for the given data graph then the processor MUST signal a
-    /// failure." This processor supports exactly `sh:RulesEntailment` — SHACL 1.2
-    /// Inference Rules: "Validation engines that do support the SHACL rules entailment
-    /// regime execute the rules following the rules execution instructions prior to
-    /// performing the actual validation."
-    fn parse_entailment(&self) -> Result<bool, String> {
+    /// failure." This processor supports `sh:RulesEntailment` and, under the law
+    /// that reads the editor's draft's "Entailment using Rule Sets" ([`ShaclProfile::ED_20261016`](crate::profile::ShaclProfile::ED_20261016),
+    /// SHACL 1.2 Inference Rules: "Any rule set can be used as a value of
+    /// sh:entailment, i.e. any IRI that is a SHACL instance of sh:RuleSet in the shapes
+    /// graph."), the rule sets of the shapes graph. The working draft states only
+    /// `sh:RulesEntailment`, so under it a rule set is a regime this processor does
+    /// not support, like every other value.
+    fn parse_entailment(&self) -> Result<(bool, Vec<NamedNode>), String> {
         let mut rules = false;
+        let mut sets: Vec<NamedNode> = Vec::new();
+        let mut instances = ShaclInstances::new(self.data);
         for (subject, _, object) in self.quads_with(None, Some(sh::ENTAILMENT), None) {
             if object == Term::NamedNode(NamedNode::from(sh::RULES_ENTAILMENT)) {
                 rules = true;
                 continue;
             }
+            let is_rule_set =
+                matches!(&object, Term::NamedNode(_)) && self.is_rule_set(&mut instances, &object);
+            if is_rule_set && !self.profile.reads_editors_draft_semantics() {
+                return Err(format!(
+                    "the shapes graph declares {subject} sh:entailment {object}, a rule set; \
+                     under {} the only entailment regime this processor supports from \
+                     SHACL 1.2 Inference Rules is sh:RulesEntailment (\"the IRI \
+                     sh:RulesEntailment, which executes all rules of the shapes graph\"), and \
+                     SHACL requires a processor to signal a failure for a regime it does not \
+                     support; rule sets as sh:entailment values are first defined by the \
+                     editor's draft {}",
+                    self.profile,
+                    crate::profile::ShaclProfile::ED_20261016
+                ));
+            }
+            if let Term::NamedNode(iri) = &object
+                && is_rule_set
+            {
+                if !sets.contains(iri) {
+                    sets.push(iri.clone());
+                }
+                continue;
+            }
             return Err(format!(
                 "the shapes graph declares {subject} sh:entailment {object}; this processor \
-                 supports the entailment regime sh:RulesEntailment only, and SHACL requires a \
-                 processor to signal a failure for a regime it does not support"
+                 supports the entailment regime sh:RulesEntailment and the rule sets of the \
+                 shapes graph (SHACL instances of sh:RuleSet), and SHACL requires a processor \
+                 to signal a failure for a regime it does not support"
             ));
         }
-        Ok(rules)
+        sets.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        Ok((rules, sets))
+    }
+
+    /// Whether `term` is a SHACL instance of `sh:RuleSet` in the shapes graph: the one
+    /// test by which a rule set is recognised, for the declarations
+    /// ([`Self::parse_rule_sets`]) and for the values of `sh:entailment`
+    /// ([`Self::parse_entailment`]) alike. An untyped subject of `sh:hasRule` or
+    /// `sh:includesRuleSet` is not one, since SHACL does no RDFS inference from their
+    /// `rdfs:domain`.
+    fn is_rule_set(&self, instances: &mut ShaclInstances<'_>, term: &Term) -> bool {
+        crate::data::resolve_id(self.data, term)
+            .is_some_and(|node| instances.is_instance(node, self.data.term_id_by_iri(sh::RULE_SET)))
     }
 
     /// Every node that is a SHACL instance of `sh:Rule`, `sh:TripleRule` or
@@ -211,24 +254,23 @@ impl Parser<'_> {
         out
     }
 
-    /// Parse every rule set, in IRI order.
+    /// Parse every rule set, in IRI order, and resolve each one's include closure.
     ///
     /// SHACL 1.2 Inference Rules: "All SHACL instances of sh:RuleSet have an IRI. Rule sets
     /// can have values for sh:hasRule and those values are rules. The values of
-    /// sh:includesRuleSet at a rule set are IRIs."
+    /// sh:includesRuleSet at a rule set are IRIs." A rule set is a SHACL instance of
+    /// `sh:RuleSet` and nothing else: `sh:hasRule` and `sh:includesRuleSet` declare
+    /// `rdfs:domain sh:RuleSet`, but SHACL does no RDFS inference, so an untyped subject
+    /// of either is not a rule set (the members of its `sh:hasRule` are still global
+    /// rules). [`Self::parse_entailment`] reads "rule set" by the same test.
+    /// `sh:includesRuleSet` has `rdfs:range sh:RuleSet`, so an included IRI that is not a
+    /// declared rule set is refused here, at load, whichever regimes the shapes graph
+    /// names; include cycles are allowed, the closure being a set.
     fn parse_rule_sets(&self) -> Result<Vec<RuleSetDeclaration>, String> {
         let mut nodes: Vec<Term> = Vec::new();
         let mut instances = ShaclInstances::new(self.data);
-        let class = self.data.term_id_by_iri(sh::RULE_SET);
         for (subject, _, _) in self.quads_with(None, Some(rdf::TYPE), None) {
-            if crate::data::resolve_id(self.data, &subject)
-                .is_some_and(|node| instances.is_instance(node, class))
-            {
-                nodes.push(subject);
-            }
-        }
-        for predicate in [sh::HAS_RULE, sh::INCLUDES_RULE_SET] {
-            for (subject, _, _) in self.quads_with(None, Some(predicate), None) {
+            if self.is_rule_set(&mut instances, &subject) {
                 nodes.push(subject);
             }
         }
@@ -261,6 +303,20 @@ impl Parser<'_> {
                 includes,
                 processors: self.processors_of(&node)?,
             });
+        }
+        for set in &sets {
+            for include in &set.includes {
+                if !sets.iter().any(|known| known.id == *include) {
+                    return Err(format!(
+                        "rule set {} includes {} through sh:includesRuleSet, which is not a \
+                         declared rule set (no SHACL instance of sh:RuleSet of that IRI); \
+                         declare it with `{} a sh:RuleSet`",
+                        Term::NamedNode(set.id.clone()),
+                        Term::NamedNode(include.clone()),
+                        Term::NamedNode(include.clone())
+                    ));
+                }
+            }
         }
         Ok(sets)
     }
@@ -579,7 +635,9 @@ impl Parser<'_> {
     /// shapes. If the value C of sh:condition is a SHACL instance of both sh:NodeShape and
     /// rdfs:Class, then the focus nodes must also conform to the constraints of the
     /// non-deactivated SHACL superclasses of C that are also SHACL instances of both
-    /// sh:NodeShape and rdfs:Class." Those superclasses join the list.
+    /// sh:NodeShape and rdfs:Class." Those superclasses join the list. A superclass
+    /// deactivated by a node expression joins it too: the expression is evaluated at the
+    /// focus node the condition judges, where a deactivated shape is conformed to.
     ///
     /// The sub-parse runs with a FRESH in-flight set and with rule parsing disabled: a
     /// shape whose rule names that shape itself as its condition is legal, and the
@@ -649,7 +707,7 @@ impl Parser<'_> {
                 seen.push(superclass.clone());
                 pending.push(superclass.clone());
                 if class_shape(&mut instances, &superclass)
-                    && !self.deactivated_of(&superclass)?
+                    && !self.constantly_deactivated(&superclass)?
                     && !out.contains(&superclass)
                 {
                     out.push(superclass);

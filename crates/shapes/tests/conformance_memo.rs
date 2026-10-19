@@ -405,6 +405,75 @@ fn a_named_inner_shape_is_evaluated_once_for_a_shared_value_node() {
     );
 }
 
+// ── Short-circuiting is kept where no deactivation expression is reachable ─────
+
+/// **`sh:or` stops at its first conforming member unless a member's closure holds a
+/// node-expression `sh:deactivated`.**
+///
+/// Inside such a closure every member is walked, so the expressions evaluated do not
+/// depend on member order (SHACL 1.2 Core: an ill-formed `sh:deactivated` is a
+/// failure). Everywhere else the first conforming member settles the constraint, and
+/// the counted member is never asked. The oracle is the same as above: the number of
+/// times the second member's constraint ran. The three arms differ in the second
+/// member's `sh:deactivated` alone, and the arm with `false` is the control that the
+/// member WOULD run if it were reached (the constant `false` leaves it active).
+#[test]
+fn an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_is_reachable() {
+    let _guard = measure_lock();
+    let _relations = enter_property_function_scope(counting_relations());
+    let data = parse_ntriples_to_dataset(&format!(
+        "{DATA}<{FOCUS_IRI}> <http://example.org/purrdf/memo#muted> \
+         \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n"
+    ))
+    .unwrap_or_else(|errors| panic!("the fixture data graph must parse: {}", errors.join("\n")));
+    let shapes = |first: &str, second: &str, deactivation: &str| {
+        format!(
+            "{PREFIXES}\
+             ex:Pass a sh:NodeShape ; sh:nodeKind sh:IRI .\n\
+             ex:Counted a sh:NodeShape ; {INNER_CONSTRAINT} {deactivation} .\n\
+             ex:Outer a sh:NodeShape ; sh:targetClass ex:Focus ; sh:or ( {first} {second} ) .\n"
+        )
+    };
+    let asks = |first: &str, second: &str, deactivation: &str, label: &str| {
+        Arm::prepare(&data, &shapes(first, second, deactivation), label).asks_to_validate(label)
+    };
+
+    // The counted member is reached when it comes first, whatever its deactivation.
+    assert_eq!(asks("ex:Counted", "ex:Pass", "", "counted first"), 1);
+    // Behind a conforming member with no deactivation expression: never asked.
+    assert_eq!(asks("ex:Pass", "ex:Counted", "", "plain"), 0);
+    assert_eq!(
+        asks(
+            "ex:Pass",
+            "ex:Counted",
+            "; sh:deactivated false",
+            "constant false"
+        ),
+        0
+    );
+    assert_eq!(
+        asks(
+            "ex:Pass",
+            "ex:Counted",
+            "; sh:deactivated true",
+            "constant true"
+        ),
+        0
+    );
+    // A reachable expression makes the closure exhaustive: the counted member is
+    // walked even though a conforming member precedes it (it is not deactivated at
+    // the focus node, so its constraint runs).
+    assert_eq!(
+        asks(
+            "ex:Pass",
+            "ex:Counted",
+            "; sh:deactivated [ sh:path ex:muted ]",
+            "expression"
+        ),
+        1
+    );
+}
+
 // ── The regression guard: every test in this binary holds MEASURE_LOCK first ───
 
 /// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST

@@ -5136,22 +5136,152 @@ fn native_syntax(
     }
 }
 
-fn expect_arity(
-    args: &[Expression],
-    n: usize,
+/// The argument counts of a call, as `(min, max)` with `None` for no upper bound.
+pub(crate) type ArityRange = (usize, Option<usize>);
+
+/// The keyword forms the grammar spells as productions of their own rather than as a
+/// [`Function`] (`IF`, `sameTerm`, `BOUND`, `COALESCE`), with their argument counts.
+/// Upper-cased names; the second half of the one arity table ([`builtin_arity`] is the
+/// first).
+const FORM_ARITIES: &[(&str, ArityRange)] = &[
+    ("IF", (3, Some(3))),
+    ("SAMETERM", (2, Some(2))),
+    ("BOUND", (1, Some(1))),
+    ("COALESCE", (0, None)),
+];
+
+/// The argument counts of the form `upper` (see [`FORM_ARITIES`]).
+pub(crate) fn form_arity(upper: &str) -> Option<ArityRange> {
+    FORM_ARITIES
+        .iter()
+        .find_map(|&(name, range)| (name == upper).then_some(range))
+}
+
+/// The number of arguments a keyword built-in function admits, per the `BuiltInCall`
+/// productions of the SPARQL 1.2 Query grammar (rules [141]-[144]): `NAME '(' Expression
+/// ')'` is 1, `NAME NIL` is 0, `BNODE ( '(' Expression ')' | NIL )` is 0-1, `SUBSTR` and
+/// `REGEX` are 2-3, `REPLACE` is 3-4, and `CONCAT` takes an `ExpressionList` (any
+/// number). The names the grammar does not list but the parser accepts are fixed by
+/// their proposals: `ADJUST` takes 2 (SEP-0002) and the four `SHA3-*` hashes take 1
+/// (SEP-0008).
+///
+/// The match is exhaustive over [`Function`]: a new variant does not compile until it
+/// is given a count here. `None` only for the three variants whose arity is checked
+/// where they are parsed (`Purrdf`, `Custom` and `Cdt` are never produced by keyword
+/// dispatch).
+pub(crate) fn builtin_arity(function: &Function) -> Option<ArityRange> {
+    Some(match function {
+        Function::Rand | Function::Now | Function::Uuid | Function::StrUuid => (0, Some(0)),
+        Function::BNode => (0, Some(1)),
+        Function::Concat => (0, None),
+        Function::SubStr | Function::Regex => (2, Some(3)),
+        Function::Replace => (3, Some(4)),
+        Function::LangMatches
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::StrLang
+        | Function::StrDt
+        | Function::Adjust => (2, Some(2)),
+        Function::StrLangDir | Function::Triple => (3, Some(3)),
+        Function::Str
+        | Function::Lang
+        | Function::LangDir
+        | Function::HasLang
+        | Function::HasLangDir
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::StrLen
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::Sha3_224
+        | Function::Sha3_256
+        | Function::Sha3_384
+        | Function::Sha3_512
+        | Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::IsTriple => (1, Some(1)),
+        Function::Purrdf(_) | Function::Cdt(_) | Function::Custom(_) => return None,
+    })
+}
+
+/// The argument counts of the keyword call `name` (any case): `builtin_arity` for a
+/// function, `form_arity` for the forms that are productions of their own. `None` when
+/// `name` is no keyword call.
+///
+/// A host that builds a call from a name (SHACL 1.2 Node Expressions §5's
+/// `sparql:<NAME>`) asks here, so it refuses the same counts the parser does.
+#[must_use]
+pub fn builtin_keyword_arity(name: &str) -> Option<(usize, Option<usize>)> {
+    let upper = name.to_ascii_uppercase();
+    form_arity(&upper).or_else(|| builtin_arity(&builtin_function(&upper)?))
+}
+
+/// Refuse a call of `name` whose argument count `range` does not admit: a syntax error
+/// naming the call and the counts it takes. The one place the refusal is worded.
+pub(crate) fn expect_arity_range(
     name: &str,
+    range: ArityRange,
+    args: &[Expression],
     at: usize,
     memory: &mut Memory<'_, dyn ParserAdmission + '_>,
 ) -> Result<()> {
-    if args.len() == n {
-        Ok(())
-    } else {
-        Err(native_syntax(
-            &format_args!("{name} expects {n} arguments, got {}", args.len()),
-            at,
-            memory,
-        ))
+    let (min, max) = range;
+    if args.len() >= min && max.is_none_or(|max| args.len() <= max) {
+        return Ok(());
     }
+    let expected = match max {
+        Some(max) if max == min => format!("exactly {min}"),
+        Some(max) => format!("{min} to {max}"),
+        None => format!("at least {min}"),
+    };
+    Err(native_syntax(
+        &format_args!("{name} takes {expected} argument(s), got {}", args.len()),
+        at,
+        memory,
+    ))
+}
+
+/// Refuse a keyword built-in call whose argument count its grammar production does not
+/// admit. Every keyword call is finished by `finish_call`, which asks here.
+pub(crate) fn expect_builtin_arity(
+    function: &Function,
+    args: &[Expression],
+    at: usize,
+    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+) -> Result<()> {
+    let Some(range) = builtin_arity(function) else {
+        return Ok(());
+    };
+    let name = crate::serialize::function_keyword(function).unwrap_or("function");
+    expect_arity_range(name, range, args, at, memory)
 }
 
 fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
@@ -5304,6 +5434,143 @@ mod tests {
     // property list and nothing lexical separates the two cases; teaching the scan
     // about `#` would WIDEN acceptance, not narrow it. Only the parser, which has
     // the following tokens, can tell them apart.
+
+    // ── Keyword built-ins admit exactly the argument counts their production fixes ───
+
+    /// Every keyword `builtin_function` resolves has a fixed arity, so the check below
+    /// cannot silently skip one.
+    #[test]
+    fn every_keyword_builtin_has_an_arity() {
+        for keyword in [
+            "STR",
+            "LANG",
+            "LANGDIR",
+            "STRLANGDIR",
+            "HASLANG",
+            "HASLANGDIR",
+            "LANGMATCHES",
+            "DATATYPE",
+            "IRI",
+            "URI",
+            "BNODE",
+            "RAND",
+            "ABS",
+            "CEIL",
+            "FLOOR",
+            "ROUND",
+            "CONCAT",
+            "SUBSTR",
+            "STRLEN",
+            "REPLACE",
+            "UCASE",
+            "LCASE",
+            "ENCODE_FOR_URI",
+            "CONTAINS",
+            "STRSTARTS",
+            "STRENDS",
+            "STRBEFORE",
+            "STRAFTER",
+            "YEAR",
+            "MONTH",
+            "DAY",
+            "HOURS",
+            "MINUTES",
+            "SECONDS",
+            "TIMEZONE",
+            "TZ",
+            "ADJUST",
+            "NOW",
+            "UUID",
+            "STRUUID",
+            "MD5",
+            "SHA1",
+            "SHA256",
+            "SHA384",
+            "SHA512",
+            "SHA3-224",
+            "SHA3_224",
+            "SHA3-256",
+            "SHA3_256",
+            "SHA3-384",
+            "SHA3_384",
+            "SHA3-512",
+            "SHA3_512",
+            "STRLANG",
+            "STRDT",
+            "ISIRI",
+            "ISURI",
+            "ISBLANK",
+            "ISLITERAL",
+            "ISNUMERIC",
+            "REGEX",
+            "TRIPLE",
+            "SUBJECT",
+            "PREDICATE",
+            "OBJECT",
+            "ISTRIPLE",
+        ] {
+            let function = builtin_function(keyword).expect("a keyword");
+            assert!(builtin_arity(&function).is_some(), "{keyword} has no arity");
+        }
+    }
+
+    /// The host-facing lookup answers from the same table as the parser, for functions
+    /// and for the forms that are productions of their own, in any case.
+    #[test]
+    fn the_keyword_arity_lookup_covers_functions_and_forms() {
+        assert_eq!(builtin_keyword_arity("abs"), Some((1, Some(1))));
+        assert_eq!(builtin_keyword_arity("substr"), Some((2, Some(3))));
+        assert_eq!(builtin_keyword_arity("if"), Some((3, Some(3))));
+        assert_eq!(builtin_keyword_arity("sameTerm"), Some((2, Some(2))));
+        assert_eq!(builtin_keyword_arity("bound"), Some((1, Some(1))));
+        assert_eq!(builtin_keyword_arity("coalesce"), Some((0, None)));
+        assert_eq!(builtin_keyword_arity("nosuch"), None);
+    }
+
+    /// For each arity class of rules [141]-[144]: a wrong count is a syntax error, and
+    /// the neighbouring correct count parses.
+    #[test]
+    fn a_keyword_builtin_of_the_wrong_arity_is_refused_and_the_right_one_parses() {
+        let call = |name: &str, n: usize| {
+            let args = vec!["1"; n].join(", ");
+            format!("SELECT ({name}({args}) AS ?x) WHERE {{}}")
+        };
+        // (keyword, counts that parse, counts refused)
+        let classes: &[(&str, &[usize], &[usize])] = &[
+            ("ABS", &[1], &[0, 2]),
+            ("STR", &[1], &[0, 2]),
+            ("hasLANG", &[1], &[0, 2]),
+            ("SHA3-256", &[1], &[0, 2]),
+            ("RAND", &[0], &[1]),
+            ("NOW", &[0], &[1]),
+            ("UUID", &[0], &[1]),
+            ("STRUUID", &[0], &[2]),
+            ("BNODE", &[0, 1], &[2]),
+            ("CONTAINS", &[2], &[1, 3]),
+            ("STRLANG", &[2], &[1, 3]),
+            ("ADJUST", &[2], &[1, 3]),
+            ("SUBSTR", &[2, 3], &[1, 4]),
+            ("REGEX", &[2, 3], &[1, 4]),
+            ("REPLACE", &[3, 4], &[2, 5]),
+            ("TRIPLE", &[3], &[2, 4]),
+            ("STRLANGDIR", &[3], &[2, 4]),
+            ("CONCAT", &[0, 1, 5], &[]),
+            ("COALESCE", &[0, 1, 5], &[]),
+            ("IF", &[3], &[2, 4]),
+            ("sameTerm", &[2], &[1, 3]),
+        ];
+        for &(name, parses, refused) in classes {
+            for &n in parses {
+                let query = call(name, n);
+                assert!(try_parse(&query).is_ok(), "{query} must parse");
+            }
+            for &n in refused {
+                let query = call(name, n);
+                let error = try_parse(&query).expect_err(&query).to_string();
+                assert!(error.contains("syntax error"), "{query}: {error}");
+            }
+        }
+    }
 
     fn try_parse(q: &str) -> Result<Query> {
         SparqlParser::new().parse_query(q)
@@ -11700,7 +11967,7 @@ mod tests {
     fn adjust_with_one_argument_is_a_syntax_error() {
         // ADJUST has exactly one documented (2-argument) signature (SEP-0002);
         // the generic builtin-call path does not arity-check on its own, so
-        // this pins the dedicated `expect_arity` gate added for it.
+        // this pins the dedicated `expect_arity_range` gate added for it.
         let q = "SELECT ?h WHERE { ?s ?p ?o . BIND(ADJUST(?o) AS ?h) }";
         let error = SparqlParser::new()
             .parse_query(q)
