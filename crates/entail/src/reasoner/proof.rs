@@ -857,10 +857,11 @@ impl ServiceProof {
         &self,
         ontology: &D,
         question: &Question,
-    ) -> Result<(), DlProofError> {
+    ) -> Result<(), DlProofError<D::ReadError>> {
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
             .map_err(DlProofError::Canonicalization)?;
         self.binds_identity(expected, question)
+            .map_err(DlProofError::with_read_error)
     }
 
     /// Bind the same proof fields to the consumer's independently computed input identity.
@@ -1017,9 +1018,10 @@ impl ServiceProof {
         question: &Question,
         certificate: Option<&DlCertificate>,
         ctx: &DlProofContext<'_>,
-    ) -> Result<ServiceReplay, DlProofError> {
+    ) -> Result<ServiceReplay, DlProofError<D::ReadError>> {
         self.binds(ontology, question)?;
         self.verify_prepared(question, certificate, ctx)
+            .map_err(DlProofError::with_read_error)
     }
 
     /// Verify against the consumer's immutable, already prepared source context.

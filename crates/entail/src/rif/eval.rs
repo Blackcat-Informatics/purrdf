@@ -131,7 +131,7 @@ impl Terms {
 pub fn materialize_rif<D: DatasetView>(
     ds: &D,
     rules: &RuleSet,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     materialize_rif_until(ds, rules, None)
 }
 
@@ -151,7 +151,7 @@ pub fn materialize_rif_until<D: DatasetView>(
     ds: &D,
     rules: &RuleSet,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     materialize_rif_with(ds, rules, &EvalOptions::default(), stop)
 }
 
@@ -173,7 +173,7 @@ pub fn materialize_rif_with<D: DatasetView>(
     rules: &RuleSet,
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         // Refuse a run that was already stopped before interning source terms, ground facts,
         // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
@@ -210,7 +210,7 @@ pub fn materialize_rif_with<D: DatasetView>(
         // Translate every rule into engine clauses, interning constants as they are met.
         let mut clauses: Vec<DlClause> = Vec::new();
         for rule in &rules.rules {
-            clauses.extend(translate_rule(rule, &mut terms)?);
+            clauses.extend(translate_rule(rule, &mut terms).map_err(EntailError::with_read_error)?);
         }
 
         // The fixpoint is `purrdf-datalog`'s. The stop signal is polled at its round

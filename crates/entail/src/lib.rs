@@ -345,7 +345,7 @@ pub use owl_dl::roles::RoleHierarchyError;
 /// Why a closure could not be produced.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum EntailError {
+pub enum EntailError<E = std::convert::Infallible> {
     /// Logical capacity or physical storage refused construction.
     Storage(purrdf_lex::allocation::StorageError),
     /// Building the derived dataset failed.
@@ -418,7 +418,7 @@ pub enum EntailError {
     ForeignTerm(purrdf_core::TermLookupError),
     /// The input source refused a term, index or iterator read. No partial closure or
     /// report is returned as complete.
-    SourceRead(String),
+    SourceRead(E),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     ///
@@ -545,13 +545,13 @@ pub enum EntailError {
     /// and so never returns this. The caller's data is wholly untrusted here — a document
     /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
     /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
-    Canonicalization(purrdf_core::CanonError),
+    Canonicalization(purrdf_core::CanonError<E>),
 }
 
-impl EntailError {
+impl<E> EntailError<E> {
     /// Preserve the operational refusal's classification at this crate's boundary.
-    pub(crate) fn source_read(error: impl std::fmt::Display) -> Self {
-        Self::SourceRead(error.to_string())
+    pub(crate) fn source_read(error: E) -> Self {
+        Self::SourceRead(error)
     }
 
     /// This error, with any report it carries restated for a run whose `owl:imports` were
@@ -566,9 +566,40 @@ impl EntailError {
     }
 }
 
-purrdf_lex::variant_from!(EntailError { Storage(purrdf_lex::allocation::StorageError) });
+impl EntailError {
+    /// Select a reader's error type for a source-independent refusal.
+    /// The owned reasoning state has no backing read error to convert or render.
+    #[must_use]
+    pub fn with_read_error<E>(self) -> EntailError<E> {
+        match self {
+            Self::Storage(cause) => EntailError::Storage(cause),
+            Self::Build(reason) => EntailError::Build(reason),
+            Self::Parse(reason) => EntailError::Parse(reason),
+            Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
+            Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
+            Self::Evaluate(cause) => EntailError::Evaluate(cause),
+            Self::Chase(cause) => EntailError::Chase(cause),
+            Self::MalformedList(reason) => EntailError::MalformedList(reason),
+            Self::ForeignTerm(cause) => EntailError::ForeignTerm(cause),
+            Self::SourceRead(never) => match never {},
+            Self::Inconsistent(run) => EntailError::Inconsistent(run),
+            Self::Unsatisfiable => EntailError::Unsatisfiable,
+            Self::UnsupportedRegime(regime) => EntailError::UnsupportedRegime(regime),
+            Self::UnresolvedImport(iri) => EntailError::UnresolvedImport(iri),
+            Self::UnreachedImport { iris, unanchored } => {
+                EntailError::UnreachedImport { iris, unanchored }
+            }
+            Self::IncompatibleImports(conflicts) => EntailError::IncompatibleImports(conflicts),
+            Self::MatchBudget => EntailError::MatchBudget,
+            Self::Stopped => EntailError::Stopped,
+            Self::Canonicalization(cause) => EntailError::Canonicalization(cause.with_read_error()),
+        }
+    }
+}
 
-impl From<purrdf_core::RdfDiagnostic> for EntailError {
+purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocation::StorageError) });
+
+impl<E> From<purrdf_core::RdfDiagnostic> for EntailError<E> {
     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
         error
             .storage_error()
@@ -576,7 +607,7 @@ impl From<purrdf_core::RdfDiagnostic> for EntailError {
     }
 }
 
-impl From<RoleHierarchyError> for EntailError {
+impl<E> From<RoleHierarchyError> for EntailError<E> {
     fn from(error: RoleHierarchyError) -> Self {
         match error {
             RoleHierarchyError::Stopped => Self::Stopped,
@@ -585,7 +616,7 @@ impl From<RoleHierarchyError> for EntailError {
     }
 }
 
-impl std::fmt::Display for EntailError {
+impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "entailment storage error: {error}"),
@@ -689,7 +720,7 @@ impl std::fmt::Display for EntailError {
     }
 }
 
-impl<E: std::fmt::Display> From<purrdf_core::TermLookupError<E>> for EntailError {
+impl<E> From<purrdf_core::TermLookupError<E>> for EntailError<E> {
     fn from(error: purrdf_core::TermLookupError<E>) -> Self {
         match error {
             purrdf_core::TermLookupError::ForeignId => {
@@ -700,7 +731,7 @@ impl<E: std::fmt::Display> From<purrdf_core::TermLookupError<E>> for EntailError
     }
 }
 
-impl std::error::Error for EntailError {
+impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
     /// The wrapped cause, for the variants that carry one.
     ///
     /// Two of these variants exist ONLY to carry another crate's diagnostic —
@@ -729,8 +760,8 @@ impl std::error::Error for EntailError {
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::RoleHierarchy(inner) => Some(inner),
+            Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
-            | Self::SourceRead(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
             | Self::Inconsistent(_)
@@ -847,7 +878,7 @@ impl std::error::Error for EntailError {
 pub fn materialize<D: DatasetView>(
     ds: &D,
     plan: Materialization<'_>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     materialize_until(ds, plan, None)
 }
 
@@ -899,7 +930,7 @@ pub fn materialize_until<D: DatasetView>(
     ds: &D,
     plan: Materialization<'_>,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     materialize_with(ds, plan, &EvalOptions::default(), stop)
 }
 
@@ -936,7 +967,7 @@ pub fn materialize_with<D: DatasetView>(
     plan: Materialization<'_>,
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         if stop.is_some_and(|stop| stop.stopped()) {
             return Err(EntailError::Stopped);
@@ -1051,12 +1082,22 @@ mod tests {
     struct FailingSource {
         dataset: Arc<RdfDataset>,
         fail_term: bool,
+        fail_on_pass: usize,
+        passes: std::cell::Cell<usize>,
         failed: std::cell::Cell<bool>,
+        cause: Arc<std::io::Error>,
     }
 
     impl FailingSource {
-        fn failure() -> Arc<std::io::Error> {
-            Arc::new(std::io::Error::other("injected source failure"))
+        fn new(dataset: Arc<RdfDataset>, fail_term: bool, fail_on_pass: usize) -> Self {
+            Self {
+                dataset,
+                fail_term,
+                fail_on_pass,
+                passes: std::cell::Cell::new(0),
+                failed: std::cell::Cell::new(false),
+                cause: Arc::new(std::io::Error::other("injected source failure")),
+            }
         }
     }
 
@@ -1067,15 +1108,18 @@ mod tests {
         type ProbePlan = ();
 
         fn read_error(&self) -> Option<Self::ReadError> {
-            self.failed.get().then(Self::failure)
+            self.failed.get().then(|| Arc::clone(&self.cause))
         }
 
         fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.passes.set(self.passes.get() + 1);
             let mut rows = self.dataset.quads();
             let mut yielded = false;
             std::iter::from_fn(move || {
                 if yielded {
-                    self.failed.set(true);
+                    if self.passes.get() >= self.fail_on_pass {
+                        self.failed.set(true);
+                    }
                     return None;
                 }
                 yielded = true;
@@ -1084,9 +1128,9 @@ mod tests {
         }
 
         fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
-            if self.fail_term {
+            if self.fail_term && self.passes.get() >= self.fail_on_pass {
                 self.failed.set(true);
-                return Err(Self::failure());
+                return Err(Arc::clone(&self.cause));
             }
             Ok(self.dataset.as_ref().resolve(id))
         }
@@ -1122,11 +1166,11 @@ mod tests {
     fn operational_failure_returns_no_partial_reasoner_or_identity() {
         for fail_term in [false, true] {
             for recorded in [false, true] {
-                let source = FailingSource {
-                    dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+                let source = FailingSource::new(
+                    dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
                     fail_term,
-                    failed: std::cell::Cell::new(false),
-                };
+                    1,
+                );
                 let error = if recorded {
                     Reasoner::with_proofs(&source)
                 } else {
@@ -1155,25 +1199,84 @@ mod tests {
                 Materialization::OwlDirect(&[]),
                 Materialization::Rif(&rules),
             ] {
-                let source = FailingSource {
-                    dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+                let source = FailingSource::new(
+                    dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
                     fail_term,
-                    failed: std::cell::Cell::new(false),
-                };
+                    1,
+                );
                 let error = materialize(&source, plan).expect_err("source refusal is fatal");
                 assert!(matches!(error, EntailError::SourceRead(_)), "{error}");
                 assert!(error.to_string().contains("injected source failure"));
             }
 
-            let source = FailingSource {
-                dataset: dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
+            let source = FailingSource::new(
+                dataset(&[(X, RDF_TYPE, A), (A, RDFS_SUBCLASSOF, B)]),
                 fail_term,
-                failed: std::cell::Cell::new(false),
-            };
+                1,
+            );
             assert!(matches!(
                 materialize_combined(&source, &[]),
                 Err(EntailError::SourceRead(_))
             ));
+        }
+    }
+
+    #[test]
+    fn second_traversal_failure_retains_the_original_cause_without_a_partial_reasoner() {
+        let data = dataset(&[(X, RDF_TYPE, A)]);
+        for fail_term in [false, true] {
+            let source = FailingSource::new(Arc::clone(&data), fail_term, 2);
+            let cause = Arc::clone(&source.cause);
+            let error = Reasoner::new(&source).expect_err("the second source pass must fail");
+            assert_eq!(source.passes.get(), 2);
+            drop(source);
+            let EntailError::SourceRead(native) = &error else {
+                panic!("expected the native second-pass cause, got {error:?}");
+            };
+            assert!(Arc::ptr_eq(native, &cause));
+            let chained = std::error::Error::source(&error)
+                .expect("the read cause stays in the source chain")
+                .downcast_ref::<Arc<std::io::Error>>()
+                .expect("the native error type survives");
+            assert!(Arc::ptr_eq(chained, &cause));
+        }
+        let source = FailingSource::new(data, false, usize::MAX);
+        let reasoner = Reasoner::new(&source).expect("the neighboring complete source is valid");
+        assert_eq!(source.passes.get(), 2);
+        assert!(!reasoner.records_proofs());
+    }
+
+    #[test]
+    fn proof_context_retains_native_source_failures_before_and_after_identity() {
+        let data = dataset(&[(X, RDF_TYPE, A)]);
+        let complete = FailingSource::new(Arc::clone(&data), false, usize::MAX);
+        try_ontology_identity(&complete).expect("complete identity");
+        let identity_passes = complete.passes.get();
+        assert!(identity_passes > 0);
+        DlProofContext::of_ontology(&complete).expect("complete checking context");
+
+        for fail_term in [false, true] {
+            for fail_on_pass in [1, identity_passes + 1] {
+                let source = FailingSource::new(Arc::clone(&data), fail_term, fail_on_pass);
+                let cause = Arc::clone(&source.cause);
+                let error = DlProofContext::of_ontology(&source)
+                    .expect_err("an incomplete source cannot publish a checking context");
+                drop(source);
+                let native = match &error {
+                    DlProofError::SourceRead(native)
+                    | DlProofError::Canonicalization(purrdf_core::CanonError::Read(native)) => {
+                        native
+                    }
+                    other => panic!("expected the original reader cause, got {other:?}"),
+                };
+                assert!(Arc::ptr_eq(native, &cause));
+                let outer = std::error::Error::source(&error).expect("native source chain");
+                let native = outer
+                    .downcast_ref::<Arc<std::io::Error>>()
+                    .or_else(|| outer.source()?.downcast_ref::<Arc<std::io::Error>>())
+                    .expect("the read error type survives the proof boundary");
+                assert!(Arc::ptr_eq(native, &cause));
+            }
         }
     }
 
@@ -2169,7 +2272,8 @@ mod tests {
         assert!(witness.graph().is_none());
         // The message names the rule, so a caller who only logs the error still learns
         // which axiom their data broke.
-        let rendered = EntailError::Inconsistent(run).to_string();
+        let error: EntailError = EntailError::Inconsistent(run);
+        let rendered = error.to_string();
         assert!(rendered.contains("cax-dw"), "{rendered}");
 
         // The RDFS lane says nothing about `owl:disjointWith`, so the same graph is

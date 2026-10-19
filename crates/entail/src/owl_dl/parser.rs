@@ -1201,7 +1201,7 @@ impl<'a> CeExtractor<'a> {
 }
 
 /// Poll the caller's latching cancellation signal at a reverse-mapping work boundary.
-fn poll(stop: Option<&dyn StopSignal>) -> Result<(), EntailError> {
+fn poll<E>(stop: Option<&dyn StopSignal>) -> Result<(), EntailError<E>> {
     if stop.is_some_and(StopSignal::stopped) {
         Err(EntailError::Stopped)
     } else {
@@ -1220,7 +1220,7 @@ fn poll(stop: Option<&dyn StopSignal>) -> Result<(), EntailError> {
 pub(crate) fn build_until<D: DatasetView>(
     ds: &D,
     stop: Option<&dyn StopSignal>,
-) -> Result<Kb, EntailError> {
+) -> Result<Kb, EntailError<D::ReadError>> {
     build_with_preparation(ds, stop, super::bounds::SchemaPreparationBudget::default())
 }
 
@@ -1228,7 +1228,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
     ds: &D,
     stop: Option<&dyn StopSignal>,
     budget: super::bounds::SchemaPreparationBudget,
-) -> Result<Kb, EntailError> {
+) -> Result<Kb, EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         poll(stop)?;
         let mut interner = Interner::default();
@@ -1297,16 +1297,17 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             // The n-ary axioms are stated as a node carrying a list or a reification, so they
             // are read from the node rather than from any one of its triples.
             for (&node, preds) in &index {
-                ce.poll()?;
+                ce.poll().map_err(EntailError::with_read_error)?;
                 for &axiom_class in preds.get(&v.ty).map_or(&[][..], Vec::as_slice) {
-                    ce.poll()?;
+                    ce.poll().map_err(EntailError::with_read_error)?;
                     acc.source = super::AxiomSource::Node {
                         node,
                         kind: Some(axiom_class),
                     };
                     ce.source_scope(&mut acc, |ce, acc| {
                         axiom_node(ce, &mut table, acc, &v, node, axiom_class)
-                    })?;
+                    })
+                    .map_err(EntailError::with_read_error)?;
                 }
                 // A negative property assertion is identified by its VOCABULARY, not by its
                 // typing: OWL 2's RDF-Based Semantics states the axiom over any node carrying
@@ -1321,18 +1322,20 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                     acc.source = super::AxiomSource::Node { node, kind: None };
                     ce.source_scope(&mut acc, |ce, acc| {
                         negative_assertion(ce, &mut table, acc, &v, node)
-                    })?;
+                    })
+                    .map_err(EntailError::with_read_error)?;
                 }
             }
             for &spo in &triples {
-                ce.poll()?;
+                ce.poll().map_err(EntailError::with_read_error)?;
                 acc.source = super::AxiomSource::Triple(spo.0, spo.1, spo.2);
                 ce.source_scope(&mut acc, |ce, acc| {
                     axiom(ce, &mut table, acc, &v, &interner, spo)
-                })?;
+                })
+                .map_err(EntailError::with_read_error)?;
             }
             for (&node, body) in ce.definitions() {
-                ce.poll()?;
+                ce.poll().map_err(EntailError::with_read_error)?;
                 acc.source = super::AxiomSource::RecursiveDefinition(node);
                 let start = acc.tbox.len();
                 gci(&mut table, &mut acc, Concept::Named(node), body.clone());
@@ -1348,9 +1351,11 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             // while the restriction was being decoded.
             let top = interner.id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
             for &role in ce.counted_roles() {
-                ce.poll()?;
+                ce.poll().map_err(EntailError::with_read_error)?;
                 let (Role::Named(property) | Role::Inv(property)) = role;
-                if top.is_some() && subrole_satisfies(role, &acc, stop, |id| top == Some(id))?
+                if top.is_some()
+                    && subrole_satisfies(role, &acc, stop, |id| top == Some(id))
+                        .map_err(EntailError::with_read_error)?
                     || role_program
                         .as_ref()
                         .is_some_and(|program| program.non_simple.contains(&role))
@@ -1361,12 +1366,14 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                             .into(),
                     );
                 }
-                if subrole_satisfies(role, &acc, stop, |id| acc.transitive.contains(&id))? {
+                if subrole_satisfies(role, &acc, stop, |id| acc.transitive.contains(&id))
+                    .map_err(EntailError::with_read_error)?
+                {
                     acc.boundaries.insert(Construct::NonSimpleRole);
                     break;
                 }
             }
-            syntax = ce.into_syntax()?;
+            syntax = ce.into_syntax().map_err(EntailError::with_read_error)?;
         }
 
         {
@@ -1391,7 +1398,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                         .contains(&kind)
                     })
                 });
-                if restricted && non_simple(property)? {
+                if restricted && non_simple(property).map_err(EntailError::with_read_error)? {
                     return Err(
                         super::roles::RoleHierarchyError::NonSimpleProperty { property }
                             .with_source(&interner)
@@ -1401,7 +1408,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             }
             for &pair in &acc.disjoint_roles {
                 for property in <[u32; 2]>::from(pair) {
-                    if non_simple(property)? {
+                    if non_simple(property).map_err(EntailError::with_read_error)? {
                         return Err(super::roles::RoleHierarchyError::NonSimpleProperty {
                             property,
                         }
@@ -1424,7 +1431,8 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             &mut acc.abox_types,
             &mut acc.boundaries,
             stop,
-        )?;
+        )
+        .map_err(EntailError::with_read_error)?;
         for index in authored_types..acc.abox_types.len() {
             poll(stop)?;
             acc.inputs.record(
