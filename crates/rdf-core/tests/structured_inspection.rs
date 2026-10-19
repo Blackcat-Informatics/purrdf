@@ -220,7 +220,117 @@ fn graph_refusal_keeps_original_invalid_edge_without_rendering() {
     );
 }
 
+fn event_ingestion_retains_original_freeze_causes_and_cancellation() {
+    use core::ops::ControlFlow;
+    use purrdf_core::DatasetSink;
+    use purrdf_events::{EventError, EventQuad, EventTerm, EventTermId, RdfEventSink};
+    let mut cancelled = DatasetSink::new();
+    cancelled.mark_cancelled();
+    let error = cancelled.finish().unwrap_err();
+    assert_eq!(error, EventError::Cancelled);
+    assert_eq!(Capture::read(&error).code, "event-cancelled");
+    assert!(cancelled.into_dataset().is_none());
+
+    for invalid in [true, false] {
+        let mut sink = DatasetSink::new();
+        let s = EventTermId(10);
+        let p = EventTermId(20);
+        let o = EventTermId(30);
+        assert_eq!(
+            sink.term(s, EventTerm::Iri("https://example.org/s"))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        let predicate = if invalid {
+            EventTerm::Literal {
+                lexical: "not-a-predicate",
+                datatype: purrdf_xsd::datatype::XSD_STRING,
+                language: None,
+                direction: None,
+            }
+        } else {
+            EventTerm::Iri("https://example.org/p")
+        };
+        assert_eq!(sink.term(p, predicate).unwrap(), ControlFlow::Continue(()));
+        assert_eq!(
+            sink.term(o, EventTerm::Iri("https://example.org/o"))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(
+            sink.quad(EventQuad { s, p, o, g: None }).unwrap(),
+            ControlFlow::Continue(())
+        );
+        if invalid {
+            let error = sink.finish().unwrap_err();
+            assert!(
+                sink.into_dataset().is_none(),
+                "refused data must never freeze"
+            );
+            let original = std::error::Error::source(&error).unwrap().source().unwrap();
+            assert!(original.is::<purrdf_core::RdfDiagnostic>());
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, "event-native");
+            let freeze = fields.child("cause");
+            assert_eq!(freeze.code, "event-ingest-freeze");
+            let diagnostic = freeze.child("cause");
+            assert_eq!(diagnostic.code, "rdf-diagnostic");
+            assert!(matches!(
+                diagnostic.field("code"),
+                ErrorValue::Code("rdf-ir-predicate-not-iri")
+            ));
+        } else {
+            sink.finish().unwrap();
+            assert_eq!(sink.into_dataset().unwrap().quad_count(), 1);
+        }
+    }
+}
+
+fn byte_cover_refusals_keep_original_ranges_and_nested_digest_finding() {
+    use purrdf_core::cover::{ByteCover, CoverBuilder};
+
+    let cover = ByteCover::identity(b"abc");
+    for end in [4, u64::MAX] {
+        let error = cover.reference(1..end).unwrap_err();
+        let captured = Capture::read(&error);
+        assert_eq!(captured.code, "cover-emit-range");
+        assert!(matches!(captured.field("start"), ErrorValue::ByteCount(1)));
+        assert!(
+            matches!(captured.field("end"), ErrorValue::ByteCount(value) if value == u128::from(end))
+        );
+        assert!(matches!(
+            captured.field("byte_length"),
+            ErrorValue::ByteCount(3)
+        ));
+    }
+    let reference = cover.reference(1..3).unwrap();
+    assert_eq!(reference.resolve_source(b"abc").unwrap(), b"bc");
+    let error = reference.resolve_source(b"abd").unwrap_err();
+    let captured = Capture::read(&error);
+    assert_eq!(captured.code, "cover-emit-cover");
+    let cause = captured.child("cause");
+    assert_eq!(cause.code, "cover-digest-mismatch");
+    let expected = purrdf_core::ContentDigest::of(b"abc").to_hex();
+    let actual = purrdf_core::ContentDigest::of(b"abd").to_hex();
+    assert!(matches!(cause.field("expected"), ErrorValue::Text(value) if value == expected));
+    assert!(matches!(cause.field("reconstructed"), ErrorValue::Text(value) if value == actual));
+    let error = CoverBuilder::new(b"abc").finish().unwrap_err();
+    let captured = Capture::read(&error).child("cause");
+    assert_eq!(captured.code, "cover-uncovered-range");
+    assert!(matches!(
+        captured.field("byte_start"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(matches!(
+        captured.field("byte_end"),
+        ErrorValue::ByteCount(3)
+    ));
+    assert_eq!(cover.reconstruct().unwrap(), b"abc");
+}
+
 purrdf_testkit::harness_main!(
+    byte_cover_refusals_keep_original_ranges_and_nested_digest_finding,
+    event_ingestion_retains_original_freeze_causes_and_cancellation,
     graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
     native_evidence_alignment_and_answer_state_failures_remain_structured,
     xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts,

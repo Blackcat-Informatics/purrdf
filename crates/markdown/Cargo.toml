@@ -40,6 +40,10 @@ purrdf-hash.workspace = true
 purrdf-rdf.workspace = true
 purrdf-testkit.workspace = true
 
+[[test]]
+name = "structured_errors"
+harness = false
+
 [[bench]]
 # Slicer profiling harness over a generated document: `analyze` alone, the
 # `render` projection over an already-analyzed model, and `slice_markdown`

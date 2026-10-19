@@ -747,10 +747,22 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test structured_inspection -- --exact \
+				byte_cover_refusals_keep_original_ranges_and_nested_digest_finding \
+				event_ingestion_retains_original_freeze_causes_and_cancellation \
 				graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields \
 				native_evidence_alignment_and_answer_state_failures_remain_structured \
 				xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts \
 				graph_refusal_keeps_original_invalid_edge_without_rendering \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-json --test structured_errors -- --exact \
+				source_refusals_keep_offsets_and_declared_limits \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-markdown --test structured_errors -- --exact \
+				source_iri_cause_survives_input_disposal \
+				tampered_unit_keeps_original_embedding_cause \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test structured_errors -- --exact \
+				attachment_refusal_keeps_part_and_absolute_offset \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test structured_errors -- --exact \
 				nested_discovery_keeps_original_limits_and_child_failures \

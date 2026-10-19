@@ -232,6 +232,19 @@ impl std::fmt::Display for ReconstructError {
 
 impl std::error::Error for ReconstructError {}
 
+impl purrdf_hash::error::StructuredError for ReconstructError {
+    purrdf_hash::error_visit! {
+        InvertedSpan { byte_start, byte_end } => "cover-inverted-span" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)) },
+        SpanOutOfBounds { byte_start, byte_end, byte_length } => "cover-span-out-of-bounds" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)), "byte_length" => ByteCount(u128::from(*byte_length)) },
+        SpanLengthMismatch { byte_start, byte_end, text_bytes } => "cover-span-length-mismatch" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)), "text_bytes" => ByteCount(*text_bytes as u128) },
+        UncoveredRange { byte_start, byte_end } => "cover-uncovered-range" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)) },
+        UndeclaredOverlap { byte_start, byte_end, covered_start, covered_end } => "cover-undeclared-overlap" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)), "covered_start" => ByteCount(u128::from(*covered_start)), "covered_end" => ByteCount(u128::from(*covered_end)) },
+        OverlapDisagreement { at } => "cover-overlap-disagreement" { "at" => ByteCount(u128::from(*at)) },
+        InvalidUtf8 { valid_up_to } => "cover-invalid-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
+        DigestMismatch { expected, reconstructed } => "cover-digest-mismatch" { "expected" => Text(expected), "reconstructed" => Text(reconstructed) },
+    }
+}
+
 /// The document back from its cover: writes each span's bytes at its
 /// offset, requires every byte covered, admits an overlap only where a
 /// `continues` edge declares it and its bytes agree, and proves the

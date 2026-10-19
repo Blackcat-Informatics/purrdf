@@ -476,6 +476,8 @@ pub enum EventError {
     },
     /// The drive-global identifier space is exhausted; no identifier is reused.
     IdSpaceExhausted,
+    /// The sink cannot freeze a drive that already observed cancellation.
+    Cancelled,
     /// A producer-specific native failure, retained without rendering it.
     Native(EventCause),
     /// Any other protocol failure, carried as a message (e.g. a sink-specific freeze
@@ -490,6 +492,7 @@ impl purrdf_hash::error::StructuredError for EventError {
             "attempted" => Unsigned(*attempted),
             "limit" => Unsigned(*limit),
         },
+        Cancelled => "event-cancelled" {},
         Native(cause) => "event-native" { "cause" => Cause(cause.0.as_ref()) },
         StorageSizeOverflow => "event-storage-size-overflow" {},
         StorageAllocationFailed => "event-storage-allocation-failed" {},
@@ -576,6 +579,9 @@ impl core::fmt::Display for EventError {
                 id.0
             ),
             Self::IdSpaceExhausted => f.write_str("event term identifier space exhausted"),
+            Self::Cancelled => {
+                f.write_str("finish called after a cancelled (ControlFlow::Break) drive")
+            }
             Self::Native(cause) => core::fmt::Display::fmt(cause.0.as_ref(), f),
             Self::Message(msg) => f.write_str(msg),
         }

@@ -52,6 +52,22 @@ pub enum MimeError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for MimeError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "mime-storage" { "cause" => Cause(cause) },
+        Iri(cause) => "mime-iri" { "cause" => Cause(cause) },
+        Profile(reason) => "mime-profile" { "reason" => Text(reason) },
+        Limit { resource, limit } => "mime-limit" { "resource" => Code(resource), "limit" => Unsigned(u128::from(*limit)) },
+        ProfileMismatch => "mime-profile-mismatch" {},
+        Emit(cause) => "mime-emit" { "cause" => Cause(cause) },
+        Cover(cause) => "mime-cover" { "cause" => Cause(cause) },
+        Rdf(cause) => "mime-rdf" { "cause" => Cause(cause) },
+        Metadata { subject, field } => "mime-metadata" { "subject" => Text(subject), "field" => Code(field) },
+        UnknownPart(part) => "mime-unknown-part" { "part" => Unsigned(*part as u128) },
+        Transfer { part, at, reason } => "mime-transfer" { "part" => Unsigned(*part as u128), "at" => ByteCount(*at as u128), "reason" => Text(reason) },
+    }
+}
+
 impl std::fmt::Display for MimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
