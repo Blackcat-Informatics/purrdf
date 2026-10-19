@@ -3677,6 +3677,8 @@ mod tests {
             &mut observer,
         )
         .unwrap_err();
+        // Caller input was allocated before the writer's measurement window.
+        let writer_measurement = window.close();
         drop(literal);
         let GeoError::GeoJsonWrite(cause) = error.original() else {
             panic!("native writer cause")
@@ -3688,7 +3690,7 @@ mod tests {
         let retained = account.live.load(Ordering::Relaxed);
         assert!(retained > 0);
         assert_eq!(
-            window.sample().retained_bytes,
+            writer_measurement.retained_bytes,
             i64::try_from(retained).unwrap()
         );
         context.begin(1).unwrap();
@@ -3696,15 +3698,18 @@ mod tests {
             context.remaining_workspace(),
             context.policy().limits().max_workspace_bytes
         );
-        let allocations = window.sample().allocations;
+        let window = CurrentThreadWindow::open();
         let last = error.clone();
-        assert_eq!(window.sample().allocations, allocations);
+        assert_eq!(window.sample().allocations, 0);
         drop(error);
         assert!(last.is_expression_error());
         assert_eq!(account.live.load(Ordering::Relaxed), retained);
         drop(last);
         assert_eq!(account.live.load(Ordering::Relaxed), 0);
-        assert_eq!(window.close().retained_bytes, 0);
+        let released = window.close();
+        assert_eq!(released.allocations, 0);
+        assert_eq!(released.requested_bytes, 0);
+        assert_eq!(released.retained_bytes, -i64::try_from(retained).unwrap());
     }
 
     #[test]

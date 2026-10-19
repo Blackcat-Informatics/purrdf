@@ -43,6 +43,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
+        id: rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: nightly
@@ -55,14 +56,26 @@ jobs:
         run: |
           mkdir -p target
           cargo test --locked -p purrdf-geo-kernel --lib -- --list > target/geographic-kernel-test-inventory.txt
+          result=0
           for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests::; do
             grep -Fq -- "$prefix" target/geographic-kernel-test-inventory.txt
-            cargo test --locked -p purrdf-geo-kernel --lib "$prefix"
+            cargo test --locked -p purrdf-geo-kernel --lib "$prefix" || result=$?
           done
+          exit "$result"
+      - name: Execute admitted core term-copy controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          cargo test --locked -p purrdf-core --lib -- --list > target/geographic-core-test-inventory.txt
+          prefix=ir::term_walk::tests::admitted_clone_
+          grep -Fq -- "$prefix" target/geographic-core-test-inventory.txt
+          cargo test --locked -p purrdf-core --lib "$prefix"
       - name: Execute native evaluator transport and caller controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
+          result=0
           for prefix in geo::error::tests:: geo::functions::standard_tests::; do
             grep -Fq -- "$prefix" target/geographic-evaluator-test-inventory.txt
-            cargo test --locked -p purrdf-sparql-eval --lib "$prefix"
+            cargo test --locked -p purrdf-sparql-eval --lib "$prefix" || result=$?
           done
+          exit "$result"
