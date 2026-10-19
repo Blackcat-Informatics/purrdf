@@ -228,6 +228,13 @@ pub enum GuardSite {
     },
 }
 
+impl purrdf_hash::error::StructuredError for GuardSite {
+    purrdf_hash::error_visit! {
+        Body(index) => "guard-site-body" { "index" => Unsigned(*index as u128) },
+        Negation { negation, guard } => "guard-site-negation" { "negation" => Unsigned(*negation as u128), "guard" => Unsigned(*guard as u128) },
+    }
+}
+
 /// One guard evaluation request.
 #[derive(Debug)]
 pub struct GuardCall<'a, D: TermDictionary = TermInterner, const N: usize = 4>
@@ -287,18 +294,79 @@ pub enum CallbackError<E = core::convert::Infallible> {
     Storage(purrdf_lex::allocation::StorageError),
     /// The guard's own evaluation diagnostic.
     Evaluation(String),
+    /// Original native callback configuration or output-shape refusal.
+    Native(CallbackDiagnostic),
+}
+
+/// The diagnostic contextualized by a guard or layer boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallbackDiagnostic {
+    /// An actual caller-authored callback message.
+    Message(String),
+    /// A rule requires an evaluator that was not supplied.
+    NoEvaluator {
+        /// Original rule index.
+        rule: usize,
+        /// Original guard name.
+        guard: String,
+    },
+    /// A callback returned a row incompatible with its output declaration.
+    RowWidth {
+        /// Actual returned width.
+        actual: usize,
+        /// Declared output width.
+        expected: usize,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for CallbackDiagnostic {
+    purrdf_hash::error_visit! {
+        Message(message) => "datalog-callback-message" { "message" => Message(message) },
+        NoEvaluator { rule, guard } => "datalog-callback-no-evaluator" { "rule" => Unsigned(*rule as u128), "guard" => Text(guard) },
+        RowWidth { actual, expected } => "datalog-callback-row-width" { "actual" => Unsigned(*actual as u128), "expected" => Unsigned(*expected as u128) },
+    }
+}
+
+impl fmt::Display for CallbackDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(message) => f.write_str(message),
+            Self::NoEvaluator { rule, guard } => write!(
+                f,
+                "rule {rule} carries guard {guard:?}, but the evaluation was given no guard evaluator"
+            ),
+            Self::RowWidth { actual, expected } => write!(
+                f,
+                "the evaluator answered a row of {actual} values for {expected} outputs"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CallbackDiagnostic {}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for CallbackError<E>
+{
+    purrdf_hash::error_visit! {
+        Source(cause) => "datalog-callback-source" { "cause" => Cause(cause) },
+        Storage(cause) => "datalog-callback-storage" { "cause" => Cause(cause) },
+        Evaluation(message) => "datalog-callback-evaluation" { "message" => Message(message) },
+        Native(cause) => "datalog-callback-native" { "cause" => Cause(cause) },
+    }
 }
 
 impl<E> CallbackError<E> {
     /// Preserve source and storage identity; contextualize only the textual diagnostic.
     pub(crate) fn into_eval_error(
         self,
-        describe: impl FnOnce(String) -> crate::seminaive::EvalError<E>,
+        describe: impl FnOnce(CallbackDiagnostic) -> crate::seminaive::EvalError<E>,
     ) -> crate::seminaive::EvalError<E> {
         match self {
             Self::Source(error) => crate::seminaive::EvalError::Source(error),
             Self::Storage(error) => crate::seminaive::EvalError::Storage(error),
-            Self::Evaluation(message) => describe(message),
+            Self::Evaluation(message) => describe(CallbackDiagnostic::Message(message)),
+            Self::Native(cause) => describe(cause),
         }
     }
 }
@@ -309,6 +377,7 @@ impl<E: fmt::Display> fmt::Display for CallbackError<E> {
             Self::Source(error) => error.fmt(f),
             Self::Storage(error) => error.fmt(f),
             Self::Evaluation(message) => f.write_str(message),
+            Self::Native(cause) => cause.fmt(f),
         }
     }
 }
@@ -319,6 +388,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CallbackError<E> {
             Self::Source(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::Evaluation(_) => None,
+            Self::Native(cause) => Some(cause),
         }
     }
 }
@@ -342,12 +412,10 @@ where
         &self,
         call: &GuardCall<'_, D, N>,
     ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>> {
-        Err(format!(
-            "rule {} carries guard {:?}, but the evaluation was given no guard evaluator",
-            call.rule,
-            call.guard.name()
-        )
-        .into())
+        Err(CallbackError::Native(CallbackDiagnostic::NoEvaluator {
+            rule: call.rule,
+            guard: call.guard.name().to_owned(),
+        }))
     }
 }
 

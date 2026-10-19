@@ -72,3 +72,7 @@ harness = false
 [[test]]
 name = "never_derive"
 harness = false
+
+[[test]]
+name = "structured_errors"
+harness = false

@@ -54,6 +54,18 @@ pub enum StructureError {
     NegatedCycle(String),
 }
 
+impl purrdf_hash::error::StructuredError for StructureError {
+    purrdf_hash::error_visit! {
+        DanglingShapeRef(label) => "shex-dangling-shape-reference" { "label" => Text(label) },
+        DanglingTripleExprRef(label) => "shex-dangling-triple-expression-reference" { "label" => Text(label) },
+        DuplicateShapeLabel(label) => "shex-duplicate-shape-label" { "label" => Text(label) },
+        DuplicateTripleExprLabel(label) => "shex-duplicate-triple-expression-label" { "label" => Text(label) },
+        LabelCollision(label) => "shex-label-collision" { "label" => Text(label) },
+        ReferenceCycle(label) => "shex-reference-cycle" { "label" => Text(label) },
+        NegatedCycle(label) => "shex-negated-cycle" { "label" => Text(label) },
+    }
+}
+
 impl fmt::Display for StructureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

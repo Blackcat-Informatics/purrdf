@@ -574,6 +574,17 @@ pub enum HeadForm {
     Inconsistency,
 }
 
+impl purrdf_hash::error::StructuredError for HeadForm {
+    purrdf_hash::error_visit! {
+        NoOutput => "clause-head-no-output" {},
+        Atomic => "clause-head-atomic" {},
+        Existential => "clause-head-existential" {},
+        Disjunctive => "clause-head-disjunctive" {},
+        Conjunctive => "clause-head-conjunctive" {},
+        Inconsistency => "clause-head-inconsistency" {},
+    }
+}
+
 impl HeadForm {
     /// Whether this is the Datalog form, and therefore evaluable by [`crate::seminaive`].
     pub fn is_datalog(self) -> bool {
@@ -626,6 +637,14 @@ pub struct NonDatalogClause {
     /// that re-derives clauses from their text alone (backward resolution) has no
     /// meaning for a literal whose meaning is caller code.
     guarded: bool,
+}
+
+impl purrdf_hash::error::StructuredError for NonDatalogClause {
+    purrdf_hash::error_visit! {
+        @record self { clause, form, guarded } => "non-datalog-clause" {
+            "clause" => Unsigned(self.clause as u128), "form" => Record(&self.form), "guarded" => Boolean(self.guarded)
+        }
+    }
 }
 
 impl NonDatalogClause {

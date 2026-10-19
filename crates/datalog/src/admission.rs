@@ -45,6 +45,14 @@ pub enum DeclarationLayer {
     RuleSet,
 }
 
+impl purrdf_hash::error::StructuredError for DeclarationLayer {
+    purrdf_hash::error_visit! {
+        Ontology => "declaration-layer-ontology" {},
+        StoreProfile => "declaration-layer-store-profile" {},
+        RuleSet => "declaration-layer-rule-set" {},
+    }
+}
+
 /// A caller's stable identifier for the source of a declaration.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeclarationSource {
@@ -54,11 +62,39 @@ pub struct DeclarationSource {
     pub identity: String,
 }
 
+impl purrdf_hash::error::StructuredError for DeclarationSource {
+    purrdf_hash::error_visit! {
+        @record self { layer, identity } => "declaration-source" {
+            "layer" => Record(&self.layer), "identity" => Text(&self.identity)
+        }
+    }
+}
+
 /// The effective union of assessor-only declarations, with every source kept.
 /// There is deliberately no remove, replace or layer-override operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NeverDeriveDeclarations {
     predicates: BTreeMap<String, BTreeSet<DeclarationSource>>,
+}
+
+impl purrdf_hash::error::StructuredError for NeverDeriveDeclarations {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self { predicates } = self;
+        visitor.variant("never-derive-declarations");
+        visitor.begin_list(Some("predicates"), predicates.len());
+        for (predicate, sources) in predicates {
+            visitor.begin_record(None, "never-derive-predicate");
+            visitor.value(Some("predicate"), ErrorValue::Iri(predicate));
+            visit_list(
+                visitor,
+                Some("sources"),
+                sources.iter().map(|source| ErrorValue::Record(source)),
+            );
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
 }
 
 impl NeverDeriveDeclarations {
@@ -142,6 +178,14 @@ pub struct DerivationStep {
     pub predicate: String,
 }
 
+impl purrdf_hash::error::StructuredError for DerivationStep {
+    purrdf_hash::error_visit! {
+        @record self { rule, predicate } => "declaration-derivation-step" {
+            "rule" => Unsigned(self.rule as u128), "predicate" => Text(&self.predicate)
+        }
+    }
+}
+
 /// Exact static violation, or a static decision the analysis cannot establish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdmissionRefusal {
@@ -163,6 +207,20 @@ pub enum AdmissionRefusal {
     },
     /// A cached certificate was supplied for another rule bundle.
     ProgramChanged,
+}
+
+impl purrdf_hash::error::StructuredError for AdmissionRefusal {
+    purrdf_hash::error_visit! {
+        ProtectedHead { predicate, sources, chain } => "admission-protected-head" {
+            "predicate" => Iri(predicate),
+            "sources" => List(sources.iter().map(|source| purrdf_hash::error::ErrorValue::Record(source))),
+            "chain" => List(chain.iter().map(|step| purrdf_hash::error::ErrorValue::Record(step)))
+        },
+        UndecidableHead { rule, declarations } => "admission-undecidable-head" {
+            "rule" => Unsigned(*rule as u128), "declarations" => Record(declarations)
+        },
+        ProgramChanged => "admission-program-changed" {},
+    }
 }
 
 impl fmt::Display for AdmissionRefusal {

@@ -60,6 +60,9 @@ use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 use crate::id::{MetaId, NodeId, SymId};
 
+mod retained;
+pub use retained::RetainedTerm;
+
 /// One node's shape.
 ///
 /// A `Leaf`/`Free`/`Meta`/`Bound` node is a LEAF of the term structure (it has no

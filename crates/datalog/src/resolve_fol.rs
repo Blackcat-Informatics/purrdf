@@ -345,6 +345,17 @@ pub enum FolUnsupported {
     },
 }
 
+impl purrdf_hash::error::StructuredError for FolUnsupported {
+    purrdf_hash::error_visit! {
+        Floundering => "fol-floundering" {},
+        ClauseBodyTooWide { rule, literals } => "fol-clause-body-too-wide" {
+            "rule" => Unsigned(*rule as u128),
+            "literals" => Unsigned(*literals as u128),
+            "maximum" => Unsigned(MAX_BODY_LITERALS as u128)
+        },
+    }
+}
+
 /// What [`resolve_fol`] returns: a decided outcome, or a typed reason it could
 /// not decide the program at all.
 #[derive(Debug, Clone)]
@@ -1379,10 +1390,10 @@ pub enum FolProofError {
     HeadMismatch {
         /// The cited clause index.
         rule: usize,
-        /// The rendered conclusion the checker derived.
-        derived: String,
-        /// The rendered conclusion the proof claimed.
-        stated: String,
+        /// The original reachable conclusion the checker derived.
+        derived: crate::term::RetainedTerm,
+        /// The original reachable conclusion the proof claimed.
+        stated: crate::term::RetainedTerm,
     },
     /// The proof supplies a premise count differing from the clause's positive
     /// body arity.
@@ -1424,6 +1435,19 @@ pub enum FolProofError {
         /// The cited clause index.
         rule: usize,
     },
+}
+
+impl purrdf_hash::error::StructuredError for FolProofError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "fol-proof-storage" { "cause" => Cause(cause) },
+        UnknownRule { rule } => "fol-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
+        HeadMismatch { rule, derived, stated } => "fol-proof-head-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Term(derived), "stated" => Term(stated) },
+        PremiseCountMismatch { rule, body, premises } => "fol-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
+        PremiseMismatch { rule, position } => "fol-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "position" => Unsigned(*position as u128) },
+        NegatedPremiseNotExcluded { rule, position } => "fol-proof-negated-premise-not-excluded" { "rule" => Unsigned(*rule as u128), "position" => Unsigned(*position as u128) },
+        RuleIdentityMismatch { rule } => "fol-proof-rule-identity-mismatch" { "rule" => Unsigned(*rule as u128) },
+        AssertHasBody { rule } => "fol-proof-assert-has-body" { "rule" => Unsigned(*rule as u128) },
+    }
 }
 
 /// Independently check `proof` against `clauses`, RE-DERIVING its conclusion
@@ -1529,8 +1553,8 @@ pub fn check_fol_proof(
         let derived_head = unify::apply(dag, &subst, head)?;
         return Err(FolProofError::HeadMismatch {
             rule,
-            derived: render(dag, derived_head),
-            stated: render(dag, goal),
+            derived: crate::term::RetainedTerm::capture(dag, derived_head)?,
+            stated: crate::term::RetainedTerm::capture(dag, goal)?,
         });
     }
 
@@ -1659,6 +1683,13 @@ pub enum FolError {
     Clause(NonDatalogClause),
     /// Original native storage or logical capacity refusal.
     Storage(StorageError),
+}
+
+impl purrdf_hash::error::StructuredError for FolError {
+    purrdf_hash::error_visit! {
+        Clause(cause) => "fol-clause" { "cause" => Cause(cause) },
+        Storage(cause) => "fol-storage" { "cause" => Cause(cause) },
+    }
 }
 impl core::fmt::Display for FolError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2358,6 +2389,22 @@ mod tests {
         )
         .expect_err("a forged head must be rejected");
         assert!(matches!(error, FolProofError::HeadMismatch { rule: 0, .. }));
+        let retained = error.clone();
+        drop(error);
+        drop(dag);
+        let fields = purrdf_testkit::error_capture::Capture::read(&retained);
+        let stated = fields.child("stated");
+        let stated_nodes = stated.records("nodes");
+        assert_eq!(stated_nodes.len(), 1);
+        assert!(matches!(
+            stated_nodes[0].field("symbol"),
+            purrdf_hash::error::ErrorValue::Text("not_p_of_anything")
+        ));
+        let derived = fields.child("derived");
+        assert!(derived.records("nodes").iter().any(|node| matches!(
+            node.field("symbol"),
+            purrdf_hash::error::ErrorValue::Text("p")
+        )));
     }
 
     /// A premise-count mismatch and a wrong (nonexistent) rule index are both

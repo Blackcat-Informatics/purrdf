@@ -169,7 +169,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-columnar"
-deps = ["purrdf-core", "purrdf-lex"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-datalog"
@@ -191,6 +191,7 @@ deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-xsd"]
 name = "purrdf-shex"
 deps = [
     "purrdf-core",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
     "purrdf-stack",
