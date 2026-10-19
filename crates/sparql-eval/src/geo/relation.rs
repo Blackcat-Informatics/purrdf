@@ -593,7 +593,7 @@ impl PfCursor for GeoCursor {
 ///
 /// # Errors
 ///
-/// [`GeoError::Config`] if `families` is empty. Registering nothing while
+/// [`GeoError::NoRelationFamilies`] if `families` is empty. Registering nothing while
 /// returning `Ok` looks like success, and the symptom arrives much later as a
 /// query whose `geo:sfWithin` was parsed as an ordinary triple pattern and
 /// matched nothing.
@@ -630,11 +630,7 @@ fn register_with(
     mut create: impl FnMut(SpatialRelation) -> GeoRelation,
 ) -> Result<(), GeoError> {
     if families.is_empty() {
-        return Err(GeoError::config(
-            "no relation families supplied to register; registering nothing and returning success \
-             would surface much later as a query whose geo: relation was parsed as an ordinary \
-             triple pattern and matched nothing",
-        ));
+        return Err(GeoError::NoRelationFamilies);
     }
     for relation in SpatialRelation::ALL {
         if !families.contains(&relation.family()) {
@@ -1685,9 +1681,17 @@ mod tests {
     fn registering_no_families_is_refused_and_registering_one_is_not() {
         let index = Arc::new(index_of(&four_branch_rows()));
         let mut empty = PropertyFunctionRegistry::new();
+        let refused = register(&mut empty, &vocab(), &index, &[]).unwrap_err();
+        assert!(matches!(refused, GeoError::NoRelationFamilies));
+        assert!(!refused.is_expression_error());
+        assert_eq!(
+            purrdf_testkit::error_capture::Capture::read(&refused).code,
+            "geo-no-relation-families"
+        );
         assert!(matches!(
-            register(&mut empty, &vocab(), &index, &[]),
-            Err(GeoError::Config(_))
+            EvalError::from(refused),
+            EvalError::RetainedNativeFailure(cause)
+                if cause.kind() == crate::NativeDiagnosticKind::Config
         ));
         assert!(empty.is_empty(), "and nothing was registered");
 

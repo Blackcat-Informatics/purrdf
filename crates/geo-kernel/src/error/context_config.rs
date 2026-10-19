@@ -3,6 +3,22 @@
 
 //! Original worker scratch, backend and retained-storage configuration refusals.
 
+/// The native phase whose cumulative work receipt is being retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PreparationPhase {
+    /// Numeric buffer-radius decoding and scaling.
+    BufferRadius,
+    /// Validation of the original geographic literal.
+    OriginalValidation,
+}
+
+impl purrdf_hash::error::StructuredError for PreparationPhase {
+    purrdf_hash::error_visit! {
+        BufferRadius => "preparation-buffer-radius" {},
+        OriginalValidation => "preparation-original-validation" {},
+    }
+}
+
 /// The original materialized-output receipt release requirement that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OutputReceiptReason {
@@ -21,6 +37,19 @@ impl purrdf_hash::error::StructuredError for OutputReceiptReason {
 /// The original worker configuration and requested operation that disagree.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ContextConfigError {
+    /// A phase's cumulative work predates its original preparation baseline.
+    PreparationWork {
+        /// Original consuming phase.
+        phase: PreparationPhase,
+        /// Work already retained before this phase.
+        baseline_work: u64,
+        /// Cumulative work reported by the phase's context.
+        actual_work: u64,
+        /// Original phase output still retained.
+        retained_workspace: u64,
+        /// Complete observed workspace peak.
+        complete_peak: u64,
+    },
     /// An original materialized-output release cannot consume its receipt.
     OutputReceipt {
         /// First failed release requirement.
@@ -118,6 +147,12 @@ pub enum ContextConfigError {
 
 impl purrdf_hash::error::StructuredError for ContextConfigError {
     purrdf_hash::error_visit! {
+        PreparationWork { phase, baseline_work, actual_work, retained_workspace, complete_peak } => "context-preparation-work" {
+            "phase" => Record(phase), "baseline_work" => Unsigned(u128::from(*baseline_work)),
+            "actual_work" => Unsigned(u128::from(*actual_work)),
+            "retained_workspace" => ByteCount(u128::from(*retained_workspace)),
+            "complete_peak" => ByteCount(u128::from(*complete_peak))
+        },
         OutputReceipt { reason, receipt_bytes, live_owners, required_owners, registered_outputs, output_bytes, receipt_storage_bytes, retained_workspace, current_workspace } => "context-output-receipt" {
             "reason" => Record(reason), "receipt_bytes" => ByteCount(u128::from(*receipt_bytes)),
             "live_owners" => Unsigned(*live_owners as u128), "required_owners" => Unsigned(*required_owners as u128),
@@ -155,6 +190,12 @@ impl purrdf_hash::error::StructuredError for ContextConfigError {
 impl core::fmt::Display for ContextConfigError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
+            Self::PreparationWork { phase, .. } => match phase {
+                PreparationPhase::BufferRadius => "buffer radius work receipt is inconsistent",
+                PreparationPhase::OriginalValidation => {
+                    "original validation work receipt is inconsistent"
+                }
+            },
             Self::OutputReceipt { reason, .. } => match reason {
                 OutputReceiptReason::Unknown => {
                     "materialized output receipt belongs to a different or released context"

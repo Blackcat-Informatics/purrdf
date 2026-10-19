@@ -61,10 +61,12 @@ pub use error::ImageTargetReason;
 pub use error::MembershipInput;
 pub use error::OutputReceiptReason;
 pub use error::PolynomialInputError;
+pub use error::PreparationPhase;
 pub use error::PreparedEdgeRequirement;
 pub use error::ReferenceMismatchReason;
 pub use error::WrittenTangentReason;
 pub use error::{AffineInputError, HelmertInputReason, OperationValidationContext};
+pub use error::{ArgumentInputError, ArgumentInputReason};
 pub use error::{
     BindingConfigError, CarrierInputError, CarrierInputReason, CrsError, EllipsoidInputError,
     EllipsoidRequirement, GeoError, GeoFailureCause, GeoJsonShapeError, GeoJsonWriteError,

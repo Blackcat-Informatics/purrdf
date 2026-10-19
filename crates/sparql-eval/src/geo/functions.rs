@@ -1145,14 +1145,11 @@ fn compute_standard_in_storage(
                 &mut context,
                 &mut continuation,
             )?;
-            let work = context
-                .work_items()
-                .checked_sub(budget.work_items())
-                .ok_or_else(|| GeoError::config("buffer radius work receipt is inconsistent"))?;
-            budget.retain_phase(
-                work,
+            budget.retain_context_phase(
+                &context,
                 radius.retained_workspace_bytes(),
-                context.workspace_peak(),
+                purrdf_geo_kernel::PreparationPhase::BufferRadius,
+                Some(observer),
             )?;
             radius
         };
@@ -1472,13 +1469,11 @@ fn validate_standard_literal(
         purrdf_geo_kernel::MetricWorkContinuation::new(observer, work, budget.workspace_peak());
     let result =
         profile.validate_literal_in_context_metered(literal, &mut context, &mut continuation);
-    budget.retain_phase(
-        context
-            .work_items()
-            .checked_sub(work)
-            .ok_or_else(|| GeoError::config("original validation work receipt is inconsistent"))?,
+    budget.retain_context_phase(
+        &context,
         0,
-        context.workspace_peak(),
+        purrdf_geo_kernel::PreparationPhase::OriginalValidation,
+        Some(observer),
     )?;
     result
 }
@@ -1647,8 +1642,8 @@ pub fn evaluate(
 ///
 /// The same computation [`evaluate`] performs, stopping one step earlier: every
 /// refusal arrives as the [`GeoError`] that was raised, with its detail message
-/// intact and its kind still legible. [`evaluate`] is the seam shape — it maps two
-/// of the five kinds onto SPARQL's per-solution `Ok(None)`, which by construction
+/// intact and its kind still legible. [`evaluate`] is the seam shape — it maps
+/// argument and domain refusals onto SPARQL's per-solution `Ok(None)`, which by construction
 /// carries no message, because the specification gives an expression error nowhere
 /// to put one. A caller that wants to *report* why a geometry was rejected (a
 /// loader, a linter, a diagnostic pass) must call this; a caller that wants what a
@@ -1657,10 +1652,10 @@ pub fn evaluate(
 /// # Errors
 ///
 /// [`GeoError::Arity`] for a wrong argument count, [`GeoError::Unsupported`] for a
-/// function this crate does not implement, [`GeoError::Literal`] for a malformed or
-/// wrongly-typed geometry literal, [`GeoError::Domain`] for well-formed arguments the
-/// operation is undefined on, and [`GeoError::Config`] for a vocabulary missing a
-/// term the call needs.
+/// function this crate does not implement, typed carrier/parser or
+/// [`GeoError::ArgumentInput`] refusals for malformed or wrongly typed inputs,
+/// typed domain refusals for well-formed arguments the operation is undefined
+/// on, and typed vocabulary/configuration refusals for missing host declarations.
 pub fn compute(
     function: GeofFunction,
     vocab: &GeoVocab,
@@ -1898,12 +1893,12 @@ fn dispatch(
         GeofFunction::Distance => {
             let (a, b) = geometry_pair(decoded, args)?;
             vocab.require_unit(a.crs(), unit_arg(args[2])?)?;
-            distance_term(&a, &b)
+            distance_term(&a, &b, observer)
         }
         GeofFunction::MetricDistance => {
             let (a, b) = geometry_pair(decoded, args)?;
             vocab.require_metre(a.crs())?;
-            distance_term(&a, &b)
+            distance_term(&a, &b, observer)
         }
 
         GeofFunction::AsWkt => {
@@ -2002,7 +1997,7 @@ fn geometry_pair<'a>(
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] naming what arrived, for a blank node, a triple term, a
+/// [`GeoError::ArgumentInput`] retaining what arrived, for a blank node, a triple term, a
 /// language-tagged literal, or a literal of any other datatype.
 fn unit_arg(value: &TermValue) -> Result<&str, GeoError> {
     unit_arg_metered(value, None)
@@ -2020,13 +2015,9 @@ fn unit_arg_metered<'a>(
             language: None,
             ..
         } if is_any_uri(datatype) || datatype == XsdDatatype::String.iri() => Ok(lexical_form),
-        other => Err(purrdf_geo_kernel::carrier::error_from_display_metered(
-            GeoError::Literal,
-            format_args!(
-                "a units argument is a unit IRI (as an IRI term, an xsd:anyURI or an xsd:string) and \
-             {} arrived",
-                purrdf_geo_kernel::carrier::term_description_display(other)
-            ),
+        other => Err(purrdf_geo_kernel::ArgumentInputError::capture(
+            other,
+            purrdf_geo_kernel::ArgumentInputReason::Unit,
             observer,
         )),
     }
@@ -2036,7 +2027,7 @@ fn unit_arg_metered<'a>(
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] naming what arrived, for a non-literal, a literal whose
+/// [`GeoError::ArgumentInput`] retaining what arrived, for a non-literal, a literal whose
 /// datatype is not in the XSD integer family, or a lexical form outside `i64`.
 fn integer_arg(value: &TermValue) -> Result<i64, GeoError> {
     integer_arg_metered(value, None)
@@ -2053,12 +2044,9 @@ fn integer_arg_metered(
         ..
     } = value
     else {
-        return Err(purrdf_geo_kernel::carrier::error_from_display_metered(
-            GeoError::Literal,
-            format_args!(
-                "an integer argument was expected and {} arrived",
-                purrdf_geo_kernel::carrier::term_description_display(value)
-            ),
+        return Err(purrdf_geo_kernel::ArgumentInputError::capture(
+            value,
+            purrdf_geo_kernel::ArgumentInputReason::IntegerLiteral,
             observer,
         ));
     };
@@ -2066,18 +2054,16 @@ fn integer_arg_metered(
         .and_then(XsdDatatype::integer_range)
         .is_some();
     if !is_integer_family {
-        return Err(purrdf_geo_kernel::carrier::error_from_display_metered(
-            GeoError::Literal,
-            format_args!(
-                "an integer argument was expected and a literal of datatype <{datatype}> arrived"
-            ),
+        return Err(purrdf_geo_kernel::ArgumentInputError::capture(
+            value,
+            purrdf_geo_kernel::ArgumentInputReason::IntegerDatatype,
             observer,
         ));
     }
-    lexical_form.parse::<i64>().map_err(|_| {
-        purrdf_geo_kernel::carrier::error_from_display_metered(
-            GeoError::Literal,
-            format_args!("{lexical_form:?} is not an integer purrdf-geo can index with"),
+    lexical_form.parse::<i64>().map_err(|cause| {
+        purrdf_geo_kernel::ArgumentInputError::capture(
+            value,
+            purrdf_geo_kernel::ArgumentInputReason::IntegerLexical(cause),
             observer,
         )
     })
@@ -2087,7 +2073,7 @@ fn integer_arg_metered(
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] naming what arrived, for anything that is not a
+/// [`GeoError::ArgumentInput`] retaining what arrived, for anything that is not a
 /// plain (non-language-tagged) `xsd:string` literal.
 fn string_arg(value: &TermValue) -> Result<&str, GeoError> {
     string_arg_metered(value, None)
@@ -2104,12 +2090,9 @@ fn string_arg_metered<'a>(
             language: None,
             ..
         } if datatype == XsdDatatype::String.iri() => Ok(lexical_form),
-        other => Err(purrdf_geo_kernel::carrier::error_from_display_metered(
-            GeoError::Literal,
-            format_args!(
-                "an xsd:string argument was expected and {} arrived",
-                purrdf_geo_kernel::carrier::term_description_display(other)
-            ),
+        other => Err(purrdf_geo_kernel::ArgumentInputError::capture(
+            other,
+            purrdf_geo_kernel::ArgumentInputReason::String,
             observer,
         )),
     }
@@ -2299,11 +2282,16 @@ fn metric_measure(
 }
 
 /// The shared tail of `distance` and `metricDistance`.
-fn distance_term(a: &GeometryLiteral, b: &GeometryLiteral) -> Result<TermValue, GeoError> {
+fn distance_term(
+    a: &GeometryLiteral,
+    b: &GeometryLiteral,
+    observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
+) -> Result<TermValue, GeoError> {
     let value = measure::distance(a.geometry(), b.geometry()).ok_or_else(|| {
-        GeoError::domain(
-            "the distance to an empty geometry is undefined: there is no point of the empty set \
-             for the distance to be measured to, and 0 would say the two geometries touch",
+        purrdf_geo_kernel::GeometryDomainError::planar_distance_support(
+            a.geometry(),
+            b.geometry(),
+            observer,
         )
     })?;
     Ok(double_term(&value))
@@ -2338,6 +2326,79 @@ mod tests {
     const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
     const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
     const XSD_ANY_URI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
+
+    #[test]
+    fn integer_argument_refusal_retains_original_term_and_parser_kind() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let value =
+            TermValue::typed_literal("9223372036854775808", purrdf_xsd::datatype::XSD_INTEGER);
+        let error = super::integer_arg(&value).unwrap_err();
+        assert!(error.is_expression_error());
+        drop(value);
+        let original = Capture::read(error.original()).child("cause");
+        assert_eq!(original.code, "geo-argument-input");
+        assert!(matches!(
+            original.child("value").field("lexical_form"),
+            ErrorValue::Text("9223372036854775808")
+        ));
+        let kind = original.child("reason").child("cause").child("kind");
+        assert!(matches!(
+            kind.field("name"),
+            ErrorValue::Code("positive-overflow")
+        ));
+        assert_eq!(
+            super::integer_arg(&TermValue::integer(i64::MAX)).unwrap(),
+            i64::MAX
+        );
+    }
+
+    #[test]
+    fn empty_distance_preserves_original_support_order_and_valid_neighbour() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
+        let vocab = vocab();
+        let registry = registry_of(&vocab);
+        for (first, second, expected) in [
+            ("POINT EMPTY", "POINT(1 2)", [true, false]),
+            ("POINT(1 2)", "POINT EMPTY", [false, true]),
+            ("POINT EMPTY", "POINT EMPTY", [true, true]),
+        ] {
+            let args = [wkt(&vocab, first), wkt(&vocab, second)];
+            let error = call(&registry, &vocab, named("metricDistance"), &args).unwrap_err();
+            drop(args);
+            assert!(error.is_expression_error());
+            let fields = Capture::read(error.original()).child("cause");
+            assert_eq!(fields.code, "geometry-planar-distance-support");
+            let empty = fields
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Value(None, ErrorValue::Boolean(value)) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(empty, expected);
+            let kinds = fields
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Value(None, ErrorValue::Code(value)) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(kinds, ["POINT", "POINT"]);
+        }
+        assert!(
+            call(
+                &registry,
+                &vocab,
+                named("metricDistance"),
+                &[wkt(&vocab, "POINT(1 2)"), wkt(&vocab, "POINT(1 2)")]
+            )
+            .is_ok()
+        );
+    }
 
     fn crs(iri: &str) -> Crs {
         Crs::new(iri).expect("a non-empty IRI")

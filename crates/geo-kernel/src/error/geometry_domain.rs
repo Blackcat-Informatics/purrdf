@@ -276,6 +276,13 @@ pub enum GeometryDomainError {
         /// Original left and right primitive counts.
         primitives: [usize; 2],
     },
+    /// The original planar arguments have no pair of nonempty point sets.
+    PlanarDistanceSupport {
+        /// Original left and right geometry kinds.
+        kinds: [crate::GeometryKind; 2],
+        /// Original left and right empty-set membership.
+        empty: [bool; 2],
+    },
     /// A membership law received an incomplete or unexpected class list.
     Membership {
         /// Original membership law.
@@ -392,6 +399,10 @@ impl purrdf_hash::error::StructuredError for GeometryDomainError {
         DistanceSupport { stage, regions, primitives } => "geometry-distance-support" {
             "stage" => Record(stage), "regions" => List(regions.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
             "primitives" => List(primitives.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128)))
+        },
+        PlanarDistanceSupport { kinds, empty } => "geometry-planar-distance-support" {
+            "kinds" => List(kinds.iter().map(|value| purrdf_hash::error::ErrorValue::Code(value.wkt_keyword()))),
+            "empty" => List(empty.iter().map(|value| purrdf_hash::error::ErrorValue::Boolean(*value)))
         },
         Membership { input, expected, actual } => "geometry-membership-input" {
             "input" => Record(input), "expected" => Unsigned(*expected as u128),
@@ -673,6 +684,38 @@ impl GeometryDomainError {
         captured.map_or_else(|error| error, super::GeoError::GeometryDomain)
     }
 
+    /// Preserve the original planar support refusal through native admission.
+    #[must_use]
+    pub fn planar_distance_support(
+        first: &crate::Geometry,
+        second: &crate::Geometry,
+        observer: Option<&mut dyn crate::MetricWorkObserver>,
+    ) -> super::GeoError {
+        let mut progress = crate::context::WorkProgress::integer(observer);
+        let result = crate::context::Retained::produce(
+            &mut progress,
+            |memory| {
+                let empty = [
+                    first
+                        .is_empty_with_memory(memory)
+                        .map_err(super::GeoError::Storage)?,
+                    second
+                        .is_empty_with_memory(memory)
+                        .map_err(super::GeoError::Storage)?,
+                ];
+                Ok(Self::PlanarDistanceSupport {
+                    kinds: [first.kind(), second.kind()],
+                    empty,
+                })
+            },
+            |_, _| Ok(()),
+        );
+        match result {
+            Ok(cause) => super::GeoError::GeometryDomain(cause),
+            Err(error) => error,
+        }
+    }
+
     pub(crate) fn distance_support(
         stage: DistanceSupportStage,
         regions: [&crate::PreparedRegion; 2],
@@ -875,6 +918,7 @@ impl core::fmt::Display for GeometryDomainError {
             Self::DistanceSupport { .. } => {
                 f.write_str("distance requires two nonempty geometries")
             }
+            Self::PlanarDistanceSupport { .. } => f.write_str("the distance to an empty geometry is undefined: there is no point of the empty set for the distance to be measured to, and 0 would say the two geometries touch"),
             Self::Membership { input, .. } => f.write_str(match input {
                 MembershipInput::PolygonRings => "polygon membership ring count mismatch",
                 MembershipInput::ConstantRegion { .. } => {

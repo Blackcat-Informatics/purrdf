@@ -22,6 +22,7 @@ impl core::fmt::Display for GeographicFailure {
                 core::fmt::Display::fmt(cause, f)
             }
             GeoError::Config(message) => f.write_str(message),
+            GeoError::NoRelationFamilies => f.write_str(&self.0.detail()),
             GeoError::MissingNativeObserver { .. } => {
                 f.write_str("native entry requires its owned observer")
             }
@@ -98,6 +99,7 @@ fn convert(
         }
         GeoError::SourceRead(_) => NativeDiagnosticKind::SourceRead,
         GeoError::Config(_)
+        | GeoError::NoRelationFamilies
         | GeoError::CrsConfiguration(_)
         | GeoError::IndexConfiguration(_)
         | GeoError::IndexBinding(_)
@@ -124,6 +126,7 @@ fn convert(
         }
         GeoError::ModelInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
         GeoError::Literal(_)
+        | GeoError::ArgumentInput(_)
         | GeoError::NumericLiteral(_)
         | GeoError::IndexSerialization(_)
         | GeoError::GeometryShape(_)
