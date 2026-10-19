@@ -1,0 +1,16 @@
+issue      /home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/brief.json  (+ requirements.json, references.json)
+
+  - issue #494 + 0 comment(s) via github
+  - link crawl: 9 issue(s) within 2 hop(s) of `#N` references
+  - ADR-0038 cited by the issue but no file in docs/adr/
+  - ADRs: 1 cited; 0 resolved on disk
+  - forge search on ['Evaluate', 'caller-supplied', 'coordinates:']: 6 other item(s)
+  - GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #494 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #494: 0
+  - requirement candidates: 4 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 13 path(s) (4 on disk), 9 identifier(s), 1 workspace package(s), 0 URL(s)

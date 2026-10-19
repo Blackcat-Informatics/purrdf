@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 494,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates",
+  "branch": "paudley/494-evaluate-at-caller-supplied-coordinates",
+  "slug": "evaluate-at-caller-supplied-coordinates",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "0994332d93bc89747f95e5a942715faf36129648",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates",
+    "branch:paudley/494-evaluate-at-caller-supplied-coordinates",
+    "stage:/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates",
+    "issue:/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/.stage/evaluate-at-caller-supplied-coordinates/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T06:50:50-0600"
+}

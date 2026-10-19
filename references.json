@@ -1,0 +1,204 @@
+{
+  "paths": [
+    {
+      "ref": "crates/sparql-eval/src/clock.rs:1-35",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/clock.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 54,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "271733e76 Remove js-sys through direct wasm host imports",
+        "9c53340b1 feat(license): offer MulanPSL-2.0 as a third license option (#352)",
+        "71c6b0139 feat(sparql-eval): caller-set query governors with a host-supplied stop signal",
+        "be5981e1e fix(sparql): NOW() is the wall clock and RAND() is real entropy \u2014 by default, everywhere"
+      ]
+    },
+    {
+      "ref": "engine.rs:1360",
+      "path": "/home/paudley/Active/purrdf/engine.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "eval.rs:996",
+      "path": "/home/paudley/Active/purrdf/eval.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "eval.rs:1135-1143",
+      "path": "/home/paudley/Active/purrdf/eval.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/design/purrdf-backend-contract.md:569+",
+      "path": "/home/paudley/Active/purrdf/docs/design/purrdf-backend-contract.md:569+",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/rdf-core/src/ir/paged/stack.rs",
+      "path": "/home/paudley/Active/purrdf/crates/rdf-core/src/ir/paged/stack.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1206,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "cef34c8aa Preserve authored ordinary rows across sealed stack layers",
+        "1a2e326a7 Expose sound statistics for chronological stack queries",
+        "80ec82890 Make native capacity refusal typed and compose sparse dataset views",
+        "a0f8a7ed8 rdf: bound paged stack metadata probes",
+        "dd9109995 core: layer sealed paged generations with pinned mutable snapshots"
+      ]
+    },
+    {
+      "ref": "stack.rs:335",
+      "path": "/home/paudley/Active/purrdf/stack.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "paged/provider.rs:35",
+      "path": "/home/paudley/Active/purrdf/paged/provider.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "engine.rs",
+      "path": "/home/paudley/Active/purrdf/engine.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "docs/design/QUERY-AT-SCALE.md",
+      "path": "/home/paudley/Active/purrdf/docs/design/QUERY-AT-SCALE.md",
+      "where": "not here; exists in sibling(s): katamari",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    },
+    {
+      "ref": "crates/sparql-eval/src/clock.rs",
+      "path": "/home/paudley/Active/purrdf/crates/sparql-eval/src/clock.rs",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 54,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "271733e76 Remove js-sys through direct wasm host imports",
+        "9c53340b1 feat(license): offer MulanPSL-2.0 as a third license option (#352)",
+        "71c6b0139 feat(sparql-eval): caller-set query governors with a host-supplied stop signal",
+        "be5981e1e fix(sparql): NOW() is the wall clock and RAND() is real entropy \u2014 by default, everywhere"
+      ]
+    },
+    {
+      "ref": "docs/design/purrdf-backend-contract.md",
+      "path": "/home/paudley/Active/purrdf/docs/design/purrdf-backend-contract.md",
+      "where": "repo",
+      "exists": true,
+      "kind": "file",
+      "lines": 1026,
+      "licence": "SPDX: MIT OR Apache-2.0 OR MulanPSL-2.0",
+      "commits": [
+        "cef34c8aa Preserve authored ordinary rows across sealed stack layers",
+        "1a2e326a7 Expose sound statistics for chronological stack queries",
+        "7c5a41cc2 Estimate structural RDF patterns across every statement stream",
+        "2bb0691b2 Seal paged predicate statistics in the shared dictionary",
+        "0f5137046 Record snapshot statistics and exactness in query explanations",
+        "d0f544f49 perf(rdf): index structural reifiers and annotation values",
+        "4e75877ec Fix triple carrier review boundaries and shared artifact admission",
+        "525b3cf1b Add a graph-free RDF carrier and rule execution",
+        "eb43e0b54 Preserve native storage diagnostics across language hosts",
+        "15bc79027 Propagate typed capacity failures through workspace consumers"
+      ]
+    },
+    {
+      "ref": "paged/provider.rs",
+      "path": "/home/paudley/Active/purrdf/paged/provider.rs",
+      "where": "repo",
+      "exists": false,
+      "kind": "",
+      "lines": null,
+      "licence": "",
+      "commits": []
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "PagedStack",
+      "files": 13
+    },
+    {
+      "name": "main",
+      "files": 2080
+    },
+    {
+      "name": "EvalCtx::with_now",
+      "files": 0
+    },
+    {
+      "name": "wall_clock_now",
+      "files": 5
+    },
+    {
+      "name": "PageGeneration",
+      "files": 17
+    },
+    {
+      "name": "StaleGeneration",
+      "files": 9
+    },
+    {
+      "name": "QueryOptions",
+      "files": 204
+    },
+    {
+      "name": "FILTER",
+      "files": 1421
+    },
+    {
+      "name": "with_now",
+      "files": 2
+    }
+  ],
+  "packages": [
+    "purrdf"
+  ],
+  "urls": [],
+  "truncated": []
+}

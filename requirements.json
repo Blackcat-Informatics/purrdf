@@ -1,0 +1,49 @@
+{
+  "rows": [
+    {
+      "id": "B1",
+      "line": 20,
+      "rules": [
+        "modal"
+      ],
+      "text": "- A query or rule containing `NOW()` must be reproducible. Katamari will pass the instant it means; the answer has to be computed at that instant, and re-running it must give the same result.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B2",
+      "line": 33,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- A query with `NOW()` run twice with the same `with_now` value returns identical results, and differs when the value differs; without the option, behaviour is unchanged.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B3",
+      "line": 34,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- For a stack with generations G1..G5, `snapshot_at(3)` answers every query exactly as an eager seal of G1..G3 (with their removals) would.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    },
+    {
+      "id": "B4",
+      "line": 35,
+      "rules": [
+        "list-under-requirement-heading"
+      ],
+      "text": "- A valid-time range query over 10^7 reified claims reads only the pages whose summaries overlap the range (G8 evidence), with results identical to the post-filter plan.",
+      "source": "body",
+      "author": "",
+      "date": ""
+    }
+  ],
+  "silent_comments": []
+}

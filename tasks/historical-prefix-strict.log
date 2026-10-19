@@ -1,0 +1,26 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/hash)
+    Checking typenum v1.20.1
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/deflate)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/stack)
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/xsd)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/testkit)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/494-evaluate-at-caller-supplied-coordinates/crates/cdt)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 53.13s

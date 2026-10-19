@@ -1,0 +1,95 @@
+{
+  "issue": 494,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Evaluate at caller-supplied coordinates: host-supplied NOW(), as-of snapshots of a PagedStack, and range scans on annotation values",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0038",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {
+    "491": "RDF 1.2: index reifiers by triple term and annotations by (predicate, object); reifiers_of is a linear scan",
+    "457": "Paged tier: an LSM-style stack of sealed delta generations with removals, read as one snapshot",
+    "484": "Planner statistics: per-predicate, per-class, distinct and multi-column counts, including reifier and annotation rows, mergeable across segments",
+    "22": "SPARQL NOW() returns Unix epoch (1970-01-01) instead of the current query time",
+    "288": "fix(rdf): canonical output of a reifier is refused by the canonicalizer",
+    "401": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+    "479": "rules: two rdf:type patterns with disjoint subjects are joined as a cross product (quadratic memory in SPARQL 1.2 RL)",
+    "483": "sparql-eval: never materialize a cross product (factorized components) and give every plan a guaranteed output bound",
+    "349": "A selectivity-only statistic narrows a retrieval plan but is not recorded on its snapshot"
+  },
+  "link_relations": {
+    "491": "mentions",
+    "457": "mentions",
+    "484": "mentions",
+    "22": "mentions",
+    "288": "2-hop",
+    "401": "2-hop",
+    "479": "2-hop",
+    "483": "2-hop",
+    "349": "2-hop"
+  },
+  "related": [
+    {
+      "number": 484,
+      "title": "Planner statistics: per-predicate, per-class, distinct and multi-column counts, including reifier and annotation rows, mergeable across segments",
+      "state": "CLOSED"
+    },
+    {
+      "number": 518,
+      "title": "Optimizer: a ShapeProvider extension for exact physical operators (ordered window, bucketed series, host shapes)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 512,
+      "title": "text/sparql-eval: dictionary-match shape -- a VALUES block of phrases on one predicate as one automaton, longest-first spans",
+      "state": "CLOSED"
+    },
+    {
+      "number": 408,
+      "title": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 320,
+      "title": "Offer: a deterministic HNSW index for the ANN slot PURREMB declares but PurRDF cannot fill",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 21,
+    "performance": 3,
+    "correctness": 1,
+    "bug": 2,
+    "semantic-identity-loss": 1
+  },
+  "prior_attempts": {
+    "commits": [],
+    "branches": [],
+    "prs": [],
+    "own_branch": "paudley/494-evaluate-at-caller-supplied-coordinates"
+  },
+  "coverage": [
+    "issue #494 + 0 comment(s) via github",
+    "link crawl: 9 issue(s) within 2 hop(s) of `#N` references",
+    "ADR-0038 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['Evaluate', 'caller-supplied', 'coordinates:']: 6 other item(s)",
+    "GhpRsq-Defect-Class trailers: 5 distinct class(es) in the last 200 commits",
+    "prior attempts: 0 commit(s) citing #494 (second parents walked), 0 other branch(es) named for it",
+    "PRs citing #494: 0",
+    "requirement candidates: 4 line(s); 0 comment(s) matched no rule",
+    "referenced artifacts: 13 path(s) (4 on disk), 9 identifier(s), 1 workspace package(s), 0 URL(s)"
+  ]
+}
