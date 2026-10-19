@@ -45,6 +45,10 @@ purrdf-testkit.workspace = true
 name = "roundtrip"
 harness = false
 
+[[test]]
+name = "structured_errors"
+harness = false
+
 [[bench]]
 name = "ordered_json"
 harness = false

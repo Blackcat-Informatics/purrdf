@@ -286,7 +286,50 @@ fn event_ingestion_retains_original_freeze_causes_and_cancellation() {
     }
 }
 
+fn byte_cover_refusals_keep_original_ranges_and_nested_digest_finding() {
+    use purrdf_core::cover::{ByteCover, CoverBuilder};
+
+    let cover = ByteCover::identity(b"abc");
+    for end in [4, u64::MAX] {
+        let error = cover.reference(1..end).unwrap_err();
+        let captured = Capture::read(&error);
+        assert_eq!(captured.code, "cover-emit-range");
+        assert!(matches!(captured.field("start"), ErrorValue::ByteCount(1)));
+        assert!(
+            matches!(captured.field("end"), ErrorValue::ByteCount(value) if value == u128::from(end))
+        );
+        assert!(matches!(
+            captured.field("byte_length"),
+            ErrorValue::ByteCount(3)
+        ));
+    }
+    let reference = cover.reference(1..3).unwrap();
+    assert_eq!(reference.resolve_source(b"abc").unwrap(), b"bc");
+    let error = reference.resolve_source(b"abd").unwrap_err();
+    let captured = Capture::read(&error);
+    assert_eq!(captured.code, "cover-emit-cover");
+    let cause = captured.child("cause");
+    assert_eq!(cause.code, "cover-digest-mismatch");
+    let expected = purrdf_core::ContentDigest::of(b"abc").to_hex();
+    let actual = purrdf_core::ContentDigest::of(b"abd").to_hex();
+    assert!(matches!(cause.field("expected"), ErrorValue::Text(value) if value == expected));
+    assert!(matches!(cause.field("reconstructed"), ErrorValue::Text(value) if value == actual));
+    let error = CoverBuilder::new(b"abc").finish().unwrap_err();
+    let captured = Capture::read(&error).child("cause");
+    assert_eq!(captured.code, "cover-uncovered-range");
+    assert!(matches!(
+        captured.field("byte_start"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(matches!(
+        captured.field("byte_end"),
+        ErrorValue::ByteCount(3)
+    ));
+    assert_eq!(cover.reconstruct().unwrap(), b"abc");
+}
+
 purrdf_testkit::harness_main!(
+    byte_cover_refusals_keep_original_ranges_and_nested_digest_finding,
     event_ingestion_retains_original_freeze_causes_and_cancellation,
     graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
     native_evidence_alignment_and_answer_state_failures_remain_structured,
