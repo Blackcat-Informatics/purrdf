@@ -187,6 +187,7 @@ fn persisted_layer_row_orders_disagree_after_shared_identity_translation() {
 
     let a = statement("urn:a", "urn:value", None);
     let z = statement("urn:z", "urn:value", None);
+    let expected = [a.clone(), z.clone()];
     let images = [
         statement_image([&[a.clone(), z.clone()], &[], &[]]),
         statement_image([&[z, a], &[], &[]]),
@@ -256,11 +257,21 @@ fn persisted_layer_row_orders_disagree_after_shared_identity_translation() {
         shared[1][0] > shared[1][1],
         "identity translation does not preserve row order"
     );
-    assert_eq!(
-        query.quads().count(),
-        2,
-        "the current visibility path still removes duplicates"
-    );
+    let actual = query
+        .quads()
+        .map(|row| purrdf_core::QuadValues {
+            s: query.term_value(row.s).unwrap().value().clone(),
+            p: query.term_value(row.p).unwrap().value().clone(),
+            o: query.term_value(row.o).unwrap().value().clone(),
+            g: row
+                .g
+                .map(|graph| query.term_value(graph).unwrap().value().clone()),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), expected.len(), "duplicate rows are removed");
+    for row in expected {
+        assert!(actual.contains(&row), "expected {row:?}, got {actual:?}");
+    }
     assert!(matches!(
         query.operation_status(),
         ViewOperationStatus::Ready { .. }
