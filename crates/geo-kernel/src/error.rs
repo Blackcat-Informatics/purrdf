@@ -739,6 +739,40 @@ impl GeoError {
         )
     }
 
+    /// Whether the caller must repair a missing or invalid declaration.
+    /// Configuration failures are fatal even when a row first reveals them.
+    #[must_use]
+    pub fn is_configuration_error(&self) -> bool {
+        match self.original() {
+            Self::Vocabulary(cause) => !cause.is_expression_error(),
+            Self::CarrierInput(cause) => cause.is_configuration(),
+            Self::TransverseInput(cause) => !cause.is_domain_error(),
+            Self::AffineInput(cause) => !cause.is_domain_error(),
+            Self::ProjectionInput(cause) => !cause.is_domain_error(),
+            Self::ModelInput(cause) => !cause.is_domain_error(),
+            Self::Config(_)
+            | Self::NoRelationFamilies
+            | Self::CrsConfiguration(_)
+            | Self::IndexConfiguration(_)
+            | Self::IndexBinding(_)
+            | Self::SourcePreparation(_)
+            | Self::ContextConfiguration(_)
+            | Self::PolynomialInput(_)
+            | Self::MetricUnit(_)
+            | Self::MatrixConfiguration(_)
+            | Self::BindingConfiguration(_)
+            | Self::UnregisteredCrs(_)
+            | Self::MissingOperation { .. }
+            | Self::InvalidEllipsoid(_)
+            | Self::InvalidExecutionPolicy(_)
+            | Self::InvalidCoverPolicy(_)
+            | Self::InvalidPointIndexPolicy(_)
+            | Self::MissingNativeObserver { .. }
+            | Self::InvalidNativeStorage(_) => true,
+            _ => false,
+        }
+    }
+
     /// Whether the original operands fall outside an operation's value domain.
     /// Carrier syntax, configuration and operational refusals remain distinct.
     #[must_use]

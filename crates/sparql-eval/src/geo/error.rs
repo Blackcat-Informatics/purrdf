@@ -88,54 +88,24 @@ fn convert(
     {
         return frame.storage_error(*error, "native geographic numerical storage");
     }
-    let kind = match original {
-        GeoError::Vocabulary(cause) if !cause.is_expression_error() => NativeDiagnosticKind::Config,
-        GeoError::CarrierInput(cause) => {
-            if cause.is_configuration() {
-                NativeDiagnosticKind::Config
-            } else {
-                NativeDiagnosticKind::Data
-            }
+    let kind = if original.is_configuration_error() {
+        NativeDiagnosticKind::Config
+    } else {
+        match original {
+            GeoError::SourceRead(_) => NativeDiagnosticKind::SourceRead,
+            GeoError::CarrierInput(_)
+            | GeoError::Literal(_)
+            | GeoError::ArgumentInput(_)
+            | GeoError::NumericLiteral(_)
+            | GeoError::IndexSerialization(_)
+            | GeoError::GeometryShape(_)
+            | GeoError::GeoJsonShape(_)
+            | GeoError::PatternSyntax(_)
+            | GeoError::CrsLiteral { .. }
+            | GeoError::WktSyntax(_)
+            | GeoError::JsonSyntax(_) => NativeDiagnosticKind::Data,
+            _ => function,
         }
-        GeoError::SourceRead(_) => NativeDiagnosticKind::SourceRead,
-        GeoError::Config(_)
-        | GeoError::NoRelationFamilies
-        | GeoError::CrsConfiguration(_)
-        | GeoError::IndexConfiguration(_)
-        | GeoError::IndexBinding(_)
-        | GeoError::SourcePreparation(_)
-        | GeoError::ContextConfiguration(_)
-        | GeoError::PolynomialInput(_)
-        | GeoError::MetricUnit(_)
-        | GeoError::MatrixConfiguration(_)
-        | GeoError::BindingConfiguration(_)
-        | GeoError::UnregisteredCrs(_)
-        | GeoError::MissingOperation { .. }
-        | GeoError::InvalidEllipsoid(_)
-        | GeoError::InvalidExecutionPolicy(_)
-        | GeoError::InvalidCoverPolicy(_)
-        | GeoError::InvalidPointIndexPolicy(_)
-        | GeoError::MissingNativeObserver { .. }
-        | GeoError::InvalidNativeStorage(_) => NativeDiagnosticKind::Config,
-        GeoError::TransverseInput(cause) if !cause.is_domain_error() => {
-            NativeDiagnosticKind::Config
-        }
-        GeoError::AffineInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
-        GeoError::ProjectionInput(cause) if !cause.is_domain_error() => {
-            NativeDiagnosticKind::Config
-        }
-        GeoError::ModelInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
-        GeoError::Literal(_)
-        | GeoError::ArgumentInput(_)
-        | GeoError::NumericLiteral(_)
-        | GeoError::IndexSerialization(_)
-        | GeoError::GeometryShape(_)
-        | GeoError::GeoJsonShape(_)
-        | GeoError::PatternSyntax(_)
-        | GeoError::CrsLiteral { .. }
-        | GeoError::WktSyntax(_)
-        | GeoError::JsonSyntax(_) => NativeDiagnosticKind::Data,
-        _ => function,
     };
     crate::RetainedNativeFailure::error(kind, GeographicFailure(error), workspace)
 }

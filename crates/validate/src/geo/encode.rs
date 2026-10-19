@@ -1216,6 +1216,9 @@ pub(super) fn refusal(
                     "duplicate-point-key"
                 }
                 GeoError::PointIndexReferenceMismatch => "point-index-reference-mismatch",
+                _ if error.is_configuration_error() => "configuration",
+                _ if error.is_domain_error() => "domain",
+                _ if error.is_expression_error() => "literal",
                 _ => "engine-refusal",
             };
             fields = fields

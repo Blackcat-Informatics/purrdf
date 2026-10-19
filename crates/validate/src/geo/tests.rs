@@ -1782,6 +1782,39 @@ fn native_math_and_vocabulary_refusals_preserve_host_classes_and_fields() {
         record["cause"]["namespace"]["code"],
         "vocabulary-namespace-core"
     );
+
+    let crs = Crs::new("https://example.org/crs/planar").unwrap();
+    let other = Crs::new("https://example.org/crs/other").unwrap();
+    let point = purrdf_geo_kernel::wkt::parse("POINT (0 0)", &crs).unwrap();
+    assert!(purrdf_geo_kernel::geojson::write(&point, &crs, 3).is_ok());
+    for (error, expected) in [
+        (
+            purrdf_geo_kernel::wkt::parse("POINT (broken)", &crs).unwrap_err(),
+            "literal",
+        ),
+        (
+            purrdf_geo_kernel::geojson::parse(r#"{"type":"Unknown"}"#, &crs).unwrap_err(),
+            "literal",
+        ),
+        (
+            purrdf_geo_kernel::geojson::write(&point, &other, 3).unwrap_err(),
+            "domain",
+        ),
+        (
+            purrdf_geo_kernel::index::GeoIndexConfig::new(
+                Vec::new(),
+                purrdf_geo_kernel::index::GraphSelector::Any,
+            )
+            .unwrap_err(),
+            "configuration",
+        ),
+    ] {
+        assert_eq!(error.is_configuration_error(), expected == "configuration");
+        assert_eq!(error.is_domain_error(), expected == "domain");
+        let record =
+            native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+        assert_eq!(record["code"], expected);
+    }
 }
 
 #[test]

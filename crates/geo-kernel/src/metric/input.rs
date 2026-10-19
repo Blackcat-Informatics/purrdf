@@ -160,7 +160,7 @@ mod tests {
         }
 
         for (lexical, datatype, code) in [
-            ("12x", XsdDatatype::Integer, "xsd-exact"),
+            ("12x", XsdDatatype::Integer, "xsd-invalid-lexical"),
             ("1.2.3", XsdDatatype::Decimal, "xsd-exact"),
             ("300", XsdDatatype::Byte, "xsd-out-of-range"),
         ] {
