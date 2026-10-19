@@ -355,8 +355,35 @@ pub fn visit_list<'error>(
 ///     }
 /// }
 /// ```
+///
+/// Tuple owners likewise enumerate their complete physical shape:
+///
+/// ```compile_fail
+/// use purrdf_hash::error::StructuredError;
+/// pub struct Owner(u64, u64);
+/// impl StructuredError for Owner {
+///     purrdf_hash::error_visit! {
+///         @tuple self (value) => "owner" { "value" => Unsigned(u128::from(*value)) }
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! error_visit {
+    (
+        @tuple $this:ident ($($member:ident),* $(,)?) => $code:literal {
+            $($field:literal => $kind:ident $(($value:expr))?),* $(,)?
+        }
+    ) => {
+        fn visit<'error>(
+            &'error $this,
+            visitor: &mut dyn $crate::error::ErrorVisitor<'error>,
+        ) {
+            // Bind the complete shape, as for named records and enum variants.
+            let Self($($member),*) = $this;
+            visitor.variant($code);
+            $($crate::error_visit!(@field visitor, $field, $kind $(($value))?);)*
+        }
+    };
     (
         @record $this:ident { $($member:ident),* $(,)? } => $code:literal {
             $($field:literal => $kind:ident $(($value:expr))?),* $(,)?

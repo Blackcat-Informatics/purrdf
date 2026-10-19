@@ -112,6 +112,12 @@ use purrdf_lex::allocation::{Admission, Memory, Resident};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseIri(Iri);
 
+impl purrdf_hash::error::StructuredError for BaseIri {
+    purrdf_hash::error_visit! {
+        @tuple self (_iri) => "iri-base" { "iri" => Iri(self.as_str()) }
+    }
+}
+
 impl BaseIri {
     /// Parse `s` as an absolute IRI to be used as a base.
     ///
@@ -551,6 +557,14 @@ impl core::fmt::Display for BaseInScope {
 pub struct ScopedBase {
     iri: BaseIri,
     origin: BaseOrigin,
+}
+
+impl purrdf_hash::error::StructuredError for ScopedBase {
+    purrdf_hash::error_visit! {
+        @record self { iri, origin } => "iri-scoped-base" {
+            "iri" => Record(&self.iri), "origin" => Record(&self.origin),
+        }
+    }
 }
 
 impl ScopedBase {

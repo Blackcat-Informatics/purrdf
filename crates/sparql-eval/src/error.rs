@@ -288,9 +288,9 @@ pub enum EvalError {
     RetainedServiceFailure(crate::remote::RetainedServiceFailure),
     /// A native formatter violated its certified stable output length.
     UnstableNativeDiagnostic,
-    /// A query failed to parse in [`purrdf_sparql_algebra`]. Carries the rendered
-    /// parse error.
-    Parse(String),
+    /// A query failed to parse in [`purrdf_sparql_algebra`]. Retains the original
+    /// variant, fields and source ownership; rendering is presentation only.
+    Parse(ParseError),
 
     /// The backing dataset failed to read a term or index. No partial answer is
     /// valid; fallible engine entry points retain the view's typed root cause.
@@ -1045,6 +1045,7 @@ impl core::fmt::Display for EvalError {
 impl std::error::Error for EvalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Parse(error) => Some(error),
             Self::XPathRegex(error) => Some(error),
             Self::FunctionAdmission(error) => Some(error.cause()),
             _ => None,
@@ -1052,12 +1053,7 @@ impl std::error::Error for EvalError {
     }
 }
 
-impl From<ParseError> for EvalError {
-    /// A parse failure is [`EvalError::Parse`].
-    fn from(err: ParseError) -> Self {
-        Self::Parse(err.to_string())
-    }
-}
+purrdf_lex::variant_from!(EvalError { Parse(ParseError) });
 
 #[cfg(test)]
 mod tests {
@@ -1079,10 +1075,35 @@ mod tests {
 
     #[test]
     fn parse_error_converts_and_renders() {
-        let pe = ParseError::Unsupported("VALUES with mixed arity".to_owned());
+        use std::error::Error;
+
+        // The prior Dataset arm already accommodates a parser error inline.
+        // Retaining the source must not require a new allocation or larger slot.
+        const {
+            assert!(size_of::<ParseError>() <= size_of::<purrdf_core::RdfDiagnostic>());
+            assert!(align_of::<ParseError>() <= align_of::<purrdf_core::RdfDiagnostic>());
+        }
+        let pe = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query("SELECT WHERE {")
+            .expect_err("the production parser refuses a missing projection");
+        let expected = pe.clone();
+        let english = format!("SPARQL parse error: {pe}");
         let ee: EvalError = pe.into();
-        assert!(matches!(ee, EvalError::Parse(_)));
-        assert!(ee.to_string().contains("parse error"));
+        let EvalError::Parse(retained) = &ee else {
+            panic!("parse failures retain their own evaluator category")
+        };
+        assert_eq!(retained, &expected);
+        assert_eq!(
+            ee.source().unwrap().downcast_ref::<ParseError>(),
+            Some(retained)
+        );
+        assert_eq!(ee.to_string(), english);
+        let cloned = ee.clone();
+        drop(ee);
+        assert_eq!(
+            cloned.source().unwrap().downcast_ref::<ParseError>(),
+            Some(&expected)
+        );
     }
 
     #[test]
@@ -1122,7 +1143,10 @@ mod tests {
         assert_eq!(EvalError::data("x").diagnostic_code(), None);
         assert_eq!(EvalError::function("x").diagnostic_code(), None);
         assert_eq!(EvalError::config("x").diagnostic_code(), None);
-        assert_eq!(EvalError::Parse("x".to_owned()).diagnostic_code(), None);
+        assert_eq!(
+            EvalError::Parse(ParseError::syntax("x", 0)).diagnostic_code(),
+            None
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

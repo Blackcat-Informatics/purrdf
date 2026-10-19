@@ -96,6 +96,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RegistryId(u64);
 
+impl purrdf_hash::error::StructuredError for RegistryId {
+    purrdf_hash::error_visit! {
+        @tuple self (value) => "registry-instance" { "value" => Unsigned(u128::from(*value)), "scope" => Code("process") }
+    }
+}
+
 impl RegistryId {
     /// Mint a fresh identity, distinct from every other identity minted by this
     /// function so far in this process.

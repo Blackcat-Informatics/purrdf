@@ -68,13 +68,10 @@ impl NamedNode {
     /// must be absolute; `purrdf_iri::parse` itself admits relative references).
     pub fn new(iri: impl Into<String>) -> Result<Self> {
         let iri = iri.into();
-        let parsed = purrdf_iri::parse(&iri).map_err(|e| ParseError::Iri {
-            lexical: iri.clone(),
-            reason: crate::IriTermReason::Validation {
-                cause: e,
-                include_code: false,
-            },
-        })?;
+        let parsed = match purrdf_iri::parse(&iri) {
+            Ok(parsed) => parsed,
+            Err(cause) => return Err(ParseError::iri_validation(iri, cause, false)),
+        };
         if !parsed.has_scheme() {
             return Err(ParseError::Iri {
                 lexical: iri,

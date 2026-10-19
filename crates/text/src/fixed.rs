@@ -115,6 +115,14 @@ const SERIES_TERMS: u32 = 20;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Fixed(i128);
 
+impl purrdf_hash::error::StructuredError for Fixed {
+    purrdf_hash::error_visit! {
+        @tuple self (raw) => "text-fixed" {
+            "raw" => Signed(*raw), "scale_digits" => Unsigned(u128::from(SCALE_DIGITS))
+        }
+    }
+}
+
 impl Fixed {
     /// The additive identity.
     pub const ZERO: Self = Self(0);

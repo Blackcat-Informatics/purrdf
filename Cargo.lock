@@ -822,6 +822,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-iri",
  "purrdf-lex",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
@@ -964,6 +965,7 @@ name = "purrdf-stack"
 version = "3.0.1"
 dependencies = [
  "libc",
+ "purrdf-hash",
  "purrdf-testkit",
  "windows-sys",
 ]
