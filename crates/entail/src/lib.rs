@@ -129,6 +129,7 @@ pub mod entails;
 pub mod explain;
 pub(crate) mod interner;
 pub(crate) mod lists;
+pub use lists::{CollectionError, CollectionPhase};
 pub(crate) mod owl_dl;
 pub mod reasoner;
 pub mod report;
@@ -420,6 +421,8 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// silently. The message names the collection's head, the cell the walk stopped at,
     /// and the fault.
     MalformedList(String),
+    /// An original strict collection failure, retaining source-independent RDF terms.
+    Collection(Box<CollectionError>),
     /// A term id of the input view did not resolve to a value: the view handed back a
     /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
     /// reasoned over a term the input does not actually hold.
@@ -568,6 +571,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
         Chase(cause) => "entailment-chase" { "cause" => Cause(cause) },
         MalformedList(message) => "entailment-malformed-list" { "message" => Message(message) },
+        Collection(cause) => "entailment-collection" { "cause" => Cause(cause.as_ref()) },
         ForeignTerm(cause) => "entailment-foreign-term" { "cause" => Cause(cause) },
         SourceRead(cause) => "entailment-source-read" { "cause" => Cause(cause) },
         Inconsistent(run) => "entailment-inconsistent" { "run" => Record(run.as_ref()) },
@@ -619,6 +623,7 @@ impl EntailError {
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
             Self::Chase(cause) => EntailError::Chase(cause),
             Self::MalformedList(reason) => EntailError::MalformedList(reason),
+            Self::Collection(cause) => EntailError::Collection(cause),
             Self::ForeignTerm(cause) => EntailError::ForeignTerm(cause),
             Self::SourceRead(never) => match never {},
             Self::Inconsistent(run) => EntailError::Inconsistent(run),
@@ -670,6 +675,7 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
+            Self::Collection(cause) => cause.fmt(f),
             Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
             Self::SourceRead(error) => write!(f, "entailment source read error: {error}"),
             Self::Inconsistent(run) => write!(
@@ -799,6 +805,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::RoleHierarchy(inner) => Some(inner),
+            Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
             | Self::Parse(_)

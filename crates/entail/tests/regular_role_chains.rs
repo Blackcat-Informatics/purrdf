@@ -216,6 +216,89 @@ fn import_conflict_inspection_keeps_original_versions_and_default_graph() {
     ));
 }
 
+fn actual_collection_refusals_keep_original_terms_and_the_ordered_prefix() {
+    use purrdf_core::TermFactory;
+    use purrdf_core::collections::ListErrorKind;
+    use purrdf_entail::{CollectionPhase, Materialization};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    for phase in [CollectionPhase::OwlRl, CollectionPhase::OwlDirect] {
+        let mut ontology = Ontology::default();
+        let owner = ontology.named("original-class");
+        let head_value = TermValue::Blank {
+            label: "original-cell".into(),
+            scope: BlankScope(91),
+        };
+        let member_value = TermValue::Literal {
+            lexical_form: "原文".into(),
+            datatype: rdf::LANG_STRING.into(),
+            language: Some("zh".into()),
+            direction: None,
+        };
+        let head = ontology.builder.intern_value(&head_value).unwrap();
+        let member = ontology.builder.intern_value(&member_value).unwrap();
+        ontology.relation(owner, owl::INTERSECTION_OF, head);
+        ontology.relation(head, rdf::FIRST, member);
+        let dataset = ontology.finish();
+        let error = match phase {
+            CollectionPhase::OwlRl => {
+                purrdf_entail::materialize(&dataset, Materialization::OwlRl).unwrap_err()
+            }
+            CollectionPhase::OwlDirect => Reasoner::new(&dataset).unwrap_err(),
+        };
+        drop(dataset);
+        let original = match &error {
+            EntailError::Collection(original) => original,
+            other => panic!("native collection cause lost: {other:?}"),
+        };
+        assert_eq!(original.phase, phase);
+        assert_eq!(original.head, head_value);
+        assert_eq!(original.original.node, head_value);
+        assert_eq!(original.original.kind, ListErrorKind::MissingRest);
+        assert_eq!(original.original.members, [member_value]);
+        let buffer = Vec::with_capacity(4);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(&error, buffer);
+        assert_eq!(window.close().allocations, 0);
+        let fields = fields.child("cause");
+        assert_eq!(fields.child("original").code, "rdf-list-error");
+        assert_eq!(fields.child("original").records("members").len(), 1);
+        assert!(matches!(
+            fields.child("head").field("scope"),
+            ErrorValue::Unsigned(91)
+        ));
+    }
+}
+
+fn empty_collection_admission_checks_nil_structure() {
+    use purrdf_entail::{CollectionPhase, Materialization};
+    for phase in [CollectionPhase::OwlRl, CollectionPhase::OwlDirect] {
+        for malformed in [false, true] {
+            let mut ontology = Ontology::default();
+            let owner = ontology.named("original-class");
+            let nil = ontology.standard(rdf::NIL);
+            ontology.relation(owner, owl::INTERSECTION_OF, nil);
+            if malformed {
+                ontology.relation(nil, rdf::FIRST, owner);
+            }
+            let dataset = ontology.finish();
+            let result = match phase {
+                CollectionPhase::OwlRl => {
+                    purrdf_entail::materialize(&dataset, Materialization::OwlRl).map(|_| ())
+                }
+                CollectionPhase::OwlDirect => Reasoner::new(&dataset).map(|_| ()),
+            };
+            if malformed {
+                assert!(matches!(result, Err(EntailError::Collection(ref error))
+                if error.original.kind == purrdf_core::collections::ListErrorKind::NonEmptyNil));
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Ontology {
     builder: RdfDatasetBuilder,
@@ -1041,6 +1124,8 @@ fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
 }
 
 purrdf_testkit::harness_main!(
+    actual_collection_refusals_keep_original_terms_and_the_ordered_prefix,
+    empty_collection_admission_checks_nil_structure,
     import_conflict_inspection_keeps_original_versions_and_default_graph,
     entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run,
     role_refusals_keep_native_fields_after_the_source_drops,

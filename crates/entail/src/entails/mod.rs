@@ -564,7 +564,8 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
         | EntailError::Canonicalization(_)
-        | EntailError::Unsatisfiable) => other,
+        | EntailError::Unsatisfiable
+        | EntailError::Collection(_)) => other,
     }
 }
 

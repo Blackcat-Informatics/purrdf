@@ -1170,7 +1170,13 @@ impl<'a> CeExtractor<'a> {
         });
         self.syntax.borrow_mut().leave(token, result.is_ok());
         self.poll()?;
-        result.map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
+        result.map_err(|error| {
+            EntailError::Collection(Box::new(crate::CollectionError {
+                phase: crate::CollectionPhase::OwlDirect,
+                head: self.interner.value(head).clone(),
+                original: error.map(|id| self.interner.value(id).clone()),
+            }))
+        })
     }
 
     /// Walk an RDF list of class expressions.

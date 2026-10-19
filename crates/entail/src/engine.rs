@@ -733,10 +733,13 @@ pub(crate) fn seed<D: DatasetView>(
         // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
         // the run here rather than producing a closure over the well-formed prefix of it.
         if walks_collections(regime) {
-            for fact in lists
-                .materialize()
-                .map_err(|error| EntailError::MalformedList(error.to_string()))?
-            {
+            for fact in lists.materialize().map_err(|error| {
+                EntailError::Collection(Box::new(crate::CollectionError {
+                    phase: crate::CollectionPhase::OwlRl,
+                    head: terms.value(&error.head).clone(),
+                    original: error.original.map(|surface| terms.value(&surface).clone()),
+                }))
+            })? {
                 let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }

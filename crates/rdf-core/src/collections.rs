@@ -166,6 +166,34 @@ pub struct ListError<Id = crate::ir::TermId> {
     pub node: Id,
 }
 
+impl<Id> ListError<Id> {
+    /// Preserve the fault and ordered prefix while changing its identifier domain.
+    pub fn map<Mapped>(self, mut map: impl FnMut(Id) -> Mapped) -> ListError<Mapped> {
+        let Self {
+            kind,
+            members,
+            node,
+        } = self;
+        ListError {
+            kind,
+            members: members.into_iter().map(&mut map).collect(),
+            node: map(node),
+        }
+    }
+}
+
+impl<Id: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for ListError<Id>
+{
+    purrdf_hash::error_visit! {
+        @record self { kind, members, node } => "rdf-list-error" {
+            "kind" => Record(&self.kind),
+            "members" => List(self.members.iter().map(|member| purrdf_hash::error::ErrorValue::Record(member))),
+            "node" => Record(&self.node),
+        }
+    }
+}
+
 impl<Id: std::fmt::Debug> std::fmt::Display for ListError<Id> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

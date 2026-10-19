@@ -53,7 +53,15 @@ jobs:
           grep -Fq role_refusals_keep_native_fields_after_the_source_drops target/role-error-test-inventory.txt
           grep -Fq entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run target/role-error-test-inventory.txt
           grep -Fq import_conflict_inspection_keeps_original_versions_and_default_graph target/role-error-test-inventory.txt
+          grep -Fq actual_collection_refusals_keep_original_terms_and_the_ordered_prefix target/role-error-test-inventory.txt
+          grep -Fq empty_collection_admission_checks_nil_structure target/role-error-test-inventory.txt
           cargo test --locked -p purrdf-entail --test regular_role_chains
+      - name: Execute native collection indexing and existing structural refusal controls
+        run: |
+          cargo test --locked -p purrdf-entail --lib -- --list > target/collection-unit-test-inventory.txt
+          grep -Fq lists::tests:: target/collection-unit-test-inventory.txt
+          cargo test --locked -p purrdf-entail --lib lists::tests::
+          cargo test --locked -p purrdf-entail --test reasoner -- --exact malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals
 
   wasm:
     name: WASM role refusal inspection
@@ -96,5 +104,7 @@ jobs:
             role_refusals_keep_native_fields_after_the_source_drops \
             entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run \
             import_conflict_inspection_keeps_original_versions_and_default_graph \
+            actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
+            empty_collection_admission_checks_nil_structure \
             non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
             class_expression_role_refusals_retain_original_source_terms
