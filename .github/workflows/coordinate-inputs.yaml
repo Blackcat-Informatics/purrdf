@@ -24,10 +24,6 @@ on:
       - scripts/check-wasm-test-runner.sh
       - .github/actions/wasm-toolchain/**
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
@@ -39,6 +35,9 @@ env:
 jobs:
   native:
     name: Native ${{ matrix.target }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -73,6 +72,9 @@ jobs:
 
   wasm:
     name: WASM coordinate ownership and host isolation
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-wasm
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
