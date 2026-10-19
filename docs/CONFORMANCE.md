@@ -61,11 +61,11 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 262 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 590 | 1 | 0 | 0 | GREEN |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 590 | 1 | 1 | 0 | GREEN |
 | SHACL 1.2 unlisted vendored files | W3C shacl12-test-suite files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | Community SHACL dated profiles (REC 2017 / WD 2026) | community-proposed corpus, agent-reviewed | 115 | 0 | 0 | 0 | GREEN |
-| SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 401 | 0 | 0 | 0 | GREEN |
+| SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 407 | 0 | 0 | 0 | GREEN |
 | XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 292 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 20 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
@@ -75,7 +75,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 4223 | 4 | 4 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 4232 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The Python rows retain the last complete broad-suite snapshot. Contextual SPARQL
