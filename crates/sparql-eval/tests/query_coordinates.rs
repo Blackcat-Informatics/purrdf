@@ -7,7 +7,8 @@ mod support;
 
 use purrdf_core::DatasetView as _;
 use purrdf_core::{
-    RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, TermValue, TrippedGovernor,
+    RdfDatasetBuilder, SegmentedEvidence, SparqlRequest, SparqlResult, StopCause, TermValue,
+    TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions,
@@ -205,7 +206,12 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
         panic!("dateTime value")
     };
     let expected = TermValue::typed_literal(now.canonical_lexical(), XsdDatatype::DateTime.iri());
-    let before = source.evidence().live_bytes();
+    // These reader buffers outlive results. Pinned blocks and original query
+    // grants remain in the compared balance and must all be released.
+    let owner_balance = |evidence: &SegmentedEvidence| {
+        evidence.live_bytes() - evidence.unpinned_cache_bytes() - evidence.bookkeeping_bytes()
+    };
+    let before = owner_balance(&source.evidence());
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let found = without_host_clock_or_entropy(|| {
         engine
@@ -230,7 +236,8 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     assert_eq!(variables, ["time"]);
     assert_eq!(rows, [vec![Some(expected.clone())]]);
     let original_live = source.evidence().live_bytes();
-    assert!(original_live > before);
+    let original_owners = owner_balance(&source.evidence());
+    assert!(original_owners > before);
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let retained = found.clone();
     drop(found);
@@ -240,9 +247,10 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     assert_eq!(measurement.retained_bytes, 0);
     assert_eq!(measurement.peak_working_bytes, 0);
     assert_eq!(source.evidence().live_bytes(), original_live);
+    assert_eq!(owner_balance(&source.evidence()), original_owners);
     assert_eq!(retained.solutions().unwrap().1, [vec![Some(expected)]]);
     drop(retained);
-    assert_eq!(source.evidence().live_bytes(), before);
+    assert_eq!(owner_balance(&source.evidence()), before);
 
     let XsdValue::DateTime(now) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
     else {
@@ -270,7 +278,7 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     );
     assert!(source.read_error().is_none());
     drop(refused);
-    assert_eq!(source.evidence().live_bytes(), before);
+    assert_eq!(owner_balance(&source.evidence()), before);
 }
 
 purrdf_testkit::harness_main!(
