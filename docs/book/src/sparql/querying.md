@@ -2026,7 +2026,7 @@ http://example.org/d,3,3,http://example.org/d
 `GROUP BY ?pathId` is how the hop rows become walks again. The identifier is
 constant across one walk's rows and distinct between walks, so each group IS one
 walk; `?start`, `?end` and `?len` are constant within a group, so grouping by
-them alongside is free and lets them be projected:
+them alongside preserves the same groups and lets them be projected:
 
 ```sh
 purrdf query --data chain.ttl --results-format csv \

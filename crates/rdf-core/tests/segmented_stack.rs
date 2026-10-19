@@ -180,6 +180,104 @@ fn statement_image(rows: [&[purrdf_core::QuadValues]; 3]) -> purrdf_core::Segmen
     builder.seal().unwrap()
 }
 
+fn persisted_layer_row_orders_disagree_after_shared_identity_translation() {
+    use purrdf_core::{
+        FallibleDatasetView, SegmentedSession, SegmentedStackSource, ViewOperationStatus,
+    };
+
+    let a = statement("urn:a", "urn:value", None);
+    let z = statement("urn:z", "urn:value", None);
+    let expected = [a.clone(), z.clone()];
+    let images = [
+        statement_image([&[a.clone(), z.clone()], &[], &[]]),
+        statement_image([&[z, a], &[], &[]]),
+    ];
+    let sessions = images.each_ref().map(|image| {
+        SegmentedSession::open(Arc::new(image.provider()), image.receipt(), limits()).unwrap()
+    });
+    let physical = sessions
+        .each_ref()
+        .map(|session| session.quads().collect::<Vec<_>>());
+    let subjects = sessions
+        .each_ref()
+        .into_iter()
+        .zip(physical.each_ref())
+        .map(|(session, rows)| {
+            rows.iter()
+                .map(|row| session.term_value(row.s).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        subjects[0],
+        [TermValue::iri("urn:a"), TermValue::iri("urn:z")]
+    );
+    assert_eq!(
+        subjects[1],
+        [TermValue::iri("urn:z"), TermValue::iri("urn:a")]
+    );
+    for rows in &physical {
+        assert!(rows.windows(2).all(|pair| pair[0].s < pair[1].s));
+    }
+
+    let layers = images
+        .iter()
+        .map(|image| {
+            Arc::new(
+                SegmentedLayer::new(
+                    Arc::new(image.provider()),
+                    image.receipt().clone(),
+                    SegmentedLayerMetadata::default(),
+                )
+                .unwrap(),
+            )
+        })
+        .collect();
+    let mut stack = SegmentedStack::default();
+    stack.publish(layers, limits()).unwrap();
+    let snapshot = stack.snapshot().unwrap();
+    let query = snapshot.query(limits()).unwrap();
+    let shared = physical
+        .iter()
+        .enumerate()
+        .map(|(layer, rows)| {
+            rows.iter()
+                .map(|row| {
+                    query
+                        .intern_source_term(SegmentedStackSource::Layer(layer), row.s.index())
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(shared[0][0], shared[1][1]);
+    assert_eq!(shared[0][1], shared[1][0]);
+    assert!(shared[0][0] < shared[0][1]);
+    assert!(
+        shared[1][0] > shared[1][1],
+        "identity translation does not preserve row order"
+    );
+    let actual = query
+        .quads()
+        .map(|row| purrdf_core::QuadValues {
+            s: query.term_value(row.s).unwrap().value().clone(),
+            p: query.term_value(row.p).unwrap().value().clone(),
+            o: query.term_value(row.o).unwrap().value().clone(),
+            g: row
+                .g
+                .map(|graph| query.term_value(graph).unwrap().value().clone()),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), expected.len(), "duplicate rows are removed");
+    for row in expected {
+        assert!(actual.contains(&row), "expected {row:?}, got {actual:?}");
+    }
+    assert!(matches!(
+        query.operation_status(),
+        ViewOperationStatus::Ready { .. }
+    ));
+}
+
 fn generated_chronological_publications_match_eager_typed_seals() {
     use purrdf_core::{
         BlankScope, InMemoryPageProvider, PackBuilder, PagedDataset, PagedQueryLimits, PagedStack,
@@ -1243,6 +1341,7 @@ fn resident_head_copy_refuses_under_the_shared_operation_grant() {
 }
 
 purrdf_testkit::harness_main!(
+    persisted_layer_row_orders_disagree_after_shared_identity_translation,
     ordinary_quads_keep_their_authored_kind_across_layer_partitions,
     generated_chronological_publications_match_eager_typed_seals,
     empty_certified_streams_do_not_probe_dictionary_for_bound_head_row,

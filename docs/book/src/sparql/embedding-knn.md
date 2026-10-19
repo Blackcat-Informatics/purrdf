@@ -48,13 +48,15 @@ Four flattened positions — one on the subject side, three on the object side:
 | 2 | `k` | **in**: how many neighbours to retrieve |
 | 3 | `?distance` | **out**: the distance, as `xsd:double` |
 
-The one declared mode is `fbbf`: the seed and `k` are inputs the relation
+The ranked-search mode is `fbbf`: the seed and `k` are inputs the relation
 cannot enumerate, while `?neighbour` and `?distance` may each be bound or free.
 `k` accepts any integer-derived datatype (`xsd:integer`, `xsd:int`,
 `xsd:long`, `xsd:nonNegativeInteger`, …); `k = 0` is a valid request for zero
 neighbours. A seed with no vector in the space is an **empty answer**, not an
 abort — otherwise every query ranging a seed over partly-embedded terms would
-die.
+die. A second mode, `bbff`, binds the neighbour and seed while leaving `k`
+free: it asks whether the space holds that neighbour, without ranking it.
+Binding `k` always selects ranked search, even when the neighbour is bound.
 
 ## PurRDF mints no IRI for this
 
@@ -114,7 +116,7 @@ serialized JSON included.
 
 ## Binary64, in a pinned order
 
-The workspace's other ranked-retrieval surface forbids floating point entirely,
+The workspace's full-text ranked-retrieval surface uses no floating-point arithmetic,
 because BM25 needs a logarithm and IEEE-754 does not require `ln` to be
 correctly rounded. That reason does not transfer. A kNN kernel needs no
 transcendental — subtraction, multiplication, addition, division and square
@@ -138,10 +140,10 @@ thread whose float environment flushes subnormals is refused by name. Distances 
 canonical lexical round-trips the exact bits — a rounded decimal would print
 two adjacent doubles alike and hide exactly the divergence this is about.
 
-One limit, stated rather than hidden: cosine self-distance is not exactly zero
-(`dot(v, v)` and `|v|·|v|` are two roundings of one real number), so a seed
-ranks strictly ahead of every other direction rather than at a zero that is not
-there.
+One limit, stated rather than hidden: cosine self-distance need not be exactly zero
+(`dot(v, v)` and `|v|·|v|` are two roundings of one real number). Do not assume
+zero self-distance; ranking follows the computed distance and the canonical
+row tie-break.
 
 ## What a search costs
 
