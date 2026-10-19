@@ -90,13 +90,9 @@ pub enum OpenPgpError {
         /// Original S2K usage byte.
         usage: u8,
     },
-    /// The secret packet's checksum does not match its contents.
-    SecretChecksum {
-        /// Checksum declared in the supplied envelope.
-        expected: u16,
-        /// Checksum computed over the supplied encoded MPI.
-        actual: u16,
-    },
+    /// The secret packet's checksum does not match its contents. Neither the
+    /// declared nor computed checksum is retained: both describe secret material.
+    SecretChecksum,
 }
 
 impl fmt::Display for OpenPgpError {
@@ -119,7 +115,7 @@ impl fmt::Display for OpenPgpError {
             Self::EncryptedSecret { .. } => f.write_str(
                 "encrypted secret keys are not supported; export an unencrypted Ed25519 secret key",
             ),
-            Self::SecretChecksum { .. } => f.write_str("OpenPGP secret-key checksum mismatch"),
+            Self::SecretChecksum => f.write_str("OpenPGP secret-key checksum mismatch"),
         }
     }
 }
@@ -131,7 +127,7 @@ impl PartialEq for OpenPgpError {
             (Self::Rule(a), Self::Rule(b)) => a == b,
             (Self::PublicHeader { .. }, Self::PublicHeader { .. })
             | (Self::EncryptedSecret { .. }, Self::EncryptedSecret { .. })
-            | (Self::SecretChecksum { .. }, Self::SecretChecksum { .. }) => true,
+            | (Self::SecretChecksum, Self::SecretChecksum) => true,
             (Self::Algorithm { actual: a }, Self::Algorithm { actual: b }) => a == b,
             (Self::Oid { actual: a }, Self::Oid { actual: b }) => a == b,
             (Self::PublicMpiLength { actual: a }, Self::PublicMpiLength { actual: b })
@@ -160,8 +156,6 @@ impl purrdf_hash::error::StructuredError for OpenPgpError {
             "actual" => ByteCount(*actual as u128), "normalized" => ByteCount(*normalized as u128), "maximum" => ByteCount(32),
         },
         EncryptedSecret { usage } => "gts-openpgp-encrypted-secret" { "usage" => Unsigned(u128::from(*usage)) },
-        SecretChecksum { expected, actual } => "gts-openpgp-secret-checksum" {
-            "expected" => Unsigned(u128::from(*expected)), "actual" => Unsigned(u128::from(*actual)),
-        },
+        SecretChecksum => "gts-openpgp-secret-checksum" {},
     }
 }

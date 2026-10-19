@@ -377,7 +377,7 @@ fn parse_ed25519_secret_material(body: &[u8]) -> Result<([u8; 32], SigningKey, u
     let expected = u16::from_be_bytes([body[next], body[next + 1]]);
     let actual = checksum16(&body[secret_start..next]);
     if actual != expected {
-        return Err(OpenPgpError::SecretChecksum { expected, actual });
+        return Err(OpenPgpError::SecretChecksum);
     }
 
     let raw_secret = secret_mpi_to_seed(&mpi)?;
@@ -641,12 +641,11 @@ mod tests {
         assert!(err.to_string().contains("checksum mismatch"));
         let fields = purrdf_testkit::error_capture::Capture::read(&err);
         assert_eq!(fields.code, "gts-openpgp-secret-checksum");
-        let purrdf_hash::error::ErrorValue::Unsigned(expected) = fields.field("expected") else {
-            panic!("declared checksum must remain unsigned")
-        };
         assert!(
-            matches!(fields.field("actual"), purrdf_hash::error::ErrorValue::Unsigned(actual) if actual == expected ^ 1)
+            fields.events.is_empty(),
+            "secret-derived checksums are not error data"
         );
+        assert_eq!(format!("{err:?}"), "SecretChecksum");
     }
 
     #[test]

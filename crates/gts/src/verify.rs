@@ -265,7 +265,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
                 (kid, public, raw_public, fingerprint, None)
             }
             Err(err) => {
-                errors.push(VerificationError::TrustedKey(err));
+                errors.push(VerificationError::TrustedPublicKey(err));
                 return VerificationResult {
                     ok: false,
                     errors,

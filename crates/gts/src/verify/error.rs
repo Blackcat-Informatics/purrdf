@@ -46,8 +46,10 @@ impl purrdf_hash::error::StructuredError for TransportKeyError {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum VerificationError {
-    /// An explicitly configured trusted key could not be loaded.
-    TrustedKey(TransportKeyError),
+    /// An explicitly configured trusted public verification key could not be
+    /// loaded. The payload contains public material and structural diagnostics,
+    /// never secret signing material.
+    TrustedPublicKey(TransportKeyError),
     /// The file's declared transport key could not be loaded.
     EmbeddedKey {
         /// Original declared key identifier.
@@ -76,7 +78,7 @@ pub enum VerificationError {
 impl fmt::Display for VerificationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TrustedKey(cause) => write!(f, "cannot load trusted key: {cause}"),
+            Self::TrustedPublicKey(cause) => write!(f, "cannot load trusted key: {cause}"),
             Self::EmbeddedKey { cause, .. } => {
                 write!(f, "cannot load embedded transport key: {cause}")
             }
@@ -92,13 +94,13 @@ impl fmt::Display for VerificationError {
 }
 
 purrdf_lex::error_source!(VerificationError => {
-    Self::TrustedKey(cause) | Self::EmbeddedKey { cause, .. } => cause,
+    Self::TrustedPublicKey(cause) | Self::EmbeddedKey { cause, .. } => cause,
     Self::Integrity(diagnostic) => diagnostic,
 });
 
 impl purrdf_hash::error::StructuredError for VerificationError {
     purrdf_hash::error_visit! {
-        TrustedKey(cause) => "gts-verify-trusted-key" { "cause" => Cause(cause) },
+        TrustedPublicKey(cause) => "gts-verify-trusted-key" { "cause" => Cause(cause) },
         EmbeddedKey { kid, cause } => "gts-verify-embedded-key" { "kid" => Text(kid), "cause" => Cause(cause) },
         MissingTransportKey => "gts-verify-missing-transport-key" {},
         Integrity(diagnostic) => "gts-verify-integrity" { "diagnostic" => Record(diagnostic) },
