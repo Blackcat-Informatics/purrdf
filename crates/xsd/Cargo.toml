@@ -55,6 +55,10 @@ name = "exact_wasm_determinism"
 harness = false
 
 [[test]]
+name = "exact_governance"
+harness = false
+
+[[test]]
 name = "certified_numerical"
 harness = false
 

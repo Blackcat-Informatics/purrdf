@@ -276,6 +276,10 @@ pub enum RuleProcessor {
 /// A host's rule-execution request.
 #[derive(Debug, Clone, Default)]
 pub struct RuleOptions {
+    /// Caller-owned evaluation time, shared without copying its exact coefficient.
+    now: Option<Arc<purrdf_xsd::temporal::DateTime>>,
+    /// Initial state of the per-execution SPARQL request-seed sequence.
+    entropy_seed: Option<u64>,
     /// The `sh:ruleProcessor` values the host handles, and how.
     processors: Vec<(Term, RuleProcessor)>,
     /// The rule sets to execute together as one; `None` for the default rule set.
@@ -295,6 +299,28 @@ pub struct RuleOptions {
 }
 
 impl RuleOptions {
+    /// Use this exact time for every SPARQL request in the rule execution.
+    /// The request configuration owns the value; each query admits its own native
+    /// coefficient before evaluation. Cloning the options shares the input.
+    #[must_use]
+    pub fn with_now(mut self, now: purrdf_xsd::temporal::DateTime) -> Self {
+        self.now = Some(Arc::new(now));
+        self
+    }
+
+    /// Select a reproducible sequence of seeds for the rule execution's queries.
+    /// Each SPARQL execution takes one draw from the shared SplitMix64 law;
+    /// preparing a query consumes none. A new inference starts the sequence again.
+    #[must_use]
+    pub const fn with_entropy_seed(mut self, seed: u64) -> Self {
+        self.entropy_seed = Some(seed);
+        self
+    }
+
+    pub(crate) fn coordinate_scope(&self) -> Option<crate::sparql::coordinates::Scope> {
+        crate::sparql::coordinates::enter(self.now.clone(), self.entropy_seed)
+    }
+
     /// Declare that the host handles the `sh:ruleProcessor` value `value` as `processor`.
     #[must_use]
     pub fn with_rule_processor(mut self, value: Term, processor: RuleProcessor) -> Self {

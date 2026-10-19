@@ -2317,7 +2317,15 @@ pub(crate) fn evaluate_in_memory_admitted(
             })?;
         }
     }
-    let mut ctx = EvalCtx::new_admitted(dataset, workspace)?.with_remote(nested);
+    // A SERVICE endpoint executes its own query; its protocol request has no
+    // caller-selected clock or entropy coordinate.
+    let mut ctx = EvalCtx::new_admitted(dataset, workspace, || {
+        Ok((
+            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
+            crate::clock::entropy_seed(),
+        ))
+    })?
+    .with_remote(nested);
     ctx.growth = workspace.clone();
     if request.stop.is_some() || request.max_intermediate_cells.is_some() {
         let mut governors = QueryGovernors::UNBOUNDED;

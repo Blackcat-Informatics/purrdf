@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 294 named cases in 48 integration targets,
-with 304 executions across 53 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 302 named cases in 51 integration targets,
+with 312 executions across 56 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
@@ -127,6 +127,9 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `borrowed_value_equality_matches_the_query_operator_on_this_target` | Compares original borrowed RDF values against actual query equality, preserving numeric, scope, language/direction, triple/composite and expression-error distinctions. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `any_uri_casts_keep_their_primitive_domain_on_this_target` | Preserves native URI whitespace collapse and string/self casts while refusing casts into unrelated primitive domains through the governed query entry point. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_numeric_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of every numeric query result (arithmetic, all division policies, casts, `ORDER BY`, aggregates, functions, absorbed F&O codes) and the governor's fuel and scratch-byte refusals beside their answering neighbours. |
+| `purrdf-xsd` / `exact_governance` | scalar | `admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs`, `admitted_datetime_refusal_precedes_any_copy_allocation` | Preserves exact fractional seconds and timezone under the original admission, shares published limbs without allocation, and refuses before a copy is allocated. |
+| `purrdf-sparql-eval` / `query_coordinates` | scalar | All four exact cases registered in the original target | Executes supplied time and entropy with host sources sealed, including subqueries, correlated expressions, prepared/governed reuse, retained output ownership and cancellation cleanup. |
+| `purrdf-shapes` / `rule_coordinates` | scalar | Both exact cases registered in the original target | Executes reproducible time and distinct per-query seeds across SHACL focus nodes and parsed RL on quad and graph-free carriers, including refusal and retry cleanup. |
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Asserts Simd128 selection with simd128 and Portable selection without it. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `every_kernel_path_encodes_and_decodes_the_same_bytes` | Explicitly selects the simd128 encoder and decoder and compares their composed output with the portable backend. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `copy_kernels_match_portable` | Calls simd128 overlapping match-copy operations against a bytewise reference. |

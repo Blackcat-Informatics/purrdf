@@ -22,6 +22,7 @@
 //! across worker-local engines without retaining a global evaluation lock.
 
 mod bounded_workspace;
+mod coordinates;
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
 
@@ -2244,7 +2245,7 @@ impl NativeSparqlEngine {
                 .base_iri()
                 .map(|base| crate::eval::EffectiveBase::copy(base.as_str(), workspace))
                 .transpose()?,
-            now: purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
+            now: coordinates::now(options.now, workspace)?,
         };
         crate::property_fn_eval::open_call_cursor(
             &shape,
@@ -2291,7 +2292,7 @@ impl NativeSparqlEngine {
         options: QueryOptions<'d, 'd>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
-        apply_query_options(self.eval_ctx(dataset, workspace)?, options)
+        apply_query_options(self.eval_ctx(dataset, workspace, options)?, options)
     }
 
     /// The context every governed lane evaluates in: governors attached, `options`
@@ -3237,16 +3238,24 @@ impl NativeSparqlEngine {
 
     /// Build the per-query evaluation context, threading the engine-level
     /// configuration (order cache + standpoint predicate table + loss vocabulary +
-    /// eval options) into it. `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are already
-    /// correct by construction: [`EvalCtx::new`] samples the real host wall clock
-    /// and OS entropy itself.
+    /// eval options) into it. Caller coordinates are selected before sampling;
+    /// only an input the request omits is read from the host.
     fn eval_ctx<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        options: QueryOptions<'d, 'd>,
     ) -> Result<EvalCtx<'d, D>, crate::EvalError> {
-        let mut ctx = EvalCtx::new_admitted(dataset, &workspace.capability())?
-            .with_eval_options(self.eval_options);
+        let capability = workspace.capability();
+        let mut ctx = EvalCtx::new_admitted(dataset, &capability, || {
+            Ok((
+                coordinates::now(options.now, &capability)?,
+                options
+                    .entropy_seed
+                    .unwrap_or_else(crate::clock::entropy_seed),
+            ))
+        })?
+        .with_eval_options(self.eval_options);
         ctx.xpath_regex = self.xpath_regex;
         ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
         ctx.workspace = workspace.clone();
@@ -4453,7 +4462,7 @@ impl NativeSparqlEngine {
             ));
         }
         check_prepared_registries_unchanged(&execution.prepared, options, &workspace.capability())?;
-        let ctx = self.eval_ctx(dataset, workspace)?;
+        let ctx = self.eval_ctx(dataset, workspace, options)?;
         let mut ctx = apply_query_options(ctx, options)?;
         if let Some(source) = source {
             ctx = ctx.with_evidence_source(source)?;
@@ -5910,6 +5919,13 @@ pub enum ShaclPrebinding {
 #[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct QueryOptions<'a, 'providers> {
+    /// A caller-selected `NOW()` value. Missing input samples the host clock.
+    /// Exact fractional seconds and the declared timezone are retained under
+    /// the query's native admission before any context can share them.
+    pub now: Option<&'a purrdf_xsd::temporal::DateTime>,
+    /// A caller-selected seed for `RAND()`, `UUID()` and `STRUUID()`.
+    /// Missing input samples the host entropy source once for this context.
+    pub entropy_seed: Option<u64>,
     /// Explicit hard membership constraints evaluated by each actual producer
     /// before its ranking depth. The borrowed caller is shared with nested
     /// invocations and workers; ordinary requests carry no callback.
@@ -6057,6 +6073,8 @@ pub struct QueryOptions<'a, 'providers> {
 impl std::fmt::Debug for QueryOptions<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryOptions")
+            .field("now", &self.now)
+            .field("entropy_seed", &self.entropy_seed)
             .field("candidate_scope", &self.candidate_scope.is_some())
             .field("graph_existence", &self.graph_existence)
             .field("prebinding", &self.prebinding)
@@ -6114,6 +6132,8 @@ impl QueryOptions<'_, '_> {
     /// UPDATE remembers empty named graphs; explicitly select
     /// [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub const EMPTY: Self = Self {
+        now: None,
+        entropy_seed: None,
         candidate_scope: None,
         graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
@@ -6149,6 +6169,20 @@ impl Default for QueryOptions<'_, '_> {
 }
 
 impl<'a, 'providers> QueryOptions<'a, 'providers> {
+    /// Select an exact evaluation time without reading the host wall clock.
+    #[must_use]
+    pub const fn with_now(mut self, now: &'a purrdf_xsd::temporal::DateTime) -> Self {
+        self.now = Some(now);
+        self
+    }
+
+    /// Select reproducible random/UUID input without sampling host entropy.
+    #[must_use]
+    pub const fn with_entropy_seed(mut self, seed: u64) -> Self {
+        self.entropy_seed = Some(seed);
+        self
+    }
+
     /// Select the dated native XPath law and finite limits for this request.
     ///
     /// This overrides the engine's selection across ordinary, prepared, governed

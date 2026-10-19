@@ -382,7 +382,7 @@ impl NativeSparqlEngine {
             .as_ref()
             .map_or(&prepared.query, |value| &value.query);
         let ctx = self
-            .eval_ctx(dataset, workspace)
+            .eval_ctx(dataset, workspace, options)
             .map_err(GraphBuildError::Evaluation)?;
         let mut ctx = apply_query_options(ctx, options).map_err(graph_evaluation_failure)?;
         if let Some(state) = state {

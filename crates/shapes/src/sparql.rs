@@ -14,6 +14,8 @@
 //! pre-binding list the evaluator's interned entry points take, so a validation
 //! does not re-allocate the shape's variable names once per focus node.
 
+pub(crate) mod coordinates;
+
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -1057,6 +1059,7 @@ pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -
 ///   environment is re-prepared at checkout rather than run).
 #[derive(Default)]
 pub struct AmbientContext {
+    coordinates: Option<coordinates::Runtime>,
     functions: Option<Arc<BoundFunctionRegistry>>,
     parser_options: Option<Arc<ParserOptions>>,
     property_functions: Option<Arc<PropertyFunctionRegistry<'static>>>,
@@ -1072,6 +1075,7 @@ pub struct AmbientContext {
 impl std::fmt::Debug for AmbientContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AmbientContext")
+            .field("coordinates", &self.coordinates.is_some())
             .field("functions", &self.functions.is_some())
             .field("parser_options", &self.parser_options.is_some())
             .field("property_functions", &self.property_functions.is_some())
@@ -1091,7 +1095,8 @@ impl AmbientContext {
     /// validation in progress.
     #[must_use]
     pub const fn is_idle(&self) -> bool {
-        self.functions.is_none()
+        self.coordinates.is_none()
+            && self.functions.is_none()
             && self.parser_options.is_none()
             && self.property_functions.is_none()
             && self.aggregates.is_none()
@@ -1107,6 +1112,7 @@ impl AmbientContext {
 /// See [`AmbientContext`].
 pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
     AmbientContext {
+        coordinates: coordinates::replace(next.coordinates),
         functions: CURRENT_FUNCTIONS.with(|slot| slot.replace(next.functions)),
         parser_options: CURRENT_PARSER_OPTIONS.with(|slot| slot.replace(next.parser_options)),
         property_functions: CURRENT_PROPERTY_FUNCTIONS
@@ -1300,6 +1306,7 @@ static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
 /// held them apart is a door that can forget one of them. See that module's
 /// documentation for why the separateness was the bug.
 struct AmbientScopes {
+    now: Option<Arc<purrdf_xsd::temporal::DateTime>>,
     /// The SHACL-AF function table in scope, if a validation installed one. Bound
     /// against `env` already — see [`bind_in_current_env`].
     functions: Option<Arc<BoundFunctionRegistry>>,
@@ -1344,6 +1351,7 @@ impl AmbientScopes {
             .as_ref()
             .map(crate::query_law::Runtime::function_admission);
         Ok(Self {
+            now: coordinates::now(),
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
             env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
             governors,
@@ -1405,6 +1413,12 @@ impl AmbientScopes {
             .with_remote(remote)
             .with_load(load)
             .with_declared_prebound(declared_prebound);
+        let options = self
+            .now
+            .as_ref()
+            .map_or(options, |now| options.with_now(now));
+        let options =
+            coordinates::next_seed().map_or(options, |seed| options.with_entropy_seed(seed));
         let options = self.native_xpath.as_ref().map_or(options, |configuration| {
             options.with_xpath_regex(configuration.profile, configuration.limits)
         });

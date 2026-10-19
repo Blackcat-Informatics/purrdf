@@ -460,6 +460,32 @@ impl Decimal {
         self.copy_using(&crate::bigint::scratch::Fallible)
     }
 
+    /// Copy the exact coefficient into its original preparation account.
+    /// Publish the result with [`Self::publish_detached`] before shared escape.
+    ///
+    /// # Errors
+    /// Preserves native admission, layout and allocator refusal.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            unscaled: self.unscaled.detached_with_memory(memory)?,
+            scale: self.scale,
+        })
+    }
+
+    /// Publish the copied coefficient under its original immutable lease.
+    ///
+    /// # Errors
+    /// Returns native shared-control refusal without changing the decimal law.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.unscaled.publish_detached(original)
+    }
+
     /// Absolute value through fallible native destinations.
     /// # Errors
     /// Refuses physical storage without changing the rounding/value law.
