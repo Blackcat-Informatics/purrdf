@@ -127,6 +127,30 @@ pub enum CdtArity {
     Pairs,
 }
 
+impl purrdf_hash::error::StructuredError for CdtArity {
+    purrdf_hash::error_visit! {
+        Fixed(count) => "cdt-arity-fixed" { "count" => Unsigned(*count as u128) },
+        Range { min, max } => "cdt-arity-range" {
+            "min" => Unsigned(*min as u128), "max" => Unsigned(*max as u128),
+        },
+        AtLeast(min) => "cdt-arity-at-least" { "min" => Unsigned(*min as u128) },
+        Pairs => "cdt-arity-pairs" {},
+    }
+}
+
+impl core::fmt::Display for CdtArity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Fixed(1) => f.write_str("exactly 1 argument"),
+            Self::Fixed(count) => write!(f, "exactly {count} arguments"),
+            Self::Range { min, max } => write!(f, "{min} to {max} arguments"),
+            Self::AtLeast(0) => f.write_str("any number of arguments"),
+            Self::AtLeast(min) => write!(f, "at least {min} arguments"),
+            Self::Pairs => f.write_str("an even number of arguments (key/value pairs)"),
+        }
+    }
+}
+
 impl CdtArity {
     /// Whether a call with `argc` arguments has an admissible shape.
     ///

@@ -397,12 +397,13 @@ fn phase_artifact_digest(phase: Phase, artifact: &ArtifactRecord) -> Result<Stri
     // therefore always has one. Missing it is a hard failure (no-optionality).
     match &artifact.semantic_digest {
         Some(d) => Ok(d.clone()),
-        None => Err(SliceError::InvalidManifest(format!(
-            "phase {} requires a semantic digest for artifact {} (role {:?}) but none was computed",
-            phase.tag().as_str(),
-            artifact.logical_path,
-            artifact.role
-        ))),
+        None => Err(SliceError::InvalidManifest(
+            crate::error::ManifestRefusal::MissingSemanticDigest {
+                phase: phase.tag().as_str(),
+                path: artifact.logical_path.clone(),
+                role: artifact.role.clone(),
+            },
+        )),
     }
 }
 
@@ -497,7 +498,9 @@ fn merkle_root(
     let mut leaves: BTreeMap<SliceIri, String> = BTreeMap::new();
     for slice in &covered {
         let record = catalog.get(slice).ok_or_else(|| {
-            SliceError::InvalidManifest(format!("cache key references unknown slice IRI {slice}"))
+            SliceError::InvalidManifest(crate::error::ManifestRefusal::UnknownCacheSlice {
+                slice: slice.clone(),
+            })
         })?;
         leaves.insert(slice.clone(), slice_phase_leaf(phase, record, toolchain)?);
     }
