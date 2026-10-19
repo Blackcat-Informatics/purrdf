@@ -1260,7 +1260,7 @@ impl CompositeDatasetView {
     /// Materialize the complete RDF surface at an explicit ownership boundary.
     /// # Errors
     /// Returns admission errors without publishing a partial dataset.
-    pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::DatasetMaterializationError> {
         // Rebuilt under the configuration the sources agree on, by `union`'s rule.
         let mut configured = Vec::new();
         self.configured_datasets(&mut configured);

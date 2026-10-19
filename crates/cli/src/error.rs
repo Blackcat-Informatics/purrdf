@@ -197,7 +197,7 @@ purrdf_lex::variant_from!(CliError {
 });
 
 purrdf_lex::variant_from!(impl [E] CliError where [E: fmt::Display] {
-    Runtime(EntailError<E>) as ToString::to_string
+    Runtime(EntailError<E>, purrdf_core::DatasetMaterializationError<E>) as ToString::to_string
 });
 
 #[cfg(test)]

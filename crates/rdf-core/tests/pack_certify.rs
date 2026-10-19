@@ -118,7 +118,6 @@ fn rich_fixture() -> Arc<RdfDataset> {
 /// coverage (that directory starts at offset 64).
 const RDFC_DIGEST_HEADER_OFFSET: usize = 32;
 
-#[test]
 fn verify_pack_certifies_a_round_tripped_pack_against_the_source_digest() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -143,7 +142,6 @@ fn verify_pack_certifies_a_round_tripped_pack_against_the_source_digest() {
     assert_eq!(certified.as_bytes(), &view.rdfc_digest());
 }
 
-#[test]
 fn verify_pack_rejects_a_tampered_digest_header_field() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -182,7 +180,6 @@ fn verify_pack_rejects_a_tampered_digest_header_field() {
     assert!(verify_pack(&bytes).is_ok());
 }
 
-#[test]
 fn verify_pack_defers_to_section_integrity_for_body_corruption() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -201,7 +198,6 @@ fn verify_pack_defers_to_section_integrity_for_body_corruption() {
     );
 }
 
-#[test]
 fn verify_pack_is_deterministic_across_two_builds() {
     let dataset = rich_fixture();
     let bytes_a = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -261,7 +257,6 @@ const SIDE_ENTRY_INDEX: usize = 2;
 /// This drives the actual `verify_pack(bytes)` production entry point
 /// end-to-end (not a lower-level unit test), so it exercises the same code
 /// path a caller handed adversarial bytes would.
-#[test]
 fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -333,9 +328,33 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
         "a reifier bound to a non-triple target must fail freeze's structural \
          validation inside verify_pack, not panic",
     );
-    assert!(
-        matches!(err, PackError::Malformed(_)),
-        "expected PackError::Malformed from the failed reconstruction, got {err:?}"
+    let PackError::Materialization(purrdf_core::DatasetMaterializationError::Freeze(cause)) = &err
+    else {
+        panic!("expected the original structural freeze refusal, got {err:?}");
+    };
+    assert_eq!(
+        std::error::Error::source(&err)
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_core::RdfDiagnostic>(),
+        Some(cause)
+    );
+    let captured = purrdf_testkit::error_capture::Capture::read(&err);
+    assert_eq!(captured.code, "pack-materialization");
+    assert_eq!(
+        captured.child("cause").code,
+        "dataset-materialization-freeze"
+    );
+    let restored = purrdf_core::restore_pack(&corrupted).unwrap_err();
+    assert_eq!(restored, err);
+    let attached = purrdf_core::CertifiedPurrpckSource::certify(&corrupted).unwrap_err();
+    let purrdf_core::EmbeddingError::InvalidSourcePack(owner) = attached else {
+        panic!("expected native attachment refusal")
+    };
+    assert_eq!(
+        owner.as_ref(),
+        &purrdf_core::EmbeddingSourceError::Pack(err)
     );
 
     // The untampered pack still verifies fine — the patch, not the fixture
@@ -343,7 +362,6 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     assert!(verify_pack(&bytes).is_ok());
 }
 
-#[test]
 fn pack_digest_to_hex_is_64_lowercase_hex_chars() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
@@ -363,3 +381,12 @@ fn pack_digest_to_hex_is_64_lowercase_hex_chars() {
         "to_hex is a pure function of the digest bytes"
     );
 }
+
+purrdf_testkit::harness_main!(
+    verify_pack_certifies_a_round_tripped_pack_against_the_source_digest,
+    verify_pack_rejects_a_tampered_digest_header_field,
+    verify_pack_defers_to_section_integrity_for_body_corruption,
+    verify_pack_is_deterministic_across_two_builds,
+    verify_pack_returns_err_when_reconstruction_fails_structural_validation,
+    pack_digest_to_hex_is_64_lowercase_hex_chars,
+);
