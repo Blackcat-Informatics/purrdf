@@ -189,6 +189,8 @@ macro_rules! __text_field {
 /// themselves takes them as one group, `Variant(Source, ..) as convert`, and
 /// each body is `Self::Variant(convert(&value))` — `ToString::to_string` for a
 /// variant that carries the source's message.
+/// `Variant(Source, ..) via convert` passes the owned source to the conversion,
+/// for an owner that must retain the original error rather than borrow it.
 ///
 /// A generic target names its unbounded type parameters in an `impl<T, U>`
 /// header. Both forms support that header, including source types that use the
@@ -262,6 +264,15 @@ macro_rules! variant_from {
         $crate::variant_from!(@variants [] [] $type { $($items)* });
     };
     (@variants $parameters:tt $bounds:tt $type:ty {
+        $variant:ident($($source:ty),+ $(,)?) via $convert:path
+    }) => {
+        $(
+            $crate::variant_from!(@owned $parameters $bounds $type {
+                $variant($source) via $convert
+            });
+        )*
+    };
+    (@variants $parameters:tt $bounds:tt $type:ty {
         $variant:ident($($source:ty),+ $(,)?) as $convert:path
     }) => {
         $(
@@ -276,6 +287,15 @@ macro_rules! variant_from {
         $(
             $crate::variant_from!(@wrap $parameters $bounds $type { $variant($source) });
         )+
+    };
+    (@owned [$($parameters:tt)*] [$($bounds:tt)*] $type:ty {
+        $variant:ident($source:ty) via $convert:path
+    }) => {
+        impl $($parameters)* ::core::convert::From<$source> for $type $($bounds)* {
+            fn from(value: $source) -> Self {
+                Self::$variant($convert(value))
+            }
+        }
     };
     (@render [$($parameters:tt)*] [$($bounds:tt)*] $type:ty {
         $variant:ident($source:ty) as $convert:path

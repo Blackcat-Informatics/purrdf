@@ -83,10 +83,11 @@ pub fn compute_fix_deps(catalog: &SliceCatalog) -> Result<Vec<ManifestPatch>, Sl
         }
         let Some(record) = catalog.get(&edge.from_slice) else {
             // Every edge endpoint is a discovered slice; absence is unexpected.
-            return Err(SliceError::InvalidManifest(format!(
-                "fix-deps: depending slice {} not found in catalog",
-                edge.from_slice
-            )));
+            return Err(SliceError::InvalidManifest(
+                crate::error::ManifestRefusal::UnknownDependencySlice {
+                    slice: edge.from_slice.clone(),
+                },
+            ));
         };
         let entry = proposals
             .entry(edge.from_slice.clone())
@@ -117,7 +118,8 @@ pub fn compute_fix_deps(catalog: &SliceCatalog) -> Result<Vec<ManifestPatch>, Sl
         // once here — where the path is known to name a real file — keeps the two parses
         // in agreement, which is what makes the post-edit set comparison meaningful.
         let base = retrieval_base_iri(Path::new(&proposal.manifest_path))?;
-        let original = std::fs::read_to_string(&proposal.manifest_path).map_err(SliceError::Io)?;
+        let original =
+            std::fs::read_to_string(&proposal.manifest_path).map_err(SliceError::from)?;
         let patched = apply_proposal(&original, &proposal, catalog.vocab(), Some(base.as_str()))?;
         if patched != original {
             patches.push(ManifestPatch {
@@ -197,11 +199,13 @@ fn apply_proposal(
         expected.insert((*t).clone());
     }
     if result != expected {
-        return Err(SliceError::InvalidManifest(format!(
-            "fix-deps: patched {} did not yield the expected sliceDependsOn set \
-             (got {:?}, expected {:?})",
-            proposal.manifest_path, result, expected
-        )));
+        return Err(SliceError::InvalidManifest(
+            crate::error::ManifestRefusal::PatchDependencies {
+                path: proposal.manifest_path.clone(),
+                actual: result,
+                expected,
+            },
+        ));
     }
     // Confirm the slice subject still typed as the vocab's Slice class (no
     // structural damage).
@@ -210,10 +214,12 @@ fn apply_proposal(
         .iter()
         .any(|s| s == subject);
     if !still_a_slice {
-        return Err(SliceError::InvalidManifest(format!(
-            "fix-deps: patched {} no longer declares its slice subject {}",
-            proposal.manifest_path, proposal.slice_iri
-        )));
+        return Err(SliceError::InvalidManifest(
+            crate::error::ManifestRefusal::PatchSubject {
+                path: proposal.manifest_path.clone(),
+                slice: proposal.slice_iri.clone(),
+            },
+        ));
     }
 
     Ok(patched)
@@ -282,11 +288,11 @@ fn surgical_edit(
                 // No textual block found but the graph said there were objects:
                 // the manifest uses a form we don't recognize. Hard-fail rather
                 // than silently mangle it.
-                Err(SliceError::InvalidManifest(format!(
-                    "fix-deps: could not locate the {}:sliceDependsOn predicate \
-                     block for a surgical edit",
-                    vocab.prefix_name()
-                )))
+                Err(SliceError::InvalidManifest(
+                    crate::error::ManifestRefusal::MissingPredicateBlock {
+                        prefix: vocab.prefix_name().to_owned(),
+                    },
+                ))
             }
         }
     }
@@ -451,9 +457,7 @@ fn rewrite_block(
                 out = format!("{stripped}.{trailing_ws}");
             } else {
                 return Err(SliceError::InvalidManifest(
-                    "fix-deps: removing the terminal sliceDependsOn block left no \
-                     predicate to carry the statement terminator"
-                        .to_string(),
+                    crate::error::ManifestRefusal::MissingTerminator,
                 ));
             }
             out.push_str(&original[block.end..]);
@@ -518,10 +522,9 @@ fn insert_new_block(
         .find(&format!("a {prefix}:Slice"))
         .or_else(|| original.find(&format!("a\t{prefix}:Slice")))
         .ok_or_else(|| {
-            SliceError::InvalidManifest(format!(
-                "fix-deps: manifest has no `a {prefix}:Slice` line to anchor a new \
-                 sliceDependsOn predicate"
-            ))
+            SliceError::InvalidManifest(crate::error::ManifestRefusal::MissingAnchor {
+                prefix: prefix.to_owned(),
+            })
         })?;
     let line_end = original[anchor_rel..]
         .find('\n')

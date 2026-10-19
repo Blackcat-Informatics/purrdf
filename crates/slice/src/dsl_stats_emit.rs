@@ -49,9 +49,9 @@ pub fn emit_dsl_stats(root: &Path, vocab: &SliceVocab) -> Result<String, SliceEr
     for cell_iri in subjects_of_type(&store, &vocab.term_equivalence())? {
         equivalences += 1;
         let Some(sssom_file) = object_literal(&store, &cell_iri, &sssom_file_iri)? else {
-            return Err(SliceError::Parse(format!(
-                "term equivalence {cell_iri} missing sssomFile"
-            )));
+            return Err(SliceError::Parse(
+                crate::error::ParseRefusal::TermEquivalence { subject: cell_iri },
+            ));
         };
         *cells_by_set.entry(sssom_file).or_insert(0) += 1;
     }
@@ -67,9 +67,9 @@ pub fn emit_dsl_stats(root: &Path, vocab: &SliceVocab) -> Result<String, SliceEr
         std::collections::BTreeSet::new();
     for set_iri in subjects_of_type(&store, &vocab.mapping_set())? {
         let Some(file) = object_literal(&store, &set_iri, &sssom_file_iri)? else {
-            return Err(SliceError::Parse(format!(
-                "mapping set {set_iri} missing sssomFile"
-            )));
+            return Err(SliceError::Parse(crate::error::ParseRefusal::MappingSet {
+                subject: set_iri,
+            }));
         };
         mapping_set_files.insert(file);
     }

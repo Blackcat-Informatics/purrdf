@@ -48,8 +48,13 @@ impl NamedNode {
     /// IRI (term-position IRIs must be absolute).
     pub fn new(iri: impl Into<String>) -> Result<Self, SliceError> {
         let iri = iri.into();
-        purrdf_sparql_algebra::NamedNode::new(iri.clone())
-            .map_err(|e| SliceError::Parse(format!("invalid IRI {iri}: {e}")))?;
+        purrdf_sparql_algebra::NamedNode::new(iri.clone()).map_err(|cause| match cause {
+            purrdf_sparql_algebra::ParseError::Storage(storage) => SliceError::Storage(storage),
+            cause => SliceError::Iri {
+                iri: iri.clone(),
+                cause: Box::new(cause),
+            },
+        })?;
         Ok(Self { iri })
     }
 
@@ -372,7 +377,7 @@ impl Dataset {
         context: &str,
     ) -> Result<Self, SliceError> {
         let ds = parse_dataset(bytes, media_type, base)
-            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
+            .map_err(|error| SliceError::rdf(error, &format!("syntax error in {context}")))?;
         // `parse_dataset` returns an `Arc<RdfDataset>`; unwrap the fresh, uniquely-owned
         // allocation into an owned dataset (no clone — it is the sole reference).
         let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
@@ -535,15 +540,16 @@ impl Dataset {
     /// `purrdf_rdf::canonical_nquads` over the flat quad set: both canonicalize
     /// the same flat triple set, so the semantic digest is preserved (the native
     /// folded `canonicalize` would instead emit reserved overlay sentinels).
-    pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
+    ///
+    /// # Errors
+    /// Retains native storage, structural and canonicalization refusals.
+    pub fn canonical_nquads_flat(&self) -> Result<String, purrdf_rdf::CanonError> {
         let mut builder = RdfDatasetBuilder::new();
         for quad in purrdf_rdf::flat_rdf_quads(&self.ds) {
             builder.push_owned_quad(&quad)?;
         }
-        let frozen = builder
-            .freeze()
-            .map_err(|error| SliceError::rdf(&error, "flatten for canonicalization"))?;
-        Ok(purrdf_rdf::canonicalize(&frozen).nquads)
+        let frozen = builder.freeze()?;
+        Ok(purrdf_rdf::try_canonicalize(&frozen)?.nquads)
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -556,7 +562,7 @@ impl Dataset {
         }
         let frozen = builder
             .freeze()
-            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
+            .map_err(|error| SliceError::rdf(error, "dataset freeze failed"))?;
         Self::from_frozen(frozen)
     }
 }
@@ -838,7 +844,7 @@ fn owned_clone_of(ds: &RdfDataset) -> Result<RdfDataset, SliceError> {
     builder.push_dataset(ds)?;
     let frozen = builder
         .freeze()
-        .map_err(|error| SliceError::rdf(&error, "re-freeze owned dataset"))?;
+        .map_err(|error| SliceError::rdf(error, "re-freeze owned dataset"))?;
     std::sync::Arc::try_unwrap(frozen).map_or_else(|arc| owned_clone_of(&arc), Ok)
 }
 
@@ -873,7 +879,7 @@ impl DatasetAccumulator {
         context: &str,
     ) -> Result<(), SliceError> {
         let parsed = parse_dataset(bytes, media_type, base)
-            .map_err(|error| SliceError::rdf(&error, &format!("syntax error in {context}")))?;
+            .map_err(|error| SliceError::rdf(error, &format!("syntax error in {context}")))?;
         self.builder.push_dataset(&parsed)?;
         Ok(())
     }
@@ -911,7 +917,7 @@ impl DatasetAccumulator {
         let ds = self
             .builder
             .freeze()
-            .map_err(|error| SliceError::rdf(&error, "dataset freeze failed"))?;
+            .map_err(|error| SliceError::rdf(error, "dataset freeze failed"))?;
         let ds = std::sync::Arc::try_unwrap(ds).map_or_else(|arc| owned_clone_of(&arc), Ok)?;
         Ok(Dataset::from_dataset(ds))
     }
@@ -1581,9 +1587,10 @@ mod tests {
         let err =
             Dataset::parse_turtle(b"<> <urn:example:declares> <thing> .\n", None, "in-memory")
                 .expect_err("a relative IRI with no base in scope is a hard error");
-        let SliceError::Parse(message) = err else {
-            panic!("expected a parse error");
+        let SliceError::Rdf { cause, .. } = &err else {
+            panic!("expected the original RDF parse diagnostic");
         };
+        let message = cause.to_string();
         assert!(
             message.contains("iri-relative-no-base") || message.contains("no base"),
             "the diagnostic must name the missing base, got: {message}"

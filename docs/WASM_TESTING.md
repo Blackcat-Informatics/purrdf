@@ -9,14 +9,15 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 244 named cases in 37 integration targets,
-with 254 executions across 42 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 258 named cases in 39 integration targets,
+with 268 executions across 44 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
 carrier, governed-request EXPLAIN, core `structured_inspection` and GTS
-`structured_errors` and `event_bridge` targets, and the JSON, Markdown and MIME
-`structured_errors` targets. These inspection targets preserve original data,
+`structured_errors` and `event_bridge` targets, and the JSON, Markdown, MIME and
+slice `structured_errors` targets and SPARQL `lexer_owned_admission` target.
+These inspection targets preserve original data,
 error payloads and refusal paths on the 32-bit target. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
 32-bit target; the scoped text cases retain original candidate rows and scores.
@@ -138,7 +139,9 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-sparql-eval` / `evidence_ingress` | scalar | All twenty exact cases registered in the original target | Preserves polarity, closure, unknown status, scope, ledger cells and accepted ordering through actual operators and query forms; native empty, late-emitted and unclosed whole-search declarations retain their original owners and admitted COUNT bounds through EXISTS and ASK functions without an external evidence source. Thirty-six actual empty-producer combinations cover complete/open/incomplete search, explicit source scope, positive EXISTS, NOT EXISTS and nested MINUS: only closed complete absence decides the predicate; unresolved membership remains enumerable. Producer refusal prevents partial publication. |
 | `purrdf-core` / `triple_carrier` | scalar | All six exact cases selected in `make wasm-test` | Pins 12/8/12-byte row layouts, all bound patterns and lazy side indexes, lexical/statement/canonical identity, named-role refusal and shared first-cause/fresh-read behavior. |
 | `purrdf-gts` / `mmr_preimages` | scalar | `streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids` | Replays the frozen inclusion proof and root and compares variable-length frame commitments at CBOR width boundaries against the independent tree encoder. |
-| `purrdf-core` / `structured_inspection` | scalar | All five exact cases selected in `make wasm-test` | Borrows original dictionary, graph streams, source locations, RDF 1.2 terms and capabilities without materialization or inspection allocation. Exercises native evidence/answer state failures, full-width XPath resource refusals, original invalid graph edges, retained ingestion freeze diagnostics and cancellation refusal. |
+| `purrdf-core` / `structured_inspection` | scalar | All six exact cases selected in `make wasm-test` | Borrows original dictionary, graph streams, source locations, RDF 1.2 terms and capabilities without materialization or inspection allocation. Exercises native evidence/answer state failures, full-width XPath resource refusals, original invalid graph edges, retained ingestion freeze diagnostics and cancellation refusal. |
+| `purrdf-sparql-algebra` / `lexer_owned_admission` | scalar | All ten exact cases selected in `make wasm-test` | Preserves original escaped tokens, native IRI/lexical/CDT/aggregate fields and scalar keys, first-token admission and cleanup, and caller-owned messages without rendering native causes. |
+| `purrdf-slice` / `structured_errors` | scalar | Four exact cases selected in `make wasm-test` | Retains native I/O ownership and full-width offsets, original JSON members after input disposal, IRI/RDF causes and the fallible canonicalization refusal with unchanged valid output. The real missing-filesystem-path control remains native. |
 | `purrdf-gts` / `structured_errors` | scalar | All 32 exact cases selected in `make wasm-test` | Exercises the actual native reader, writer, framing, proof, policy, compaction, dictionary, nested discovery and transport refusals through one generic borrowed visitor. Preserves original I/O owners and sources, nested records, full-width counts, JSON/CBOR values, exact floating-point bits, empty/absent fields and typed cryptographic/codec causes without rendering them. |
 | `purrdf-gts` / `event_bridge` | scalar | All 14 exact cases selected in `make wasm-test` | Executes the public event bridge, original caller and reader causes, full-width resolution fields and literal refusals beside valid neighbors. Preserves original native owners through the event protocol without rendering; also checks cancellation, scopes, deterministic IDs and bounded per-segment state. |
 | `purrdf-deflate` / `deflate_conformance` | scalar | `bad_crc_refused_in_first_and_second_member`, `decompressed_limit_refuses_bomb` | Checks original CRC counts and decompression limits through the actual streaming I/O bridge and its borrowed native cause. |

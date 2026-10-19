@@ -288,7 +288,7 @@ pub(crate) fn collect_dsl_store(root: &Path, vocab: &SliceVocab) -> Result<Datas
     collect_ttl_files(&dsl_dir, &mut dsl_files)?;
     dsl_files.sort();
     for path in &dsl_files {
-        let bytes = std::fs::read(path).map_err(SliceError::Io)?;
+        let bytes = std::fs::read(path).map_err(SliceError::from)?;
         acc.add_file(&bytes, path)?;
     }
     let slices_dir = root.join("slices");
@@ -315,10 +315,10 @@ fn collect_ttl_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()
     if !dir.is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(dir).map_err(SliceError::Io)? {
-        let entry = entry.map_err(SliceError::Io)?;
+    for entry in std::fs::read_dir(dir).map_err(SliceError::from)? {
+        let entry = entry.map_err(SliceError::from)?;
         let path = entry.path();
-        let file_type = entry.file_type().map_err(SliceError::Io)?;
+        let file_type = entry.file_type().map_err(SliceError::from)?;
         if file_type.is_dir() {
             collect_ttl_files(&path, out)?;
         } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("ttl") {
