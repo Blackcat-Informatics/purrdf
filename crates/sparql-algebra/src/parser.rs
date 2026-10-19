@@ -5232,8 +5232,8 @@ pub(crate) fn builtin_arity(function: &Function) -> Option<ArityRange> {
     })
 }
 
-/// The argument counts of the keyword call `name` (any case): [`builtin_arity`] for a
-/// function, [`form_arity`] for the forms that are productions of their own. `None` when
+/// The argument counts of the keyword call `name` (any case): `builtin_arity` for a
+/// function, `form_arity` for the forms that are productions of their own. `None` when
 /// `name` is no keyword call.
 ///
 /// A host that builds a call from a name (SHACL 1.2 Node Expressions §5's
