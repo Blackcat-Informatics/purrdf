@@ -130,3 +130,8 @@ harness = false
 # Native error fields through the same generic consumer on native and wasm.
 name = "structured_errors"
 harness = false
+
+[[test]]
+# The public event bridge uses the same runner on native and wasm.
+name = "event_bridge"
+harness = false
