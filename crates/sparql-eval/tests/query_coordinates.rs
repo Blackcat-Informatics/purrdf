@@ -232,6 +232,8 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     assert!(source.evidence().peak_bytes() <= support::segmented::CEILING);
     assert!(source.read_error().is_none());
     drop(now);
+    drop(prepared);
+    drop(engine);
     let (variables, rows) = found.solutions().unwrap();
     assert_eq!(variables, ["time"]);
     assert_eq!(rows, [vec![Some(expected.clone())]]);
@@ -250,8 +252,17 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     assert_eq!(owner_balance(&source.evidence()), original_owners);
     assert_eq!(retained.solutions().unwrap().1, [vec![Some(expected)]]);
     drop(retained);
-    assert_eq!(owner_balance(&source.evidence()), before);
+    assert_eq!(
+        owner_balance(&source.evidence()),
+        before,
+        "the last output releases its grant after its engine and plan are gone: {:?}",
+        source.evidence()
+    );
 
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query("SELECT (NOW() AS ?time) WHERE {}", None)
+        .unwrap();
     let XsdValue::DateTime(now) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
     else {
         panic!("dateTime value for cancellation")
@@ -278,6 +289,8 @@ fn bounded_coordinate_owners_price_real_allocations_and_release_after_last_outpu
     );
     assert!(source.read_error().is_none());
     drop(refused);
+    drop(prepared);
+    drop(engine);
     assert_eq!(owner_balance(&source.evidence()), before);
 }
 
