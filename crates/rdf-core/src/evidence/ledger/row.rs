@@ -28,6 +28,16 @@ pub enum LedgerNodeKey {
     Aggregate(Digest32, AggregateBound),
 }
 
+impl purrdf_hash::error::StructuredError for LedgerNodeKey {
+    purrdf_hash::error_visit! {
+        Reason(id) => "ledger-node-reason" { "reason" => Record(id) },
+        Frame(id) => "ledger-node-frame" { "identity" => Bytes(id.as_bytes()) },
+        Reference(id) => "ledger-node-reference" { "identity" => Bytes(id.as_bytes()) },
+        Information(standpoint, information) => "ledger-node-information" { "standpoint" => Record(standpoint), "information" => Record(information) },
+        Aggregate(column, bound) => "ledger-node-aggregate" { "column" => Bytes(column.as_bytes()), "bound" => Record(bound) },
+    }
+}
+
 impl LedgerNodeKey {
     /// Canonical identity used by the caller's deliberate node-minting policy.
     #[must_use]

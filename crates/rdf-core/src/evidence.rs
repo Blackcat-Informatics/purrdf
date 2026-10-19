@@ -68,6 +68,15 @@ pub enum Information {
     Both = 3,
 }
 
+impl purrdf_hash::error::StructuredError for Information {
+    purrdf_hash::error_visit! {
+        Neither => "evidence-information-neither" {},
+        Supported => "evidence-information-supported" {},
+        Opposed => "evidence-information-opposed" {},
+        Both => "evidence-information-both" {},
+    }
+}
+
 impl Information {
     /// Whether a positive witness exists.
     #[must_use]
@@ -171,6 +180,15 @@ pub enum AggregateBound {
     Upper,
     /// Neither directional bound is justified.
     Undetermined,
+}
+
+impl purrdf_hash::error::StructuredError for AggregateBound {
+    purrdf_hash::error_visit! {
+        Exact => "evidence-aggregate-exact" {},
+        Lower => "evidence-aggregate-lower" {},
+        Upper => "evidence-aggregate-upper" {},
+        Undetermined => "evidence-aggregate-undetermined" {},
+    }
 }
 
 /// Aggregate monotonicity, established from the actual expression and inputs.

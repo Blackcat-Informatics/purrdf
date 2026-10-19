@@ -32,6 +32,15 @@ pub enum GraphError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for GraphError {
+    purrdf_hash::error_visit! {
+        InvalidEdge { from, to } => "graph-invalid-edge" {
+            "from" => Unsigned(*from as u128), "to" => Unsigned(*to as u128),
+        },
+        Storage(cause) => "graph-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(GraphError { Storage(StorageError) });
 
 impl core::fmt::Display for GraphError {

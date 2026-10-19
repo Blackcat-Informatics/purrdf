@@ -1,0 +1,228 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Inspect original graph payloads and actual native refusals without rendering.
+
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn structured_graph_fixture() -> std::sync::Arc<purrdf_core::RdfDataset> {
+    use purrdf_core::{
+        BlankScope, ContentIdScheme, RdfDatasetBuilder, RdfLocation, RdfTextDirection, TermBox,
+        TermFactory, TermValue,
+    };
+    let mut builder = RdfDatasetBuilder::with_content_addressing(
+        ContentIdScheme::new("urn:content:").unwrap(),
+        Some("https://example.org/derivation".into()),
+    );
+    let subject = TermValue::Blank {
+        label: "original".into(),
+        scope: BlankScope(37),
+    };
+    let predicate = TermValue::iri("https://example.org/p");
+    let value = TermValue::Literal {
+        lexical_form: "方向".into(),
+        datatype: purrdf_iri::vocab::rdf::DIR_LANG_STRING.into(),
+        language: Some("zh".into()),
+        direction: Some(RdfTextDirection::Rtl),
+    };
+    let triple = TermValue::Triple {
+        s: TermBox::new(subject.clone()),
+        p: TermBox::new(predicate.clone()),
+        o: TermBox::new(value.clone()),
+    };
+    let s = builder.intern_value(&subject).unwrap();
+    let p = builder.intern_value(&predicate).unwrap();
+    let o = builder.intern_value(&value).unwrap();
+    let t = builder.intern_value(&triple).unwrap();
+    let r = builder.intern_iri("https://example.org/reifier").unwrap();
+    let second = builder.intern_iri("https://example.org/second").unwrap();
+    let g = builder.intern_iri("https://example.org/graph").unwrap();
+    let empty = builder.intern_iri("https://example.org/empty").unwrap();
+    let handle = builder.push_quad_with_handle(s, p, o, None).unwrap();
+    builder.attach_location(
+        handle,
+        RdfLocation {
+            path: Some("source.ttl".into()),
+            line: Some(u64::MAX),
+            ..RdfLocation::default()
+        },
+    );
+    builder.push_quad(second, p, o, None).unwrap();
+    builder.push_quad(s, p, o, Some(g)).unwrap();
+    builder.push_reifier_in_graph(r, t, Some(g)).unwrap();
+    builder.push_annotation_in_graph(r, p, o, Some(g)).unwrap();
+    builder.declare_named_graph(empty).unwrap();
+    builder.freeze().unwrap()
+}
+
+fn graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields() {
+    use purrdf_core::SparqlResult;
+    let data = structured_graph_fixture();
+    let result = SparqlResult::Graph(data.clone().into());
+    let graph = Capture::read(&result).child("graph");
+    let events = Vec::with_capacity(256);
+    let window = CurrentThreadWindow::open();
+    let exact = Capture::read_with_buffer(data.as_ref(), events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(graph.code, "rdf-dataset");
+    assert_eq!(exact.records("quads").len(), 3);
+    assert_eq!(exact.records("reifiers").len(), 1);
+    assert_eq!(exact.records("annotations").len(), 1);
+    assert!(
+        matches!(exact.records("locations")[0].child("location").field("line"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    let ErrorValue::Record(dictionary) = exact.field("dictionary") else {
+        panic!("the original dictionary is retained")
+    };
+    let events = Vec::with_capacity(256);
+    let window = CurrentThreadWindow::open();
+    let dictionary = Capture::read_with_buffer(dictionary, events);
+    assert_eq!(window.close().allocations, 0);
+    assert!(matches!(
+        dictionary.child("content_id_scheme").field("prefix"),
+        ErrorValue::Text("urn:content:")
+    ));
+    assert!(matches!(
+        dictionary.field("derivation_predicate_iri"),
+        ErrorValue::Iri("https://example.org/derivation")
+    ));
+    let terms = dictionary.records("terms");
+    assert_eq!(terms.len(), data.term_count());
+    let literal = terms
+        .iter()
+        .find(|term| term.child("term").code == "rdf-interned-literal")
+        .unwrap()
+        .child("term");
+    assert!(matches!(
+        literal.field("lexical_form"),
+        ErrorValue::Text("方向")
+    ));
+    assert!(matches!(literal.field("language"), ErrorValue::Text("zh")));
+    assert!(matches!(
+        literal.field("direction"),
+        ErrorValue::Code("rtl")
+    ));
+    assert!(matches!(
+        terms
+            .iter()
+            .find(|term| term.child("term").code == "rdf-interned-blank")
+            .unwrap()
+            .child("term")
+            .field("scope"),
+        ErrorValue::Unsigned(37)
+    ));
+    assert!(
+        terms
+            .iter()
+            .any(|term| term.child("term").code == "rdf-interned-triple")
+    );
+    assert!(matches!(
+        exact.child("capabilities").field("named_graphs"),
+        ErrorValue::Boolean(true)
+    ));
+}
+
+fn native_evidence_alignment_and_answer_state_failures_remain_structured() {
+    use purrdf_core::evidence::{
+        AnswerAccumulator, AnswerRequest, AnswerTier, EvidenceColumn, EvidenceId,
+        EvidenceWorkspace, SearchCompleteness, StandpointKey,
+    };
+    use purrdf_lex::allocation::Resident;
+    let mut owner = EvidenceWorkspace::with_admission(Resident);
+    let mut column = EvidenceColumn::uniform_default(0);
+    let original = owner
+        .set_row(&mut column, usize::MAX, EvidenceId::default())
+        .unwrap_err();
+    let captured = Capture::read(&original);
+    assert_eq!(captured.code, "evidence-workspace-column");
+    assert_eq!(
+        captured.child("cause").code,
+        "evidence-column-row-out-of-bounds"
+    );
+    let error = owner.canonical_index().unwrap_err();
+    assert_eq!(Capture::read(&error).code, "evidence-workspace-aborted");
+    let mut answer = AnswerAccumulator::with_admission(
+        AnswerRequest {
+            tier: AnswerTier::Summary,
+            question: None,
+            standpoint: StandpointKey::Unscoped,
+            input_completeness: SearchCompleteness::Complete,
+            closure_declared: false,
+        },
+        Resident,
+    );
+    let error = answer.status().unwrap_err();
+    assert_eq!(Capture::read(&error).code, "answer-evidence-not-finished");
+    let error = answer.finish(false).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).code,
+        "answer-evidence-enumeration-required"
+    );
+    answer.finish(true).unwrap();
+    let error = answer.finish(true).unwrap_err();
+    assert_eq!(
+        Capture::read(&error).code,
+        "answer-evidence-already-finished"
+    );
+}
+
+fn xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts() {
+    use purrdf_core::xsd_regex::xpath::{self, Limits, Profile, Resource};
+    let error = xpath::compile(Profile::Xpath31, "a", "z", Limits::default()).unwrap_err();
+    let cause = Capture::read(&error);
+    assert_eq!(cause.code, "xpath-invalid-flags");
+    assert!(matches!(cause.field("flag"), ErrorValue::Character('z')));
+    assert!(matches!(cause.field("offset"), ErrorValue::ByteCount(0)));
+    assert_eq!(cause.child("profile").code, "xpath-profile-3.1-2017-03-21");
+    let refusal = Limits::default()
+        .with(Resource::PatternBytes, 0)
+        .admit(Resource::PatternBytes, u128::MAX)
+        .unwrap_err();
+    let capture = Capture::read(&refusal);
+    assert!(matches!(
+        capture.field("required"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    assert!(matches!(capture.field("limit"), ErrorValue::Unsigned(0)));
+    let source = xpath::compile(
+        Profile::Xpath20,
+        "a",
+        "",
+        Limits::default().with(Resource::PatternBytes, 0),
+    )
+    .unwrap_err();
+    assert_eq!(
+        Capture::read(&source).child("cause").child("resource").code,
+        "xpath-resource-pattern-bytes"
+    );
+}
+
+fn graph_refusal_keeps_original_invalid_edge_without_rendering() {
+    use purrdf_lex::allocation::{Memory, Resident};
+    let adjacency = [vec![usize::MAX]];
+    let mut admission = Resident;
+    let error =
+        purrdf_core::graph::tarjan_scc_with_memory(&adjacency, &mut Memory::new(&mut admission))
+            .unwrap_err();
+    let events = Vec::with_capacity(2);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "graph-invalid-edge");
+    assert!(matches!(fields.field("from"), ErrorValue::Unsigned(0)));
+    assert!(
+        matches!(fields.field("to"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+}
+
+purrdf_testkit::harness_main!(
+    graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields,
+    native_evidence_alignment_and_answer_state_failures_remain_structured,
+    xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts,
+    graph_refusal_keeps_original_invalid_edge_without_rendering,
+);

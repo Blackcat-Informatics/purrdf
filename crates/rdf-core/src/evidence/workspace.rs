@@ -24,6 +24,15 @@ pub enum EvidenceWorkspaceError {
     Column(EvidenceColumnError),
 }
 
+impl purrdf_hash::error::StructuredError for EvidenceWorkspaceError {
+    purrdf_hash::error_visit! {
+        Aborted => "evidence-workspace-aborted" {},
+        Record(cause) => "evidence-workspace-record" { "cause" => Cause(cause) },
+        Dictionary(cause) => "evidence-workspace-dictionary" { "cause" => Cause(cause) },
+        Column(cause) => "evidence-workspace-column" { "cause" => Cause(cause) },
+    }
+}
+
 impl core::fmt::Display for EvidenceWorkspaceError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

@@ -229,6 +229,47 @@ pub enum SparqlResult {
     Boolean(bool),
 }
 
+impl purrdf_hash::error::StructuredError for SparqlResult {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        match self {
+            Self::Solutions {
+                variables,
+                rows,
+                aux,
+            } => {
+                visitor.variant("sparql-solutions");
+                visit_list(
+                    visitor,
+                    Some("variables"),
+                    variables.iter().map(|name| ErrorValue::Text(name)),
+                );
+                visitor.begin_list(Some("rows"), rows.len());
+                for row in rows {
+                    visit_list(
+                        visitor,
+                        None,
+                        row.iter().map(|cell| {
+                            cell.as_ref()
+                                .map_or(ErrorValue::Absent, |value| ErrorValue::Term(value))
+                        }),
+                    );
+                }
+                visitor.end_list();
+                visitor.value(Some("aux"), ErrorValue::Record(aux.as_ref()));
+            }
+            Self::Graph(graph) => {
+                visitor.variant("sparql-graph");
+                visitor.value(Some("graph"), ErrorValue::Record(graph.as_ref()));
+            }
+            Self::Boolean(value) => {
+                visitor.variant("sparql-boolean");
+                visitor.value(Some("value"), ErrorValue::Boolean(*value));
+            }
+        }
+    }
+}
+
 impl SparqlResult {
     /// The query form this result answers, as the lowercase SPARQL keyword the result
     /// formats record it under: `select` for a solution sequence, `ask` for a boolean,

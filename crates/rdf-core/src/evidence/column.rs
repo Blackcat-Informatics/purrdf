@@ -16,6 +16,13 @@ pub enum EvidenceColumnError {
     RowOutOfBounds,
 }
 
+impl purrdf_hash::error::StructuredError for EvidenceColumnError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "evidence-column-storage" { "cause" => Cause(cause) },
+        RowOutOfBounds => "evidence-column-row-out-of-bounds" {},
+    }
+}
+
 impl core::fmt::Display for EvidenceColumnError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

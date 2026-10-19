@@ -728,6 +728,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test structured_inspection -- --exact \
+				graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields \
+				native_evidence_alignment_and_answer_state_failures_remain_structured \
+				xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts \
+				graph_refusal_keeps_original_invalid_edge_without_rendering \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test structured_errors -- --exact \
 				policy_findings_keep_native_counts_identifiers_and_vocabulary \
 				reader_preserves_terminal_io_and_sequence_causes \

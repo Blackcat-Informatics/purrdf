@@ -24,6 +24,14 @@ pub enum TripleReadError {
     SharedOwnership(SharedCloneError),
 }
 
+impl purrdf_hash::error::StructuredError for TripleReadError {
+    purrdf_hash::error_visit! {
+        NamedGraphsUnsupported => "triple-read-named-graphs-unsupported" {},
+        Storage(cause) => "triple-read-storage" { "cause" => Cause(cause) },
+        SharedOwnership(cause) => "triple-read-shared-ownership" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for TripleReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

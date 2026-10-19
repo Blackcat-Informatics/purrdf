@@ -27,6 +27,20 @@ pub enum StandpointError<K> {
     Storage(StorageError),
 }
 
+impl<K: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for StandpointError<K>
+{
+    purrdf_hash::error_visit! {
+        Undeclared(key) => "standpoint-undeclared" { "key" => Record(key) },
+        Unscoped(key) => "standpoint-unscoped" { "key" => Record(key) },
+        Cycle { sharper, broader } => "standpoint-cycle" {
+            "sharper" => Record(sharper), "broader" => Record(broader),
+        },
+        Graph(cause) => "standpoint-graph" { "cause" => Cause(cause) },
+        Storage(cause) => "standpoint-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(impl<K> StandpointError<K> {
     Storage(StorageError),
     Graph(GraphError),
