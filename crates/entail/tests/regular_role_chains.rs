@@ -240,6 +240,8 @@ fn actual_collection_refusals_keep_original_terms_and_the_ordered_prefix() {
         let member = ontology.builder.intern_value(&member_value).unwrap();
         ontology.relation(owner, owl::INTERSECTION_OF, head);
         ontology.relation(head, rdf::FIRST, member);
+        let individual = ontology.named("source-individual");
+        ontology.relation(individual, rdf::TYPE, owner);
         let dataset = ontology.finish();
         let error = match phase {
             CollectionPhase::OwlRl => {
@@ -279,6 +281,8 @@ fn empty_collection_admission_checks_nil_structure() {
             let owner = ontology.named("original-class");
             let nil = ontology.standard(rdf::NIL);
             ontology.relation(owner, owl::INTERSECTION_OF, nil);
+            let individual = ontology.named("source-individual");
+            ontology.relation(individual, rdf::TYPE, owner);
             if malformed {
                 ontology.relation(nil, rdf::FIRST, owner);
             }
@@ -290,8 +294,11 @@ fn empty_collection_admission_checks_nil_structure() {
                 CollectionPhase::OwlDirect => Reasoner::new(&dataset).map(|_| ()),
             };
             if malformed {
-                assert!(matches!(result, Err(EntailError::Collection(ref error))
-                if error.original.kind == purrdf_core::collections::ListErrorKind::NonEmptyNil));
+                assert!(
+                    matches!(result, Err(EntailError::Collection(ref error))
+                if error.original.kind == purrdf_core::collections::ListErrorKind::NonEmptyNil),
+                    "{phase:?} must preserve the native nil fault: {result:?}"
+                );
             } else {
                 assert!(result.is_ok());
             }
