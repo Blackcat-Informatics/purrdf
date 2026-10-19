@@ -129,9 +129,17 @@ impl GeographicGeoIndex {
         let matches = crate::numerical::reference_matches(declared, context, &mut progress)?;
         let reference_binding = crate::numerical::reference_identity(context, &mut progress, None)?;
         if !matches || profile.policy() != context.policy() {
-            return Err(progress.retained_message(
-                "geographic index requires its actual target reference and original profile policy",
-                GeoError::Config,
+            let reason = if !matches {
+                crate::GeoIndexAdmissionReason::Reference
+            } else {
+                crate::GeoIndexAdmissionReason::Policy
+            };
+            return Err(crate::BindingConfigError::geographic_index_admission(
+                &target,
+                [declared, context.reference()],
+                [profile.policy(), context.policy()],
+                reason,
+                &mut progress,
             ));
         }
         let mut hash = Hasher::new();
@@ -461,15 +469,25 @@ impl GeographicGeoIndex {
         GeoError,
     > {
         if context.reference() != &self.reference {
-            return Err(GeoError::config(
-                "geographic index query requires its actual prepared target reference",
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::GeographicIndex,
+                &mut WorkProgress::new(observer),
             ));
         }
         context.begin(1)?;
         if let Some(receipt) = receipt {
-            if *receipt != self.source_receipt() {
-                return Err(GeoError::config(
-                    "geographic index source receipt does not match its immutable preparation",
+            let expected = self.source_receipt();
+            if *receipt != expected {
+                return Err(GeoError::retained_failure(
+                    crate::SourcePreparationError::Receipt {
+                        consumer: crate::PreparationReceiptConsumer::GeographicIndex,
+                        expected,
+                        actual: *receipt,
+                    },
+                    GeoError::SourcePreparation,
+                    observer,
                 ));
             }
             receipt.validate_context(context)?;
@@ -800,6 +818,110 @@ mod tests {
     }
 
     #[test]
+    fn preparation_refusal_retains_target_references_policies_and_first_comparison() {
+        use crate::{BindingConfigError, GeoIndexAdmissionReason};
+        use purrdf_testkit::error_capture::Capture;
+
+        let source = projection();
+        let profile = GeoProfile::standard();
+        let expected = GeographicReference::wgs84();
+        let other = GeographicReference::new(
+            expected.ellipsoid().clone(),
+            Digest32::new([123; 32]),
+            crate::AxisOrder::LatLon,
+        );
+        let policy = crate::ExecutionPolicy::new(crate::ExecutionLimits {
+            max_work_items: crate::ExecutionLimits::GEOMETRY.max_work_items * 2,
+            ..crate::ExecutionLimits::GEOMETRY
+        })
+        .unwrap();
+        for (actual, reason) in [
+            (other, GeoIndexAdmissionReason::Reference),
+            (expected.clone(), GeoIndexAdmissionReason::Policy),
+        ] {
+            let target = Crs::new(ogc::CRS84).unwrap();
+            let mut context = MetricContext::new(actual.clone(), policy).unwrap();
+            let error = GeographicGeoIndex::prepare(
+                Arc::clone(&source),
+                &profile,
+                target.clone(),
+                &mut context,
+            )
+            .unwrap_err();
+            let GeoError::BindingConfiguration(cause) = error.original() else {
+                panic!("original index admission")
+            };
+            assert!(
+                matches!(&**cause, BindingConfigError::GeographicIndexAdmission {
+                reason: original, target: original_target, declared, actual: original_actual, expected_policy, actual_policy,
+            } if *original == reason && original_target == &target && declared == &expected && original_actual == &actual
+                && *expected_policy == profile.policy() && *actual_policy == policy)
+            );
+            assert!(!error.is_expression_error());
+            assert_eq!(
+                error.detail(),
+                "geographic index requires its actual target reference and original profile policy"
+            );
+            drop((context, actual, target));
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let last = error.clone();
+            assert_eq!(window.close().allocations, 0);
+            drop(error);
+            let fields = Capture::read(last.original()).child("cause");
+            assert_eq!(fields.code, "carrier-geographic-index-admission");
+            assert_eq!(fields.child("target").code, "coordinate-reference");
+            assert_eq!(
+                fields.child("reason").code,
+                if reason == GeoIndexAdmissionReason::Reference {
+                    "geographic-index-admission-reference"
+                } else {
+                    "geographic-index-admission-policy"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn index_reference_refusal_retains_both_complete_original_declarations() {
+        let index = prepare(projection(), &GeoProfile::standard());
+        let expected = index.reference().clone();
+        let actual = GeographicReference::new(
+            expected.ellipsoid().clone(),
+            Digest32::new([117; 32]),
+            crate::AxisOrder::LatLon,
+        );
+        let mut context =
+            MetricContext::new(actual.clone(), crate::ExecutionPolicy::geometry()).unwrap();
+        let error = index
+            .relation_pairs(SpatialRelation::SfEquals, None, None, &mut context)
+            .unwrap_err();
+        assert_eq!(context.work_items(), 0);
+        assert_eq!(context.retained_workspace_bytes(), 0);
+        let GeoError::BindingConfiguration(cause) = error.original() else {
+            panic!("native reference mismatch")
+        };
+        assert!(
+            matches!(&**cause, crate::BindingConfigError::ReferenceMismatch { reason: crate::ReferenceMismatchReason::GeographicIndex, actual: original, expected: required } if original == &actual && required == &expected)
+        );
+        drop((index, context, actual, expected));
+        let last = error.clone();
+        drop(error);
+        let fields = purrdf_testkit::error_capture::Capture::read(last.original()).child("cause");
+        assert_eq!(fields.code, "carrier-reference-mismatch");
+        assert_eq!(
+            fields.child("reason").code,
+            "reference-mismatch-geographic-index"
+        );
+        assert_eq!(fields.child("actual").code, "geographic-reference");
+        assert_eq!(fields.child("expected").code, "geographic-reference");
+        assert!(!last.is_expression_error());
+        assert_eq!(
+            last.detail(),
+            "geographic index query requires its actual prepared target reference"
+        );
+    }
+
+    #[test]
     fn geographic_index_preserves_planar_projection_and_asserted_union() {
         let source = projection();
         let original_id = source.source_fingerprint();
@@ -1009,7 +1131,7 @@ mod tests {
                 &index.prepared[0][0].source_receipt(),
                 &mut context,
             ),
-            Err(GeoError::Config(_))
+            Err(GeoError::SourcePreparation(cause)) if matches!(&*cause, crate::SourcePreparationError::Receipt { consumer: crate::PreparationReceiptConsumer::GeographicIndex, .. })
         ));
         assert!(matches!(
             index.relation_pairs_prepared_with_receipt(
@@ -1019,7 +1141,7 @@ mod tests {
                 &source,
                 &mut MetricContext::wgs84().unwrap(),
             ),
-            Err(GeoError::Config(_))
+            Err(GeoError::SourcePreparation(cause)) if matches!(&*cause, crate::SourcePreparationError::Baseline { .. })
         ));
     }
 }

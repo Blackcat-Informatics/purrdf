@@ -217,8 +217,21 @@ pub(crate) fn locate_enclosure(
         // arithmetic latitude guards can be intersected with that known domain.
         let south = south.max(Rat::from_i64(-90));
         let north = north.min(Rat::from_i64(90));
-        if west > east || south > north {
-            return Err(GeoError::domain("empty validated geographic enclosure"));
+        let failed_axis = if west > east {
+            Some(0)
+        } else if south > north {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(axis) = failed_axis {
+            return Err(crate::GeometryDomainError::empty_enclosure(
+                longitude,
+                latitude,
+                [&south, &north],
+                axis,
+                progress,
+            ));
         }
         let intervals = longitude_intervals(&west, &east, context, progress)?;
         let mut uniform = None;
@@ -274,8 +287,21 @@ pub(crate) fn locate_ring_enclosure(
         let (south, north) = crate::numerical::exact_bounds(latitude);
         let south = south.max(Rat::from_i64(-90));
         let north = north.min(Rat::from_i64(90));
-        if west > east || south > north {
-            return Err(GeoError::domain("empty validated geographic enclosure"));
+        let failed_axis = if west > east {
+            Some(0)
+        } else if south > north {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(axis) = failed_axis {
+            return Err(crate::GeometryDomainError::empty_enclosure(
+                longitude,
+                latitude,
+                [&south, &north],
+                axis,
+                progress,
+            ));
         }
         let mut uniform = None;
         for (west, east) in longitude_intervals(&west, &east, context, progress)? {
@@ -721,9 +747,15 @@ fn union_location_with<'a>(
 pub(crate) fn polygon_base_membership(
     polygon: &PreparedPolygon,
     ring_interiors: &[bool],
+    progress: &mut WorkProgress<'_>,
 ) -> Result<bool, GeoError> {
     if ring_interiors.len() != polygon.rings().len() || ring_interiors.is_empty() {
-        return Err(GeoError::domain("polygon membership ring count mismatch"));
+        return Err(crate::GeometryDomainError::membership(
+            crate::MembershipInput::PolygonRings,
+            polygon.rings().len(),
+            ring_interiors,
+            progress,
+        ));
     }
     if polygon.closed_support() {
         return Ok(false);
@@ -744,12 +776,18 @@ fn polygon_selected_membership(polygon: &PreparedPolygon, base: bool) -> bool {
 pub(crate) fn region_membership(
     region: &PreparedRegion,
     polygon_bases: &[bool],
+    progress: &mut WorkProgress<'_>,
 ) -> Result<bool, GeoError> {
     let (polygons, complementary) = match region {
         PreparedRegion::Empty | PreparedRegion::Whole => {
             if !polygon_bases.is_empty() {
-                return Err(GeoError::domain(
-                    "constant region membership count mismatch",
+                return Err(crate::GeometryDomainError::membership(
+                    crate::MembershipInput::ConstantRegion {
+                        whole: matches!(region, PreparedRegion::Whole),
+                    },
+                    0,
+                    polygon_bases,
+                    progress,
                 ));
             }
             return Ok(matches!(region, PreparedRegion::Whole));
@@ -758,7 +796,12 @@ pub(crate) fn region_membership(
         PreparedRegion::ComplementOfPolygons(polygons) => (polygons, true),
     };
     if polygon_bases.len() != polygons.len() {
-        return Err(GeoError::domain("region membership polygon count mismatch"));
+        return Err(crate::GeometryDomainError::membership(
+            crate::MembershipInput::RegionPolygons { complementary },
+            polygons.len(),
+            polygon_bases,
+            progress,
+        ));
     }
     Ok(polygons
         .iter()
@@ -1345,25 +1388,42 @@ pub(crate) fn written_boundary_locations_in(
 ) -> Result<[Set; 2], GeoError> {
     use crate::numerical::{ExactAdmission, exact_rational};
     use purrdf_xsd::integer::ExactOperation::{Linear, RationalAdd, RationalCompare};
-    for polygon in polygons {
+    for (index, polygon) in polygons.iter().enumerate() {
         charge(context, progress, 1)?;
         if polygon.chart().is_none() {
-            return Err(GeoError::domain(
-                "written boundary sides require source charts",
+            return Err(GeoError::retained_failure_with_progress(
+                crate::GeometryDomainError::MissingWrittenChart {
+                    index,
+                    polygon_count: polygons.len(),
+                    ring_count: polygon.rings().len(),
+                    binding: polygon.binding_id(),
+                    oriented: polygon.oriented_interior(),
+                    closed_support: polygon.closed_support(),
+                    interior: polygon.interior(),
+                },
+                GeoError::GeometryDomain,
+                progress,
             ));
         }
     }
-    let directions = {
+    let pole = ExactAdmission::new(context, progress).rational(
+        RationalCompare,
+        &[point.y()],
+        2,
+        || Ok(point.y() == &Rat::from_i64(90) || point.y() == &Rat::from_i64(-90)),
+    )?;
+    if pole {
+        // A written fragment with an interior pole point lies completely
+        // on that pole row. The row is one physical point, not a 1D edge.
+        return Err(crate::GeometryDomainError::written_tangent(
+            [point, from, to],
+            None,
+            crate::WrittenTangentReason::PhysicalPole,
+            progress,
+        ));
+    }
+    let (dx, dy) = {
         let mut admission = ExactAdmission::new(context, progress);
-        if admission.rational(RationalCompare, &[point.y()], 2, || {
-            Ok(point.y() == &Rat::from_i64(90) || point.y() == &Rat::from_i64(-90))
-        })? {
-            // A written fragment with an interior pole point lies completely
-            // on that pole row. The row is one physical point, not a 1D edge.
-            return Err(GeoError::domain(
-                "a physical pole has no open chart tangent",
-            ));
-        }
         let dx = exact_rational(
             Some(&mut admission),
             RationalAdd,
@@ -1376,9 +1436,18 @@ pub(crate) fn written_boundary_locations_in(
             &[to.y(), from.y()],
             |values| values.subtract(to.y(), from.y()),
         )?;
-        if dx.is_zero() && dy.is_zero() {
-            return Err(GeoError::domain("zero written noded tangent"));
-        }
+        (dx, dy)
+    };
+    if dx.is_zero() && dy.is_zero() {
+        return Err(crate::GeometryDomainError::written_tangent(
+            [point, from, to],
+            Some([&dx, &dy]),
+            crate::WrittenTangentReason::Zero,
+            progress,
+        ));
+    }
+    let directions = {
+        let mut admission = ExactAdmission::new(context, progress);
         admission.expression_result(Linear, &[&dx, &dy], 4, |values| {
             Ok([
                 [values.negate(&dy)?, values.original(&dx)?],

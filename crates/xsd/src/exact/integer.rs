@@ -34,6 +34,20 @@ enum Repr {
     Big(BigInt),
 }
 
+impl purrdf_hash::error::StructuredError for Integer {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self(value) = self;
+        visitor.variant("xsd-integer");
+        visitor.value(
+            Some("value"),
+            match value {
+                Repr::Small(value) => purrdf_hash::error::ErrorValue::Signed(*value),
+                Repr::Big(value) => purrdf_hash::error::ErrorValue::Record(value),
+            },
+        );
+    }
+}
+
 impl Integer {
     /// Zero.
     pub const ZERO: Self = Self(Repr::Small(0));

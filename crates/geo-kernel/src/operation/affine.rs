@@ -20,6 +20,12 @@ pub enum RotationLaw {
     /// Right-handed active matrix `Rz Ry Rx`.
     HelmertEulerRzRyRxV1,
 }
+impl purrdf_hash::error::StructuredError for RotationLaw {
+    purrdf_hash::error_visit! {
+        HelmertSmallAngleV1 => "rotation-law-helmert-small-angle-v1" {},
+        HelmertEulerRzRyRxV1 => "rotation-law-helmert-euler-rz-ry-rx-v1" {},
+    }
+}
 
 /// Explicit active-vector or passive-frame convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +34,12 @@ pub enum RotationConvention {
     PositionVector,
     /// Full matrix transpose of the position-vector law.
     CoordinateFrame,
+}
+impl purrdf_hash::error::StructuredError for RotationConvention {
+    purrdf_hash::error_visit! {
+        PositionVector => "rotation-convention-position-vector" {},
+        CoordinateFrame => "rotation-convention-coordinate-frame" {},
+    }
 }
 
 /// Per exact decimal year rates, in metres, arcseconds and ppm respectively.
@@ -41,6 +53,16 @@ pub struct HelmertRates {
     pub rotation_arcseconds: [Rat; 3],
     /// Scale rate in ppm/year.
     pub scale_ppm: Rat,
+}
+impl purrdf_hash::error::StructuredError for HelmertRates {
+    purrdf_hash::error_visit! {
+        @record self { epoch, translation, rotation_arcseconds, scale_ppm } => "helmert-rates" {
+            "epoch" => Record(&self.epoch),
+            "translation" => List(self.translation.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "rotation_arcseconds" => List(self.rotation_arcseconds.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "scale_ppm" => Record(&self.scale_ppm)
+        }
+    }
 }
 
 /// Caller-supplied seven parameters with an explicit pivot, calibrated law and convention.
@@ -63,6 +85,22 @@ pub struct HelmertParameters {
     /// Invert the actual calibrated affine matrix when true.
     pub inverse: bool,
 }
+impl purrdf_hash::error::StructuredError for HelmertParameters {
+    purrdf_hash::error_visit! {
+        @record self { translation, rotation_arcseconds, scale_ppm, pivot, law, convention, rates, inverse } => "helmert-parameters" {
+            "translation" => List(self.translation.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "rotation_arcseconds" => List(self.rotation_arcseconds.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "scale_ppm" => Record(&self.scale_ppm),
+            "pivot" => List(self.pivot.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "law" => Record(&self.law), "convention" => Record(&self.convention),
+            "rates" => Value(match &self.rates {
+                Some(value) => purrdf_hash::error::ErrorValue::Record(value),
+                None => purrdf_hash::error::ErrorValue::Absent,
+            }),
+            "inverse" => Boolean(self.inverse)
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(HelmertParameters {
     native: [translation, rotation_arcseconds, scale_ppm, pivot, rates],
@@ -84,38 +122,69 @@ impl HelmertParameters {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(progress
-                .retained_message("Helmert scale factor must be positive", GeoError::Config));
+            return Err(crate::AffineInputError::helmert(
+                self,
+                None,
+                None,
+                None,
+                crate::HelmertInputReason::DeclaredScale,
+                progress,
+            ));
         }
         Ok(())
     }
 
-    pub(super) fn validate_point(&self, point: &OperationPoint) -> Result<(), GeoError> {
+    pub(super) fn validate_point(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
         if point.z.is_none() {
             return Err(GeoError::MissingHeight);
         }
         if self.rates.is_some() && point.epoch.is_none() {
-            return Err(GeoError::domain(
-                "a rate-bearing Helmert requires an actual observation epoch",
+            return Err(crate::AffineInputError::helmert(
+                self,
+                Some(point),
+                None,
+                None,
+                crate::HelmertInputReason::ObservationEpoch,
+                progress,
             ));
         }
-        if self.adjusted(point)?.2 <= Rat::from_i64(-1_000_000) {
-            return Err(GeoError::domain(
-                "epoch-adjusted Helmert scale factor must be positive",
+        let scale = self.adjusted(point, progress)?.2;
+        if scale <= Rat::from_i64(-1_000_000) {
+            return Err(crate::AffineInputError::helmert(
+                self,
+                Some(point),
+                None,
+                Some(&scale),
+                crate::HelmertInputReason::AdjustedScale,
+                progress,
             ));
         }
         Ok(())
     }
 
-    fn adjusted(&self, point: &OperationPoint) -> Result<([Rat; 3], [Rat; 3], Rat), GeoError> {
+    fn adjusted(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<([Rat; 3], [Rat; 3], Rat), GeoError> {
         let mut translation = self.translation.clone();
         let mut rotation = self.rotation_arcseconds.clone();
         let mut scale = self.scale_ppm.clone();
         if let Some(rates) = &self.rates {
-            let epoch = point
-                .epoch
-                .as_ref()
-                .ok_or_else(|| GeoError::domain("a Helmert observation epoch is required"))?;
+            let epoch = point.epoch.as_ref().ok_or_else(|| {
+                crate::AffineInputError::helmert(
+                    self,
+                    Some(point),
+                    None,
+                    None,
+                    crate::HelmertInputReason::AdjustmentEpoch,
+                    progress,
+                )
+            })?;
             let delta = epoch.sub(&rates.epoch);
             for index in 0..3 {
                 translation[index] = translation[index].add(&rates.translation[index].mul(&delta));
@@ -166,8 +235,9 @@ impl HelmertParameters {
         point: &OperationPoint,
         coordinates: &[FixedInterval],
         math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
     ) -> Result<OperationCoordinates, MathError> {
-        self.evaluate_with_matrix(point, coordinates, math)
+        self.evaluate_with_matrix(point, coordinates, math, progress)
             .map(|(image, _)| image)
     }
 
@@ -176,10 +246,15 @@ impl HelmertParameters {
         point: &OperationPoint,
         coordinates: &[FixedInterval],
         math: &mut CoordinateMath,
+        progress: &mut WorkProgress<'_>,
     ) -> Result<(OperationCoordinates, purrdf_xsd::math::Matrix3), MathError> {
-        let (translation, rotation, scale) = self
-            .adjusted(point)
-            .map_err(|_| MathError::Domain("missing epoch"))?;
+        let (translation, rotation, scale) = self.adjusted(point, progress).map_err(|error| {
+            GeoError::math_validation_failure(
+                error,
+                crate::OperationValidationContext::AffineEpoch,
+                progress,
+            )
+        })?;
         let arcseconds = FixedInterval::from_i64(3600, math)?;
         let mut angles = OperationCoordinates::default();
         for angle in &rotation {
@@ -279,6 +354,15 @@ pub struct Similarity2d {
     /// Invert the actual affine map when true.
     pub inverse: bool,
 }
+impl purrdf_hash::error::StructuredError for Similarity2d {
+    purrdf_hash::error_visit! {
+        @record self { translation, scale, rotation_degrees, convention, inverse } => "similarity-2d" {
+            "translation" => List(self.translation.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "scale" => Record(&self.scale), "rotation_degrees" => Record(&self.rotation_degrees),
+            "convention" => Record(&self.convention), "inverse" => Boolean(self.inverse)
+        }
+    }
+}
 
 crate::context::retained::native_detached_fields!(Similarity2d {
     native: [translation, scale, rotation_degrees],
@@ -296,9 +380,7 @@ impl Similarity2d {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(
-                progress.retained_message("similarity scale must be positive", GeoError::Config)
-            );
+            return Err(crate::AffineInputError::similarity(self, progress));
         }
         Ok(())
     }

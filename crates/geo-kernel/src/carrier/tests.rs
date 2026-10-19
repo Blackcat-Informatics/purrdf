@@ -4,6 +4,196 @@
 use super::*;
 use crate::{ExecutionLimits, ExecutionPolicy, MetricWorkObserver};
 
+#[test]
+fn rejected_carrier_inputs_keep_full_original_terms_after_source_destruction() {
+    use purrdf_core::{BlankScope, RdfTextDirection};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let vocab = crate::standard_vocabulary();
+    for input in [
+        TermValue::Iri("https://example.org/original-input".to_owned()),
+        TermValue::Blank {
+            label: "original-blank".to_owned(),
+            scope: BlankScope(u32::MAX),
+        },
+        TermValue::Triple {
+            s: TermValue::Blank {
+                label: "nested-blank".to_owned(),
+                scope: BlankScope(42),
+            }
+            .into(),
+            p: TermValue::Iri("https://example.org/predicate".to_owned()).into(),
+            o: TermValue::typed_literal("original nested literal", "https://example.org/datatype")
+                .into(),
+        },
+        TermValue::Literal {
+            lexical_form: "original 原文".to_owned(),
+            datatype: "https://example.org/unknown-carrier".to_owned(),
+            language: Some("zh-Hant".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        },
+    ] {
+        let expected = input.clone();
+        let reason = if matches!(&input, TermValue::Literal { .. }) {
+            "carrier-input-unknown-datatype"
+        } else {
+            "carrier-input-expected-literal"
+        };
+        let error = geometry_arg(vocab, &input).unwrap_err();
+        drop(input);
+        let cloned = error.clone();
+        drop(error);
+        let fields = Capture::read(&cloned).child("cause");
+        assert_eq!(fields.code, "carrier-input");
+        assert_eq!(fields.child("reason").code, reason);
+        assert!(matches!(fields.field("value"), ErrorValue::Term(_)));
+        let GeoError::CarrierInput(cause) = &cloned else {
+            panic!("original carrier input")
+        };
+        assert_eq!(cause.value(), &expected);
+        assert!(cloned.is_expression_error());
+        assert!(std::error::Error::source(&cloned).is_some());
+        if matches!(&expected, TermValue::Blank { .. }) {
+            assert!(
+                matches!(fields.child("value").field("scope"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+            );
+        }
+    }
+}
+
+#[test]
+fn missing_parsed_source_keeps_input_validation_priority_and_original_literal() {
+    use purrdf_lex::allocation::{Admission, Resident};
+    use purrdf_testkit::error_capture::Capture;
+
+    let vocab = crate::standard_vocabulary();
+    for (value, reason, configuration) in [
+        (
+            TermValue::iri("https://example.org/input"),
+            "carrier-input-expected-literal",
+            false,
+        ),
+        (
+            TermValue::typed_literal("POINT(1 2)", "https://example.org/unknown"),
+            "carrier-input-unknown-datatype",
+            false,
+        ),
+        (
+            literal("POINT(1 2)", false),
+            "carrier-input-missing-parsed-source",
+            true,
+        ),
+    ] {
+        let mut resident = Resident;
+        let storage = CarrierStorage::new(&mut resident as &mut dyn Admission);
+        let error = missing_parsed_source_error(vocab, &value, &storage);
+        let GeoError::CarrierInput(cause) = &error else {
+            panic!("native source boundary refusal")
+        };
+        assert_eq!(cause.value(), &value);
+        assert_eq!(cause.is_configuration(), configuration);
+        drop(value);
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.child("reason").code, reason);
+        assert_eq!(error.is_expression_error(), !configuration);
+        drop(error);
+    }
+}
+
+#[test]
+fn refused_carrier_input_copy_refunds_its_partial_native_fields() {
+    use purrdf_lex::allocation::{Admission, Resident};
+
+    let value = TermValue::typed_literal("original lexical", "https://example.org/unknown");
+    let vocab = crate::standard_vocabulary();
+    let baseline = usize::MAX - "original lexical".len();
+    let mut resident = Resident;
+    let storage = CarrierStorage::resume(&mut resident as &mut dyn Admission, baseline);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let error = geometry_argument_format(vocab, &value, &storage).unwrap_err();
+    let allocations = window.close();
+    assert_eq!(error, GeoError::Storage(StorageError::SizeOverflow));
+    assert_eq!(storage.admitted_bytes(), baseline);
+    assert_eq!(allocations.allocations, 1);
+    assert_eq!(allocations.requested_bytes, "original lexical".len() as u64);
+
+    let identifier = "relative/reference";
+    let baseline = usize::MAX - identifier.len();
+    let storage = CarrierStorage::resume(&mut resident as &mut dyn Admission, baseline);
+    let mut observer = CancelAfter {
+        calls: 0,
+        at: usize::MAX,
+        work: 0,
+    };
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let error = crate::Crs::new_with_storage(identifier, &mut observer, &storage).unwrap_err();
+    let allocations = window.close();
+    assert_eq!(error, GeoError::Storage(StorageError::SizeOverflow));
+    assert_eq!(storage.admitted_bytes(), baseline);
+    assert_eq!(allocations.allocations, 1);
+    assert_eq!(allocations.requested_bytes, identifier.len() as u64);
+}
+
+#[test]
+fn native_crs_causes_agree_in_resident_and_admitted_identifier_validation() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_lex::allocation::{Admission, Resident};
+    use purrdf_testkit::error_capture::Capture;
+
+    for identifier in [
+        "relative/reference",
+        "https://example.org/%Q0",
+        "https://example.org/a b",
+    ] {
+        let input = identifier.to_owned();
+        let resident = crate::Crs::new(&input).unwrap_err();
+        let mut admission = Resident;
+        let storage = CarrierStorage::new(&mut admission as &mut dyn Admission);
+        let mut observer = CancelAfter {
+            calls: 0,
+            at: usize::MAX,
+            work: 0,
+        };
+        let admitted = crate::Crs::new_with_storage(&input, &mut observer, &storage).unwrap_err();
+        drop(input);
+        assert_eq!(resident, admitted);
+        assert_eq!(resident.to_string(), admitted.to_string());
+        for error in [resident, admitted] {
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, "crs-invalid-identifier");
+            assert!(matches!(fields.field("iri"), ErrorValue::Iri(value) if value == identifier));
+            assert!(matches!(fields.field("cause"), ErrorValue::Cause(_)));
+        }
+    }
+}
+
+#[test]
+fn unsupported_datatypes_retain_original_identifiers_after_term_destruction() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let vocab = crate::standard_vocabulary();
+    for term in [
+        GeoTerm::GmlLiteral,
+        GeoTerm::KmlLiteral,
+        GeoTerm::DggsLiteral,
+    ] {
+        let datatype = vocab.term(term);
+        let input = TermValue::typed_literal("original unimplemented carrier", &datatype);
+        let error = geometry_arg(vocab, &input).unwrap_err();
+        drop(input);
+        let cloned = error.clone();
+        drop(error);
+        let fields = Capture::read(&cloned).child("cause");
+        assert_eq!(fields.code, "geo-unsupported-datatype");
+        assert!(matches!(fields.field("datatype"), ErrorValue::Iri(value) if value == datatype));
+        assert!(
+            matches!(fields.field("term"), ErrorValue::Code(value) if value == term.local_name())
+        );
+    }
+}
+
 fn literal(text: &str, json: bool) -> TermValue {
     TermValue::typed_literal(
         text,

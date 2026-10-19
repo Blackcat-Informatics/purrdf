@@ -279,8 +279,14 @@ pub(super) fn residual(
         epoch: None,
     };
     parameters
-        .validate_point(&source)
-        .map_err(|_| MathError::Domain("rounded inverse outside its declared source zone"))?;
+        .validate_point(&source, progress)
+        .map_err(|error| {
+            crate::GeoError::math_validation_failure(
+                error,
+                crate::OperationValidationContext::InverseSourceZone,
+                progress,
+            )
+        })?;
     let coordinates = [
         fixed_from_rat(&source.x, math)?,
         fixed_from_rat(&source.y, math)?,

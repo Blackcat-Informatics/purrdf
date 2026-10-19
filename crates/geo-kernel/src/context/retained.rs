@@ -433,6 +433,24 @@ pub enum RetainedProductionFailure<S> {
     },
 }
 
+impl<S> purrdf_hash::error::StructuredError for RetainedProductionFailure<S> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Published(error) => {
+                visitor.variant("geo-production-published");
+                visitor.value(Some("error"), ErrorValue::Cause(error));
+            }
+            Self::Unpublished { error, storage: _ } => {
+                // Storage is the original physical capability, not error data.
+                // Inspection must neither invoke it nor constrain its type.
+                visitor.variant("geo-production-unpublished");
+                visitor.value(Some("error"), ErrorValue::Cause(error));
+            }
+        }
+    }
+}
+
 impl<S> RetainedProductionFailure<S> {
     /// Preserve the typed cause at a resident producer boundary.
     /// Published payloads carry their original owner intrinsically.
@@ -613,6 +631,12 @@ pub fn retain_failure_with_storage<S: Admission + Send + Sync + 'static>(
 /// Cloning this value shares the payload and its owner. Only an immutable borrow
 /// is exposed; publication cannot detach the payload from its original lease.
 pub struct Retained<T>(Shared<Produced<T>>);
+
+impl<T: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for Retained<T> {
+    purrdf_hash::error_visit! {
+        @tuple self (_owner) => "geo-retained-value" { "value" => Record(&**self) }
+    }
+}
 
 impl<T> Retained<T> {
     /// Publish a private payload already covered by the current producer's
@@ -1582,7 +1606,7 @@ mod tests {
     use super::{
         Retained, RetainedAllocationProducer, RetainedBuilder, retain_produced_with_storage,
     };
-    use crate::{GeoError, MetricContext, MetricWorkObserver, Rat, context::WorkProgress};
+    use crate::{Coord, GeoError, MetricContext, MetricWorkObserver, Rat, context::WorkProgress};
     use core::alloc::Layout;
     use core::cell::Cell;
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -2027,8 +2051,11 @@ mod tests {
                 &mut observer,
             )
             .unwrap_err();
-        assert!(matches!(failure.original(), GeoError::Config(message)
-            if message == "conflicting reference registration for <urn:example:reference:registered>"));
+        assert!(
+            matches!(failure.original(), GeoError::BindingConfiguration(cause)
+            if matches!(&**cause, crate::BindingConfigError::ReferenceRegistration { reference, reason: crate::ReferenceRegistrationReason::ConflictingRegistration, .. }
+                if reference == "urn:example:reference:registered"))
+        );
         assert_eq!(profile, previous);
         drop(profile);
         drop(previous);
@@ -2242,7 +2269,7 @@ mod tests {
         )
         .unwrap();
         let ring = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]
-            .map(|[x, y]| crate::Coord::xy(Rat::from_i64(x), Rat::from_i64(y)))
+            .map(|[x, y]| Coord::xy(Rat::from_i64(x), Rat::from_i64(y)))
             .to_vec();
         let polygon = crate::PreparedPolygon::from_source(
             &vec![ring],
@@ -2278,7 +2305,7 @@ mod tests {
         assert_eq!(context.current_workspace_bytes(), baseline);
         assert!(matches!(
             context.release_materialized_output(receipt.clone()),
-            Err(GeoError::Config(_))
+            Err(GeoError::ContextConfiguration(cause)) if matches!(&*cause, crate::ContextConfigError::OutputReceipt { reason: crate::OutputReceiptReason::LiveOwners, .. })
         ));
         assert_eq!(context.retained_workspace_bytes(), baseline);
         drop(context);
@@ -2452,10 +2479,19 @@ mod tests {
             &mut admitted,
         )
         .unwrap_err();
-        assert!(matches!(
-            failure.original(),
-            GeoError::InvalidEllipsoid("semimajor axis must be positive")
-        ));
+        let GeoError::InvalidEllipsoid(cause) = failure.original() else {
+            panic!("original ellipsoid refusal");
+        };
+        assert_eq!(
+            cause.requirement,
+            crate::EllipsoidRequirement::PositiveSemimajor
+        );
+        assert_eq!(cause.semimajor, Rat::zero());
+        assert_eq!(cause.inverse_flattening, Rat::from_i64(300));
+        let clone = failure.clone();
+        drop(failure);
+        assert!(account.live.load(Ordering::Relaxed) > 0);
+        drop(clone);
         assert_eq!(account.live.load(Ordering::Relaxed), 0);
     }
 
@@ -2561,8 +2597,12 @@ mod tests {
             &mut observer,
         )
         .unwrap_err();
-        assert!(matches!(failure.original(), GeoError::Config(message)
-            if message == "inverse source rectangle requires positive metre extents"));
+        assert!(matches!(failure.original(), GeoError::ModelInput(cause)
+            if matches!(&**cause, crate::ModelInputError::SourceRectangle { .. })));
+        assert_eq!(
+            failure.detail(),
+            "inverse source rectangle requires positive metre extents"
+        );
         assert!(account.live.load(Ordering::Relaxed) > 0);
         let copy = failure.clone();
         drop(failure);
@@ -2885,9 +2925,9 @@ mod tests {
     }
 
     #[test]
-    fn malformed_chart_destroys_original_arrays_before_settling_its_lexical_owner() {
-        let source = [(0, 0), (1, 0), (0, 0)]
-            .map(|(x, y)| crate::Coord::xy(Rat::from_i64(x), Rat::from_i64(y)));
+    fn malformed_chart_releases_original_arrays_and_keeps_an_inline_reason() {
+        let source =
+            [(0, 0), (1, 0), (0, 0)].map(|(x, y)| Coord::xy(Rat::from_i64(x), Rat::from_i64(y)));
         let (account, mut observer) = observer(usize::MAX);
         let mut progress = WorkProgress::new(Some(&mut observer));
         let window = CurrentThreadWindow::open();
@@ -2902,24 +2942,20 @@ mod tests {
                 let mut rings = Vec::new();
                 memory.reserve(&mut rings, 1).map_err(GeoError::Storage)?;
                 rings.push(ring);
-                crate::Geometry::new_with_memory(
-                    crate::CoordDim::Xy,
-                    crate::GeometryBody::Polygon(rings),
-                    memory,
-                )
+                crate::Geometry::new(crate::CoordDim::Xy, crate::GeometryBody::Polygon(rings))
             },
             |_, _| Ok(()),
         )
         .unwrap_err();
-        let GeoError::Literal(message) = error.original() else {
-            panic!("the original ring validation remains lexical");
+        let GeoError::GeometryShape(cause) = error.original() else {
+            panic!("the original ring validation remains structural");
         };
         assert_eq!(
-            message,
+            cause.to_string(),
             "a polygon ring needs at least four positions (three corners and the repeat that closes it); this one has 3"
         );
-        let retained =
-            message.capacity() + SharedOwned::<GeoError>::allocation_layout::<Owner>().size();
+        assert_eq!(cause.reason, crate::GeometryShapeReason::ShortRing(3));
+        let retained = 0;
         assert_eq!(account.live.load(Ordering::Relaxed), retained);
         assert_eq!(
             window.sample().retained_bytes,
@@ -2931,13 +2967,13 @@ mod tests {
     }
 
     #[test]
-    fn native_structural_error_and_its_last_clone_keep_the_original_diagnostic_owner() {
+    fn native_structural_error_and_its_clone_need_no_diagnostic_allocation() {
         let (account, mut observer) = observer(usize::MAX);
         let mut progress = WorkProgress::integer(Some(&mut observer));
         let window = CurrentThreadWindow::open();
         let error = crate::Geometry::new_with_progress(
             crate::CoordDim::Xy,
-            crate::GeometryBody::Point(Some(crate::Coord::new(
+            crate::GeometryBody::Point(Some(Coord::new(
                 Rat::zero(),
                 Rat::zero(),
                 Some(Rat::zero()),
@@ -2946,11 +2982,14 @@ mod tests {
             &mut progress,
         )
         .unwrap_err();
-        let GeoError::Literal(message) = error.original() else {
-            panic!("native structural validation preserves its lexical cause");
+        let GeoError::GeometryShape(cause) = error.original() else {
+            panic!("native structural validation preserves its original cause");
         };
-        let retained =
-            message.capacity() + SharedOwned::<GeoError>::allocation_layout::<Owner>().size();
+        assert!(matches!(
+            cause.reason,
+            crate::GeometryShapeReason::CoordinateDimension { .. }
+        ));
+        let retained = 0;
         assert_eq!(account.live.load(Ordering::Relaxed), retained);
         assert_eq!(
             window.sample().retained_bytes,
@@ -2974,7 +3013,7 @@ mod tests {
         let window = CurrentThreadWindow::open();
         let result = crate::Geometry::new_with_progress(
             crate::CoordDim::Xy,
-            crate::GeometryBody::Point(Some(crate::Coord::new(
+            crate::GeometryBody::Point(Some(Coord::new(
                 Rat::zero(),
                 Rat::zero(),
                 Some(Rat::zero()),
@@ -2990,6 +3029,682 @@ mod tests {
         let measured = window.close();
         assert_eq!(measured.allocations, 0);
         assert_eq!(measured.retained_bytes, 0);
+    }
+
+    #[test]
+    fn grid_error_snapshot_keeps_the_original_source_lease_without_copying_nodes() {
+        let (account, mut admission) = observer(usize::MAX);
+        let node = crate::operation::GridNode {
+            x: Rat::zero(),
+            y: Rat::zero(),
+        };
+        let grid = crate::operation::BilinearGrid::new_in_budget_metered(
+            [Rat::zero(), Rat::zero()],
+            [Rat::one(), Rat::one()],
+            2,
+            2,
+            vec![Some(node.clone()), None, Some(node.clone()), Some(node)],
+            &mut crate::PreparationBudget::new(crate::ExecutionPolicy::geometry()),
+            &mut admission,
+        )
+        .unwrap();
+        let source_live = account.live.load(Ordering::Relaxed);
+        assert!(source_live > 0);
+        let missing = crate::operation::GridMissingNode {
+            column: 0,
+            row: 0,
+            node_column: 1,
+            node_row: 0,
+            index: 1,
+        };
+        let window = CurrentThreadWindow::open();
+        let error = crate::ModelInputError::missing_node(
+            &grid,
+            missing,
+            &mut WorkProgress::integer(Some(&mut admission)),
+        );
+        let GeoError::ModelInput(cause) = error.original() else {
+            panic!("original grid error snapshot")
+        };
+        let crate::ModelInputError::MissingNode {
+            grid: retained,
+            cause: original,
+        } = &**cause
+        else {
+            panic!("original missing node")
+        };
+        assert_eq!(*original, missing);
+        assert!(core::ptr::eq(
+            grid.nodes().as_ptr(),
+            retained.nodes().as_ptr()
+        ));
+        let live = account.live.load(Ordering::Relaxed);
+        assert!(live > source_live);
+        assert_eq!(
+            window.sample().retained_bytes,
+            i64::try_from(live - source_live).unwrap()
+        );
+        let allocations = window.sample().allocations;
+        let last = error.clone();
+        assert_eq!(window.sample().allocations, allocations);
+        drop(error);
+        drop(grid);
+        assert_eq!(account.live.load(Ordering::Relaxed), live);
+        drop(last);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        // The source predates this window and dies with the final error owner.
+        let _ = window.close();
+    }
+
+    #[test]
+    fn rejected_monomials_keep_only_their_original_native_error_account() {
+        let first = crate::operation::PolynomialTerm {
+            x_power: 1,
+            y_power: 1,
+            x_coefficient: Rat::from_int(crate::Int::one().shl(4096)),
+            y_coefficient: Rat::from_i64(7),
+        };
+        let second = crate::operation::PolynomialTerm {
+            x_coefficient: Rat::from_i64(-19),
+            y_coefficient: Rat::from_int(crate::Int::one().shl(4352)),
+            ..first
+        };
+        assert!(first.x_coefficient.detached_required_bytes().unwrap() > 0);
+        for duplicate in [false, true] {
+            for limit in [0, 1, 128, usize::MAX] {
+                let (account, mut admission) = observer(limit);
+                let mut progress = WorkProgress::integer(Some(&mut admission));
+                let window = CurrentThreadWindow::open();
+                let error = progress.retained_error(|memory| {
+                    crate::PolynomialInputError::monomial_with_memory(
+                        if duplicate { 2 } else { 1 },
+                        0,
+                        if duplicate { 2 } else { 1 },
+                        &first,
+                        duplicate.then_some(&second),
+                        memory,
+                    )
+                });
+                if matches!(
+                    error.original(),
+                    GeoError::Storage(StorageError::AdmissionFailed)
+                ) {
+                    assert_ne!(limit, usize::MAX);
+                    assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                    if limit == 0 {
+                        assert_eq!(window.sample().allocations, 0);
+                    }
+                    drop(error);
+                    assert_eq!(window.close().retained_bytes, 0);
+                    continue;
+                }
+                let GeoError::PolynomialInput(cause) = error.original() else {
+                    panic!("original rejected monomial")
+                };
+                match &**cause {
+                    crate::PolynomialInputError::Degree { term, .. } => {
+                        assert!(!duplicate);
+                        assert_eq!(term, &first);
+                    }
+                    crate::PolynomialInputError::Duplicate {
+                        first: original,
+                        second: other,
+                        ..
+                    } => {
+                        assert!(duplicate);
+                        assert_eq!((original, other), (&first, &second));
+                    }
+                    crate::PolynomialInputError::Normalization { .. } => {
+                        panic!("the original monomial factory")
+                    }
+                }
+                let retained = account.live.load(Ordering::Relaxed);
+                assert!(retained > 0);
+                assert_eq!(
+                    window.sample().retained_bytes,
+                    i64::try_from(retained).unwrap()
+                );
+                let allocations = window.sample().allocations;
+                let last = error.clone();
+                assert_eq!(window.sample().allocations, allocations);
+                drop(error);
+                assert_eq!(account.live.load(Ordering::Relaxed), retained);
+                drop(last);
+                assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                assert_eq!(window.close().retained_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn geometry_domain_snapshots_admit_all_payloads_and_keep_the_last_native_owner() {
+        use crate::{EdgeQuotientOperation, GeometryDomainError, MembershipInput};
+        use purrdf_xsd::math::{CoordinateMath, FixedInterval, MathLimits};
+
+        let wide = Rat::from_int(crate::Int::one().shl(4096));
+        let first = Coord::new(
+            wide.clone(),
+            Rat::from_i64(17),
+            Some(wide.clone()),
+            Some(Rat::from_i64(-7)),
+        );
+        let second = Coord::xy(wide.clone(), Rat::from_i64(-23));
+        let bounds = [wide.clone(), Rat::one(), wide.clone(), Rat::zero()];
+        let prepared = crate::PreparedCoordinate::new(
+            Coord::new(
+                Rat::one(),
+                Rat::from_i64(2),
+                Some(wide.clone()),
+                Some(wide.clone()),
+            ),
+            &crate::GeographicReference::wgs84(),
+        )
+        .unwrap();
+        let edge = crate::PreparedEdge::SourceLinear(crate::PreparedValue::resident(
+            crate::SourceLinearEdge::new(prepared.clone(), prepared.clone()).unwrap(),
+        ));
+        let mut math = CoordinateMath::new(MathLimits::DEFAULT).unwrap();
+        let longitude = FixedInterval::from_i64(0, &mut math).unwrap();
+        let latitude = FixedInterval::from_i64(91, &mut math).unwrap();
+        let domain = [longitude.clone(), latitude.clone()];
+        let contact = crate::atlas::arcs::CurveIntersection::Isolated {
+            left: (Rat::zero(), wide.clone()),
+            right: (Rat::zero(), wide.clone()),
+            longitude_radians: (Rat::zero(), wide.clone()),
+            latitude_radians: (Rat::zero(), wide.clone()),
+        };
+        for case in 0..11 {
+            for limit in [0, 1, 128, 1024, usize::MAX] {
+                let (account, mut admission) = observer(limit);
+                let mut progress = WorkProgress::integer(Some(&mut admission));
+                let window = CurrentThreadWindow::open();
+                let error = match case {
+                    0 => GeometryDomainError::membership(
+                        MembershipInput::PolygonRings,
+                        1,
+                        &[true, false, true],
+                        &mut progress,
+                    ),
+                    1 => GeometryDomainError::edge_quotient(
+                        &first,
+                        &second,
+                        &wide,
+                        &wide,
+                        &Rat::zero(),
+                        EdgeQuotientOperation::CrossedMeridian,
+                        &mut progress,
+                    ),
+                    2 => GeometryDomainError::reversed_box(bounds.each_ref(), &mut progress),
+                    3 => GeometryDomainError::empty_enclosure(
+                        &longitude,
+                        &latitude,
+                        [&Rat::from_i64(91), &Rat::from_i64(90)],
+                        1,
+                        &mut progress,
+                    ),
+                    4 => GeometryDomainError::constant_ring_edge(
+                        [&prepared, &prepared],
+                        crate::PreparedEdgeKind::SourceLinear,
+                        0,
+                        1,
+                        &mut progress,
+                    ),
+                    5 => GeometryDomainError::written_tangent(
+                        [&first, &first, &second],
+                        Some([&Rat::zero(), &Rat::zero()]),
+                        crate::WrittenTangentReason::Zero,
+                        &mut progress,
+                    ),
+                    6 => GeometryDomainError::edge_requirement(
+                        &edge,
+                        crate::PreparedEdgeRequirement::Geodesic {
+                            consumer: crate::GeodesicEdgeConsumer::AreaIntegral,
+                        },
+                        &mut progress,
+                    ),
+                    7 => GeometryDomainError::contact_parameter(
+                        [&first, &second, &first],
+                        crate::SourceContactReason::Original,
+                        true,
+                        crate::SourceContactCoordinates::Planar,
+                        &mut progress,
+                    ),
+                    8 => GeometryDomainError::contact_parameter(
+                        [prepared.point(), prepared.point(), prepared.point()],
+                        crate::SourceContactReason::Written,
+                        false,
+                        crate::SourceContactCoordinates::Geographic,
+                        &mut progress,
+                    ),
+                    9 => {
+                        GeometryDomainError::ring_contact(&contact, [1, 3, 5], true, &mut progress)
+                    }
+                    _ => GeometryDomainError::edge_self_contact(
+                        &contact,
+                        &domain,
+                        [1, 3, 5],
+                        &mut progress,
+                    ),
+                };
+                if matches!(
+                    error.original(),
+                    GeoError::Storage(StorageError::AdmissionFailed)
+                ) {
+                    assert_ne!(limit, usize::MAX);
+                    assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                    if limit == 0 {
+                        assert_eq!(window.sample().allocations, 0);
+                    }
+                    drop(error);
+                    assert_eq!(window.close().retained_bytes, 0);
+                    continue;
+                }
+                assert!(matches!(error.original(), GeoError::GeometryDomain(_)));
+                let retained = account.live.load(Ordering::Relaxed);
+                assert!(retained > 0);
+                assert_eq!(
+                    window.sample().retained_bytes,
+                    i64::try_from(retained).unwrap()
+                );
+                let allocations = window.sample().allocations;
+                let last = error.clone();
+                assert_eq!(window.sample().allocations, allocations);
+                drop(error);
+                assert_eq!(account.live.load(Ordering::Relaxed), retained);
+                drop(last);
+                assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                assert_eq!(window.close().retained_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn declaration_diagnostics_keep_structural_boxes_and_exact_numeric_owners() {
+        use crate::operation::{
+            Applicability, HelmertParameters, OperationPoint, RotationConvention, RotationLaw,
+            Similarity2d,
+        };
+
+        let wide =
+            Rat::parse_decimal("123456789012345678901234567890123456789012345678901234567890.125")
+                .unwrap();
+        let parameters = HelmertParameters {
+            translation: [wide.clone(), Rat::one(), Rat::zero()],
+            rotation_arcseconds: [Rat::zero(), Rat::one(), Rat::from_i64(2)],
+            scale_ppm: Rat::from_i64(-1_000_000),
+            pivot: [Rat::one(), Rat::from_i64(2), Rat::from_i64(3)],
+            law: RotationLaw::HelmertSmallAngleV1,
+            convention: RotationConvention::PositionVector,
+            rates: None,
+            inverse: false,
+        };
+        let similarity = Similarity2d {
+            translation: [wide, Rat::zero()],
+            scale: Rat::zero(),
+            rotation_degrees: Rat::one(),
+            convention: RotationConvention::CoordinateFrame,
+            inverse: true,
+        };
+        let domain = Applicability {
+            west: Rat::parse_decimal("0.0000000000000000000000000000000000000000000000000000001")
+                .unwrap(),
+            east: Rat::one(),
+            south: Rat::zero(),
+            north: Rat::one(),
+        };
+        let point = OperationPoint {
+            x: Rat::from_i64(-1),
+            y: Rat::zero(),
+            z: Some(Rat::from_i64(7)),
+            epoch: Some(Rat::from_i64(2026)),
+        };
+        for case in 0..3 {
+            let make = |progress: &mut WorkProgress<'_>| match case {
+                0 => crate::AffineInputError::helmert(
+                    &parameters,
+                    None,
+                    None,
+                    None,
+                    crate::HelmertInputReason::DeclaredScale,
+                    progress,
+                ),
+                1 => crate::AffineInputError::similarity(&similarity, progress),
+                _ => crate::ProjectionInputError::gcj(
+                    &domain,
+                    Some(&point),
+                    crate::GcjInputReason::Outside,
+                    progress,
+                ),
+            };
+            for limit in [0, 1, 128, 1024, usize::MAX] {
+                let (account, mut admission) = observer(limit);
+                let mut progress = WorkProgress::integer(Some(&mut admission));
+                let window = CurrentThreadWindow::open();
+                let error = make(&mut progress);
+                if matches!(
+                    error.original(),
+                    GeoError::Storage(StorageError::AdmissionFailed)
+                ) {
+                    assert_ne!(limit, usize::MAX);
+                    assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                    if limit == 0 {
+                        assert_eq!(window.sample().allocations, 0);
+                    }
+                    drop(error);
+                    assert_eq!(window.close().retained_bytes, 0);
+                    continue;
+                }
+                assert!(matches!(
+                    (case, error.original()),
+                    (0 | 1, GeoError::AffineInput(_)) | (2, GeoError::ProjectionInput(_))
+                ));
+                let retained = account.live.load(Ordering::Relaxed);
+                assert!(retained > 0);
+                assert_eq!(
+                    window.sample().retained_bytes,
+                    i64::try_from(retained).unwrap()
+                );
+                let allocations = window.sample().allocations;
+                let last = error.clone();
+                assert_eq!(window.sample().allocations, allocations);
+                drop(error);
+                assert_eq!(account.live.load(Ordering::Relaxed), retained);
+                drop(last);
+                assert_eq!(account.live.load(Ordering::Relaxed), 0);
+                assert_eq!(window.close().retained_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn arc_and_image_refusals_retain_original_bindings_and_last_reference_owner() {
+        let expected = crate::GeographicReference::wgs84();
+        let actual = crate::GeographicReference::new(
+            expected.ellipsoid().clone(),
+            purrdf_hash::hex::Digest32::new([121; 32]),
+            crate::AxisOrder::LatLon,
+        );
+        let required = expected.id();
+        let other = actual.id();
+        let bindings = [other, required, other];
+        let target = crate::operation::OperationReference {
+            realization: required.digest(),
+            unit: crate::operation::CoordinateUnit::Metres,
+            swapped_axes: false,
+        };
+        for (reason, geographic) in [
+            (None, false),
+            (Some(crate::ImageTargetReason::MetricUnits), false),
+            (Some(crate::ImageTargetReason::MetricUnits), true),
+            (Some(crate::ImageTargetReason::MetricReference), true),
+            (Some(crate::ImageTargetReason::CurveReference), true),
+        ] {
+            let make = |progress: &mut WorkProgress<'_>| match reason {
+                Some(reason) => crate::BindingConfigError::image_target(
+                    target,
+                    geographic.then_some(&actual),
+                    reason,
+                    progress,
+                ),
+                None => crate::BindingConfigError::cached_arc(
+                    &actual, &expected, required, bindings, progress,
+                ),
+            };
+            let (account, mut admission) = observer(usize::MAX);
+            let mut progress = WorkProgress::integer(Some(&mut admission));
+            let window = CurrentThreadWindow::open();
+            let error = make(&mut progress);
+            let GeoError::BindingConfiguration(cause) = error.original() else {
+                panic!("original reference binding refusal")
+            };
+            match reason {
+                None => assert!(matches!(&**cause, crate::BindingConfigError::CachedArc {
+                    actual_reference, expected_reference, expected: binding, start, end, inverse,
+                } if actual_reference == &actual && expected_reference == &expected && *binding == required
+                    && [*start, *end, *inverse] == bindings)),
+                Some(reason) => {
+                    let crate::BindingConfigError::ImageTarget {
+                        reason: original_reason,
+                        target: original_target,
+                        metric,
+                    } = &**cause
+                    else {
+                        panic!("original image metric")
+                    };
+                    assert_eq!((*original_reason, *original_target), (reason, target));
+                    match metric {
+                        crate::operation::ImageMetric::CartesianMetres => assert!(!geographic),
+                        crate::operation::ImageMetric::Geographic(reference) => {
+                            assert!(geographic);
+                            assert_eq!(&**reference, &actual);
+                        }
+                    }
+                }
+            }
+            let retained = account.live.load(Ordering::Relaxed);
+            assert!(retained > 0);
+            assert_eq!(
+                window.sample().retained_bytes,
+                i64::try_from(retained).unwrap()
+            );
+            let allocations = window.sample().allocations;
+            let last = error.clone();
+            assert_eq!(window.sample().allocations, allocations);
+            drop(error);
+            assert_eq!(account.live.load(Ordering::Relaxed), retained);
+            drop(last);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+            assert_eq!(window.close().retained_bytes, 0);
+
+            let (account, mut admission) = observer(0);
+            let mut progress = WorkProgress::integer(Some(&mut admission));
+            let window = CurrentThreadWindow::open();
+            let error = make(&mut progress);
+            assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+            assert_eq!(window.close().allocations, 0);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn offset_source_refusal_preserves_receipts_and_original_observer_ownership() {
+        let profile = crate::GeoProfile::standard();
+        let literal =
+            crate::wkt::parse("POINT(0 0)", crate::standard_vocabulary().default_wkt_crs())
+                .unwrap();
+        let geometry = crate::PreparedGeometry::from_literal(&literal, &profile).unwrap();
+        let source = geometry.source_receipt();
+        assert!(source.work_items() > 0 && source.workspace_bytes() > 0);
+        let radius = crate::Metres::new(Rat::one());
+        for reason in [
+            crate::PreparationBaselineReason::Work,
+            crate::PreparationBaselineReason::Workspace,
+        ] {
+            let mut budget = crate::PreparationBudget::new(profile.policy());
+            if reason == crate::PreparationBaselineReason::Workspace {
+                budget.retain(source.work_items(), 0).unwrap();
+            }
+            let original = budget;
+            let input = geometry.clone();
+            let (account, mut admission) = observer(usize::MAX);
+            let window = CurrentThreadWindow::open();
+            let error = budget
+                .prepare_offset(input, &radius, &mut admission)
+                .unwrap_err();
+            assert_eq!(budget, original);
+            let GeoError::SourcePreparation(cause) = &error else {
+                panic!("original offset admission")
+            };
+            assert_eq!(
+                &**cause,
+                &crate::SourcePreparationError::OffsetAdmission {
+                    source,
+                    budget: original,
+                    reason
+                }
+            );
+            let retained = account.live.load(Ordering::Relaxed);
+            assert!(retained > 0);
+            assert_eq!(
+                window.sample().retained_bytes,
+                i64::try_from(retained).unwrap()
+            );
+            let allocations = window.sample().allocations;
+            let last = error.clone();
+            assert_eq!(window.sample().allocations, allocations);
+            drop(error);
+            assert_eq!(account.live.load(Ordering::Relaxed), retained);
+            drop(last);
+            assert_eq!(account.live.load(Ordering::Relaxed), 0);
+            assert_eq!(window.close().retained_bytes, 0);
+        }
+        let input = geometry;
+        let mut budget = crate::PreparationBudget::new(profile.policy());
+        let (account, mut admission) = observer(0);
+        let window = CurrentThreadWindow::open();
+        let error = budget
+            .prepare_offset(input, &radius, &mut admission)
+            .unwrap_err();
+        assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn crs_pair_refusal_releases_partial_fields_and_keeps_the_last_original_owner() {
+        let first = crate::Crs::new("https://example.org/first").unwrap();
+        let second = crate::Crs::new("https://example.org/second").unwrap();
+        let base = Retained::<crate::GeometryDomainError>::allocation_layout().size()
+            + SharedOwned::<()>::allocation_layout::<Owner>().size();
+        let (account, mut admission) = observer(base + first.as_str().len());
+        let mut progress = WorkProgress::integer(Some(&mut admission));
+        let window = CurrentThreadWindow::open();
+        let error = crate::GeometryDomainError::crs_pair(&first, &second, &mut progress);
+        assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+        assert_eq!(
+            account.maximum.load(Ordering::Relaxed),
+            base + first.as_str().len()
+        );
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        assert_eq!(window.close().retained_bytes, 0);
+
+        let (account, mut admission) = observer(usize::MAX);
+        let mut progress = WorkProgress::integer(Some(&mut admission));
+        let window = CurrentThreadWindow::open();
+        let error = crate::GeometryDomainError::crs_pair(&first, &second, &mut progress);
+        assert!(matches!(&error, GeoError::GeometryDomain(_)));
+        let retained = account.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        assert_eq!(
+            window.sample().retained_bytes,
+            i64::try_from(retained).unwrap()
+        );
+        let allocations = window.sample().allocations;
+        let last = error.clone();
+        assert_eq!(window.sample().allocations, allocations);
+        drop(error);
+        assert_eq!(account.live.load(Ordering::Relaxed), retained);
+        drop(last);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        assert_eq!(window.close().retained_bytes, 0);
+    }
+
+    #[test]
+    fn invalid_radius_term_preserves_its_native_owner_and_refuses_before_copy() {
+        let value = purrdf_core::TermValue::iri("https://example.org/original-radius");
+        let mut context = MetricContext::wgs84().unwrap();
+        let (account, mut admission) = observer(0);
+        let window = CurrentThreadWindow::open();
+        let error = crate::metric::numeric_radius_metered(
+            &value,
+            &Rat::one(),
+            &mut context,
+            &mut admission,
+        )
+        .unwrap_err();
+        assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        assert_eq!(window.close().allocations, 0);
+
+        let (account, mut admission) = observer(usize::MAX);
+        let window = CurrentThreadWindow::open();
+        let error = crate::metric::numeric_radius_metered(
+            &value,
+            &Rat::one(),
+            &mut context,
+            &mut admission,
+        )
+        .unwrap_err();
+        let GeoError::CarrierInput(cause) = error.original() else {
+            panic!("original numeric input")
+        };
+        assert_eq!(cause.value(), &value);
+        assert_eq!(
+            cause.reason(),
+            crate::CarrierInputReason::RadiusExpectedLiteral
+        );
+        let retained = account.live.load(Ordering::Relaxed);
+        assert!(retained > 0);
+        assert_eq!(
+            window.sample().retained_bytes,
+            i64::try_from(retained).unwrap()
+        );
+        let allocations = window.sample().allocations;
+        let last = error.clone();
+        assert_eq!(window.sample().allocations, allocations);
+        drop(error);
+        assert_eq!(account.live.load(Ordering::Relaxed), retained);
+        drop(last);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        assert_eq!(window.close().retained_bytes, 0);
+    }
+
+    #[test]
+    fn geojson_writer_error_keeps_its_native_owner_after_output_cleanup() {
+        let (account, mut observer) = observer(usize::MAX);
+        let literal = crate::wkt::parse(
+            "MULTIPOINT(1 2,EMPTY)",
+            crate::standard_vocabulary().default_wkt_crs(),
+        )
+        .unwrap();
+        let mut context = MetricContext::wgs84().unwrap();
+        let window = CurrentThreadWindow::open();
+        let error = crate::geojson::write_in_context_metered(
+            &literal,
+            literal.crs(),
+            12,
+            &mut context,
+            &mut observer,
+        )
+        .unwrap_err();
+        drop(literal);
+        let GeoError::GeoJsonWrite(cause) = error.original() else {
+            panic!("native writer cause")
+        };
+        assert_eq!(
+            &**cause,
+            &crate::GeoJsonWriteError::EmptyMember { index: 1, count: 2 }
+        );
+        let retained = account.live.load(Ordering::Relaxed);
+        assert!(retained > 0);
+        assert_eq!(
+            window.sample().retained_bytes,
+            i64::try_from(retained).unwrap()
+        );
+        context.begin(1).unwrap();
+        assert_eq!(
+            context.remaining_workspace(),
+            context.policy().limits().max_workspace_bytes
+        );
+        let allocations = window.sample().allocations;
+        let last = error.clone();
+        assert_eq!(window.sample().allocations, allocations);
+        drop(error);
+        assert!(last.is_expression_error());
+        assert_eq!(account.live.load(Ordering::Relaxed), retained);
+        drop(last);
+        assert_eq!(account.live.load(Ordering::Relaxed), 0);
+        assert_eq!(window.close().retained_bytes, 0);
     }
 
     #[test]

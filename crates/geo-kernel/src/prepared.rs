@@ -23,12 +23,20 @@ const SYMBOLIC_POINTS_DOMAIN: Domain = Domain::new(b"exact-symbolic-operation-im
 
 /// Original geographic position and verbatim carrier ordinates. Z and M are
 /// retained as data; surface metrics never invent a height from them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedCoordinate {
     point: LonLat,
     source: Coord,
     binding: GeoBindingId,
 }
+impl purrdf_hash::error::StructuredError for PreparedCoordinate {
+    purrdf_hash::error_visit! {
+        @record self { point, source, binding } => "prepared-coordinate" {
+            "point" => Record(&self.point), "source" => Record(&self.source), "binding" => Record(&self.binding)
+        }
+    }
+}
+
 impl crate::context::NativeDetached for PreparedCoordinate {
     fn layout_bytes(&self) -> Result<usize, purrdf_lex::allocation::StorageError> {
         self.point
@@ -364,11 +372,7 @@ fn produce_source_chart(
                 chart.push(coordinates);
             }
             drop(rings);
-            crate::Geometry::new_with_memory(
-                crate::CoordDim::Xy,
-                GeometryBody::Polygon(chart),
-                memory,
-            )
+            crate::Geometry::new(crate::CoordDim::Xy, GeometryBody::Polygon(chart))
         },
         |_, _| Ok(()),
     )
@@ -558,8 +562,16 @@ impl SourceLinearEdge {
     /// # Errors
     /// Refuses a parameter outside the closed unit interval.
     pub fn interpolate(start: &LonLat, end: &LonLat, parameter: &Rat) -> Result<LonLat, GeoError> {
-        if parameter < &Rat::zero() || parameter > &Rat::one() {
-            return Err(GeoError::domain("edge parameter outside [0,1]"));
+        if let Some(requirement) =
+            crate::metric::unit_parameter_refusal(parameter, None, |a, b| Ok(a.cmp(b)))?
+        {
+            return Err(crate::MetricInputError::parameter(
+                parameter,
+                None,
+                crate::UnitParameterOperation::LinearEdge,
+                requirement,
+                &mut WorkProgress::integer(None),
+            ));
         }
         LonLat::new(
             interpolate_ordinate(start.longitude(), end.longitude(), parameter),
@@ -1062,10 +1074,18 @@ impl AzimuthLengthArc {
             &[self.start.binding],
             |context, progress, retained| {
                 let mut admission = crate::numerical::ExactAdmission::new(context, progress);
-                if admission.compare(parameter, &Rat::zero())?.is_lt()
-                    || admission.compare(parameter, &Rat::one())?.is_gt()
+                if let Some(requirement) =
+                    crate::metric::unit_parameter_refusal(parameter, None, |a, b| {
+                        admission.compare(a, b)
+                    })?
                 {
-                    return Err(GeoError::domain("arc parameter outside [0,1]"));
+                    return Err(crate::MetricInputError::parameter(
+                        parameter,
+                        None,
+                        crate::UnitParameterOperation::AzimuthArc,
+                        requirement,
+                        progress,
+                    ));
                 }
                 admission
                     .rational_retained(
@@ -1225,6 +1245,27 @@ impl ShortestGeodesicArc {
     }
 }
 
+/// The original interpolation law of a prepared edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PreparedEdgeKind {
+    /// A written source-coordinate line.
+    SourceLinear,
+    /// An original azimuth and travel length.
+    AzimuthLength,
+    /// The selected shortest branch between original endpoints.
+    ShortestGeodesic,
+    /// A continuous image through an explicit operation chain.
+    Transformed,
+}
+impl purrdf_hash::error::StructuredError for PreparedEdgeKind {
+    purrdf_hash::error_visit! {
+        SourceLinear => "prepared-edge-source-linear" {},
+        AzimuthLength => "prepared-edge-azimuth-length" {},
+        ShortestGeodesic => "prepared-edge-shortest-geodesic" {},
+        Transformed => "prepared-edge-transformed" {},
+    }
+}
+
 /// One prepared curve edge with an explicit mathematical interpolation law.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparedEdge {
@@ -1239,6 +1280,17 @@ pub enum PreparedEdge {
     Transformed(crate::PreparedValue<crate::operation::OperationImageCurve>),
 }
 impl PreparedEdge {
+    /// Original interpolation law, without allocating or cloning edge data.
+    #[must_use]
+    pub const fn kind(&self) -> PreparedEdgeKind {
+        match self {
+            Self::SourceLinear(_) => PreparedEdgeKind::SourceLinear,
+            Self::AzimuthLength(_) => PreparedEdgeKind::AzimuthLength,
+            Self::ShortestGeodesic(_) => PreparedEdgeKind::ShortestGeodesic,
+            Self::Transformed(_) => PreparedEdgeKind::Transformed,
+        }
+    }
+
     /// Share the complete original immutable edge after its native work poll.
     /// No integer copy or allocation control is created by this clone.
     pub(crate) fn clone_admitted(
@@ -1493,6 +1545,13 @@ pub enum RegionInterior {
     Complement,
 }
 
+impl purrdf_hash::error::StructuredError for RegionInterior {
+    purrdf_hash::error_visit! {
+        Written => "region-interior-written" {},
+        Complement => "region-interior-complement" {},
+    }
+}
+
 /// Explicit side of a certified native oriented ring intersection.
 /// Exterior and hole traversals retain their declared orientation: the Left
 /// base intersects the left sides of every supplied Jordan ring.
@@ -1502,6 +1561,12 @@ pub enum OrientedInterior {
     Left,
     /// Closed complement of that complete intersection.
     Right,
+}
+impl purrdf_hash::error::StructuredError for OrientedInterior {
+    purrdf_hash::error_visit! {
+        Left => "oriented-interior-left" {},
+        Right => "oriented-interior-right" {},
+    }
 }
 
 /// Original areal rings, retaining written or explicitly oriented interiors.
@@ -1795,11 +1860,14 @@ impl PreparedPolygon {
         progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         if rings.is_empty() {
-            return Err(
-                progress.retained_message("empty native oriented polygon", |message| {
-                    GeoError::Domain(message.into())
-                }),
-            );
+            return Err(GeoError::retained_failure_with_progress(
+                crate::GeometryDomainError::EmptyOrientedPolygon {
+                    oriented,
+                    closed_support,
+                },
+                GeoError::GeometryDomain,
+                progress,
+            ));
         }
         let binding = reference.id();
         let mut coordinates = 0_u64;
@@ -2020,6 +2088,27 @@ fn geodesic_entry<A, T>(
     result
 }
 
+/// The original selected closed-region form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PreparedRegionKind {
+    /// No selected surface region.
+    Empty,
+    /// The whole identified surface.
+    Whole,
+    /// A polygon union.
+    Polygons,
+    /// The closed complement of a polygon union.
+    ComplementOfPolygons,
+}
+impl purrdf_hash::error::StructuredError for PreparedRegionKind {
+    purrdf_hash::error_visit! {
+        Empty => "prepared-region-empty" {},
+        Whole => "prepared-region-whole" {},
+        Polygons => "prepared-region-polygons" {},
+        ComplementOfPolygons => "prepared-region-complement-of-polygons" {},
+    }
+}
+
 /// An explicitly selected closed region, including empty and the whole surface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreparedRegion {
@@ -2034,6 +2123,17 @@ pub enum PreparedRegion {
     ComplementOfPolygons(crate::PreparedValues<PreparedPolygon>),
 }
 impl PreparedRegion {
+    /// Original selected region form, without cloning polygon storage.
+    #[must_use]
+    pub const fn kind(&self) -> PreparedRegionKind {
+        match self {
+            Self::Empty => PreparedRegionKind::Empty,
+            Self::Whole => PreparedRegionKind::Whole,
+            Self::Polygons(_) => PreparedRegionKind::Polygons,
+            Self::ComplementOfPolygons(_) => PreparedRegionKind::ComplementOfPolygons,
+        }
+    }
+
     pub(crate) fn from_admitted(
         polygons: crate::context::RetainedBuilder<PreparedPolygon>,
     ) -> Self {

@@ -761,6 +761,16 @@ pub enum Arity {
     AtLeast(usize),
 }
 
+impl purrdf_hash::error::StructuredError for Arity {
+    purrdf_hash::error_visit! {
+        Exact(count) => "function-arity-exact" { "count" => Unsigned(*count as u128) },
+        Range { min, max } => "function-arity-range" {
+            "minimum" => Unsigned(*min as u128), "maximum" => Unsigned(*max as u128),
+        },
+        AtLeast(minimum) => "function-arity-at-least" { "minimum" => Unsigned(*minimum as u128) },
+    }
+}
+
 impl Arity {
     /// Whether `count` arguments satisfies this declared arity.
     ///

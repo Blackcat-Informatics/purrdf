@@ -475,8 +475,11 @@ impl PreparedGeodesic {
         let mut chunks = ChunkObserver::new(observer);
         chunks.initial().map_err(solve_external_error)?;
         if !chunks.reference_matches(&self.reference, context)? {
-            return Err(GeoError::config(
-                "prepared geodesic and metric context references differ",
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::GeodesicContext,
+                chunks.progress_mut(),
             ));
         }
         let binding = chunks.reference_identity(Some(&self.reference), context)?;
@@ -564,9 +567,7 @@ impl PreparedGeodesic {
             observed.map_err(solve_external_error)?;
             match solution {
                 Ok((solution, mut proof)) => {
-                    let metadata = solution
-                        .metadata
-                        .ok_or_else(|| GeoError::domain("inverse metadata capture missing"))?;
+                    let metadata = solution.metadata.ok_or(GeoError::MissingInverseMetadata)?;
                     let mut progress = chunks
                         .into_owned_progress()
                         .expect("native inverse owns its observer");

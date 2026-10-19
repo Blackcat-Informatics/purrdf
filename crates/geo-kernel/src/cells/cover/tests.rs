@@ -874,6 +874,51 @@ fn original_radius_and_box_precision_are_admitted_before_exact_products() {
 }
 
 #[test]
+fn invalid_cover_policies_keep_original_full_width_limits_before_allocation() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let center = point(0, 0);
+    let radius = Metres::new(Rat::one());
+    let levels = CoverLevels::new(0, 0).unwrap();
+    for limits in [
+        MixedCoverLimits {
+            max_emitted_cells: 0,
+            max_work_items: u64::MAX,
+            max_workspace_bytes: u64::MAX,
+        },
+        MixedCoverLimits {
+            max_emitted_cells: u64::MAX,
+            max_work_items: 0,
+            max_workspace_bytes: u64::MAX,
+        },
+        MixedCoverLimits {
+            max_emitted_cells: u64::MAX,
+            max_work_items: u64::MAX,
+            max_workspace_bytes: 0,
+        },
+    ] {
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = grid()
+            .cover_disk_mixed(&center, &radius, levels, limits)
+            .unwrap_err();
+        let allocations = window.close();
+        assert_eq!(allocations.allocations, 0);
+        assert_eq!(error, GeoError::InvalidCoverPolicy(limits));
+        let fields = Capture::read(&error).child("limits");
+        assert!(
+            matches!(fields.field("max_emitted_cells"), ErrorValue::Unsigned(value) if value == u128::from(limits.max_emitted_cells))
+        );
+        assert!(
+            matches!(fields.field("max_work_items"), ErrorValue::Unsigned(value) if value == u128::from(limits.max_work_items))
+        );
+        assert!(
+            matches!(fields.field("max_workspace_bytes"), ErrorValue::ByteCount(value) if value == u128::from(limits.max_workspace_bytes))
+        );
+    }
+}
+
+#[test]
 fn reported_threshold_conversion_refuses_before_extreme_owner_allocation() {
     let center = point(0, 0);
     let levels = CoverLevels::new(0, 0).unwrap();
@@ -901,7 +946,7 @@ fn reported_threshold_conversion_refuses_before_extreme_owner_allocation() {
             let allocations = measured.close();
             assert!(matches!(
                 result,
-                Err(GeoError::InvalidExecutionPolicy(_)
+                Err(GeoError::InvalidCoverPolicy(_)
                     | GeoError::WorkExhausted { limit: 1 }
                     | GeoError::MemoryExhausted { limit: 1 })
             ));

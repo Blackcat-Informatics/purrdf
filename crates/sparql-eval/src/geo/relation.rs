@@ -339,7 +339,7 @@ impl GeoRelation {
             if matches!(error.original(), GeoError::Cancelled) && meter.has_stopped() {
                 EvalError::WorkspaceStopped
             } else {
-                super::error::native_error(&error, workspace)
+                super::error::native_error(error, workspace)
             }
         })?;
         let bound = [args.get(SUBJECT), args.get(OBJECT)]
@@ -1574,19 +1574,19 @@ mod tests {
         )];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&foreign), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::CarrierInput(_))
         ));
 
         let not_a_literal = vec![row("g1", geo("asWKT"), node("g2"))];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&not_a_literal), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::IndexSerialization(_))
         ));
 
         let malformed = vec![row("g1", geo("asWKT"), wkt("POINT(1"))];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&malformed), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::WktSyntax(_))
         ));
 
         // The neighbouring VALID case.

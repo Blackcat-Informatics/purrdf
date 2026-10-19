@@ -400,8 +400,11 @@ impl PreparedGeodesic {
         if matches!(invocation, DirectInvocation::Public(_))
             && !chunks.reference_matches(&self.reference, context)?
         {
-            return Err(GeoError::config(
-                "prepared geodesic and metric context references differ",
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::GeodesicContext,
+                chunks.progress_mut(),
             ));
         }
         let grid = match invocation {
@@ -409,7 +412,11 @@ impl PreparedGeodesic {
             DirectInvocation::Admitted(_) => DirectOutputGrid::DEGREE15,
         };
         if length.exact() < &Rat::zero() {
-            return Err(GeoError::domain("direct distance must be nonnegative"));
+            return Err(crate::MetricInputError::negative_travel(
+                length.exact(),
+                crate::TravelOperation::Direct,
+                chunks.progress_mut(),
+            ));
         }
         if matches!(invocation, DirectInvocation::Public(_)) {
             validate_grid(grid, self, context, chunks)?;
@@ -431,8 +438,11 @@ impl PreparedGeodesic {
                     None => chunks.reference_identity(None, context)?,
                 };
                 if target != binding {
-                    return Err(GeoError::config(
-                        "admitted geodesic and metric context references differ",
+                    return Err(crate::BindingConfigError::identity_mismatch(
+                        binding,
+                        target,
+                        crate::ReferenceMismatchReason::AdmittedGeodesic,
+                        chunks.progress_mut(),
                     ));
                 }
                 binding
@@ -950,8 +960,16 @@ impl PreparedGeodesic {
         context: &mut MetricContext,
         observer: Option<&mut dyn MetricWorkObserver>,
     ) -> Result<DirectResult, GeoError> {
-        if t < &Rat::zero() || t > &Rat::one() {
-            return Err(GeoError::domain("geodesic arc parameter must be in [0,1]"));
+        if let Some(requirement) =
+            crate::metric::unit_parameter_refusal(t, None, |a, b| Ok(a.cmp(b)))?
+        {
+            return Err(crate::MetricInputError::parameter(
+                t,
+                None,
+                crate::UnitParameterOperation::ShortestArc,
+                requirement,
+                &mut crate::context::WorkProgress::new(observer),
+            ));
         }
         context.begin(1)?;
         let metered = observer.is_some();
@@ -1254,15 +1272,24 @@ mod tests {
         );
         let mut wrong = MetricContext::new(foreign, ExecutionPolicy::geometry()).unwrap();
         wrong.begin(1).unwrap();
-        assert!(matches!(
-            prepared.admitted_reference(&mut wrong, &mut WorkProgress::new(None)),
-            Err(GeoError::Config(_))
-        ));
+        let Err(error) = prepared.admitted_reference(&mut wrong, &mut WorkProgress::new(None))
+        else {
+            panic!("the original reference identities differ")
+        };
+        let actual = prepared.reference().id();
+        let expected = wrong.reference().id();
+        assert!(
+            matches!(error.original(), GeoError::BindingConfiguration(cause) if matches!(&**cause,
+            crate::BindingConfigError::ReferenceIdentity { reason: crate::ReferenceMismatchReason::GeodesicContext, actual: original, expected: required }
+                if *original == actual && *required == expected))
+        );
         for _ in 0..2 {
             let mut ledger = Ledger(Vec::new());
             assert!(matches!(
                 witness.direct_metered(&start, &decimal("47"), &length, &mut wrong, &mut ledger,),
-                Err(GeoError::Config(_))
+                Err(error) if matches!(error.original(), GeoError::BindingConfiguration(cause) if matches!(&**cause,
+                    crate::BindingConfigError::ReferenceIdentity { reason: crate::ReferenceMismatchReason::AdmittedGeodesic, actual: original, expected: required }
+                        if *original == actual && *required == expected))
             ));
             assert_eq!(wrong.current_workspace_bytes(), 0);
             assert_eq!(

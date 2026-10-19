@@ -104,7 +104,7 @@ impl FixedCoverLimits {
 }
 
 /// Mixed admission counts final emitted cells, never their leaf descendants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MixedCoverLimits {
     /// Maximum final canonical emitted-cell count.
     pub max_emitted_cells: u64,
@@ -112,6 +112,15 @@ pub struct MixedCoverLimits {
     pub max_work_items: u64,
     /// Maximum simultaneously retained workspace bytes.
     pub max_workspace_bytes: u64,
+}
+impl purrdf_hash::error::StructuredError for MixedCoverLimits {
+    purrdf_hash::error_visit! {
+        @record self { max_emitted_cells, max_work_items, max_workspace_bytes } => "geo-cover-limits" {
+            "max_emitted_cells" => Unsigned(u128::from(self.max_emitted_cells)),
+            "max_work_items" => Unsigned(u128::from(self.max_work_items)),
+            "max_workspace_bytes" => ByteCount(u128::from(self.max_workspace_bytes))
+        }
+    }
 }
 impl MixedCoverLimits {
     /// Frozen ordinary mixed cover admission.
@@ -301,7 +310,10 @@ impl ClosedBox {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(GeoError::domain("box south exceeds north"));
+            return Err(crate::GeometryDomainError::reversed_box(
+                [&west, &south, &east, &north],
+                &mut WorkProgress::integer(None),
+            ));
         }
         Ok(Self {
             west,
@@ -757,9 +769,7 @@ impl<'a> CoverBudget<'a> {
             || limits.max_work_items == 0
             || limits.max_workspace_bytes == 0
         {
-            return Err(GeoError::InvalidExecutionPolicy(
-                "cover admission limits must be positive",
-            ));
+            return Err(GeoError::InvalidCoverPolicy(limits));
         }
         let value = Self {
             limits,
@@ -1160,12 +1170,14 @@ impl<'a> CoverBudget<'a> {
             let result = self.math_for_sources_at_precision(precision, sources, &mut action);
             match result {
                 Ok(value) => return Ok(value),
-                Err(GeoError::PrecisionExhausted { .. } | GeoError::Domain(_))
-                    if precision < limit =>
+                Err(error)
+                    if precision < limit
+                        && (matches!(&error, GeoError::PrecisionExhausted { .. })
+                            || error.is_domain_error()) =>
                 {
                     precision = precision.saturating_mul(2).min(limit);
                 }
-                Err(GeoError::Domain(_)) => {
+                Err(error) if error.is_domain_error() => {
                     return Err(GeoError::PrecisionExhausted { bits: limit });
                 }
                 Err(error) => return Err(self.invocation_error(error)),

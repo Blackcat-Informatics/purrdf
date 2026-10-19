@@ -1176,6 +1176,55 @@ mod tests {
     use crate::{ExecutionLimits, ExecutionPolicy, GeographicReference, Int};
 
     #[test]
+    fn jordan_witness_refusal_retains_original_certificate_comparisons() {
+        let curve = crate::PreparedCurve::from_source(
+            &[
+                Coord::xy(Rat::zero(), Rat::zero()),
+                Coord::xy(Rat::one(), Rat::one()),
+            ],
+            &GeographicReference::wgs84(),
+        )
+        .unwrap();
+        for (physical_chart, orientation, reversed, empty) in [
+            (false, -1, false, false),
+            (true, -1, false, false),
+            (true, 1, true, false),
+            (true, 1, false, true),
+        ] {
+            let certificate = AreaCellCertificate {
+                physical_chart,
+                orientation,
+                bounds: None,
+            };
+            let input = if empty {
+                crate::PreparedCurve::new(Vec::new())
+            } else {
+                curve.clone()
+            };
+            let count = input.edges().len();
+            let error = crate::atlas::oriented::OrientedRing::from_operation_cell(
+                input,
+                &certificate,
+                reversed,
+                &mut WorkProgress::integer(None),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error.original(), GeoError::SourcePreparation(cause)
+                if **cause == crate::SourcePreparationError::JordanCertificate { physical_chart, orientation, reversed, edge_count: count })
+            );
+            assert_eq!(error.detail(), "operation cell Jordan certificate mismatch");
+            assert!(!error.is_expression_error());
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(error.original())
+                    .child("cause")
+                    .code,
+                "source-preparation-jordan-certificate"
+            );
+        }
+    }
+
+    #[test]
     fn generated_source_cells_retain_actual_wide_owners_and_refuse_one_byte_below_peak() {
         let small = Rat::new(Int::one(), Int::one().shl(255).add(&Int::one())).unwrap();
         let vertices = vec![

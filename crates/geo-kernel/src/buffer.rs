@@ -213,8 +213,14 @@ impl OffsetRegion {
         }
         if let Some(receipt) = receipt {
             if receipt != &self.source.source_receipt() {
-                return Err(GeoError::config(
-                    "offset receipt names a different original source",
+                return Err(GeoError::retained_failure(
+                    crate::SourcePreparationError::Receipt {
+                        consumer: crate::PreparationReceiptConsumer::OffsetMembership,
+                        expected: self.source.source_receipt(),
+                        actual: *receipt,
+                    },
+                    GeoError::SourcePreparation,
+                    observer,
                 ));
             }
             receipt.validate_context(context)?;
@@ -225,11 +231,25 @@ impl OffsetRegion {
                 .ok_or(GeoError::ArithmeticOverflow(
                     "retained offset preparation work",
                 ))?;
-            if context.preparation_work_items() < work
-                || context.retained_workspace_bytes() < self.retained_workspace_bytes()
-            {
-                return Err(GeoError::config(
-                    "offset constructor is absent from the retained source baseline",
+            let reason = if context.preparation_work_items() < work {
+                Some(crate::PreparationBaselineReason::Work)
+            } else if context.retained_workspace_bytes() < self.retained_workspace_bytes() {
+                Some(crate::PreparationBaselineReason::Workspace)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(GeoError::retained_failure(
+                    crate::SourcePreparationError::OffsetBaseline {
+                        source: *receipt,
+                        reason,
+                        required_work: work,
+                        required_workspace: self.retained_workspace_bytes(),
+                        actual_work: context.preparation_work_items(),
+                        actual_workspace: context.retained_workspace_bytes(),
+                    },
+                    GeoError::SourcePreparation,
+                    observer,
                 ));
             }
         }
@@ -584,10 +604,12 @@ mod tests {
             assert_eq!(context.workspace_peak(), exact_peak);
         }
         let other = source("POINT (0 0)");
-        assert!(matches!(
-            offset.contains_prepared(&point("-75", "90"), &other.source_receipt(), &mut context),
-            Err(GeoError::Config(_))
-        ));
+        let error = offset
+            .contains_prepared(&point("-75", "90"), &other.source_receipt(), &mut context)
+            .unwrap_err();
+        assert!(matches!(&error, GeoError::SourcePreparation(cause)
+            if matches!(&**cause, crate::SourcePreparationError::Receipt { consumer: crate::PreparationReceiptConsumer::OffsetMembership, expected, actual }
+                if *expected == offset.source.source_receipt() && *actual == other.source_receipt())));
         assert!(matches!(
             offset.contains(&point("-75", "90"), &mut context),
             Err(GeoError::MemoryExhausted { .. })

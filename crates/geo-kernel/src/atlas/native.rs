@@ -267,10 +267,11 @@ fn membership(
                 bases.push_reserved(super::polygon_base_membership(
                     polygon,
                     &states[offset..end],
+                    progress,
                 )?);
                 offset = end;
             }
-            super::region_membership(region, &bases)
+            super::region_membership(region, &bases, progress)
         })();
     drop(bases);
     let released = context.release_workspace(temporary);

@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Geographic error focused tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - .github/workflows/geographic-errors.yaml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/geo-kernel/**
+      - crates/geo/**
+      - crates/sparql-eval/src/geo/**
+      - crates/sparql-eval/src/error.rs
+      - crates/sparql-eval/src/user_fn.rs
+      - crates/rdf-core/src/dataset_view.rs
+      - crates/rdf-core/src/ir/term_walk.rs
+      - crates/lex/src/json/read.rs
+      - crates/xsd/src/**
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 8
+  RUST_TEST_THREADS: 4
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Native geographic producers and retained causes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-native
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+          cargo -vV
+      - name: Execute native kernel producer and admission controls
+        run: |
+          mkdir -p target
+          cargo test --locked -p purrdf-geo-kernel --lib -- --list > target/geographic-kernel-test-inventory.txt
+          for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests::; do
+            rg --fixed-strings --quiet "$prefix" target/geographic-kernel-test-inventory.txt
+            cargo test --locked -p purrdf-geo-kernel --lib "$prefix"
+          done
+      - name: Execute native evaluator transport and caller controls
+        run: |
+          cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
+          for prefix in geo::error::tests:: geo::functions::standard_tests::; do
+            rg --fixed-strings --quiet "$prefix" target/geographic-evaluator-test-inventory.txt
+            cargo test --locked -p purrdf-sparql-eval --lib "$prefix"
+          done

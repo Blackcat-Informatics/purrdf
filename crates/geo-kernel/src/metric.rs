@@ -14,7 +14,8 @@ pub use input::{numeric_radius, numeric_radius_metered};
 pub(crate) use report::reported_double_with_progress;
 pub use report::{reported_double, reported_double_metered};
 pub use unit::{
-    MetricDimension, convert_unit, convert_unit_metered, metres_from_unit, metres_from_unit_metered,
+    MetricDimension, MetricUnitDirection, convert_unit, convert_unit_metered, metres_from_unit,
+    metres_from_unit_metered,
 };
 
 use purrdf_hash::{Domain, frame::frame_le};
@@ -63,6 +64,27 @@ macro_rules! quantity {
 quantity!(Metres, "An exact signed distance in metres.");
 quantity!(SquareMetres, "An exact signed area in square metres.");
 
+/// Check the original closed-unit requirements in their existing order.
+/// The caller supplies its original resident or admitted exact comparator.
+pub(crate) fn unit_parameter_refusal(
+    lower: &Rat,
+    upper: Option<&Rat>,
+    mut compare: impl FnMut(&Rat, &Rat) -> Result<core::cmp::Ordering, GeoError>,
+) -> Result<Option<crate::UnitParameterRequirement>, GeoError> {
+    if compare(lower, &Rat::zero())?.is_lt() {
+        return Ok(Some(crate::UnitParameterRequirement::Lower));
+    }
+    if compare(upper.unwrap_or(lower), &Rat::one())?.is_gt() {
+        return Ok(Some(crate::UnitParameterRequirement::Upper));
+    }
+    if let Some(upper) = upper
+        && compare(lower, upper)?.is_gt()
+    {
+        return Ok(Some(crate::UnitParameterRequirement::Order));
+    }
+    Ok(None)
+}
+
 /// A finite binary64 metre threshold after SPARQL numeric promotion.
 ///
 /// Its IEEE bits are retained. Finite negative thresholds are valid and compare
@@ -97,8 +119,12 @@ impl XsdDoubleMetres {
         // binary64 scope as the metric kernels. Its thread control state is
         // restored before returning, including when promotion refuses.
         let _scope = purrdf_xsd::ieee::Binary64Scope::enter();
-        let promoted = numeric::numeric_to_f64_admitted(value, &mut |_| Ok(()))?
-            .ok_or_else(|| GeoError::domain("a distance threshold must be numeric"))?;
+        let promoted =
+            numeric::numeric_to_f64_admitted(value, &mut |_| Ok(()))?.ok_or_else(|| {
+                GeoError::NonNumericThreshold {
+                    datatype: value.datatype(),
+                }
+            })?;
         Self::new(promoted)
     }
 
@@ -231,11 +257,18 @@ impl MetricEstimate {
         Ok(output.finish())
     }
 
+    #[cfg(test)]
     pub(crate) fn from_quantized(
         quantized_micrometres: Int,
         binding: GeoBindingId,
     ) -> Result<Self, GeoError> {
-        Self::from_quantized_using(quantized_micrometres, binding, None, None)
+        Self::from_quantized_using(
+            quantized_micrometres,
+            binding,
+            None,
+            None,
+            &mut WorkProgress::integer(None),
+        )
     }
 
     fn from_quantized_using(
@@ -243,9 +276,14 @@ impl MetricEstimate {
         binding: GeoBindingId,
         scratch: Option<&LimbScratch>,
         zero_bound: Option<&Rat>,
+        progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         if quantized_micrometres.is_negative() {
-            return Err(GeoError::domain("a shortest distance cannot be negative"));
+            return Err(crate::MetricInputError::negative_distance(
+                quantized_micrometres,
+                binding,
+                progress,
+            ));
         }
         let value = match scratch {
             Some(scratch) => Rat::from_decimal_in(&quantized_micrometres, 6, scratch)
@@ -512,7 +550,15 @@ pub(crate) fn complete_point_enclosure(
     binding: GeoBindingId,
     precision_bits: u32,
 ) -> Result<MetricEstimate, GeoError> {
-    complete_point_enclosure_using(lower, upper, binding, precision_bits, None, None)
+    complete_point_enclosure_using(
+        lower,
+        upper,
+        binding,
+        precision_bits,
+        None,
+        None,
+        &mut WorkProgress::integer(None),
+    )
 }
 
 fn complete_point_enclosure_using(
@@ -522,13 +568,28 @@ fn complete_point_enclosure_using(
     precision_bits: u32,
     scratch: Option<&LimbScratch>,
     zero_bound: Option<&Rat>,
+    progress: &mut WorkProgress<'_>,
 ) -> Result<MetricEstimate, GeoError> {
     let compare = |a: &Rat, b: &Rat| match scratch {
         Some(scratch) => a.compare_in(b, scratch).map_err(GeoError::NumericalScratch),
         None => Ok(a.cmp(b)),
     };
-    if compare(lower, upper)?.is_gt() || compare(lower, &Rat::zero())?.is_lt() {
-        return Err(GeoError::domain("invalid nonnegative distance enclosure"));
+    let refusal = if compare(lower, upper)?.is_gt() {
+        Some(crate::DistanceEnclosureReason::Reversed)
+    } else if compare(lower, &Rat::zero())?.is_lt() {
+        Some(crate::DistanceEnclosureReason::Negative)
+    } else {
+        None
+    };
+    if let Some(reason) = refusal {
+        return Err(crate::MetricInputError::enclosure(
+            reason,
+            lower,
+            upper,
+            binding,
+            precision_bits,
+            progress,
+        ));
     }
     let round = |value: &Rat| match scratch {
         Some(scratch) => value
@@ -543,12 +604,7 @@ fn complete_point_enclosure_using(
             bits: precision_bits,
         });
     }
-    match scratch {
-        Some(_) => {
-            MetricEstimate::from_quantized_using(rounded_lower, binding, scratch, zero_bound)
-        }
-        None => MetricEstimate::from_quantized(rounded_lower, binding),
-    }
+    MetricEstimate::from_quantized_using(rounded_lower, binding, scratch, zero_bound, progress)
 }
 
 /// The same complete response, admitting every final original-rational
@@ -611,7 +667,7 @@ pub(crate) fn complete_point_enclosure_observed(
         }
     }
     let precision = context.policy().limits().max_precision_bits;
-    progress.exact_context(context, cost, |context| {
+    progress.exact_with(context, cost, |context, progress| {
         complete_point_enclosure_using(
             lower,
             upper,
@@ -619,6 +675,7 @@ pub(crate) fn complete_point_enclosure_observed(
             precision,
             context.integer_scratch(),
             context.zero_conversion_bound(),
+            progress,
         )
     })
 }
@@ -711,6 +768,122 @@ mod tests {
             context.remaining_workspace(),
             context.policy().limits().max_workspace_bytes
         );
+    }
+
+    #[test]
+    fn nonnumeric_threshold_retains_its_actual_datatype_without_copying_the_value() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        XsdDoubleMetres::from_integer(0).unwrap();
+        for value in [
+            purrdf_xsd::XsdValue::Boolean(false),
+            purrdf_xsd::XsdValue::String("original threshold".repeat(1024)),
+            purrdf_xsd::XsdValue::AnyUri("https://example.org/original".to_owned()),
+        ] {
+            let datatype = value.datatype();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = XsdDoubleMetres::from_xsd(&value).unwrap_err();
+            let last = error.clone();
+            assert_eq!(window.close().allocations, 0);
+            drop((value, error));
+            assert_eq!(last, GeoError::NonNumericThreshold { datatype });
+            let fields = Capture::read(&last);
+            assert_eq!(fields.code, "geo-nonnumeric-threshold");
+            assert!(
+                matches!(fields.field("datatype"), ErrorValue::Iri(value) if value == datatype.iri())
+            );
+            assert!(last.is_expression_error());
+            assert!(last.is_domain_error());
+            assert_eq!(
+                last.to_string(),
+                "geometry domain error: a distance threshold must be numeric"
+            );
+        }
+    }
+
+    #[test]
+    fn distance_certificate_refusals_keep_original_quantities_and_enclosure_order() {
+        use crate::{DistanceEnclosureReason, MetricInputError};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let binding = GeographicReference::wgs84().id();
+        let quantity = Int::from_i64(-7).shl(400);
+        let expected = quantity.clone();
+        let error = super::MetricEstimate::from_quantized(quantity, binding).unwrap_err();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let last = error.clone();
+        assert_eq!(window.close().allocations, 0);
+        drop(error);
+        let GeoError::MetricInput(cause) = &last else {
+            panic!("original certificate quantity")
+        };
+        assert!(
+            matches!(&**cause, MetricInputError::NegativeDistance { micrometres, binding: original } if micrometres == &expected && *original == binding)
+        );
+        assert_eq!(
+            Capture::read(&last).child("cause").code,
+            "metric-negative-distance"
+        );
+        assert_eq!(last.detail(), "a shortest distance cannot be negative");
+        assert!(last.is_expression_error());
+
+        for (lower, upper, reason) in [
+            (2, 1, DistanceEnclosureReason::Reversed),
+            (-2, -3, DistanceEnclosureReason::Reversed),
+            (-2, 1, DistanceEnclosureReason::Negative),
+        ] {
+            let lower = Rat::from_i64(lower);
+            let upper = Rat::from_i64(upper);
+            let resident = complete_point_enclosure(&lower, &upper, binding, u32::MAX).unwrap_err();
+            let mut context = MetricContext::wgs84().unwrap();
+            let precision = context.policy().limits().max_precision_bits;
+            let mut progress = WorkProgress::integer(None);
+            let observed = super::complete_point_enclosure_observed(
+                &lower,
+                &upper,
+                binding,
+                &mut context,
+                &mut progress,
+            )
+            .unwrap_err();
+            for (error, precision) in [(resident, u32::MAX), (observed, precision)] {
+                let GeoError::MetricInput(cause) = &error else {
+                    panic!("original distance enclosure")
+                };
+                let MetricInputError::Enclosure {
+                    reason: original,
+                    lower: first,
+                    upper: second,
+                    binding: original_binding,
+                    precision_bits,
+                } = &**cause
+                else {
+                    panic!("native enclosure fields")
+                };
+                assert_eq!(
+                    (*original, *original_binding, *precision_bits),
+                    (reason, binding, precision)
+                );
+                assert_eq!(&**first, &lower);
+                assert_eq!(&**second, &upper);
+                let fields = Capture::read(&error).child("cause");
+                assert_eq!(
+                    fields.child("reason").code,
+                    if reason == DistanceEnclosureReason::Reversed {
+                        "distance-enclosure-reversed"
+                    } else {
+                        "distance-enclosure-negative"
+                    }
+                );
+                assert!(
+                    matches!(fields.field("precision_bits"), ErrorValue::Unsigned(value) if value == u128::from(precision))
+                );
+                assert!(error.is_expression_error());
+                assert_eq!(error.detail(), "invalid nonnegative distance enclosure");
+            }
+        }
     }
 
     #[test]

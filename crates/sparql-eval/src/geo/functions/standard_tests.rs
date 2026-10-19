@@ -37,6 +37,106 @@ impl purrdf_geo_kernel::MetricWorkObserver for OutputLedger {
 }
 
 #[test]
+fn source_admission_policy_mismatch_retains_both_policies_before_arity_dispatch() {
+    use purrdf_geo_kernel::{ExecutionPolicy, PreparationBudget};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let profile = GeoProfile::standard();
+    let admitted = ExecutionPolicy::unbounded();
+    let expected = profile.policy();
+    let error = super::compute_standard_with_preparation(
+        super::GeofFunction::Distance,
+        &profile,
+        &[],
+        &mut OutputLedger::default(),
+        PreparationBudget::new(admitted),
+    )
+    .unwrap_err();
+    let clone = error.clone();
+    drop((error, profile));
+    let fields = Capture::read(clone.original()).child("cause");
+    assert_eq!(fields.code, "carrier-preparation-policy");
+    let actual = fields.child("admitted");
+    assert!(
+        matches!(actual.child("limits").field("max_work_items"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    assert!(
+        matches!(actual.field("id"), ErrorValue::Bytes(bytes) if bytes == admitted.id().digest().as_bytes())
+    );
+    let required = fields.child("expected");
+    assert!(
+        matches!(required.child("limits").field("max_work_items"), ErrorValue::Unsigned(value) if value == u128::from(expected.limits().max_work_items))
+    );
+    assert!(
+        matches!(required.field("id"), ErrorValue::Bytes(bytes) if bytes == expected.id().digest().as_bytes())
+    );
+    assert!(!clone.is_expression_error());
+    assert_eq!(
+        clone.detail(),
+        "source admission belongs to a different geographic execution policy"
+    );
+}
+
+#[test]
+fn native_domain_operands_agree_in_resident_and_standard_scalar_paths() {
+    use super::GeofFunction;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let profile = GeoProfile::standard();
+    let vocabulary = GeoVocab::standard();
+    for (function, lexical, index, ordinate, has_positions) in [
+        (GeofFunction::MinX, "POINT EMPTY", None, "ordinate-x", false),
+        (GeofFunction::MaxY, "POINT EMPTY", None, "ordinate-y", false),
+        (GeofFunction::MinZ, "POINT(1 2)", None, "ordinate-z", true),
+        (GeofFunction::MaxZ, "POINT EMPTY", None, "ordinate-z", false),
+        (
+            GeofFunction::GeometryN,
+            "MULTIPOINT((0 0),(1 1))",
+            Some(i64::MIN),
+            "",
+            false,
+        ),
+    ] {
+        let mut arguments = vec![TermValue::typed_literal(lexical, ogc::geo::WKT_LITERAL)];
+        if let Some(index) = index {
+            arguments.push(TermValue::integer(index));
+        }
+        let borrowed: Vec<_> = arguments.iter().collect();
+        let resident = super::compute(function, &vocabulary, &borrowed).unwrap_err();
+        let observed =
+            super::compute_standard(function, &profile, &borrowed, &mut OutputLedger::default())
+                .unwrap_err();
+        drop(borrowed);
+        drop(arguments);
+        assert_eq!(resident.to_string(), observed.to_string());
+        for error in [resident, observed] {
+            let cloned = error.clone();
+            drop(error);
+            assert!(cloned.is_expression_error());
+            let fields = Capture::read(cloned.original()).child("cause");
+            if let Some(index) = index {
+                assert_eq!(fields.code, "geometry-missing-member");
+                assert!(
+                    matches!(fields.field("index"), ErrorValue::Signed(value) if value == i128::from(index))
+                );
+                assert!(matches!(fields.field("count"), ErrorValue::Unsigned(2)));
+            } else {
+                assert_eq!(fields.code, "geometry-missing-bound");
+                assert!(
+                    matches!(fields.field("function"), ErrorValue::Code(value) if value == function.local_name())
+                );
+                assert_eq!(fields.child("ordinate").code, ordinate);
+                assert!(
+                    matches!(fields.field("has_positions"), ErrorValue::Boolean(value) if value == has_positions)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn carrier_term_moves_admitted_text_and_charges_its_remaining_owned_storage() {
     for (kind, datatype, lexical) in [
         (

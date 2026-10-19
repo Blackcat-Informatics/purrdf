@@ -41,6 +41,14 @@ pub struct Rational {
     denominator: Integer,
 }
 
+impl purrdf_hash::error::StructuredError for Rational {
+    purrdf_hash::error_visit! {
+        @record self { numerator, denominator } => "xsd-rational" {
+            "numerator" => Record(&self.numerator), "denominator" => Record(&self.denominator)
+        }
+    }
+}
+
 impl Rational {
     /// Zero.
     pub const ZERO: Self = Self {

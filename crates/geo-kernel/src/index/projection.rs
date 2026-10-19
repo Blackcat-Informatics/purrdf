@@ -3,7 +3,7 @@
 
 //! Admission for the single immutable dataset projection algorithm.
 
-use super::{GeoIndexConfig, GraphSelector, Keyed};
+use super::{GeoIndexConfig, Keyed};
 use crate::context::{Retained, WorkProgress};
 use crate::{GeoError, GeoVocab, GeometryLiteral, MetricContext, MetricWorkObserver, Rat};
 use core::{cmp::Ordering, ops::ControlFlow};
@@ -17,33 +17,6 @@ pub(super) struct ProjectionWork<'a, 'observer> {
 
 pub(super) use crate::context::native_memory;
 
-struct ProjectionDebug<'a, 'observer> {
-    value: &'a TermValue,
-    observer: &'a std::cell::RefCell<&'observer mut dyn MetricWorkObserver>,
-    failure: std::cell::RefCell<Option<GeoError>>,
-}
-impl core::fmt::Debug for ProjectionDebug<'_, '_> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut observer = self.observer.borrow_mut();
-        let mut progress = WorkProgress::integer(Some(&mut **observer));
-        let result = progress.with_storage(0, |memory| {
-            self.value.write_debug_with_memory(formatter, memory)
-        });
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let error = match error {
-                    purrdf_lex::walk::DebugWriteError::Storage(error) => error,
-                    purrdf_lex::walk::DebugWriteError::Format(_) => StorageError::FormattingFailed,
-                };
-                if self.failure.borrow().is_none() {
-                    *self.failure.borrow_mut() = Some(GeoError::Storage(error));
-                }
-                Err(core::fmt::Error)
-            }
-        }
-    }
-}
 impl ProjectionWork<'_, '_> {
     pub(super) fn plain() -> Self {
         Self {
@@ -153,27 +126,7 @@ impl ProjectionWork<'_, '_> {
         self.memory(|memory| memory.release_bytes(bytes).map_err(GeoError::Storage))
     }
     pub(super) fn config(&mut self, config: &GeoIndexConfig) -> Result<GeoIndexConfig, GeoError> {
-        self.memory(|memory| {
-            let copy = |term: &TermValue, memory: &mut Memory<'_, dyn Admission + '_>| {
-                let TermValue::Iri(iri) = term else {
-                    return Err(GeoError::InvalidNativeStorage(
-                        "index configuration contains a non-IRI",
-                    ));
-                };
-                memory
-                    .string(iri)
-                    .map(TermValue::Iri)
-                    .map_err(GeoError::Storage)
-            };
-            Ok(GeoIndexConfig {
-                serializations: memory.try_map(&config.serializations, copy)?,
-                graph: match &config.graph {
-                    GraphSelector::Any => GraphSelector::Any,
-                    GraphSelector::Default => GraphSelector::Default,
-                    GraphSelector::Named(term) => GraphSelector::Named(copy(term, memory)?),
-                },
-            })
-        })
+        self.memory(|memory| config.copy_with_memory(memory))
     }
     pub(super) fn iri(&mut self, text: impl core::fmt::Display) -> Result<TermValue, GeoError> {
         self.memory(|memory| {
@@ -199,20 +152,27 @@ impl ProjectionWork<'_, '_> {
                 .map_err(GeoError::Storage)
         })
     }
-    pub(super) fn source_error(&mut self, error: impl core::fmt::Display) -> GeoError {
+    pub(super) fn source_error(
+        &mut self,
+        error: impl purrdf_hash::error::NativeError + 'static,
+    ) -> GeoError {
         match self.admission.as_mut() {
-            Some((_, progress)) => {
-                progress.retained_error(|memory| memory.format(&error).map(GeoError::SourceRead))
-            }
-            None => GeoError::source_read(error.to_string()),
+            Some((_, progress)) => GeoError::native_source_with_progress(error, progress),
+            None => GeoError::native_source(error),
         }
     }
-    pub(super) fn configuration_error(&mut self, message: &str) -> GeoError {
+    pub(super) fn foreign_term_id(&mut self) -> GeoError {
         match self.admission.as_mut() {
-            Some((_, progress)) => {
-                progress.retained_error(|memory| memory.string(message).map(GeoError::Config))
-            }
-            None => GeoError::config(message),
+            Some((_, progress)) => Retained::produce(
+                progress,
+                |_| Ok(crate::IndexBindingError::ForeignTermId),
+                |_, _| Ok(()),
+            )
+            .map_or_else(|error| error, GeoError::IndexBinding),
+            None => GeoError::resident_failure(
+                crate::IndexBindingError::ForeignTermId,
+                GeoError::IndexBinding,
+            ),
         }
     }
     pub(super) fn invalid_serialization(
@@ -221,39 +181,43 @@ impl ProjectionWork<'_, '_> {
         object: &TermValue,
     ) -> GeoError {
         match self.admission.as_mut() {
-            None => GeoError::literal(format!(
-                "the object of the configured serialization property {property:?} is {object:?}, \
-                 which is not a literal; only a literal can carry a geometry serialization, so this \
-                 row names no geometry and passing over it would drop an answer the configuration \
-                 asked for"
-            )),
+            None => {
+                let mut resident = Resident;
+                crate::IndexSerializationError::capture(
+                    property,
+                    object,
+                    &mut Memory::new(&mut resident),
+                    |_| Ok(()),
+                )
+                .unwrap_or_else(|error| error)
+            }
             Some((context, progress)) => {
                 let work = context.work_items();
                 let peak = context.workspace_peak();
-                progress.with_native_storage(|memory, observer| {
-                // Recursive diagnostic traversal reports new work directly,
-                // unlike a numerical child which first polls its cumulative
-                // context. Replay that existing prefix before its first node.
-                observer.charge_chunk(work, peak)?;
-                let observer = std::cell::RefCell::new(observer);
-                let property = ProjectionDebug { value: property, observer: &observer, failure: std::cell::RefCell::new(None) };
-                let object = ProjectionDebug { value: object, observer: &observer, failure: std::cell::RefCell::new(None) };
-                let message = memory.format(&format_args!(
-                    "the object of the configured serialization property {property:?} is {object:?}, \
-                     which is not a literal; only a literal can carry a geometry serialization, so this \
-                     row names no geometry and passing over it would drop an answer the configuration \
-                     asked for"
-                ));
-                if let Some(first) = property.failure.into_inner().or_else(|| object.failure.into_inner()) {
-                    drop(message);
-                    return Err(first);
-                }
-                message.map(GeoError::Literal).map_err(GeoError::Storage)
-                }).unwrap_or_else(|error| error)
+                progress
+                    .with_native_storage(|memory, observer| {
+                        // Preserve the existing computation prefix before visiting
+                        // original term nodes. Capture uses the core's one admitted
+                        // iterative copier, never a rendered diagnostic traversal.
+                        observer.charge_chunk(work, peak)?;
+                        let mut nested = WorkProgress::new(Some(observer));
+                        let mut observer = SourceObserver {
+                            context,
+                            progress: &mut nested,
+                        };
+                        let cause = crate::IndexSerializationError::capture(
+                            property,
+                            object,
+                            memory,
+                            |_| observer.charge_chunk(1, 0),
+                        )?;
+                        Err::<GeoError, _>(cause)
+                    })
+                    .unwrap_or_else(|error| error)
             }
         }
     }
-    pub(super) fn resolve<D: DatasetView>(
+    pub(super) fn resolve<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
         &mut self,
         dataset: &D,
         id: D::Id,
@@ -281,9 +245,7 @@ impl ProjectionWork<'_, '_> {
             }
             Some(Failure::Storage(error)) => Err(GeoError::Storage(error)),
             Some(Failure::Lookup(TermLookupError::Read(error))) => Err(self.source_error(error)),
-            Some(Failure::Lookup(TermLookupError::ForeignId)) => Err(self.configuration_error(
-                "the dataset view is inconsistent: a term id does not name a term",
-            )),
+            Some(Failure::Lookup(TermLookupError::ForeignId)) => Err(self.foreign_term_id()),
         }
     }
     pub(super) fn geometry_arg(

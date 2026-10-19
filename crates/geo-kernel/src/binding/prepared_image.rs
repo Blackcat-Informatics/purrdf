@@ -132,9 +132,12 @@ impl GeoProfile {
             let reference =
                 self.reference_with_progress(binding.target(), context, &mut progress)?;
             if !crate::numerical::reference_matches(reference, context, &mut progress)? {
-                return Err(progress.retained_message(
-                    "image edge/context target reference mismatch",
-                    GeoError::Config,
+                return Err(crate::BindingConfigError::reference_registration(
+                    binding.target(),
+                    reference,
+                    context.reference(),
+                    crate::ReferenceRegistrationReason::ImageEdgeContext,
+                    &mut progress,
                 ));
             }
             let policy = remaining(context)?;
@@ -219,9 +222,12 @@ impl GeoProfile {
     ) -> Result<PreparedGeometry, GeoError> {
         let reference = self.reference_with_progress(target, context, progress)?;
         if !crate::numerical::reference_matches(reference, context, progress)? {
-            return Err(progress.retained_message(
-                "transformed preparation/context target reference mismatch",
-                GeoError::Config,
+            return Err(crate::BindingConfigError::reference_registration(
+                target,
+                reference,
+                context.reference(),
+                crate::ReferenceRegistrationReason::TransformedContext,
+                progress,
             ));
         }
         let same_surface = if selected.is_none() {
@@ -269,10 +275,14 @@ impl GeoProfile {
             || chain.operations().last().expect("compiled chain").target() != target_reference
             || target_reference.unit != CoordinateUnit::Degrees
         {
-            return Err(progress.retained_message(
-                "transformed preparation requires the registered actual geographic target",
-                GeoError::Config,
-            ));
+            return Err(super::CarrierResolutionFailure::ImageEndpoints {
+                reason: crate::ImageEndpointReason::GeographicPreparation,
+                expected_source: source_reference,
+                actual_source: chain.operations().first().expect("compiled chain").source(),
+                expected_target: target_reference,
+                actual_target: chain.operations().last().expect("compiled chain").target(),
+            }
+            .retained(progress));
         }
         let policy = remaining(context)?;
         let result = {
@@ -393,7 +403,7 @@ impl ImagePreparation<'_, '_, '_> {
         for operation in self.chain.operations() {
             operation
                 .model()
-                .validate_presence(coordinate.z(), self.epoch)?;
+                .validate_presence(coordinate.z(), self.epoch, self.progress)?;
         }
         let operands = [coordinate.x(), coordinate.y()]
             .into_iter()
@@ -691,6 +701,7 @@ impl ImagePreparation<'_, '_, '_> {
                             curve,
                             &certificate,
                             reverse,
+                            preparation.progress,
                         )?;
                         let mut witnesses = RetainedBuilder::default();
                         witnesses.push_admitted(
@@ -1005,6 +1016,59 @@ mod tests {
                 y_coefficient: Rat::one(),
             },
         ]
+    }
+
+    #[test]
+    fn image_context_refusals_keep_both_original_reference_declarations() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let (profile, source, target) = mercator_profile();
+        let name = Crs::new("http://example.org/inverse-projection").unwrap();
+        let literal = crate::wkt::parse(
+            &format!("<{source}> POINT(0 0)"),
+            crate::standard_vocabulary().default_wkt_crs(),
+        )
+        .unwrap();
+        let point = Coord::xy(Rat::zero(), Rat::zero());
+        let errors = [false, true].map(|edge| {
+            let mut context =
+                MetricContext::new(GeographicReference::cgcs2000(), ExecutionPolicy::geometry())
+                    .unwrap();
+            if edge {
+                profile
+                    .prepare_transformed_edge_named(&name, &point, &point, None, &mut context)
+                    .unwrap_err()
+            } else {
+                profile
+                    .prepare_transformed_literal(&literal, &target, None, &mut context)
+                    .unwrap_err()
+            }
+        });
+        drop((profile, source, target, name, literal, point));
+        for (error, reason) in errors.into_iter().zip([
+            "reference-transformed-context",
+            "reference-image-edge-context",
+        ]) {
+            let fields = Capture::read(error.original()).child("cause");
+            assert_eq!(fields.code, "carrier-reference-registration");
+            assert_eq!(fields.child("reason").code, reason);
+            assert!(matches!(
+                fields.field("reference"),
+                ErrorValue::Iri(ogc::CRS84)
+            ));
+            let GeoError::BindingConfiguration(cause) = error.original() else {
+                panic!("native context refusal")
+            };
+            let crate::BindingConfigError::ReferenceRegistration {
+                actual, expected, ..
+            } = &**cause
+            else {
+                panic!("original target declarations")
+            };
+            assert_eq!(actual, &GeographicReference::wgs84());
+            assert_eq!(expected, &GeographicReference::cgcs2000());
+        }
     }
 
     #[test]

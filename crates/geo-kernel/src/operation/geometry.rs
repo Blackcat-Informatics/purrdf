@@ -88,12 +88,18 @@ enum ImageSource<'a> {
 }
 
 /// Explicit physical metric of the target carrier, independent of its IRI.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageMetric {
     /// Euclidean easting/northing in metres.
     CartesianMetres,
     /// Ground ellipsoidal longitude/latitude of this actual target reference.
     Geographic(Box<GeographicReference>),
+}
+impl purrdf_hash::error::StructuredError for ImageMetric {
+    purrdf_hash::error_visit! {
+        CartesianMetres => "image-metric-cartesian-metres" {},
+        Geographic(reference) => "image-metric-geographic" { "reference" => Record(&**reference) },
+    }
 }
 impl ImageMetric {
     fn factor(
@@ -312,15 +318,23 @@ impl OperationChain {
         context: &mut MetricContext,
         observer: Option<&mut dyn MetricWorkObserver>,
     ) -> Result<GeometryImage, GeoError> {
-        let unit = self
+        let endpoint = self
             .operations()
             .last()
             .expect("compiled nonempty chain")
-            .target()
-            .unit;
-        if (unit == CoordinateUnit::Metres) != matches!(metric, ImageMetric::CartesianMetres) {
-            return Err(GeoError::config(
-                "image metric contradicts declared target units",
+            .target();
+        if (endpoint.unit == CoordinateUnit::Metres)
+            != matches!(metric, ImageMetric::CartesianMetres)
+        {
+            let reference = match metric {
+                ImageMetric::CartesianMetres => None,
+                ImageMetric::Geographic(reference) => Some(&**reference),
+            };
+            return Err(crate::BindingConfigError::image_target(
+                endpoint,
+                reference,
+                crate::ImageTargetReason::MetricUnits,
+                &mut WorkProgress::new(observer),
             ));
         }
         context.begin(1)?;
@@ -338,8 +352,11 @@ impl OperationChain {
             if endpoint.realization != binding.digest()
                 || endpoint.swapped_axes != (reference.axes() == crate::AxisOrder::LatLon)
             {
-                return Err(GeoError::config(
-                    "image metric disagrees with actual target realization or axes",
+                return Err(crate::BindingConfigError::image_target(
+                    endpoint,
+                    Some(reference),
+                    crate::ImageTargetReason::MetricReference,
+                    &mut progress,
                 ));
             }
             binding.digest()
@@ -424,17 +441,13 @@ impl OperationChain {
                             |worker| worker.leaf(node),
                         )
                     },
-                    |node, members, memory| {
+                    |node, members, _memory| {
                         {
                             let mut context = context.borrow_mut();
                             context.charge_work(1)?;
                             numerical.borrow_mut().context_poll(&context)?;
                         }
-                        Geometry::new_with_memory(
-                            node.dim(),
-                            GeometryBody::GeometryCollection(members),
-                            memory,
-                        )
+                        Geometry::new(node.dim(), GeometryBody::GeometryCollection(members))
                     },
                 )
                 .map_err(crate::geom::FoldError::into_geo_error)
@@ -718,12 +731,9 @@ impl ImageWorker<'_, '_, '_, '_> {
         dim: crate::CoordDim,
         body: GeometryBody,
     ) -> Result<Geometry, GeoError> {
-        crate::context::native_memory(
-            self.context,
-            self.progress,
-            &mut self.native_bytes,
-            |memory| Geometry::new_with_memory(dim, body, memory),
-        )
+        crate::context::native_memory(self.context, self.progress, &mut self.native_bytes, |_| {
+            Geometry::new(dim, body)
+        })
     }
     fn ring_body(&mut self, ring: Vec<Coord>) -> Result<GeometryBody, GeoError> {
         let mut rings = crate::context::RetainedBuilder::default();
@@ -1412,7 +1422,7 @@ mod tests {
         assert_eq!(context.retained_workspace_bytes(), registered);
         assert!(matches!(
             context.release_materialized_output(image.output_receipt()),
-            Err(GeoError::Config(_))
+            Err(GeoError::ContextConfiguration(cause)) if matches!(&*cause, crate::ContextConfigError::OutputReceipt { reason: crate::OutputReceiptReason::LiveOwners, .. })
         ));
         let remaining = context.remaining_workspace();
         context.admit_workspace(remaining).unwrap();
@@ -1431,7 +1441,7 @@ mod tests {
         drop(image);
         assert!(matches!(
             context.release_materialized_output(receipt.clone()),
-            Err(GeoError::Config(_))
+            Err(GeoError::ContextConfiguration(cause)) if matches!(&*cause, crate::ContextConfigError::OutputReceipt { reason: crate::OutputReceiptReason::LiveOwners, .. })
         ));
         drop(shared);
         context.release_materialized_output(receipt).unwrap();

@@ -111,9 +111,11 @@ impl OperationModel {
                         .map_err(GeoError::NumericalScratch)?
                         .is_ge()
                 {
-                    return Err(progress.retained_message(
-                        "GCJ applicability must exclude both poles",
-                        GeoError::Config,
+                    return Err(crate::ProjectionInputError::gcj(
+                        domain,
+                        None,
+                        crate::GcjInputReason::Poles,
+                        progress,
                     ));
                 }
                 Ok(())
@@ -124,9 +126,13 @@ impl OperationModel {
                     .map_err(GeoError::NumericalScratch)?
                     .is_gt()
                 {
-                    return Err(progress.retained_message(
-                        "Web Mercator radius must be positive",
-                        GeoError::Config,
+                    return Err(crate::ProjectionInputError::mercator_configuration(
+                        radius,
+                        None,
+                        self.descriptor(),
+                        None,
+                        crate::MercatorRequirement::Radius,
+                        progress,
                     ));
                 }
                 Ok(())
@@ -140,22 +146,40 @@ impl OperationModel {
                 semimajor: radius,
                 eccentricity_squared,
             } => {
-                if !values
+                let requirement = if !values
                     .compare(radius, &Rat::zero())
                     .map_err(GeoError::NumericalScratch)?
                     .is_gt()
-                    || values
-                        .compare(eccentricity_squared, &Rat::zero())
-                        .map_err(GeoError::NumericalScratch)?
-                        .is_lt()
-                    || !values
-                        .compare(eccentricity_squared, &Rat::one())
-                        .map_err(GeoError::NumericalScratch)?
-                        .is_lt()
                 {
-                    return Err(progress.retained_message(
-                        "inverse Mercator requires positive radius and squared eccentricity in [0,1)",
-                        GeoError::Config,
+                    Some(crate::MercatorRequirement::Radius)
+                } else if values
+                    .compare(eccentricity_squared, &Rat::zero())
+                    .map_err(GeoError::NumericalScratch)?
+                    .is_lt()
+                {
+                    Some(crate::MercatorRequirement::EccentricityLower)
+                } else if !values
+                    .compare(eccentricity_squared, &Rat::one())
+                    .map_err(GeoError::NumericalScratch)?
+                    .is_lt()
+                {
+                    Some(crate::MercatorRequirement::EccentricityUpper)
+                } else {
+                    None
+                };
+                if let Some(requirement) = requirement {
+                    let square_domain = match self {
+                        Self::MercatorToGeographic { square_domain, .. } => Some(*square_domain),
+                        Self::EllipsoidalMercator { .. } => None,
+                        _ => unreachable!("only the explicit Mercator parameter branch"),
+                    };
+                    return Err(crate::ProjectionInputError::mercator_configuration(
+                        radius,
+                        Some(eccentricity_squared),
+                        self.descriptor(),
+                        square_domain,
+                        requirement,
+                        progress,
                     ));
                 }
                 Ok(())
@@ -169,14 +193,18 @@ impl OperationModel {
             _ => Ok(()),
         }
     }
-    pub(super) fn validate_metadata(&self, point: &OperationPoint) -> Result<(), GeoError> {
+    pub(super) fn validate_metadata(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
         match self {
             Self::GeographicToGeocentric { .. } | Self::GeocentricToGeographic { .. }
                 if point.z.is_none() =>
             {
                 Err(GeoError::MissingHeight)
             }
-            Self::Helmert(parameters) => parameters.validate_point(point),
+            Self::Helmert(parameters) => parameters.validate_point(point, progress),
             _ => Ok(()),
         }
     }
@@ -184,6 +212,7 @@ impl OperationModel {
         &self,
         height: Option<&Rat>,
         epoch: Option<&Rat>,
+        progress: &mut WorkProgress<'_>,
     ) -> Result<(), GeoError> {
         if matches!(
             self,
@@ -194,11 +223,17 @@ impl OperationModel {
         {
             return Err(GeoError::MissingHeight);
         }
-        if matches!(self, Self::Helmert(parameters) if parameters.rates.is_some())
+        if let Self::Helmert(parameters) = self
+            && parameters.rates.is_some()
             && epoch.is_none()
         {
-            return Err(GeoError::domain(
-                "a rate-bearing Helmert requires an actual observation epoch",
+            return Err(crate::AffineInputError::helmert(
+                parameters,
+                None,
+                height,
+                None,
+                crate::HelmertInputReason::ObservationEpoch,
+                progress,
             ));
         }
         Ok(())
@@ -337,13 +372,20 @@ impl OperationModel {
         }
         Some(cost)
     }
-    pub(super) fn validate_point(&self, point: &OperationPoint) -> Result<(), GeoError> {
+    pub(super) fn validate_point(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
         match self {
             Self::GcjRationalHarmonicV1(domain) => {
                 LonLat::new(point.x.clone(), point.y.clone())?;
                 if !domain.contains(&point.x, &point.y) {
-                    return Err(GeoError::domain(
-                        "GCJ point is outside the explicitly declared applicability",
+                    return Err(crate::ProjectionInputError::gcj(
+                        domain,
+                        Some(point),
+                        crate::GcjInputReason::Outside,
+                        progress,
                     ));
                 }
             }
@@ -355,7 +397,22 @@ impl OperationModel {
             | Self::WebMercator { .. } => {
                 let coordinate = LonLat::new(point.x.clone(), point.y.clone())?;
                 if coordinate.is_pole() {
-                    return Err(GeoError::domain("Mercator is undefined at a pole"));
+                    let (radius, eccentricity_squared) = match self {
+                        Self::BaiduMercatorAnalyticV1 => (None, None),
+                        Self::EllipsoidalMercator {
+                            semimajor,
+                            eccentricity_squared,
+                        } => (Some(semimajor), Some(eccentricity_squared)),
+                        Self::WebMercator { radius } => (Some(radius), None),
+                        _ => unreachable!("only the forward Mercator point branch"),
+                    };
+                    return Err(crate::ProjectionInputError::mercator_pole(
+                        point,
+                        self.descriptor(),
+                        radius,
+                        eccentricity_squared,
+                        progress,
+                    ));
                 }
             }
             Self::GeographicToGeocentric { .. } => {
@@ -370,9 +427,9 @@ impl OperationModel {
                 }
             }
             Self::MercatorToGeographic { .. } | Self::TransverseMercatorInverse(_) => {}
-            Self::TransverseMercator(parameters) => parameters.validate_point(point)?,
-            Self::Helmert(parameters) => parameters.validate_point(point)?,
-            Self::BilinearGrid(grid) => grid.validate_point(point)?,
+            Self::TransverseMercator(parameters) => parameters.validate_point(point, progress)?,
+            Self::Helmert(parameters) => parameters.validate_point(point, progress)?,
+            Self::BilinearGrid(grid) => grid.validate_point(point, progress)?,
             Self::Similarity2d(_)
             | Self::Polynomial2d(_)
             | Self::Polynomial2dInverse(_)
@@ -778,7 +835,7 @@ impl OperationModel {
                 math,
                 progress,
             )?,
-            Self::Helmert(parameters) => parameters.evaluate(point, coordinates, math)?,
+            Self::Helmert(parameters) => parameters.evaluate(point, coordinates, math, progress)?,
             Self::Similarity2d(parameters) => parameters.evaluate(coordinates, math)?,
             Self::Polynomial2d(polynomial) => polynomial.evaluate(coordinates, math, progress)?,
             Self::BilinearGrid(grid) => {

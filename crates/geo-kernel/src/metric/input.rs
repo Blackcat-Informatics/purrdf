@@ -57,22 +57,39 @@ fn radius(
         ..
     } = value
     else {
-        return Err(GeoError::literal(
-            "a buffer radius must be a numeric literal",
-        ));
+        return Err(progress.retained_error(|memory| {
+            crate::CarrierInputError::capture_with_memory(
+                value,
+                crate::CarrierInputReason::RadiusExpectedLiteral,
+                memory,
+            )
+        }));
     };
     let datatype = XsdDatatype::from_iri(datatype)
         .filter(|datatype| datatype.is_numeric())
-        .ok_or_else(|| GeoError::literal("a buffer radius must have a numeric XSD datatype"))?;
+        .ok_or_else(|| {
+            progress.retained_error(|memory| {
+                crate::CarrierInputError::capture_with_memory(
+                    value,
+                    crate::CarrierInputReason::RadiusDatatype,
+                    memory,
+                )
+            })
+        })?;
     // The shared exact-decimal preflight also dominates the fixed-width XSD
     // numeric scanner and conversion; reject long input before its first scan.
     let cost =
         ExactArithmeticCost::decimal(lexical_form.len(), 0).ok_or(GeoError::WorkExhausted {
             limit: context.policy().limits().max_work_items,
         })?;
-    let promoted = progress.exact(context, cost, || {
-        let numeric = purrdf_xsd::parse(lexical_form, datatype)
-            .map_err(|error| GeoError::literal(error.to_string()))?;
+    let promoted = progress.exact_with(context, cost, |_, progress| {
+        let numeric = purrdf_xsd::parse(lexical_form, datatype).map_err(|cause| match cause {
+            purrdf_xsd::XsdError::Storage(cause) => GeoError::NumericalScratch(cause),
+            cause => match crate::RetainedGeoCause::capture(cause, progress) {
+                Ok(cause) => GeoError::NumericLiteral(cause),
+                Err(original) => original,
+            },
+        })?;
         XsdDoubleMetres::from_xsd(&numeric)
     })?;
     let decoded =
@@ -98,6 +115,79 @@ fn radius(
 mod tests {
     use super::*;
     use crate::{ExecutionLimits, ExecutionPolicy, GeographicReference, Int};
+
+    #[test]
+    fn radius_refusals_preserve_original_rdf_terms_and_native_xsd_causes() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        for (value, reason) in [
+            (
+                TermValue::Blank {
+                    label: "original-radius".to_owned(),
+                    scope: purrdf_core::BlankScope(91),
+                },
+                crate::CarrierInputReason::RadiusExpectedLiteral,
+            ),
+            (
+                TermValue::typed_literal("2", purrdf_xsd::datatype::XSD_STRING),
+                crate::CarrierInputReason::RadiusDatatype,
+            ),
+        ] {
+            let mut context = MetricContext::wgs84().unwrap();
+            let error = numeric_radius(&value, &Rat::one(), &mut context).unwrap_err();
+            let GeoError::CarrierInput(cause) = error.original() else {
+                panic!("original radius term")
+            };
+            assert_eq!(cause.value(), &value);
+            assert_eq!(cause.reason(), reason);
+            drop(value);
+            let last = error.clone();
+            drop(error);
+            let fields = Capture::read(last.original()).child("cause");
+            assert_eq!(fields.code, "carrier-input");
+            if reason == crate::CarrierInputReason::RadiusExpectedLiteral {
+                assert!(matches!(
+                    fields.child("value").field("scope"),
+                    ErrorValue::Unsigned(91)
+                ));
+            } else {
+                assert!(
+                    matches!(fields.child("value").field("datatype"), ErrorValue::Iri(value) if value == purrdf_xsd::datatype::XSD_STRING)
+                );
+            }
+            assert!(last.is_expression_error());
+        }
+
+        for (lexical, datatype, code) in [
+            ("12x", XsdDatatype::Integer, "xsd-invalid-lexical"),
+            ("1.2.3", XsdDatatype::Decimal, "xsd-invalid-lexical"),
+            ("300", XsdDatatype::Byte, "xsd-out-of-range"),
+        ] {
+            let original = purrdf_xsd::parse(lexical, datatype).unwrap_err();
+            let value = TermValue::typed_literal(lexical, datatype.iri());
+            let mut context = MetricContext::wgs84().unwrap();
+            let error = numeric_radius(&value, &Rat::one(), &mut context).unwrap_err();
+            drop(value);
+            let allocations = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let last = error.clone();
+            assert_eq!(allocations.close().allocations, 0);
+            drop(error);
+            let fields = Capture::read(&last).child("cause").child("cause");
+            assert_eq!(fields.code, code);
+            assert!(matches!(fields.field("lexical"), ErrorValue::Text(value) if value == lexical));
+            assert!(
+                matches!(fields.field("datatype"), ErrorValue::Iri(value) if value == datatype.iri())
+            );
+            let source = std::error::Error::source(&last).unwrap().source().unwrap();
+            assert_eq!(
+                source.downcast_ref::<purrdf_xsd::XsdError>(),
+                Some(&original)
+            );
+            assert_eq!(last.detail(), original.to_string());
+            assert!(last.is_expression_error());
+        }
+    }
 
     #[test]
     fn radius_promotes_once_then_applies_the_exact_declared_unit() {
@@ -162,7 +252,7 @@ mod tests {
         let string = TermValue::typed_literal("2", purrdf_xsd::datatype::XSD_STRING);
         assert!(matches!(
             numeric_radius(&string, &Rat::one(), &mut context),
-            Err(GeoError::Literal(_))
+            Err(error) if matches!(error.original(), GeoError::CarrierInput(cause) if cause.reason() == crate::CarrierInputReason::RadiusDatatype)
         ));
     }
 }

@@ -86,8 +86,11 @@ impl PreparedGeodesic {
         context.charge_work(1)?;
         progress.context_poll(context)?;
         if binding != target {
-            return Err(GeoError::config(
-                "prepared geodesic and metric context references differ",
+            return Err(crate::BindingConfigError::identity_mismatch(
+                binding,
+                target,
+                crate::ReferenceMismatchReason::GeodesicContext,
+                progress,
             ));
         }
         crate::numerical::validate_angular_output_grid(
@@ -313,8 +316,11 @@ impl PreparedGeodesic {
             progress.initial()?;
             progress.context_poll(context)?;
             if !crate::numerical::reference_matches(&self.reference, context, &mut progress)? {
-                return Err(GeoError::config(
-                    "prepared geodesic and worker references differ",
+                return Err(crate::BindingConfigError::reference_mismatch(
+                    context.reference(),
+                    &self.reference,
+                    crate::ReferenceMismatchReason::GeodesicWorker,
+                    &mut progress,
                 ));
             }
             let binding = crate::numerical::reference_identity(
@@ -322,9 +328,14 @@ impl PreparedGeodesic {
                 &mut progress,
                 Some(&self.reference),
             )?;
-            if source.is_some_and(|source| source.binding_id() != binding) {
-                return Err(GeoError::config(
-                    "prepared point and geodesic references differ",
+            if let Some(source) = source
+                && source.binding_id() != binding
+            {
+                return Err(crate::BindingConfigError::identity_mismatch(
+                    source.binding_id(),
+                    binding,
+                    crate::ReferenceMismatchReason::GeodesicPoint,
+                    &mut progress,
                 ));
             }
             if threshold.exact().signum() < 0 {
@@ -405,14 +416,22 @@ impl PreparedGeodesic {
         let mut chunks = ChunkObserver::new(observer);
         chunks.initial().map_err(solve_external_error)?;
         if !chunks.reference_matches(&self.reference, context)? {
-            return Err(GeoError::config(
-                "prepared geodesic and metric context references differ",
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::GeodesicContext,
+                chunks.progress_mut(),
             ));
         }
         let binding = chunks.reference_identity(Some(&self.reference), context)?;
-        if source.is_some_and(|source| source.binding_id() != binding) {
-            return Err(GeoError::config(
-                "prepared endpoint and geodesic references differ",
+        if let Some(source) = source
+            && source.binding_id() != binding
+        {
+            return Err(crate::BindingConfigError::identity_mismatch(
+                source.binding_id(),
+                binding,
+                crate::ReferenceMismatchReason::GeodesicEndpoint,
+                chunks.progress_mut(),
             ));
         }
         if a.same_location(b) {
@@ -756,7 +775,10 @@ fn native(reference: &GeographicReference) -> Result<&'static NativePreparation,
     } else if *reference == GeographicReference::cgcs2000() {
         &CGCS2000
     } else {
-        return Err(GeoError::config("not a native geographic reference"));
+        return Err(crate::BindingConfigError::nonnative_reference(
+            reference,
+            &mut WorkProgress::integer(None),
+        ));
     };
     if let Some(native) = cell.get() {
         return Ok(native);
@@ -892,9 +914,32 @@ enum SolveError {
     External(GeoError),
 }
 
+impl purrdf_hash::error::StructuredError for SolveError {
+    purrdf_hash::error_visit! {
+        Math(cause) => "geodesic-solve-math" { "cause" => Cause(cause) },
+        Iterations => "geodesic-solve-iterations" {},
+        External(cause) => "geodesic-solve-external" { "cause" => Cause(cause) },
+    }
+}
+
 impl From<MathError> for SolveError {
     fn from(error: MathError) -> Self {
         Self::Math(error)
+    }
+}
+
+/// Native geodesic entry that requires ownership of its progress observer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NativeEntryOperation {
+    /// Admission of a reference identity.
+    ReferenceIdentity,
+    /// Admission of a reference comparison.
+    ReferenceComparison,
+}
+impl purrdf_hash::error::StructuredError for NativeEntryOperation {
+    purrdf_hash::error_visit! {
+        ReferenceIdentity => "geodesic-entry-reference-identity" {},
+        ReferenceComparison => "geodesic-entry-reference-comparison" {},
     }
 }
 
@@ -1033,7 +1078,9 @@ impl<'borrow, 'observer> ChunkObserver<'borrow, 'observer> {
         context: &mut MetricContext,
     ) -> Result<crate::GeoBindingId, GeoError> {
         let ChunkProgress::Owned(progress) = &mut self.progress else {
-            return Err(GeoError::config("native entry requires its owned observer"));
+            return Err(GeoError::MissingNativeObserver {
+                operation: NativeEntryOperation::ReferenceIdentity,
+            });
         };
         crate::numerical::reference_identity(context, progress, reference)
     }
@@ -1043,7 +1090,9 @@ impl<'borrow, 'observer> ChunkObserver<'borrow, 'observer> {
         context: &mut MetricContext,
     ) -> Result<bool, GeoError> {
         let ChunkProgress::Owned(progress) = &mut self.progress else {
-            return Err(GeoError::config("native entry requires its owned observer"));
+            return Err(GeoError::MissingNativeObserver {
+                operation: NativeEntryOperation::ReferenceComparison,
+            });
         };
         crate::numerical::reference_matches(reference, context, progress)
     }
@@ -2873,6 +2922,70 @@ mod tests {
             Rat::parse_decimal(latitude).unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn borrowed_native_entry_refusals_preserve_the_operation_without_allocating() {
+        use purrdf_testkit::error_capture::Capture;
+
+        let reference = GeographicReference::wgs84();
+        let mut context = MetricContext::wgs84().unwrap();
+        let mut progress = crate::context::WorkProgress::integer(None);
+        let mut chunks = super::ChunkObserver::borrowed(&mut progress);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let identity = chunks.reference_identity(None, &mut context).unwrap_err();
+        let comparison = chunks
+            .reference_matches(&reference, &mut context)
+            .unwrap_err();
+        let copy = identity;
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(context.work_items(), 0);
+        assert_eq!(context.current_workspace_bytes(), 0);
+        for (error, operation, code) in [
+            (
+                copy,
+                super::NativeEntryOperation::ReferenceIdentity,
+                "geodesic-entry-reference-identity",
+            ),
+            (
+                comparison,
+                super::NativeEntryOperation::ReferenceComparison,
+                "geodesic-entry-reference-comparison",
+            ),
+        ] {
+            assert_eq!(error, GeoError::MissingNativeObserver { operation });
+            assert_eq!(Capture::read(&error).child("operation").code, code);
+            assert!(!error.is_expression_error());
+            assert_eq!(
+                error.to_string(),
+                "invalid geo configuration: native entry requires its owned observer"
+            );
+        }
+    }
+
+    #[test]
+    fn nonnative_reference_refusal_retains_the_original_declaration() {
+        let expected = GeographicReference::new(
+            GeographicReference::wgs84().ellipsoid().clone(),
+            purrdf_hash::hex::Digest32::new([119; 32]),
+            crate::AxisOrder::LatLon,
+        );
+        let Err(error) = super::native(&expected) else {
+            panic!("custom datum is outside the native preparations")
+        };
+        let GeoError::BindingConfiguration(cause) = error.original() else {
+            panic!("native original reference")
+        };
+        assert!(
+            matches!(&**cause, crate::BindingConfigError::NonNativeReference { actual } if actual == &expected)
+        );
+        drop(expected);
+        let copy = error.clone();
+        drop(error);
+        let fields = purrdf_testkit::error_capture::Capture::read(copy.original()).child("cause");
+        assert_eq!(fields.code, "carrier-nonnative-reference");
+        assert_eq!(fields.child("actual").code, "geographic-reference");
+        assert_eq!(copy.detail(), "not a native geographic reference");
     }
 
     #[test]

@@ -15,6 +15,15 @@ pub struct MaterializedOutputReceipt {
     token: Retained<()>,
     bytes: u64,
 }
+impl purrdf_hash::error::StructuredError for MaterializedOutputReceipt {
+    purrdf_hash::error_visit! {
+        @record self { token, bytes } => "materialized-output-receipt" {
+            // The token is resource authority, not semantic data. Inspection
+            // neither exposes its address nor clones its ownership capability.
+            "bytes" => ByteCount(u128::from(self.bytes))
+        }
+    }
+}
 impl MaterializedOutputReceipt {
     /// Carrier/result allowance and the actual retained token allocation
     /// registered in the original context baseline.
@@ -25,6 +34,28 @@ impl MaterializedOutputReceipt {
 }
 
 impl MetricContext {
+    fn output_receipt_failure(
+        &self,
+        receipt: &MaterializedOutputReceipt,
+        reason: crate::OutputReceiptReason,
+        live_owners: usize,
+    ) -> GeoError {
+        GeoError::retained_failure(
+            crate::ContextConfigError::OutputReceipt {
+                reason,
+                receipt_bytes: receipt.bytes,
+                live_owners,
+                required_owners: 2,
+                registered_outputs: self.materialized_outputs.len(),
+                output_bytes: self.materialized_output_bytes,
+                receipt_storage_bytes: self.materialized_receipt_storage_bytes,
+                retained_workspace: self.retained_workspace_bytes,
+                current_workspace: self.workspace_bytes,
+            },
+            GeoError::ContextConfiguration,
+            None,
+        )
+    }
     pub(crate) fn register_materialized_output(
         &mut self,
         bytes: u64,
@@ -124,13 +155,18 @@ impl MetricContext {
             .iter()
             .position(|entry| Retained::ptr_eq(&entry.token, &receipt.token))
             .ok_or_else(|| {
-                GeoError::config(
-                    "materialized output receipt belongs to a different or released context",
+                self.output_receipt_failure(
+                    &receipt,
+                    crate::OutputReceiptReason::Unknown,
+                    receipt.token.strong_count(),
                 )
             })?;
-        if receipt.token.strong_count() != 2 {
-            return Err(GeoError::config(
-                "materialized output still has a live result or receipt owner",
+        let live_owners = receipt.token.strong_count();
+        if live_owners != 2 {
+            return Err(self.output_receipt_failure(
+                &receipt,
+                crate::OutputReceiptReason::LiveOwners,
+                live_owners,
             ));
         }
         let outputs = self
@@ -184,6 +220,9 @@ mod tests {
     use super::*;
     #[test]
     fn output_receipts_track_identity_clones_and_grown_registry_storage() {
+        use crate::{ContextConfigError, OutputReceiptReason};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
         let mut context = MetricContext::wgs84().unwrap();
         let mut progress = WorkProgress::new(None);
         let mut receipts = Vec::new();
@@ -203,16 +242,32 @@ mod tests {
         context.begin(1).unwrap();
         assert_eq!(context.retained_workspace_bytes(), retained);
         let mut other = MetricContext::wgs84().unwrap();
-        assert!(matches!(
-            other.release_materialized_output(receipts[0].clone()),
-            Err(GeoError::Config(_))
-        ));
+        let receipt_bytes = receipts[0].workspace_bytes();
+        let unknown = other
+            .release_materialized_output(receipts[0].clone())
+            .unwrap_err();
+        assert!(
+            matches!(unknown.original(), GeoError::ContextConfiguration(cause)
+            if matches!(&**cause, ContextConfigError::OutputReceipt { reason: OutputReceiptReason::Unknown, receipt_bytes: bytes, live_owners: 3, required_owners: 2, registered_outputs: 0, .. } if *bytes == receipt_bytes))
+        );
         assert_eq!(context.retained_workspace_bytes(), retained);
         let clone = receipts[0].clone();
+        let live = context.release_materialized_output(clone).unwrap_err();
+        assert!(
+            matches!(live.original(), GeoError::ContextConfiguration(cause)
+            if matches!(&**cause, ContextConfigError::OutputReceipt { reason: OutputReceiptReason::LiveOwners, receipt_bytes: bytes, live_owners: 3, required_owners: 2, registered_outputs: 6, retained_workspace, .. } if *bytes == receipt_bytes && *retained_workspace == retained))
+        );
+        let fields = Capture::read(&live).child("cause");
+        assert!(
+            matches!(fields.field("receipt_bytes"), ErrorValue::ByteCount(bytes) if bytes == u128::from(receipt_bytes))
+        );
         assert!(matches!(
-            context.release_materialized_output(clone),
-            Err(GeoError::Config(_))
+            fields.field("live_owners"),
+            ErrorValue::Unsigned(3)
         ));
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let last = live.clone();
+        assert_eq!(window.close().allocations, 0);
         for receipt in receipts {
             context.release_materialized_output(receipt).unwrap();
         }
@@ -224,6 +279,15 @@ mod tests {
         assert_eq!(
             context.remaining_workspace() + context.retained_workspace_bytes(),
             context.policy.limits().max_workspace_bytes
+        );
+        // Keeping all refusal records alive did not retain receipt authority.
+        assert_eq!(
+            Capture::read(&unknown).child("cause").child("reason").code,
+            "output-receipt-unknown"
+        );
+        assert_eq!(
+            Capture::read(&last).child("cause").child("reason").code,
+            "output-receipt-live-owners"
         );
     }
 }

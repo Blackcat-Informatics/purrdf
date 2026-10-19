@@ -6,76 +6,135 @@
 use crate::EvalError;
 use purrdf_geo_kernel::GeoError;
 
-/// Preserve native physical refusal before constructing a retained diagnostic.
-/// All other messages use the original geometry presentation body, including
-/// before-birth native decimal groups for exact numerical fields.
-pub(super) fn native_error(error: &GeoError, workspace: &crate::WorkspaceCapability) -> EvalError {
-    use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
-    use crate::workspace::LexicalFrame;
-    use purrdf_lex::allocation::Memory;
-    let error = error.original();
-    let mut frame = LexicalFrame::new(workspace);
-    if let GeoError::Storage(error) = error {
+/// The original geographic owner with the evaluator's existing presentation.
+struct GeographicFailure(GeoError);
+purrdf_hash::debug_non_exhaustive!(GeographicFailure {});
+
+impl purrdf_hash::error::StructuredError for GeographicFailure {
+    purrdf_hash::error_visit! {
+        @tuple self (_error) => "geo-evaluator-failure" { "cause" => Cause(&self.0) }
+    }
+}
+impl core::fmt::Display for GeographicFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0.original() {
+            GeoError::SourceRead(cause) | GeoError::Arity(cause) => {
+                core::fmt::Display::fmt(cause, f)
+            }
+            GeoError::Config(message) => f.write_str(message),
+            GeoError::MissingNativeObserver { .. } => {
+                f.write_str("native entry requires its owned observer")
+            }
+            GeoError::IndexConfiguration(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::IndexBinding(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::SourcePreparation(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::ContextConfiguration(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::TransverseInput(cause) if !cause.is_domain_error() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::AffineInput(cause) if !cause.is_domain_error() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::ProjectionInput(cause) if !cause.is_domain_error() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::PolynomialInput(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::ModelInput(cause) if !cause.is_domain_error() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::MetricUnit(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::MatrixConfiguration(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::BindingConfiguration(cause) => core::fmt::Display::fmt(&**cause, f),
+            GeoError::Vocabulary(cause) if !cause.is_expression_error() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::CarrierInput(cause) if cause.is_configuration() => {
+                core::fmt::Display::fmt(&**cause, f)
+            }
+            GeoError::CrsConfiguration(cause) => core::fmt::Display::fmt(&**cause, f),
+            other => core::fmt::Display::fmt(other, f),
+        }
+    }
+}
+impl std::error::Error for GeographicFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// Move the original cause and owner; no intermediate human message is made.
+pub(super) fn native_error(error: GeoError, workspace: &crate::WorkspaceCapability) -> EvalError {
+    convert(
+        error,
+        workspace,
+        crate::NativeDiagnosticKind::FunctionOperational,
+    )
+}
+
+fn convert(
+    error: GeoError,
+    workspace: &crate::WorkspaceCapability,
+    function: crate::NativeDiagnosticKind,
+) -> EvalError {
+    use crate::NativeDiagnosticKind;
+    let original = error.original();
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    if let GeoError::Storage(error) = original {
         return frame.storage_error(*error, "native geographic producer");
     }
-    if let GeoError::NumericalScratch(purrdf_xsd::integer::LimbScratchError::Storage(error)) = error
+    if let GeoError::NumericalScratch(purrdf_xsd::integer::LimbScratchError::Storage(error)) =
+        original
     {
         return frame.storage_error(*error, "native geographic numerical storage");
     }
-    let kind = match error {
+    let kind = match original {
+        GeoError::Vocabulary(cause) if !cause.is_expression_error() => NativeDiagnosticKind::Config,
+        GeoError::CarrierInput(cause) => {
+            if cause.is_configuration() {
+                NativeDiagnosticKind::Config
+            } else {
+                NativeDiagnosticKind::Data
+            }
+        }
         GeoError::SourceRead(_) => NativeDiagnosticKind::SourceRead,
         GeoError::Config(_)
+        | GeoError::CrsConfiguration(_)
+        | GeoError::IndexConfiguration(_)
+        | GeoError::IndexBinding(_)
+        | GeoError::SourcePreparation(_)
+        | GeoError::ContextConfiguration(_)
+        | GeoError::PolynomialInput(_)
+        | GeoError::MetricUnit(_)
+        | GeoError::MatrixConfiguration(_)
+        | GeoError::BindingConfiguration(_)
         | GeoError::UnregisteredCrs(_)
         | GeoError::MissingOperation { .. }
         | GeoError::InvalidEllipsoid(_)
         | GeoError::InvalidExecutionPolicy(_)
+        | GeoError::InvalidCoverPolicy(_)
+        | GeoError::InvalidPointIndexPolicy(_)
+        | GeoError::MissingNativeObserver { .. }
         | GeoError::InvalidNativeStorage(_) => NativeDiagnosticKind::Config,
-        GeoError::Literal(_) => NativeDiagnosticKind::Data,
-        _ => NativeDiagnosticKind::FunctionOperational,
-    };
-    let message = {
-        let mut memory = Memory::new(&mut frame);
-        match error {
-            GeoError::SourceRead(message)
-            | GeoError::Arity(message)
-            | GeoError::Config(message) => memory.string(message).map_err(GeoError::Storage),
-            GeoError::Literal(message) => memory
-                .format(&format_args!("malformed geometry literal: {message}"))
-                .map_err(GeoError::Storage),
-            GeoError::Unsupported(message) => memory
-                .format(&format_args!("unsupported GeoSPARQL operation: {message}"))
-                .map_err(GeoError::Storage),
-            GeoError::Domain(message) => memory
-                .format(&format_args!("geometry domain error: {message}"))
-                .map_err(GeoError::Storage),
-            other => other.message_with_memory(&mut memory),
+        GeoError::TransverseInput(cause) if !cause.is_domain_error() => {
+            NativeDiagnosticKind::Config
         }
-    };
-    let mut message = match message {
-        Ok(message) => Some(message),
-        Err(error) => {
-            return frame.take_failure().unwrap_or_else(|| match error {
-                GeoError::Storage(error) => {
-                    frame.storage_error(error, "native geographic diagnostic")
-                }
-                GeoError::NumericalScratch(purrdf_xsd::integer::LimbScratchError::SizeOverflow) => {
-                    EvalError::WorkspaceBoundOverflow
-                }
-                GeoError::NumericalScratch(
-                    purrdf_xsd::integer::LimbScratchError::AllocationFailed,
-                ) => EvalError::AllocationFailed {
-                    construct: "native geographic diagnostic groups",
-                },
-                // Numerical presentation cannot recurse into another formatter
-                // after a physical refusal. These are original invariant errors.
-                _ => EvalError::UnstableNativeDiagnostic,
-            });
+        GeoError::AffineInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
+        GeoError::ProjectionInput(cause) if !cause.is_domain_error() => {
+            NativeDiagnosticKind::Config
         }
+        GeoError::ModelInput(cause) if !cause.is_domain_error() => NativeDiagnosticKind::Config,
+        GeoError::Literal(_)
+        | GeoError::NumericLiteral(_)
+        | GeoError::IndexSerialization(_)
+        | GeoError::GeometryShape(_)
+        | GeoError::GeoJsonShape(_)
+        | GeoError::PatternSyntax(_)
+        | GeoError::CrsLiteral { .. }
+        | GeoError::WktSyntax(_)
+        | GeoError::JsonSyntax(_) => NativeDiagnosticKind::Data,
+        _ => function,
     };
-    match NativeDiagnostic::from_original_text(kind, &mut message, &mut frame) {
-        Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
-        Err(original) => original,
-    }
+    crate::RetainedNativeFailure::error(kind, GeographicFailure(error), workspace)
 }
 
 impl From<GeoError> for EvalError {
@@ -96,25 +155,12 @@ impl From<GeoError> for EvalError {
     ///   message is re-prefixed because `EvalError::function` supplies its own
     ///   framing rather than this type's `Display`.
     fn from(err: GeoError) -> Self {
-        match err {
-            GeoError::Retained(original) => {
-                native_error(original.original(), &crate::WorkspaceCapability::resident())
-            }
-            GeoError::SourceRead(msg) => Self::SourceRead(msg),
-            GeoError::Arity(msg) => Self::function(msg),
-            GeoError::Config(msg) => Self::config(msg),
-            GeoError::Literal(msg) => Self::data(format!("malformed geometry literal: {msg}")),
-            GeoError::Unsupported(msg) => {
-                Self::function(format!("unsupported GeoSPARQL operation: {msg}"))
-            }
-            GeoError::Domain(msg) => Self::function(format!("geometry domain error: {msg}")),
-            other @ (GeoError::UnregisteredCrs(_)
-            | GeoError::MissingOperation { .. }
-            | GeoError::InvalidEllipsoid(_)
-            | GeoError::InvalidExecutionPolicy(_)
-            | GeoError::InvalidNativeStorage(_)) => Self::config(other.to_string()),
-            other => Self::function(other.to_string()),
-        }
+        let function = if matches!(&err, GeoError::Retained(_)) {
+            crate::NativeDiagnosticKind::FunctionOperational
+        } else {
+            crate::NativeDiagnosticKind::Function
+        };
+        convert(err, &crate::WorkspaceCapability::resident(), function)
     }
 }
 
@@ -145,7 +191,11 @@ mod tests {
     /// row and the caller would read that as an honest empty answer.
     #[test]
     fn only_the_argument_level_kinds_are_per_solution_expression_errors() {
-        for per_solution in [GeoError::literal("x"), GeoError::domain("x")] {
+        for per_solution in [
+            GeoError::literal("x"),
+            GeoError::domain("x"),
+            purrdf_geo_kernel::Pattern::parse("FFFFFFFF?").unwrap_err(),
+        ] {
             assert!(
                 per_solution.is_expression_error(),
                 "{per_solution} is about one call's arguments, so it must not fail the query"
@@ -173,16 +223,83 @@ mod tests {
             EvalError::from(GeoError::arity(
                 "geof:sfEquals expects exactly 2 argument(s), got 1"
             )),
-            EvalError::Function(_)
+            EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Function
         ));
+    }
+
+    #[test]
+    fn actual_geographic_arity_failure_retains_declared_and_supplied_counts() {
+        use crate::geo::functions::GeofFunction;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let error = GeofFunction::Distance.check_argument_count(1).unwrap_err();
+        let fields = Capture::read(&error)
+            .child("cause")
+            .child("cause")
+            .child("cause");
+        assert_eq!(fields.code, "geo-function-arity");
+        assert!(matches!(
+            fields.field("function"),
+            ErrorValue::Code("distance")
+        ));
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
+        let expected = fields.child("expected");
+        assert_eq!(expected.code, "function-arity-exact");
+        assert!(matches!(expected.field("count"), ErrorValue::Unsigned(3)));
+        assert_eq!(
+            error.to_string(),
+            "wrong argument count: geof:distance expects exactly 3 argument(s), got 1"
+        );
+        let error = EvalError::from(error);
+        assert!(
+            matches!(&error, EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Function)
+        );
+        let fields = Capture::read(&error)
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .child("cause");
+        assert!(matches!(fields.field("actual"), ErrorValue::Unsigned(1)));
     }
 
     #[test]
     fn source_read_failure_remains_fatal_and_preserves_its_detail() {
         let converted = EvalError::from(GeoError::source_read("storage checksum mismatch"));
         assert!(
-            matches!(&converted, EvalError::SourceRead(message) if message == "storage checksum mismatch")
+            matches!(&converted, EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::SourceRead)
         );
+        assert!(converted.to_string().contains("storage checksum mismatch"));
+    }
+
+    #[test]
+    fn native_source_transport_never_formats_the_original_cause() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+        let original = GeoError::native_source(CallerRefusal { limit: u128::MAX });
+        for error in [
+            EvalError::from(original.clone()),
+            super::native_error(original, &crate::WorkspaceCapability::resident()),
+        ] {
+            assert!(error.is_native_storage_failure());
+            let cloned = error.clone();
+            drop(error);
+            let fields = Capture::read(&cloned)
+                .child("cause")
+                .child("cause")
+                .child("cause")
+                .child("cause")
+                .child("cause")
+                .child("cause");
+            assert_eq!(fields.code, "caller-refused");
+            assert!(matches!(
+                fields.field("limit"),
+                ErrorValue::Unsigned(u128::MAX)
+            ));
+        }
     }
 
     #[test]
@@ -211,12 +328,27 @@ mod tests {
     fn conversion_maps_config_to_its_namesake_and_a_literal_to_data() {
         assert!(matches!(
             EvalError::from(GeoError::config("x")),
-            EvalError::Config(_)
+            EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Config
         ));
         assert!(matches!(
             EvalError::from(GeoError::literal("x")),
-            EvalError::Data(_)
+            EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Data
         ));
+        let index = purrdf_geo_kernel::index::GeoIndexConfig::new(
+            Vec::new(),
+            purrdf_geo_kernel::index::GraphSelector::Any,
+        )
+        .unwrap_err();
+        let matrix = purrdf_geo_kernel::IntersectionMatrix::parse("FFFFFFFF").unwrap_err();
+        for error in [index, matrix] {
+            assert!(
+                matches!(EvalError::from(error), EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Config)
+            );
+        }
+        let pattern = purrdf_geo_kernel::Pattern::parse("FFFFFFFF?").unwrap_err();
+        assert!(
+            matches!(EvalError::from(pattern), EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Data)
+        );
     }
 
     /// An unimplemented operation must reach the caller as a hard failure, never
@@ -226,11 +358,11 @@ mod tests {
     fn conversion_maps_unsupported_and_domain_to_function() {
         assert!(matches!(
             EvalError::from(GeoError::unsupported("geof:transform")),
-            EvalError::Function(_)
+            EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Function
         ));
         assert!(matches!(
             EvalError::from(GeoError::domain("mixed CRS")),
-            EvalError::Function(_)
+            EvalError::RetainedNativeFailure(cause) if cause.kind() == crate::NativeDiagnosticKind::Function
         ));
     }
 

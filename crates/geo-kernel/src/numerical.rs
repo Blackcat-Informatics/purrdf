@@ -470,6 +470,15 @@ impl<'context, 'observer> ExactAdmission<'context, 'observer> {
         }
     }
 
+    /// Construct a native refusal between admitted expressions while borrowing
+    /// this request's existing observer rather than creating a resident account.
+    pub(crate) fn failure(
+        &mut self,
+        make: impl FnOnce(&mut WorkProgress<'_>) -> GeoError,
+    ) -> GeoError {
+        make(self.progress)
+    }
+
     /// Keep every original rational operation's complete owner allowance,
     /// including intermediates and error paths, until the enclosing proof
     /// drops all returned values and releases its accumulated counter.
@@ -645,6 +654,24 @@ impl<'context, 'observer> ExactAdmission<'context, 'observer> {
             GeoError::ArithmeticOverflow("native exact arithmetic admission"),
         )?;
         self.with_cost_values(cost, evaluate)
+    }
+
+    /// Lend the same original observer while an expression constructs a native
+    /// refusal. The error is born before arithmetic/scratch settlement, so a
+    /// later release failure cannot replace the expression's first fault.
+    pub(crate) fn expression_observed<T>(
+        &mut self,
+        operation: purrdf_xsd::integer::ExactOperation,
+        operands: &[&Rat],
+        count: u64,
+        evaluate: impl FnOnce(&ExactValues<'_>, &mut WorkProgress<'_>) -> Result<T, GeoError>,
+    ) -> Result<T, GeoError> {
+        let cost = rational_cost(operation, operands, count).ok_or(
+            GeoError::ArithmeticOverflow("native exact arithmetic admission"),
+        )?;
+        self.with_cost_progress(cost, |scratch, progress| {
+            evaluate(&ExactValues::admitted(scratch), progress)
+        })
     }
 
     pub(crate) fn expression_cost<T>(
@@ -1763,10 +1790,9 @@ pub(crate) fn math_round_decimal(
 pub(crate) fn geo_math_error(error: &MathError, policy: ExecutionPolicy) -> GeoError {
     let limits = policy.limits();
     match error {
-        // Native mathematics supplies an immutable static cause. Borrow it
-        // directly: constructing a geometry error must not allocate outside
-        // the caller's account, and its variant/presentation stay unchanged.
-        MathError::Domain(message) => GeoError::Domain(std::borrow::Cow::Borrowed(*message)),
+        // Keep the native domain variant and its original static operand reason.
+        // Cloning this variant copies no buffer and invokes no presentation.
+        MathError::Domain(_) => GeoError::NativeMath(error.clone()),
         MathError::PrecisionExhausted => GeoError::PrecisionExhausted {
             bits: limits.max_precision_bits,
         },
@@ -1784,13 +1810,12 @@ pub(crate) fn geo_math_error(error: &MathError, policy: ExecutionPolicy) -> GeoE
         MathError::ConvergenceExhausted { iterations } => GeoError::ConvergenceExhausted {
             iterations: *iterations,
         },
-        MathError::AmbiguousRoots { roots } => GeoError::AmbiguousTransform {
-            roots: u64::try_from(*roots).unwrap_or(u64::MAX),
+        MathError::AmbiguousRoots { roots } => match u64::try_from(*roots) {
+            Ok(roots) => GeoError::AmbiguousTransform { roots },
+            Err(_) => GeoError::NativeMath(error.clone()),
         },
         MathError::Environment(error) => GeoError::FloatEnvironment(*error),
-        _ => GeoError::PrecisionExhausted {
-            bits: limits.max_precision_bits,
-        },
+        _ => GeoError::NativeMath(error.clone()),
     }
 }
 
@@ -2291,10 +2316,30 @@ mod tests {
         let error = geo_math_error(&original, crate::ExecutionPolicy::geometry());
         let copy = error.clone();
         assert_eq!(window.close().allocations, 0);
-        assert_eq!(error, expected);
+        assert!(matches!(&error, crate::GeoError::NativeMath(cause) if cause == &original));
         assert_eq!(copy.detail(), expected.detail());
         assert_eq!(copy.is_expression_error(), expected.is_expression_error());
         assert_eq!(copy.to_string(), expected.to_string());
+        assert!(copy.is_domain_error());
+        let fields = purrdf_testkit::error_capture::Capture::read(&copy).child("cause");
+        assert_eq!(fields.code, "math-domain");
+        assert!(matches!(
+            fields.field("reason"),
+            purrdf_hash::error::ErrorValue::Text("reversed rational enclosure")
+        ));
+        assert_eq!(
+            std::error::Error::source(&copy)
+                .unwrap()
+                .downcast_ref::<purrdf_xsd::math::MathError>(),
+            Some(&original)
+        );
+        assert!(
+            !crate::GeoError::NativeMath(purrdf_xsd::math::MathError::Cancelled).is_domain_error()
+        );
+        assert!(
+            !crate::GeoError::NativeMath(purrdf_xsd::math::MathError::Cancelled)
+                .is_expression_error()
+        );
     }
 
     #[test]

@@ -252,8 +252,11 @@ impl PreparedGeodesic {
         let mut chunks = ChunkObserver::new(observer);
         chunks.initial().map_err(super::solve_external_error)?;
         if !chunks.reference_matches(&self.reference, context)? {
-            return Err(GeoError::config(
-                "prepared point and context references differ",
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.reference,
+                crate::ReferenceMismatchReason::PointContext,
+                chunks.progress_mut(),
             ));
         }
         let binding = chunks.reference_identity(Some(&self.reference), context)?;

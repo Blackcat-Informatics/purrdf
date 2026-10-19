@@ -98,13 +98,15 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] for every malformed input: an unknown or misspelled
+/// [`GeoError::WktSyntax`] for malformed grammar: an unknown or misspelled
 /// keyword, a dimension tag fused to its keyword (`POINTZ`), an ordinate count
 /// that disagrees with the declared dimension, a token that is not a number
 /// (`NaN` and `INF` among them), empty or unbalanced parentheses, text after the
-/// geometry, an empty CRS prefix, or a body [`Geometry::new`] refuses structurally
-/// (a one-position line, an unclosed ring, a collection member whose dimension
-/// differs from the collection's). Nesting has no bound: the reader keeps its open
+/// geometry, or an empty CRS prefix. [`GeoError::CrsLiteral`] retains an invalid
+/// explicit CRS identifier. [`GeoError::GeometryShape`] retains a body
+/// [`Geometry::new`] refuses structurally (a one-position line, an unclosed ring,
+/// a collection member whose dimension differs from the collection's).
+/// Nesting has no bound: the reader keeps its open
 /// collections on a heap stack, so a `GEOMETRYCOLLECTION(` a hundred thousand deep
 /// is a geometry, not a refusal.
 ///
@@ -226,11 +228,12 @@ pub(crate) fn parse_admitted(
     cursor.skip_whitespace();
     cursor.poll();
     if !cursor.is_at_end() {
-        return Err(cursor.error(format_args!(
-            "a wktLiteral holds exactly one geometry, but text follows it at byte {}: {}",
+        return Err(cursor.error(
             cursor.pos,
-            cursor.preview()
-        )));
+            crate::WktReason::TrailingText {
+                found: cursor.preview().0,
+            },
+        ));
     }
     Ok(GeometryLiteral::new(
         crs.unwrap_or_else(|| default_crs.clone()),
@@ -491,8 +494,8 @@ impl<'a, 'storage, 'account> Cursor<'a, '_, '_, 'storage, 'account> {
             .and_then(|admission| admission.borrow().storage())
     }
 
-    fn error(&self, message: core::fmt::Arguments<'_>) -> GeoError {
-        crate::carrier::literal_error(self.storage(), message)
+    fn error(&self, position: usize, reason: crate::WktReason<&str>) -> GeoError {
+        crate::WktError::capture(position, reason, self.storage())
     }
 
     fn poll(&mut self) {
@@ -541,17 +544,19 @@ impl<'a, 'storage, 'account> Cursor<'a, '_, '_, 'storage, 'account> {
     ///
     /// `what` names the production being read so the diagnostic says which
     /// bracket went missing rather than only that one did.
-    fn expect(&mut self, byte: u8, what: &str) -> Result<(), GeoError> {
+    fn expect(&mut self, byte: u8, what: &'static str) -> Result<(), GeoError> {
         self.skip_whitespace();
         if self.eat(byte) {
             return Ok(());
         }
-        Err(self.error(format_args!(
-            "expected {:?} in {what} at byte {}, found {}",
-            char::from(byte),
+        Err(self.error(
             self.pos,
-            self.preview()
-        )))
+            crate::WktReason::ExpectedByte {
+                expected: byte,
+                production: what,
+                found: self.preview().0,
+            },
+        ))
     }
 
     /// The maximal run of ASCII letters at the read position, possibly empty.
@@ -595,23 +600,19 @@ impl<'a, 'storage, 'account> Cursor<'a, '_, '_, 'storage, 'account> {
         let text = &self.text[start..self.pos];
         self.poll();
         if text.is_empty() {
-            return Err(self.error(format_args!(
-                "expected a number at byte {start}, found {}",
-                self.preview()
-            )));
+            return Err(self.error(
+                start,
+                crate::WktReason::ExpectedNumber {
+                    found: self.preview().0,
+                },
+            ));
         }
         let value = if let Some(admission) = &self.admission {
             admission.borrow_mut().decimal(text)?
         } else {
             Rat::parse_decimal(text)
         };
-        value.ok_or_else(|| {
-            self.error(format_args!(
-                "{text:?} at byte {start} is not an ordinate this reader can represent exactly; a \
-                 WKT ordinate is an XSD decimal or double lexical form (so NaN and INF are not \
-                 coordinates), with an exponent inside the exact parser's cap"
-            ))
-        })
+        value.ok_or_else(|| self.error(start, crate::WktReason::InvalidNumber { lexical: text }))
     }
 
     /// A short, quoted rendering of the text at the read position, for
@@ -624,7 +625,7 @@ impl<'a, 'storage, 'account> Cursor<'a, '_, '_, 'storage, 'account> {
 }
 
 /// Borrowed Debug spelling; rendering performs no hidden source copy.
-struct Preview<'a>(&'a str);
+pub(crate) struct Preview<'a>(pub(crate) &'a str);
 impl core::fmt::Display for Preview<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.0.is_empty() {
@@ -667,29 +668,24 @@ fn parse_crs_prefix(cursor: &mut Cursor<'_, '_, '_, '_, '_>) -> Result<Option<Cr
         }
     }
     if cursor.peek() != Some(b'>') {
-        return Err(cursor.error(format_args!(
-            "the coordinate reference system prefix opened at byte {} is never closed; it is \
-             written <IRI> before the geometry",
-            start - 1
-        )));
+        return Err(cursor.error(start - 1, crate::WktReason::UnclosedCrs));
     }
     let iri = &cursor.text[start..cursor.pos];
     cursor.advance();
     if iri.is_empty() {
-        return Err(cursor.error(format_args!(
-            "the coordinate reference system prefix is empty (<>); an empty IRI names no system, \
-             so a literal that means \"the default system\" omits the prefix entirely rather than \
-             writing an empty one",
-        )));
+        return Err(cursor.error(start - 1, crate::WktReason::EmptyCrs));
     }
-    // Preserve the exact original CRS diagnostic by moving its String; a
+    // Preserve the exact original CRS cause by moving its native owner; a
     // malformed explicit prefix is a lexical argument failure, never a copy.
     let crs = match cursor.admission {
         Some(admission) => admission.borrow_mut().crs(iri),
         None => Crs::new(iri),
     };
     crs.map(Some).map_err(|error| match error {
-        GeoError::Config(message) => GeoError::Literal(message),
+        GeoError::CrsConfiguration(cause) => GeoError::CrsLiteral {
+            prefix_start: start - 1,
+            cause,
+        },
         error => error,
     })
 }
@@ -789,11 +785,9 @@ fn parse_geometry(
                 dim = collection_dim;
                 continue;
             }
-            Head::Body(kind, body_dim) => Geometry::new_admitted(
-                body_dim,
-                parse_body(cursor, kind, body_dim)?,
-                cursor.storage(),
-            )?,
+            Head::Body(kind, body_dim) => {
+                Geometry::new(body_dim, parse_body(cursor, kind, body_dim)?)?
+            }
         };
         // A finished geometry is the result, or a member of the innermost open
         // collection: it is appended, and either the collection continues with the
@@ -815,11 +809,7 @@ fn parse_geometry(
                 dim: collection_dim,
                 members,
             } = open.pop().expect("the collection just read is still open");
-            finished = Geometry::new_admitted(
-                collection_dim,
-                GeometryBody::GeometryCollection(members),
-                cursor.storage(),
-            )?;
+            finished = Geometry::new(collection_dim, GeometryBody::GeometryCollection(members))?;
         }
     }
 }
@@ -828,12 +818,13 @@ fn parse_geometry(
 #[cold]
 #[inline(never)]
 fn unknown_keyword(cursor: &Cursor<'_, '_, '_, '_, '_>, at: usize, word: &str) -> GeoError {
-    cursor.error(format_args!(
-        "expected a geometry keyword at byte {at}, found {}; WKT names seven (POINT, LINESTRING, \
-         POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, GEOMETRYCOLLECTION) and writes any \
-         dimension tag as a separate token, so POINTZ is a keyword rather than POINT with a Z",
-        preview_word(cursor, at, word)
-    ))
+    cursor.error(
+        at,
+        crate::WktReason::UnknownKeyword {
+            word,
+            preview: word.is_empty().then(|| preview_word(cursor, at, word).0),
+        },
+    )
 }
 
 /// The refusal for a word after the keyword that is neither a tag nor `EMPTY`.
@@ -845,10 +836,7 @@ fn bad_tag(
     at: usize,
     word: &str,
 ) -> GeoError {
-    cursor.error(format_args!(
-        "expected a dimension tag (Z, M or ZM), EMPTY, or '(' after {} at byte {at}, found {word:?}",
-        kind.wkt_keyword()
-    ))
+    cursor.error(at, crate::WktReason::BadTag { kind, word })
 }
 
 /// The refusal for a word after a dimension tag that is not `EMPTY`.
@@ -860,9 +848,7 @@ fn bad_tag_follower(
     at: usize,
     word: &str,
 ) -> GeoError {
-    cursor.error(format_args!(
-        "expected EMPTY or '(' after the {tag:?} dimension tag at byte {at}, found {word:?}"
-    ))
+    cursor.error(at, crate::WktReason::BadTagFollower { tag, word })
 }
 
 /// The kind a keyword names, case-insensitively.
@@ -996,15 +982,11 @@ fn parse_multipolygon_body(
 /// `()` is neither `EMPTY` nor a list of anything, and accepting it would require
 /// inventing which of the two the writer meant. Refusing is the only reading that
 /// does not guess.
-fn open_list(cursor: &mut Cursor<'_, '_, '_, '_, '_>, what: &str) -> Result<(), GeoError> {
+fn open_list(cursor: &mut Cursor<'_, '_, '_, '_, '_>, what: &'static str) -> Result<(), GeoError> {
     cursor.expect(b'(', what)?;
     cursor.skip_whitespace();
     if cursor.peek() == Some(b')') {
-        return Err(cursor.error(format_args!(
-            "{what} has an empty pair of parentheses at byte {}; a geometry with no members is \
-             written EMPTY, and () is neither that nor a list",
-            cursor.pos
-        )));
+        return Err(cursor.error(cursor.pos, crate::WktReason::EmptyList { production: what }));
     }
     Ok(())
 }
@@ -1012,7 +994,7 @@ fn open_list(cursor: &mut Cursor<'_, '_, '_, '_, '_>, what: &str) -> Result<(), 
 /// Read `( item, item, ... )` with at least one item.
 fn parse_comma_list<'a, T>(
     cursor: &mut Cursor<'a, '_, '_, '_, '_>,
-    what: &str,
+    what: &'static str,
     mut item: impl FnMut(&mut Cursor<'a, '_, '_, '_, '_>) -> Result<T, GeoError>,
 ) -> Result<Vec<T>, GeoError> {
     open_list(cursor, what)?;
@@ -1034,7 +1016,7 @@ fn parse_comma_list<'a, T>(
 fn parse_coord_seq(
     cursor: &mut Cursor<'_, '_, '_, '_, '_>,
     dim: CoordDim,
-    what: &str,
+    what: &'static str,
 ) -> Result<CoordSeq, GeoError> {
     open_list(cursor, what)?;
     let mut coords = CoordSeq::new();
@@ -1124,13 +1106,10 @@ fn parse_coord(cursor: &mut Cursor<'_, '_, '_, '_, '_>, dim: CoordDim) -> Result
     };
     cursor.skip_whitespace();
     if cursor.peek().is_some_and(is_number_byte) {
-        return Err(cursor.error(format_args!(
-            "a {} position has {} ordinates, but another number follows the last one at byte {}; \
-             the dimension is written once in the tag and governs every position",
-            dim.name(),
-            dim.ordinates(),
-            cursor.pos
-        )));
+        return Err(cursor.error(
+            cursor.pos,
+            crate::WktReason::ExtraOrdinate { dimension: dim },
+        ));
     }
     Ok(Coord::new(x, y, z, m))
 }
@@ -1143,27 +1122,17 @@ fn read_ordinate(
     index: usize,
 ) -> Result<Rat, GeoError> {
     cursor.skip_whitespace();
-    cursor.number().map_err(|err| {
-        if !err.is_expression_error() {
-            return err;
+    cursor.number().map_err(|error| match error {
+        GeoError::WktSyntax(mut cause) => {
+            // This context belongs to the original refusal. Its slot was
+            // admitted with the payload; no replacement text or grant is born.
+            cause.ordinate = Some(crate::WktOrdinateContext {
+                dimension: dim,
+                index,
+            });
+            GeoError::WktSyntax(cause)
         }
-        let next = cursor.error(format_args!(
-            "{} — this is ordinate {index} of the {} a {} position carries",
-            err.detail(),
-            dim.ordinates(),
-            dim.name()
-        ));
-        // The first refusal wins; release the old lexical message only after
-        // its replacement has been constructed under the same account.
-        let released = match err {
-            GeoError::Literal(message) => crate::carrier::release_string(cursor.storage(), message),
-            _ => Ok(()),
-        };
-        if matches!(next, GeoError::Storage(_)) {
-            next
-        } else {
-            released.map_or_else(GeoError::Storage, |()| next)
-        }
+        original => original,
     })
 }
 
@@ -1462,8 +1431,208 @@ mod tests {
     fn assert_refused(text: &str) {
         let err = refused(text);
         assert!(
-            matches!(err, GeoError::Literal(_)),
+            matches!(
+                err,
+                GeoError::WktSyntax(_) | GeoError::CrsLiteral { .. } | GeoError::GeometryShape(_)
+            ),
             "{text:?} must be refused as a malformed LITERAL, but was refused as {err:?}"
+        );
+    }
+
+    #[test]
+    fn native_wkt_grammar_fields_survive_input_destruction_for_every_reason() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let default_crs = crs();
+        for (text, code, position) in [
+            ("POINT(1 2) trailing", "wkt-trailing-text", 11),
+            ("POINT(1 2", "wkt-expected-byte", 9),
+            ("POINT(1)", "wkt-expected-number", 7),
+            ("POINT(1e+ 2)", "wkt-invalid-number", 6),
+            ("<x", "wkt-unclosed-crs", 0),
+            ("<>POINT(1 2)", "wkt-empty-crs", 0),
+            ("POIN(1 2)", "wkt-unknown-keyword", 0),
+            ("POINT Q (1 2)", "wkt-bad-tag", 6),
+            ("POINT Z Q (1 2 3)", "wkt-bad-tag-follower", 8),
+            ("POINT()", "wkt-empty-list", 6),
+            ("POINT(1 2 3)", "wkt-extra-ordinate", 10),
+        ] {
+            let input = text.to_owned();
+            let error = parse(&input, &default_crs).unwrap_err();
+            drop(input);
+            let cloned = error.clone();
+            drop(error);
+            let fields = Capture::read(&cloned).child("cause");
+            assert_eq!(fields.code, "wkt-syntax");
+            assert!(
+                matches!(fields.field("position"), ErrorValue::Unsigned(value) if value == position)
+            );
+            assert_eq!(fields.child("reason").code, code);
+            assert!(cloned.is_expression_error());
+            assert!(std::error::Error::source(&cloned).is_some());
+            let GeoError::WktSyntax(cause) = &cloned else {
+                panic!("original WKT grammar refusal")
+            };
+            match &cause.reason {
+                crate::WktReason::TrailingText { found } => assert_eq!(found, "trailing"),
+                crate::WktReason::ExpectedByte {
+                    expected,
+                    production,
+                    found,
+                } => {
+                    assert_eq!(*expected, b')');
+                    assert_eq!(*production, "a point");
+                    assert_eq!(found, "");
+                }
+                crate::WktReason::ExpectedNumber { found } => {
+                    assert_eq!(found, ")");
+                    assert_eq!(
+                        cause.ordinate,
+                        Some(crate::WktOrdinateContext {
+                            dimension: CoordDim::Xy,
+                            index: 2
+                        })
+                    );
+                    assert_eq!(
+                        cloned.to_string(),
+                        "malformed geometry literal: expected a number at byte 7, found \")\" — this is ordinate 2 of the 2 a XY position carries"
+                    );
+                }
+                crate::WktReason::InvalidNumber { lexical } => {
+                    assert_eq!(lexical, "1e+");
+                    assert_eq!(
+                        cause.ordinate,
+                        Some(crate::WktOrdinateContext {
+                            dimension: CoordDim::Xy,
+                            index: 1
+                        })
+                    );
+                }
+                crate::WktReason::UnknownKeyword { word, preview } => {
+                    assert_eq!(word, "POIN");
+                    assert!(preview.is_none());
+                }
+                crate::WktReason::BadTag { kind, word } => {
+                    assert_eq!(*kind, GeometryKind::Point);
+                    assert_eq!(word, "Q");
+                }
+                crate::WktReason::BadTagFollower { tag, word } => {
+                    assert_eq!(tag, "Z");
+                    assert_eq!(word, "Q");
+                }
+                crate::WktReason::EmptyList { production } => assert_eq!(*production, "a point"),
+                crate::WktReason::ExtraOrdinate { dimension } => {
+                    assert_eq!(*dimension, CoordDim::Xy);
+                }
+                crate::WktReason::UnclosedCrs | crate::WktReason::EmptyCrs => {}
+            }
+        }
+        assert!(parse("POINT(1 2)", &default_crs).is_ok());
+    }
+
+    #[test]
+    fn native_wkt_preview_and_inherited_ordinate_context_keep_original_utf8_and_dimension() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let input = "🙂".repeat(17);
+        let preview = "🙂".repeat(16);
+        let error = read(&input).unwrap_err();
+        drop(input);
+        let fields = Capture::read(&error).child("cause").child("reason");
+        assert!(matches!(fields.field("word"), ErrorValue::Text("")));
+        assert!(matches!(fields.field("preview"), ErrorValue::Text(value) if value == preview));
+
+        let input = "GEOMETRYCOLLECTION Z(POINT(1 2))".to_owned();
+        let position = input.find(')').unwrap();
+        let error = read(&input).unwrap_err();
+        drop(input);
+        let fields = Capture::read(&error).child("cause");
+        assert!(
+            matches!(fields.field("position"), ErrorValue::Unsigned(value) if value == position as u128)
+        );
+        let context = fields.child("ordinate");
+        assert_eq!(context.child("dimension").code, "coordinate-dimension-xyz");
+        assert!(matches!(context.field("index"), ErrorValue::Unsigned(3)));
+        assert!(matches!(context.field("expected"), ErrorValue::Unsigned(3)));
+    }
+
+    #[test]
+    fn native_wkt_partial_token_refusal_refunds_before_return_and_context_needs_no_second_grant() {
+        use purrdf_lex::allocation::{Admission, Resident, StorageError};
+
+        let mut resident = Resident;
+        let baseline = usize::MAX - 1;
+        let storage =
+            crate::carrier::CarrierStorage::resume(&mut resident as &mut dyn Admission, baseline);
+        let error = crate::WktError::capture(
+            8,
+            crate::WktReason::BadTagFollower {
+                tag: "Z",
+                word: "refused",
+            },
+            Some(&storage),
+        );
+        assert_eq!(error, GeoError::Storage(StorageError::SizeOverflow));
+        assert_eq!(storage.admitted_bytes(), baseline);
+
+        let payload = size_of::<crate::WktError>() + 1;
+        let baseline = usize::MAX - payload;
+        let storage =
+            crate::carrier::CarrierStorage::resume(&mut resident as &mut dyn Admission, baseline);
+        let admission = std::cell::RefCell::new(
+            crate::carrier::ParseAdmission::new(1, crate::ExecutionPolicy::geometry(), None)
+                .unwrap()
+                .with_storage(&storage),
+        );
+        let mut cursor = super::Cursor::new("A");
+        cursor.admission = Some(&admission);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = super::read_ordinate(&mut cursor, CoordDim::Xyz, 3).unwrap_err();
+        let allocations = window.close();
+        let GeoError::WktSyntax(cause) = error else {
+            panic!("original numeric grammar refusal fits its one payload")
+        };
+        assert_eq!(
+            cause.ordinate,
+            Some(crate::WktOrdinateContext {
+                dimension: CoordDim::Xyz,
+                index: 3
+            })
+        );
+        assert_eq!(storage.admitted_bytes(), usize::MAX);
+        assert_eq!(allocations.allocations, 2);
+        assert_eq!(allocations.requested_bytes, payload as u64);
+    }
+
+    #[test]
+    fn invalid_prefix_retains_its_original_opening_offset_and_native_iri_cause() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let input = " \t <https://example.org/%Q0> POINT(1 2)".to_owned();
+        let error = read(&input).unwrap_err();
+        drop(input);
+        let clone = error.clone();
+        drop(error);
+        let fields = Capture::read(&clone);
+        assert_eq!(fields.code, "geo-crs-literal");
+        assert!(matches!(
+            fields.field("prefix_start"),
+            ErrorValue::Unsigned(3)
+        ));
+        let cause = fields.child("cause");
+        assert!(matches!(
+            cause.field("iri"),
+            ErrorValue::Iri("https://example.org/%Q0")
+        ));
+        assert_eq!(cause.child("cause").code, "iri-bad-percent-encoding");
+        assert!(clone.is_expression_error());
+        assert!(
+            clone
+                .to_string()
+                .starts_with("malformed geometry literal: ")
         );
     }
 
