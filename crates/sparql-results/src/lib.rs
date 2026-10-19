@@ -71,7 +71,9 @@ mod xml;
 mod xml_read;
 
 pub use csv::to_csv;
-pub use error::Error;
+pub use error::{
+    Error, MalformedResult, NamespaceRefusal, ReadReason, ReadRefusal, ReadShape, ReadToken,
+};
 pub use json::to_json;
 pub use json_read::{
     BoundedParsedSolutions, ParsedSolutions, ReadError, from_json, from_json_boolean,
@@ -97,6 +99,15 @@ pub enum SparqlResultsFormat {
     Csv,
     /// SPARQL Results TSV.
     Tsv,
+}
+
+impl purrdf_hash::error::StructuredError for SparqlResultsFormat {
+    purrdf_hash::error_visit! {
+        Json => "sparql-results-format-json" {},
+        Xml => "sparql-results-format-xml" {},
+        Csv => "sparql-results-format-csv" {},
+        Tsv => "sparql-results-format-tsv" {},
+    }
 }
 
 impl SparqlResultsFormat {
@@ -210,7 +221,7 @@ pub struct SerializeOutcome {
 ///
 /// Propagates the per-format [`Error`]. Notably, the result-kind support matrix
 /// is enforced by the writers: XML rejects CONSTRUCT graphs, and CSV/TSV reject
-/// both ASK booleans and CONSTRUCT graphs, all via [`Error::Format`].
+/// both ASK booleans and CONSTRUCT graphs, all via [`Error::UnsupportedResult`].
 pub fn serialize(
     result: &SparqlResult,
     format: SparqlResultsFormat,
@@ -270,7 +281,7 @@ pub fn serialize_into(
     }
     let finished = out.finish().map_err(|error| Error::Write {
         kind: error.kind(),
-        message: error.message().to_owned(),
+        cause: error,
     })?;
     Ok(StreamOutcome {
         bytes_written: finished.written,

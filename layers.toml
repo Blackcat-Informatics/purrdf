@@ -199,7 +199,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-sparql-results"
-deps = ["purrdf-core", "purrdf-iri", "purrdf-lex"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-entail"

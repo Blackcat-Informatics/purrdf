@@ -1078,6 +1078,14 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				public_schema_producers_retain_original_uri_and_pattern_causes \
 				a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not \
 				matcher_exhaustion_is_an_error_not_an_invalid_verdict \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-results --test structured_errors -- --exact \
+				native_syntax_causes_survive_input_disposal_and_clone \
+				semantic_tokens_and_language_tags_keep_original_values \
+				namespace_refusals_keep_spelling_and_original_iri_causes \
+				egress_refusals_preserve_requested_form_and_full_width_counts \
+				native_writer_causes_cross_serialization_without_formatting \
+				utf8_and_xml_scalars_keep_exact_native_positions \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

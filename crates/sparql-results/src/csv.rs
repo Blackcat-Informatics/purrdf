@@ -6,7 +6,7 @@
 //!
 //! CSV is defined **only** for SELECT variable bindings; ASK (`Boolean`) and
 //! CONSTRUCT (`Graph`) have no CSV representation and hard-fail with
-//! [`Error::Format`]. The header is the bare variable names (no `?`), records are
+//! [`Error::UnsupportedResult`]. The header is the bare variable names (no `?`), records are
 //! separated by CRLF per the RFC 4180 reference, and each cell is the "value":
 //! the IRI string, the literal lexical form, `_:label` for a blank node, or the
 //! N-Triples non-asserting triple-term token `<<( … )>>` (CSV predates RDF-1.2).
@@ -50,7 +50,7 @@ const FIELDS: FieldWriter = FieldWriter::new(Dialect::SPARQL_RESULTS);
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)
+/// Returns [`Error::UnsupportedResult`] for `Boolean` (ASK) and `Graph` (CONSTRUCT)
 /// results, which W3C CSV does not define.  Returns [`Error::MalformedTerm`]
 /// if any solution row contains more bindings than there are projected
 /// variables (over-wide rows are an invariant violation; short rows are
@@ -85,16 +85,16 @@ pub(crate) fn write_csv<W: TextOut + ?Sized>(
             variables, rows, ..
         } => (variables, rows),
         SparqlResult::Boolean(_) => {
-            return Err(Error::Format(
-                "SPARQL Results CSV is defined only for SELECT variable bindings, not ASK"
-                    .to_string(),
-            ));
+            return Err(Error::UnsupportedResult {
+                format: crate::SparqlResultsFormat::Csv,
+                ask: true,
+            });
         }
         SparqlResult::Graph(_) => {
-            return Err(Error::Format(
-                "SPARQL Results CSV is defined only for SELECT variable bindings, not CONSTRUCT graphs"
-                    .to_string(),
-            ));
+            return Err(Error::UnsupportedResult {
+                format: crate::SparqlResultsFormat::Csv,
+                ask: false,
+            });
         }
     };
 
@@ -104,11 +104,10 @@ pub(crate) fn write_csv<W: TextOut + ?Sized>(
     // unchanged — so the reported error is identical.
     for row in rows {
         if row.len() > variables.len() {
-            return Err(Error::MalformedTerm(format!(
-                "solution row has {} bindings but only {} variables are projected",
-                row.len(),
-                variables.len()
-            )));
+            return Err(Error::MalformedTerm(crate::MalformedResult::RowWidth {
+                bindings: row.len(),
+                variables: variables.len(),
+            }));
         }
     }
 
@@ -430,7 +429,10 @@ mod tests {
     fn boolean_is_format_error() {
         let err = to_csv(&SparqlResult::Boolean(true), &ResultProvenance::default())
             .expect_err("ask rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::UnsupportedResult { ask: true, .. }),
+            "expected result-form refusal: {err:?}"
+        );
     }
 
     #[test]
@@ -451,7 +453,10 @@ mod tests {
             &ResultProvenance::default(),
         )
         .expect_err("graph rejected");
-        assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
+        assert!(
+            matches!(err, Error::UnsupportedResult { ask: false, .. }),
+            "expected result-form refusal: {err:?}"
+        );
     }
 
     #[test]

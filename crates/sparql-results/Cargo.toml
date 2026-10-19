@@ -29,6 +29,7 @@ path = "src/lib.rs"
 name = "purrdf_sparql_results"
 
 [dependencies]
+purrdf-hash.workspace = true
 # The workspace's one JSON reader (the SRJ readers' grammar, tree and pull
 # reader), its string escape law (the SRJ writer's spelling), and its one XML
 # reader, for SPARQL Results XML documents.
@@ -55,6 +56,11 @@ purrdf-testkit = { workspace = true }
 # windows exactly as a streamed document does. Only an allocator can tell them
 # apart. Dev-only, so no release crate and no wasm build ever sees it.
 purrdf-alloc-probe = { workspace = true }
+
+[[test]]
+# The original public reader/writer causes on native and wasm32.
+name = "structured_errors"
+harness = false
 
 [[bench]]
 # CONSTRUCT-graph -> N-Triples streaming serialization (`to_json`'s `Graph`

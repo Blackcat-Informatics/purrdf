@@ -42,6 +42,15 @@ impl std::fmt::Display for InvalidXmlChar {
 
 impl std::error::Error for InvalidXmlChar {}
 
+impl purrdf_hash::error::StructuredError for InvalidXmlChar {
+    purrdf_hash::error_visit! {
+        @record self { byte_offset, character } => "xml-invalid-character" {
+            "byte_offset" => ByteCount(self.byte_offset as u128),
+            "character" => Character(self.character)
+        }
+    }
+}
+
 fn replacement(character: char, context: Context) -> Option<&'static str> {
     match character {
         '&' => Some("&amp;"),
