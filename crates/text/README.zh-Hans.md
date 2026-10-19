@@ -49,17 +49,29 @@ PurRDF 不生成词汇表。此 crate 通过求值器的属性函数扩展接口
 
 `TextIndex::from_dataset_with_ranking` 按显式配置建立索引；`with_ranking_profile` 利用保留的谓词级词元事实对现有索引重新加权或重映射，无须再次切词。分析器身份与排序身份分开。纯函数式 `PreparedCorpus` 和 `PreparedQuery` API 将同一评分实现提供给其他存储，并将缓存的 IDF 绑定到经验证的语料统计与不可变配置。
 
+`index.with_delta(&next_dataset, &added, &removed)` 消耗原索引，并依据有效的新增与移除语句返回更新后的索引。
+输入使用与索引相同的载体配置。断言层与注解层的字面量行都计入，同一个字面量同时出现在两个层中的情况也计入。
+逆转所给增量必须恢复索引的来源指纹；缺少新增语句或增量不完整都会产生类型化拒绝。
+下一数据集也会为非字面量变更刷新谓词覆盖信息。
+
+只重新分析发生变更的文档，按其完整键区分：`GraphLanguage` 为 `(graph, subject, language)`，
+`GraphFree` 为 `(subject, language)`。一个变更文档的全部下一状态字面量行一起分析，
+因此留在该文档中的字面量也会重新分析。其他文档保留其词元与来源投影缓冲区，复用其 gram 位置和发音代码。
+规范 ID、统计、指纹与答案都与重新完整构建一致。更新后 ID 可能改变，必须与其索引代次一起保存。
+来源收集、排序、哈希与有序表合并仍会遍历保留的数据，总工作量不是次线性的。
+若要保留旧快照，应先克隆再进行取得所有权的更新；显式克隆会复制缓冲区，不会隐式共享它们。
+
 对于稀疏字段，选择 `RankingProfile::with_field_populations()`，并向 `PreparedCorpus::with_field_populations` 提供携带各字段的文档数量。长度于是相对于携带该字段的文档的平均长度归一化；IDF 仍按整个语料计算。选择此配置时，`TextIndex` 会按分区推导这些数量。该模式会改变排序身份；既有稠密配置的指纹与分数保持不变。
 
 排序法则不设置全局分数上限，也不为宿主的并列排序键预留位。每个 `PreparedQuery` 都根据实际语料与 IDF 计算该查询的精确分数上界和所需位宽；分数携带这一证书，宿主自行选择键的表示。[排序契约](RANKING.md)给出上界证明、运算顺序、独立算术参考以及词汇表搜索的归属决策。
 
-语料统计按 `(graph, language)` 分区计算，因此分数只相对于一个语料有意义。`?rank` 是文档在**自己分区内**从 1 开始的位置，绝非全局名次；跨分区比较名次等于对不同语料计算的分数排序。行按 `(partition key ASC, rank ASC)` 输出。需要一份统一排序列表的查询应绑定 `?lang` 和 `?graph`，或使用单分区索引。
+语料统计在 `GraphLanguage` 中按 `(graph, language)` 分区计算，在 `GraphFree` 中仅按语言分区计算，因此分数只相对于一个语料有意义。`?rank` 是文档在**自己分区内**从 1 开始的位置，绝非全局名次；跨分区比较名次等于对不同语料计算的分数排序。行按 `(partition key ASC, rank ASC)` 输出。需要一份统一排序列表的查询，在 `GraphLanguage` 中应绑定 `?lang` 并限制图，在 `GraphFree` 中只需绑定 `?lang`。单分区索引同样给出一份排序列表。
 
 Rust 字段因此命名为 `Scored::partition_rank`：名次的*数值*并不记录产生它的语料。一个含三种语言的索引会给出三个名次为 1 的行，对其执行 `LIMIT 10` 取得的是按分区优先、再按分区内名次排列的前十行，而不是全局最优的十份文档。
 
-在同一分区内，顺序是 `(score DESC, document id ASC)`。文档 ID 仅在按 `(graph, subject, language)` 排序后分配，因此 ID 升序就是规范顺序升序，两个独立构建的索引也有可复现的并列顺序。ID 互不相同，所以该顺序是严格全序。
+在同一分区内，顺序是 `(score DESC, document id ASC)`。文档 ID 仅在按完整文档键排序后分配：`GraphLanguage` 为 `(graph, subject, language)`，`GraphFree` 为 `(subject, language)`。因此 ID 升序就是规范顺序升序，两个独立构建的索引也有可复现的并列顺序。ID 互不相同，所以该顺序是严格全序。
 
-分数以固定宽度的 `xsd:decimal` 送达使用者。因此两行可能报告相同的 `?score`，却带有不同的 `?rank`：它们的精确分数可能相同，也可能只是舍入后相同。需要重现索引顺序时应写 `ORDER BY ?rank`；`ORDER BY DESC(?score)` 可能产生不同顺序。
+分数以固定宽度的 `xsd:decimal` 送达使用者。因此两行可能报告相同的 `?score`，却带有不同的 `?rank`：它们的精确分数可能相同，也可能只是舍入后相同。在同一分区内，需要重现索引顺序时应写 `ORDER BY ?rank`；`ORDER BY DESC(?score)` 可能产生不同顺序。
 
 ## PurRDF 的组成部分
 

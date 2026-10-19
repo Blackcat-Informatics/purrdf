@@ -3305,7 +3305,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _flow(
                 r"upstream manifest lists (?P<listed>\d+) of them\. Of those, "
                 r"(?P<passed>\d+) pass as approved and the expected-failure ledger is "
-                r"empty\. The other (?P<unlisted>\d+) are entries of vendored files"
+                r"empty\. The remaining (?P<unlisted>\d+) entry belongs to a vendored file"
             ),
             {"listed": listed, "passed": passed, "unlisted": cats["unlisted"]},
             f"{mat}; {catsrc}",

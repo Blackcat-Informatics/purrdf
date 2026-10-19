@@ -37,8 +37,9 @@ which are two distinct types rather than one type with a mode switch:
 
 - **Ranked retrieval** (`TextSearchRelation`) emits one row per matching
   document. `?score` is an `xsd:decimal` carrying the exact BM25 value,
-  `?rank` is the document's 1-based position **within its `(graph, language)`
-  partition**, `?lang` is the partition's language tag, and `?matched` counts
+  `?rank` is the document's 1-based position **within its corpus partition**
+  (`(graph, language)` for the default `GraphLanguage` profile),
+  `?lang` is the partition's language tag, and `?matched` counts
   how many distinct needle terms the document holds.
 - **Term occurrence** (`TermOccurrenceRelation`) emits one row per occurrence
   of a single term, with its token `?position`.
@@ -121,9 +122,9 @@ See [Reaching extensions from other hosts](querying.md#reaching-extensions-from-
 
 ## Every score is exact, and identical on every target
 
-Ranking is done entirely in base-10 fixed-point integer arithmetic (`i128`,
-twelve fractional digits). No floating-point value enters the crate: its root
-denies `clippy::float_arithmetic`, so none can.
+Scores use a base-10 fixed-point integer representation (`i128`, twelve
+fractional digits). Scoring and ranking use no floating-point arithmetic;
+the crate root declares `#![deny(clippy::float_arithmetic)]`.
 
 That is a correctness requirement, not a preference. BM25 needs a natural
 logarithm, and a libm `ln` may differ by a unit in the last place between
@@ -157,7 +158,7 @@ To obtain one ranked list with `GraphLanguage`, bind `?lang` and restrict `?grap
 through the selector; with `GraphFree`, bind only `?lang`. A single-partition
 index also gives one ranked list.
 
-Two consequences worth knowing:
+Within one selected partition, two consequences are worth knowing:
 
 - **Bare `LIMIT k` is top-k.** Emission order *is* rank order, so the
   evaluator's row-ceiling licence applies and the relation stops after `k`
