@@ -283,7 +283,8 @@ Two mechanisms make that loud instead of silent:
 ## 8. Determinism, and exactly how far it goes
 
 Document ids are assigned only after every document has been sorted by
-`(graph, subject, language)`, so an id is a function of content rather than of
+its complete key: `(graph, subject, language)` for `GraphLanguage`, or
+`(subject, language)` for `GraphFree`. An id is a function of content rather than of
 the order the dataset happened to intern its terms in. The term dictionary is
 sorted by analyzed term text, postings by document id, positions ascending. Two
 independently built indexes over the same content agree byte for byte, including
@@ -308,7 +309,8 @@ Two digests are kept, and they answer different questions. The **index
 fingerprint** covers everything that can change an answer: the configuration, all
 four Unicode table versions, the document table, the dictionary, every posting
 with its positions, and every partition's statistics. The **source fingerprint**
-covers the `(graph, subject, predicate, literal)` rows that were walked. The
+covers the walked `(graph, subject, predicate, literal)` rows for `GraphLanguage`,
+or `(subject, predicate, literal)` rows for `GraphFree`. The
 second exists because pairing an index with the wrong dataset is otherwise a
 silent wrong answer rather than a failure — the relation emits well-formed
 document terms, those terms join by basic graph pattern against a dataset that
