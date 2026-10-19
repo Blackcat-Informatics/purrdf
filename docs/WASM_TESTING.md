@@ -13,8 +13,10 @@ package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 with 233 executions across 38 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
-Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
-carrier and governed-request EXPLAIN acceptance targets. The evidence and scoped retrieval cases exercise the original
+Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
+carrier, governed-request EXPLAIN, core `structured_inspection` and GTS
+`structured_errors` targets. The two inspection targets preserve original data,
+error payloads and refusal paths on the 32-bit target. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
 32-bit target; the scoped text cases retain original candidate rows and scores.
 The query-local producer cases exercise borrowed snapshot retirement, in-pull
