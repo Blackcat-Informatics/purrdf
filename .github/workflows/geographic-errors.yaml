@@ -74,7 +74,7 @@ jobs:
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
           result=0
-          for prefix in geo::error::tests:: geo::functions::standard_tests::; do
+          for prefix in geo::error::tests:: geo::functions::standard_tests:: geo::relation::tests::; do
             grep -Fq -- "$prefix" target/geographic-evaluator-test-inventory.txt
             cargo test --locked -p purrdf-sparql-eval --lib "$prefix" || result=$?
           done

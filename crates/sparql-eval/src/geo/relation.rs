@@ -820,7 +820,7 @@ mod tests {
         };
         let refused = GeoIndex::from_dataset(&view(true), &vocab(), &config());
         assert!(
-            matches!(&refused, Err(error) if matches!(error.original(), GeoError::Config(message) if message.contains("does not name a term"))),
+            matches!(&refused, Err(error) if matches!(error.original(), GeoError::IndexBinding(cause) if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::ForeignTermId))),
             "{refused:?}"
         );
         let built = GeoIndex::from_dataset(&view(false), &vocab(), &config())
@@ -1369,7 +1369,8 @@ mod tests {
     fn an_empty_serialization_list_is_refused_and_a_one_element_list_is_not() {
         assert!(matches!(
             GeoIndexConfig::new(Vec::new(), GraphSelector::Any),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::NoSerializations))
         ));
         // The neighbouring VALID case.
         assert!(
@@ -1386,7 +1387,8 @@ mod tests {
             assert!(
                 matches!(
                     GeoIndexConfig::new(vec![bad.clone()], GraphSelector::Any),
-                    Err(GeoError::Config(_))
+                    Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                        if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::Property { position: 0, property } if property == &bad))
                 ),
                 "{bad:?} is not an IRI"
             );
@@ -1405,7 +1407,8 @@ mod tests {
         let repeated = vec![TermValue::iri(geo("asWKT")), TermValue::iri(geo("asWKT"))];
         assert!(matches!(
             GeoIndexConfig::new(repeated, GraphSelector::Any),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::RepeatedProperty { property } if property == &TermValue::iri(geo("asWKT"))))
         ));
         // The neighbouring VALID case.
         let distinct = vec![
@@ -1433,7 +1436,8 @@ mod tests {
                 vec![TermValue::iri(geo("asWKT"))],
                 GraphSelector::Named(TermValue::simple_literal("g1"))
             ),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::Graph { name } if name == &TermValue::simple_literal("g1")))
         ));
 
         let in_graph = dataset_in(&four_branch_rows(), Some(GRAPH));
@@ -1651,7 +1655,11 @@ mod tests {
         ]);
         let error = verify_binding(&index, &*other, &vocab(), &config())
             .expect_err("a different dataset must be caught");
-        assert!(matches!(error, GeoError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(error.original(), GeoError::IndexBinding(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Source { expected, actual } if expected != actual)),
+            "got {error:?}"
+        );
         assert!(
             error.detail().contains("built over a different dataset"),
             "the refusal must say what it found: {error}"
@@ -1665,7 +1673,8 @@ mod tests {
                 .expect("a valid configuration");
         assert!(matches!(
             verify_binding(&index, &*source, &vocab(), &narrower),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexBinding(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Configuration { expected, actual } if expected == index.config() && actual == &narrower))
         ));
     }
 
@@ -1944,7 +1953,8 @@ mod tests {
             let error = verify_binding(&index, &*other, &vocab(), &config())
                 .expect_err("a dataset differing below the integer must be caught");
             assert!(
-                matches!(error, GeoError::Config(_)),
+                matches!(error.original(), GeoError::IndexBinding(cause)
+                    if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Source { expected, actual } if expected != actual)),
                 "got {error:?} for {different}"
             );
         }
