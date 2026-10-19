@@ -172,6 +172,10 @@ fn xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts() {
 }
 
 fn admitted_diagnostics_borrow_original_text_and_clone_the_same_owner() {
+    use purrdf_core::{RdfDatasetBuilder, SparqlEngine as _, SparqlRequest};
+    use purrdf_sparql_eval::NativeSparqlEngine;
+    use std::sync::Arc;
+
     let workspace = WorkspaceCapability::default();
     let diagnostic = NativeDiagnostic::render(
         NativeDiagnosticKind::Internal,
@@ -202,6 +206,34 @@ fn admitted_diagnostics_borrow_original_text_and_clone_the_same_owner() {
         Capture::read(&error).child("cause").child("cause").code,
         "rdf-diagnostic"
     );
+    let engine = NativeSparqlEngine::new();
+    let dataset = Arc::new(RdfDatasetBuilder::new().freeze().unwrap());
+    let query = String::from("ASK { SERVICE <https://example.org/unconfigured> { ?s ?p ?o } }");
+    let report = engine
+        .query(
+            &dataset,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+        )
+        .unwrap_err();
+    drop(query);
+    drop(dataset);
+    drop(engine);
+    let copy = report.clone();
+    drop(report);
+    let original: &(dyn std::error::Error + 'static) = copy.native_cause().unwrap();
+    let original = original.downcast_ref::<EvalError>().unwrap();
+    let EvalError::ServiceUnconfigured(message) = original else {
+        panic!("the actual query must retain its unconfigured-service refusal");
+    };
+    let cause = Capture::read(&copy)
+        .child("attachments")
+        .child("native_cause");
+    assert_eq!(cause.code, "sparql-eval-service-unconfigured");
+    assert!(matches!(cause.field("message"), ErrorValue::Text(text) if text == message));
 }
 
 fn actual_service_builder_preserves_original_failure_under_its_admission() {

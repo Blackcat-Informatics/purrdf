@@ -40,6 +40,10 @@ purrdf-testkit = { workspace = true }
 [lints]
 workspace = true
 
+[[test]]
+name = "structured_errors"
+harness = false
+
 # Complete native reassociated-index behavior. `make wasm-test` selects the
 # actual WASM build shape, arithmetic-path identity and foreign-path refusal.
 [[test]]

@@ -915,6 +915,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
 				the_image_records_the_path_and_shape_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test structured_errors -- --exact \
+				matrix_and_parameter_producers_keep_original_operands \
+				payload_producer_keeps_reserved_bits_after_input_disposal \
+				guard_and_build_identities_keep_full_width_values \
+				real_artifact_setup_retains_its_native_cause_after_owners_drop \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available official_modes_and_extended_output \
 				xof_large_output_and_seek_boundaries \

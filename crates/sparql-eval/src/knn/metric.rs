@@ -98,6 +98,14 @@ pub enum Kernel {
     SquaredEuclidean,
 }
 
+impl purrdf_hash::error::StructuredError for Kernel {
+    purrdf_hash::error_visit! {
+        Cosine => "knn-kernel-cosine" {},
+        NegativeDot => "knn-kernel-negative-dot" {},
+        SquaredEuclidean => "knn-kernel-squared-euclidean" {},
+    }
+}
+
 impl Kernel {
     /// The kernel a declared [`DistanceMetric`] names, or `None` for an extension metric.
     #[must_use]

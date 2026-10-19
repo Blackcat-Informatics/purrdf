@@ -400,7 +400,13 @@ fn a_rejected_payload_is_a_construction_failure_not_a_search() {
         KnnGuard::new(16, 16).expect("valid"),
     )
     .expect_err("the tampered payload is refused");
-    assert!(matches!(error, EvalError::Data { .. }));
+    let EvalError::RetainedNativeFailure(failure) = &error else {
+        panic!("the artifact refusal must retain its native cause");
+    };
+    assert_eq!(
+        failure.kind(),
+        purrdf_sparql_eval::NativeDiagnosticKind::Data
+    );
 }
 
 #[test]

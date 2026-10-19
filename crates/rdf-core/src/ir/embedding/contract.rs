@@ -483,6 +483,18 @@ pub enum DistanceMetric {
     },
 }
 
+impl purrdf_hash::error::StructuredError for DistanceMetric {
+    purrdf_hash::error_visit! {
+        Cosine => "embedding-metric-cosine" {},
+        NegativeDot => "embedding-metric-negative-dot" {},
+        SquaredEuclidean => "embedding-metric-squared-euclidean" {},
+        Extension { identifier, parameter_encoding, parameters } => "embedding-metric-extension" {
+            "identifier" => Text(identifier), "parameter_encoding" => Text(parameter_encoding),
+            "parameters" => Bytes(parameters),
+        },
+    }
+}
+
 impl DistanceMetric {
     /// Stable metric code.
     #[must_use]

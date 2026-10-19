@@ -167,8 +167,8 @@ pub(crate) fn build_graph<A: Arithmetic>(
     // minimum row at the maximum level, so the tie-break comparator reverses the row order.
     let entry = (0..n)
         .max_by(|a, b| levels[*a].cmp(&levels[*b]).then_with(|| b.cmp(a)))
-        .ok_or_else(|| HnswError::ParameterValidation {
-            description: "a matrix with no rows has no entry point".to_owned(),
+        .ok_or(HnswError::ParameterValidation {
+            cause: crate::error::MatrixRefusal::NoEntryPoint { rows: n },
         })?;
     graph.promote_entry(entry, levels[entry]);
 
@@ -289,9 +289,11 @@ fn repair_connectivity<A: Arithmetic>(
         }
     }
     Err(HnswError::ParameterValidation {
-        description: "connectivity repair did not converge; the degree bound admits no \
-                      spanning structure over this corpus"
-            .to_owned(),
+        cause: crate::error::MatrixRefusal::Connectivity {
+            rows: n,
+            bound,
+            passes: n,
+        },
     })
 }
 
@@ -336,11 +338,8 @@ fn choose_host(
     }
     (0..graph.node_count())
         .find(|row| reachable[*row] && has_room(*row))
-        .ok_or_else(|| HnswError::ParameterValidation {
-            description: format!(
-                "row {orphan} cannot be reattached: every reachable node has exhausted its \
-                 degree bound of {bound}"
-            ),
+        .ok_or(HnswError::ParameterValidation {
+            cause: crate::error::MatrixRefusal::Unattachable { row: orphan, bound },
         })
 }
 
