@@ -38,8 +38,10 @@
 mod emit;
 mod property;
 mod property_tables;
+mod refusal;
 mod unicode_ranges;
 mod vm;
+pub use refusal::{PatternLimit, SyntaxRefusal};
 pub use vm::MatchLimits;
 
 use std::fmt;
@@ -53,8 +55,8 @@ pub enum PatternError {
     Syntax {
         /// Character offset of the offending construct.
         offset: usize,
-        /// What is wrong.
-        message: String,
+        /// Original grammar refusal and operands.
+        reason: SyntaxRefusal,
     },
     /// The pattern is valid ECMA-262 but cannot be translated into the
     /// finite-automaton syntax returned by [`translate`]. [`compile`] uses
@@ -66,39 +68,47 @@ pub enum PatternError {
         /// or `"modifier group"`.
         construct: &'static str,
     },
-    /// A compiled character class was refused by the `regex` engine.
-    Engine(String),
     /// A valid pattern exceeds an evaluator resource limit.
     Resource {
         /// Character offset where the limit was encountered.
         offset: usize,
-        /// The exceeded limit.
-        message: String,
+        /// The original boundary and quantities at refusal.
+        reason: PatternLimit,
     },
+}
+
+impl purrdf_hash::error::StructuredError for PatternError {
+    purrdf_hash::error_visit! {
+        Syntax { offset, reason } => "ecma-pattern-syntax" { "offset" => Unsigned(*offset as u128), "reason" => Cause(reason) },
+        Unsupported { offset, construct } => "ecma-pattern-unsupported" { "offset" => Unsigned(*offset as u128), "construct" => Code(construct) },
+        Resource { offset, reason } => "ecma-pattern-resource" { "offset" => Unsigned(*offset as u128), "reason" => Cause(reason) },
+    }
 }
 
 impl fmt::Display for PatternError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Syntax { offset, message } => {
+            Self::Syntax { offset, reason } => {
                 write!(
                     f,
-                    "not an ECMA-262 regular expression at offset {offset}: {message}"
+                    "not an ECMA-262 regular expression at offset {offset}: {reason}"
                 )
             }
             Self::Unsupported { offset, construct } => write!(
                 f,
                 "ECMA-262 {construct} at offset {offset} has no finite-automaton translation"
             ),
-            Self::Engine(message) => write!(f, "the translated pattern was refused: {message}"),
-            Self::Resource { offset, message } => {
-                write!(f, "pattern resource limit at offset {offset}: {message}")
+            Self::Resource { offset, reason } => {
+                write!(f, "pattern resource limit at offset {offset}: {reason}")
             }
         }
     }
 }
 
-impl std::error::Error for PatternError {}
+purrdf_lex::error_source!(PatternError => {
+    Self::Syntax { reason, .. } => reason,
+    Self::Resource { reason, .. } => reason
+});
 
 /// Whether `pattern` is a syntactically valid ECMA-262 regular expression
 /// under the `u` flag — the `format: "regex"` assertion. Exhausted parser
@@ -244,11 +254,8 @@ pub(crate) enum Property {
     Named(String),
 }
 
-fn syntax<T>(offset: usize, message: impl Into<String>) -> Result<T, PatternError> {
-    Err(PatternError::Syntax {
-        offset,
-        message: message.into(),
-    })
+fn syntax<T>(offset: usize, reason: SyntaxRefusal) -> Result<T, PatternError> {
+    Err(PatternError::Syntax { offset, reason })
 }
 
 /// Parse `pattern` as an ECMA-262 `Pattern[+UnicodeMode, +NamedCaptureGroups]`.
@@ -279,7 +286,7 @@ pub(crate) fn parse(pattern: &str) -> Result<Ast, PatternError> {
     let ast = parser.disjunction()?;
     if parser.pos < parser.chars.len() {
         // Only an unmatched `)` stops the top-level disjunction early.
-        return syntax(parser.pos, "unmatched `)`");
+        return syntax(parser.pos, SyntaxRefusal::UnmatchedParenthesis);
     }
     parser.check_duplicate_names()?;
     Ok(ast)
@@ -414,10 +421,7 @@ impl Parser {
         };
         if let Some((min, max, greedy)) = self.quantifier()? {
             if !quantifiable {
-                return syntax(
-                    start,
-                    "nothing to repeat: an assertion cannot be quantified",
-                );
+                return syntax(start, SyntaxRefusal::QuantifiedAssertion);
             }
             return Ok(Ast::Repeat {
                 body: Box::new(atom),
@@ -515,7 +519,7 @@ impl Parser {
             match self.peek() {
                 Some(flag @ ('i' | 'm' | 's')) => {
                     if seen.contains(&flag) {
-                        return syntax(self.pos, "a modifier flag is repeated");
+                        return syntax(self.pos, SyntaxRefusal::RepeatedModifier { flag });
                     }
                     seen.push(flag);
                     if after_dash {
@@ -541,14 +545,14 @@ impl Parser {
                     self.pos += 1;
                     break;
                 }
-                _ => return syntax(start, "invalid group: `(?` must begin a known group form"),
+                _ => return syntax(start, SyntaxRefusal::UnknownGroup),
             }
         }
         if adding | removing == 0 && after_dash {
-            return syntax(start, "a modifier group must name at least one flag");
+            return syntax(start, SyntaxRefusal::EmptyModifiers);
         }
         if adding | removing == 0 {
-            return syntax(start, "invalid group: `(?` must begin a known group form");
+            return syntax(start, SyntaxRefusal::UnknownGroup);
         }
         Ok((adding, removing))
     }
@@ -557,7 +561,10 @@ impl Parser {
         if self.depth >= MAX_GROUP_NESTING {
             return Err(PatternError::Resource {
                 offset: start,
-                message: format!("group nesting exceeds {MAX_GROUP_NESTING}"),
+                reason: PatternLimit::GroupNesting {
+                    depth: self.depth,
+                    maximum: MAX_GROUP_NESTING,
+                },
             });
         }
         self.depth += 1;
@@ -565,7 +572,7 @@ impl Parser {
         self.depth -= 1;
         let body = parsed?;
         if !self.eat(')') {
-            return syntax(start, "unterminated group");
+            return syntax(start, SyntaxRefusal::UnterminatedGroup);
         }
         Ok(body)
     }
@@ -573,7 +580,7 @@ impl Parser {
     fn atom(&mut self) -> Result<Ast, PatternError> {
         let start = self.pos;
         let Some(ch) = self.peek() else {
-            return syntax(start, "unexpected end of pattern");
+            return syntax(start, SyntaxRefusal::End);
         };
         match ch {
             '.' => {
@@ -598,16 +605,10 @@ impl Parser {
                 self.pos += 1;
                 self.atom_escape(start)
             }
-            '*' | '+' | '?' => syntax(start, "nothing to repeat"),
-            '{' => syntax(
-                start,
-                "a lone `{` is not a pattern character under the `u` flag",
-            ),
-            ')' => syntax(start, "unmatched `)`"),
-            ']' | '}' => syntax(
-                start,
-                format!("a lone `{ch}` is not a pattern character under the `u` flag"),
-            ),
+            '*' | '+' | '?' => syntax(start, SyntaxRefusal::NothingToRepeat),
+            '{' => syntax(start, SyntaxRefusal::LoneCharacter { character: '{' }),
+            ')' => syntax(start, SyntaxRefusal::UnmatchedParenthesis),
+            ']' | '}' => syntax(start, SyntaxRefusal::LoneCharacter { character: ch }),
             other => {
                 self.pos += 1;
                 Ok(Ast::Char(u32::from(other)))
@@ -634,17 +635,14 @@ impl Parser {
             Some('{') => {
                 self.pos += 1;
                 let Some(min) = self.decimal()? else {
-                    return syntax(
-                        start,
-                        "a `{` must begin a `{n}`, `{n,}` or `{n,m}` quantifier",
-                    );
+                    return syntax(start, SyntaxRefusal::QuantifierStart);
                 };
                 let max = if self.eat(',') {
                     if self.peek() == Some('}') {
                         None
                     } else {
                         let Some(max) = self.decimal()? else {
-                            return syntax(start, "malformed `{n,m}` quantifier");
+                            return syntax(start, SyntaxRefusal::QuantifierBounds);
                         };
                         Some(max)
                     }
@@ -652,10 +650,16 @@ impl Parser {
                     Some(min)
                 };
                 if !self.eat('}') {
-                    return syntax(start, "unterminated `{…}` quantifier");
+                    return syntax(start, SyntaxRefusal::UnterminatedQuantifier);
                 }
-                if max.is_some_and(|max| max < min) {
-                    return syntax(start, "numbers out of order in `{n,m}` quantifier");
+                if let Some(maximum) = max.filter(|maximum| *maximum < min) {
+                    return syntax(
+                        start,
+                        SyntaxRefusal::QuantifierOrder {
+                            minimum: min,
+                            maximum,
+                        },
+                    );
                 }
                 (min, max)
             }
@@ -674,9 +678,9 @@ impl Parser {
             value = value
                 .checked_mul(10)
                 .and_then(|n| n.checked_add(digit))
-                .ok_or_else(|| PatternError::Resource {
+                .ok_or(PatternError::Resource {
                     offset: start,
-                    message: "decimal repetition or backreference exceeds u32".to_owned(),
+                    reason: PatternLimit::Decimal { value, digit },
                 })?;
             self.pos += 1;
         }
@@ -685,13 +689,19 @@ impl Parser {
 
     fn atom_escape(&mut self, start: usize) -> Result<Ast, PatternError> {
         let Some(ch) = self.peek() else {
-            return syntax(start, "`\\` at end of pattern");
+            return syntax(start, SyntaxRefusal::TrailingEscape);
         };
         match ch {
             '1'..='9' => {
                 let value = self.decimal()?.unwrap_or(0);
                 if value > self.groups {
-                    return syntax(start, "backreference to a group the pattern does not have");
+                    return syntax(
+                        start,
+                        SyntaxRefusal::MissingGroup {
+                            group: value,
+                            groups: self.groups,
+                        },
+                    );
                 }
                 Ok(Ast::Backreference {
                     offset: start,
@@ -701,7 +711,7 @@ impl Parser {
             'k' => {
                 self.pos += 1;
                 if !self.eat('<') {
-                    return syntax(start, "`\\k` must name a group under the `u` flag");
+                    return syntax(start, SyntaxRefusal::NamedReferenceStart);
                 }
                 let name = self.group_name()?;
                 let targets: Vec<u32> = self
@@ -710,7 +720,7 @@ impl Parser {
                     .filter_map(|(candidate, index)| (candidate == name).then_some(index))
                     .collect();
                 if targets.is_empty() {
-                    return syntax(start, "`\\k<…>` names a group the pattern does not have");
+                    return syntax(start, SyntaxRefusal::MissingNamedGroup { name });
                 }
                 Ok(Ast::Backreference {
                     offset: start,
@@ -755,7 +765,7 @@ impl Parser {
         in_class: bool,
     ) -> Result<Escaped, PatternError> {
         let Some(ch) = self.peek() else {
-            return syntax(start, "`\\` at end of pattern");
+            return syntax(start, SyntaxRefusal::TrailingEscape);
         };
         self.pos += 1;
         let code = match ch {
@@ -781,17 +791,17 @@ impl Parser {
                     self.pos += 1;
                     u32::from(letter) % 32
                 }
-                _ => return syntax(start, "`\\c` must be followed by an ASCII letter"),
+                _ => return syntax(start, SyntaxRefusal::ControlEscape),
             },
             '0' => {
                 if self.peek().is_some_and(|next| next.is_ascii_digit()) {
-                    return syntax(start, "octal escapes are not allowed under the `u` flag");
+                    return syntax(start, SyntaxRefusal::OctalEscape);
                 }
                 0
             }
             'x' => {
                 let Some(value) = self.hex_digits(2) else {
-                    return syntax(start, "`\\x` must be followed by two hex digits");
+                    return syntax(start, SyntaxRefusal::HexEscape);
                 };
                 value
             }
@@ -799,10 +809,7 @@ impl Parser {
             '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
             | '/' => u32::from(ch),
             _ => {
-                return syntax(
-                    start,
-                    format!("`\\{ch}` is not an escape under the `u` flag"),
-                );
+                return syntax(start, SyntaxRefusal::UnknownEscape { character: ch });
             }
         };
         Ok(Escaped::Char(code))
@@ -830,15 +837,12 @@ impl Parser {
                 self.pos += 1;
             }
             if digits == 0 || !self.eat('}') || value > 0x10_FFFF {
-                return syntax(
-                    start,
-                    "`\\u{…}` must hold a code point no greater than 10FFFF",
-                );
+                return syntax(start, SyntaxRefusal::UnicodeCodepoint { value, digits });
             }
             return Ok(value);
         }
         let Some(lead) = self.hex_digits(4) else {
-            return syntax(start, "`\\u` must be followed by four hex digits or `{…}`");
+            return syntax(start, SyntaxRefusal::UnicodeEscape);
         };
         if (0xD800..=0xDBFF).contains(&lead)
             && self.peek() == Some('\\')
@@ -859,7 +863,7 @@ impl Parser {
     /// `\p{Name}` / `\p{Name=Value}` — the `p` is already consumed.
     fn property(&mut self, start: usize) -> Result<Property, PatternError> {
         if !self.eat('{') {
-            return syntax(start, "`\\p` must be followed by `{`");
+            return syntax(start, SyntaxRefusal::PropertyStart);
         }
         let body_start = self.pos;
         while let Some(ch) = self.peek() {
@@ -867,23 +871,15 @@ impl Parser {
                 break;
             }
             if !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '=') {
-                return syntax(
-                    self.pos,
-                    "a property name may hold only ASCII letters, digits and `_`",
-                );
+                return syntax(self.pos, SyntaxRefusal::PropertyCharacter { character: ch });
             }
             self.pos += 1;
         }
         let body: String = self.chars[body_start..self.pos].iter().collect();
         if !self.eat('}') {
-            return syntax(start, "unterminated `\\p{…}`");
+            return syntax(start, SyntaxRefusal::UnterminatedProperty);
         }
-        let unknown = || {
-            syntax(
-                start,
-                format!("`\\p{{{body}}}` is not a property ECMA-262 lists"),
-            )
-        };
+        let unknown = || syntax(start, SyntaxRefusal::UnknownProperty { body: body.clone() });
         if let Some((name, value)) = body.split_once('=') {
             return match name {
                 "General_Category" | "gc" => property::lookup(property::GENERAL_CATEGORY, value)
@@ -917,7 +913,7 @@ impl Parser {
         let mut name = String::new();
         loop {
             let Some(ch) = self.peek() else {
-                return syntax(start, "unterminated group name");
+                return syntax(start, SyntaxRefusal::UnterminatedGroupName);
             };
             if ch == '>' {
                 self.pos += 1;
@@ -926,14 +922,14 @@ impl Parser {
             self.pos += 1;
             let code = if ch == '\\' {
                 if !self.eat('u') {
-                    return syntax(self.pos, "only `\\u` escapes may appear in a group name");
+                    return syntax(self.pos, SyntaxRefusal::GroupNameEscape);
                 }
                 self.unicode_escape(start)?
             } else {
                 u32::from(ch)
             };
             let Some(ch) = char::from_u32(code) else {
-                return syntax(start, "a group name may not hold a lone surrogate");
+                return syntax(start, SyntaxRefusal::GroupNameSurrogate { code });
             };
             let admitted = if name.is_empty() {
                 identifier_start(ch)
@@ -941,12 +937,18 @@ impl Parser {
                 identifier_part(ch)
             };
             if !admitted {
-                return syntax(start, "a group name must be an ECMAScript IdentifierName");
+                return syntax(
+                    start,
+                    SyntaxRefusal::GroupNameCharacter {
+                        character: ch,
+                        first: name.is_empty(),
+                    },
+                );
             }
             name.push(ch);
         }
         if name.is_empty() {
-            return syntax(start, "a group name may not be empty");
+            return syntax(start, SyntaxRefusal::EmptyGroupName);
         }
         Ok(name)
     }
@@ -958,7 +960,7 @@ impl Parser {
         let mut items = Vec::new();
         loop {
             match self.peek() {
-                None => return syntax(start, "unterminated character class"),
+                None => return syntax(start, SyntaxRefusal::UnterminatedClass),
                 Some(']') => {
                     self.pos += 1;
                     break;
@@ -973,11 +975,19 @@ impl Parser {
                 let (Escaped::Char(low), Escaped::Char(high)) = (&first, &second) else {
                     return syntax(
                         first_at,
-                        "a class escape cannot bound a range under the `u` flag",
+                        SyntaxRefusal::ClassEscapeRange {
+                            range: self.chars[first_at..self.pos].iter().collect(),
+                        },
                     );
                 };
                 if low > high {
-                    return syntax(first_at, "range out of order in character class");
+                    return syntax(
+                        first_at,
+                        SyntaxRefusal::ClassRangeOrder {
+                            low: *low,
+                            high: *high,
+                        },
+                    );
                 }
                 items.push(ClassItem::Range(*low, *high));
                 continue;
@@ -1000,10 +1010,10 @@ impl Parser {
                     .is_some_and(|ch| ch.is_ascii_digit() && ch != '0')
                     || self.peek() == Some('k')
                 {
-                    return syntax(start, "a backreference cannot appear in a character class");
+                    return syntax(start, SyntaxRefusal::ClassBackreference);
                 }
                 if self.peek() == Some('B') {
-                    return syntax(start, "`\\B` is not a class escape");
+                    return syntax(start, SyntaxRefusal::ClassBoundary);
                 }
                 self.class_or_char_escape(start, true)
             }
@@ -1011,7 +1021,7 @@ impl Parser {
                 self.pos += 1;
                 Ok(Escaped::Char(u32::from(ch)))
             }
-            None => syntax(start, "unterminated character class"),
+            None => syntax(start, SyntaxRefusal::UnterminatedClass),
         }
     }
 
@@ -1029,7 +1039,7 @@ impl Parser {
                         .any(|&(d, a)| d == disjunction && a != alternative)
                 });
                 if !exclusive {
-                    return syntax(0, format!("duplicate capture group name `{name}`"));
+                    return syntax(0, SyntaxRefusal::DuplicateGroupName { name: name.clone() });
                 }
             }
         }

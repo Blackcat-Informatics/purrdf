@@ -6,8 +6,8 @@
 use purrdf_iri::terminals::in_ranges;
 
 use super::{
-    Ast, Class, ClassItem, PatternError, Property, canonicalize, contains_property, emit,
-    unicode_ranges,
+    Ast, Class, ClassItem, PatternError, PatternLimit, Property, canonicalize, contains_property,
+    emit, unicode_ranges,
 };
 
 /// Limits shared by one validation, including nested assertions.
@@ -68,16 +68,16 @@ fn state_slots(state: &State<'_>) -> usize {
     state.tasks.len().saturating_add(state.captures.len())
 }
 
-fn resource() -> PatternError {
-    PatternError::Resource {
-        offset: 0,
-        message: "ECMA matcher budget exhausted".to_owned(),
-    }
-}
-
 fn ensure_slots(used: usize, extra: usize) -> Result<(), PatternError> {
     if used.saturating_add(extra) > MAX_VM_SLOTS {
-        Err(resource())
+        Err(PatternError::Resource {
+            offset: 0,
+            reason: PatternLimit::Slots {
+                used,
+                extra,
+                maximum: MAX_VM_SLOTS,
+            },
+        })
     } else {
         Ok(())
     }
@@ -248,7 +248,14 @@ pub(super) fn is_match(
         };
         live_slots -= state_slots(&state);
         if limits.steps == 0 || active_states > limits.states {
-            return Err(resource());
+            return Err(PatternError::Resource {
+                offset: 0,
+                reason: PatternLimit::Matcher {
+                    steps: limits.steps,
+                    active_states,
+                    maximum_states: limits.states,
+                },
+            });
         }
         limits.steps -= 1;
         let Some(task) = state.tasks.pop() else {
