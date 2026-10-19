@@ -1,0 +1,54 @@
+$ stagectl pr-checks 599
+SKIPPED    Deploy to GitHub Pages
+NEUTRAL    CodeQL
+IN_PROGRESS aarch64
+IN_PROGRESS test (integration-4)
+IN_PROGRESS miri
+IN_PROGRESS cross-arch-riscv64 (determinism-serial)
+IN_PROGRESS simd-asm-config (aarch64-neoverse-v1)
+IN_PROGRESS simd-asm-config (aarch64)
+IN_PROGRESS geo-determinism
+IN_PROGRESS simd-asm-config (x86_64-v3)
+IN_PROGRESS simd-asm-config (wasm32-simd128)
+IN_PROGRESS test (integration-2)
+IN_PROGRESS test (integration-3)
+IN_PROGRESS test (doc)
+IN_PROGRESS test (integration-5)
+IN_PROGRESS projection-oracles
+IN_PROGRESS capi
+SUCCESS    doc
+IN_PROGRESS msrv
+IN_PROGRESS wasm
+IN_PROGRESS wasm-package
+IN_PROGRESS wasm-exec
+IN_PROGRESS test (lib)
+IN_PROGRESS wasm-schema-oracles
+IN_PROGRESS simd-asm-config (x86_64)
+FAILURE    Build The PurRDF Book
+IN_PROGRESS simd-asm-config (x86_64-v4)
+IN_PROGRESS workspace
+IN_PROGRESS conformance (python)
+IN_PROGRESS simd-asm-config (wasm32)
+IN_PROGRESS test (integration-1)
+IN_PROGRESS conformance (shapes)
+IN_PROGRESS conformance (sparql)
+IN_PROGRESS cross-arch
+SUCCESS    windows-mtime
+IN_PROGRESS cross-arch-riscv64 (suites)
+IN_PROGRESS conformance (core)
+IN_PROGRESS cross-arch-riscv64 (determinism-one-worker)
+IN_PROGRESS cross-arch-riscv64 (determinism-more-workers)
+IN_PROGRESS avx512-sde
+IN_PROGRESS pytest
+SUCCESS    python-publisher
+SUCCESS    Analyze (actions)
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (javascript-typescript)
+IN_PROGRESS Analyze (rust)
+SKIPPED    simd-asm-projection
+SKIPPED    native-profile-admission
+SKIPPED    native-profile
+SKIPPED    native-profile-comparison
+SUCCESS    CodeRabbit
+state: fail

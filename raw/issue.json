@@ -1,0 +1,33 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nThe Data Shapes Working Group lists implementations on its reports pages. Each\npage is built from EARL files that implementers submit to\n`shacl12-test-suite/reports/` (SHACL 1.2) or `data-shapes-test-suite/reports/`\n(SHACL 2017). PurRDF has no report on either page.\n\nPurRDF's own SHACL 1.2 scoreboard is also graded against an outdated suite.\n`vectors/shacl12/` is pinned at w3c/data-shapes `5069ed35` (2026-09-24), which is\n134 commits behind `gh-pages` (`4cd46986`, 2026-10-16), with 360 changed files\nunder `shacl12-test-suite/tests/`. The W3C harnesses grade but emit no EARL. Six\napproved 1.2 entries are graded by the XSD 1.1 canonical decimal spelling\ninstead of their approved expectation, so an honest report would show them as\nfailures.\n\n## Proposed solution\n\n1. Re-vendor `vectors/shacl12/` to the current `gh-pages` commit with\n   `scripts/vendor-shacl12.py`, and update the frozen-corpus manifest. Check\n   whether `vectors/shacl/` matches the current `data-shapes-test-suite/tests/`,\n   and re-vendor it if it doesn't.\n2. Make every approved entry pass against its approved expectation. Fix engine\n   defects. Where an approved test appears to contradict the specification\n   (including the six decimal-spelling cases), raise it with the Working Group\n   with a specification rationale. Report it as failed until the WG settles it;\n   don't amend the expectation or ledger the test away.\n3. Emit EARL from the Rust W3C harnesses (`w3c12_conformance`,\n   `w3c_conformance`) through `purrdf_conformance_kit::outcome::to_earl`:\n   - one assertion per approved entry, with `earl:automatic` mode;\n   - `passed` or `failed` graded against the approved expectation only;\n   - `inapplicable` for a conformance class PurRDF does not claim;\n   - test IRIs that the WG reports page keys correctly;\n   - a test subject with `doap:name` \"PurRDF <version>\", `doap:homepage`, and a\n     `doap:description` naming the PurRDF commit and the suite commit;\n   - Patrick Audley as the asserter.\n   Output must be byte-deterministic, with no timestamps. Proposed\n   (`sht:proposed`) entries are excluded.\n4. Generate both reports from a tagged PurRDF release, check them in the WG's\n   actual reports page, and prepare the upstream submission PR.\n\n## Acceptance criteria\n\n- [ ] `vectors/shacl12/` (and `vectors/shacl/` if it has drifted) is vendored\n      from a recorded current `gh-pages` commit; `make check` and\n      `make conformance` pass.\n- [ ] Every approved 1.2 and 2017 entry passes against its approved\n      expectation, or is reported as failed with a WG issue that gives its\n      specification rationale.\n- [ ] The harnesses emit deterministic EARL for both suites, and harness tests\n      fail if the EARL and scoreboard disagree, in counts or per entry.\n- [ ] Both EARL files load in the WG reports pages with no page errors, no\n      \"no data\" rows for approved entries, and counts equal to the scoreboard.\n- [ ] Both reports are generated from a tagged release and submitted upstream,\n      with the release and suite commit stated.\n\n## References\n\n- [SHACL 1.2 implementation reports](https://w3c.github.io/data-shapes/shacl12-test-suite/reports.html)\n- [SHACL test suite: submitting implementation reports](https://w3c.github.io/data-shapes/data-shapes-test-suite/) (section \"Submitting Implementation Reports\")\n- [EARL 1.0 Schema](https://www.w3.org/TR/EARL10-Schema/)\n- Related: #384 (community corpus and cross-engine EARL)\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-17T08:19:26Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    },
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpxmCAw",
+      "name": "conformance",
+      "description": "W3C / external test-suite conformance",
+      "color": "0E8A16"
+    }
+  ],
+  "milestone": null,
+  "number": 570,
+  "state": "OPEN",
+  "title": "Submit W3C SHACL implementation reports (EARL) against the current test suites",
+  "updatedAt": "2026-10-17T08:19:26Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/570"
+}

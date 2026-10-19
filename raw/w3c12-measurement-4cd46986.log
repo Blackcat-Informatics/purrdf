@@ -1,0 +1,90 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 51.15s
+     Running tests/w3c12_conformance.rs (/opt/.cargo/e8/3dba8fca11da40/debug/build/purrdf-shapes/8deba2fbc575cae8/out/w3c12_conformance-8deba2fbc575cae8)
+
+running 1 test
+SCRATCH by-type discovered={"sht:EvalNodeExpr": 143, "sht:Infer": 27, "sht:Validate": 213, "srlt:RulesEvalTest": 46, "srlt:RulesNegativeStratificationTest": 7, "srlt:RulesNegativeSyntaxTest": 30, "srlt:RulesNegativeWellFormednessTest": 4, "srlt:RulesPositiveStratificationTest": 7, "srlt:RulesPositiveSyntaxTest": 111, "srlt:RulesPositiveWellFormednessTest": 4} pinned={"sht:EvalNodeExpr": 143, "sht:Infer": 27, "sht:Validate": 174, "srlt:RulesEvalTest": 46, "srlt:RulesNegativeStratificationTest": 5, "srlt:RulesNegativeSyntaxTest": 30, "srlt:RulesNegativeWellFormednessTest": 4, "srlt:RulesPositiveStratificationTest": 5, "srlt:RulesPositiveSyntaxTest": 109, "srlt:RulesPositiveWellFormednessTest": 4}
+SCRATCH total=592
+W3C SHACL 1.2 conformance scoreboard (591 approved tests; 1 entries of unlisted vendored files reported apart):
+  core/complex                         passed   2  non-canonical-expected-decimal  0  xfailed   0
+  core/misc                            passed  13  non-canonical-expected-decimal  0  xfailed   0
+  core/node                            passed  54  non-canonical-expected-decimal  0  xfailed   0
+  core/path                            passed  14  non-canonical-expected-decimal  0  xfailed   0
+  core/property                        passed  63  non-canonical-expected-decimal  0  xfailed   0
+  core/targets                         passed  11  non-canonical-expected-decimal  0  xfailed   0
+  core/validation-reports              passed   3  non-canonical-expected-decimal  0  xfailed   0
+  inference-rules                      passed  21  non-canonical-expected-decimal  0  xfailed   0
+  inference-rules/rdfs                 passed   6  non-canonical-expected-decimal  0  xfailed   0
+  node-expr/constraints                passed   3  non-canonical-expected-decimal  0  xfailed   0
+  node-expr/shnex                      passed  66  non-canonical-expected-decimal  1  xfailed   0
+  node-expr/shnex-sparql               passed  71  non-canonical-expected-decimal  5  xfailed   0
+  sparql-rl/eval                       passed  35  non-canonical-expected-decimal  0  xfailed   0
+  sparql-rl/eval2                      passed   6  non-canonical-expected-decimal  0  xfailed   0
+  sparql-rl/examples                   passed   5  non-canonical-expected-decimal  0  xfailed   0
+  sparql-rl/stratification             passed  12  non-canonical-expected-decimal  0  xfailed   0
+  sparql-rl/syntax                     passed 141  non-canonical-expected-decimal  0  xfailed   0
+  sparql-rl/wellformed                 passed   8  non-canonical-expected-decimal  0  xfailed   0
+  sparql/component                     passed   7  non-canonical-expected-decimal  0  xfailed   0
+  sparql/functions                     passed   3  non-canonical-expected-decimal  0  xfailed   0
+  sparql/node                          passed   8  non-canonical-expected-decimal  0  xfailed   0
+  sparql/pre-binding                   passed  12  non-canonical-expected-decimal  0  xfailed   0
+  sparql/property                      passed   5  non-canonical-expected-decimal  0  xfailed   0
+  sparql/targets                       passed   1  non-canonical-expected-decimal  0  xfailed   0
+  by test type:
+  sht:EvalNodeExpr                     passed 137  non-canonical-expected-decimal  6  xfailed   0
+  sht:Infer                            passed  26  non-canonical-expected-decimal  0  xfailed   0
+  sht:Validate                         passed 200  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesEvalTest                   passed  46  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesNegativeStratificationTest passed   5  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesNegativeSyntaxTest         passed  30  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesNegativeWellFormednessTest passed   4  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesPositiveStratificationTest passed   7  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesPositiveSyntaxTest         passed 111  non-canonical-expected-decimal  0  xfailed   0
+  srlt:RulesPositiveWellFormednessTest passed   4  non-canonical-expected-decimal  0  xfailed   0
+  W3C12 TOTAL: passed 570, non-canonical-expected-decimal 6, xfailed 0, ledger 0
+
+thread 'w3c_shacl12_conformance' (2326804) panicked at crates/shapes/tests/w3c12_conformance.rs:712:5:
+w3c_shacl12_conformance: 15 error(s):
+FAIL [core/node/xone-003]: UNLISTED_FILE_DELTAS names core/node/xone-003, which an upstream manifest lists — an approved test is graded against its approved expectation only
+
+FAIL [core/property/closed-001]: conforms mismatch: produced=true, expected=false
+
+FAIL [inference-rules/rules-entailment-ruleset-and-all]: shapes parse error: the shapes graph declares <file:///home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/vectors/shacl12/tests/inference-rules/rules-entailment-ruleset-and-all.ttl> sh:entailment <http://example.com/ns#FullNameRules>; this processor supports the entailment regime sh:RulesEntailment only, and SHACL requires a processor to signal a failure for a regime it does not support
+
+FAIL [inference-rules/rules-entailment-ruleset-includes]: shapes parse error: the shapes graph declares <file:///home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/vectors/shacl12/tests/inference-rules/rules-entailment-ruleset-includes.ttl> sh:entailment <http://example.com/ns#AllRules>; this processor supports the entailment regime sh:RulesEntailment only, and SHACL requires a processor to signal a failure for a regime it does not support
+
+FAIL [inference-rules/rules-entailment-ruleset-multiple]: shapes parse error: the shapes graph declares <file:///home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/vectors/shacl12/tests/inference-rules/rules-entailment-ruleset-multiple.ttl> sh:entailment <http://example.com/ns#FullNameRules>; this processor supports the entailment regime sh:RulesEntailment only, and SHACL requires a processor to signal a failure for a regime it does not support
+
+FAIL [inference-rules/rules-entailment-ruleset-validation]: shapes parse error: the shapes graph declares <file:///home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/vectors/shacl12/tests/inference-rules/rules-entailment-ruleset-validation.ttl> sh:entailment <http://example.com/ns#FullNameRules>; this processor supports the entailment regime sh:RulesEntailment only, and SHACL requires a processor to signal a failure for a regime it does not support
+
+FAIL [sparql/functions/blankNodeArgument-001]: result multiset mismatch:
+  expected x1, produced x0: ("<http://example.com/ns#TestResource>", None, Some("\"false http://example.com/ns#IRI\""), "<http://www.w3.org/ns/shacl#SPARQLConstraintComponent>", "<http://www.w3.org/ns/shacl#Violation>", "<http://example.com/ns#TestShape>")
+  expected x0, produced x1: ("<http://example.com/ns#TestResource>", None, Some("\"true http://example.com/ns#IRI\""), "<http://www.w3.org/ns/shacl#SPARQLConstraintComponent>", "<http://www.w3.org/ns/shacl#Violation>", "<http://example.com/ns#TestShape>")
+
+FAIL [sparql/functions/singleInstanceOf-001]: validation error: sh:sparql constraint on shape <http://example.com/ns#TestShape>: SPARQLConstraint query evaluation error: error native-sparql-function-operational: host function error: custom SPARQL function: custom list parameter function <http://example.com/ns#singleInstanceOf> produced 2 output nodes; SHACL 1.2 Node Expressions §6.2 reports an evaluation failure when there is more than one
+
+FAIL [sparql/node/deactivated-select-001]: shapes parse error: sh:deactivated on shape <http://example.com/ns#ActiveShape> must be an xsd:boolean literal, got _:gts_00000000000000000000000000; a node-expression value of sh:deactivated is not evaluated by this engine
+
+FAIL [sparql/node/prefixes-003]: shapes parse error: sh:sparql constraint on shape <http://example.com/ns#TestShape> has an unparsable sh:select query: SPARQL syntax error at byte 589: undeclared prefix "test"
+
+FAIL [sparql/node/sparql-failure-001]: suite expects sht:Failure but the engine validated successfully
+
+FAIL [sparql/node/sparql-message-001]: no produced result ("<http://example.com/ns#InvalidResource>", None, Some("<http://example.com/ns#InvalidResource>"), "<http://www.w3.org/ns/shacl#SPARQLConstraintComponent>", "<http://www.w3.org/ns/shacl#Violation>", "<http://example.com/ns#TestShape>") carries exactly the expected sh:resultMessage set {"\"Message from the query\""}; the results with that tuple carry [{"\"Message from the constraint\""}]
+
+FAIL [sparql/pre-binding/pre-binding-009]: shapes parse error: sh:sparql constraint <http://example.com/ns#TestShape-sparql> on shape <http://example.com/ns#TestShape>: its query violates a pre-binding restriction [syntax rule pre-binding-limitations]: VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF refuses every VALUES, which is stricter than the Working Draft's mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus requires the stricter reading)
+
+FAIL [sparql-rl/stratification/manifest#test_13]: expected a stratification failure, but every stage accepted it
+
+FAIL [sparql-rl/stratification/manifest#test_14]: expected a stratification failure, but every stage accepted it
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test w3c_shacl12_conformance ... FAILED
+
+failures:
+
+failures:
+    w3c_shacl12_conformance
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.23s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test w3c12_conformance`
+exit 101

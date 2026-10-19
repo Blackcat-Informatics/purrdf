@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 570,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports",
+  "branch": "paudley/570-submit-w3c-shacl-implementation-reports",
+  "slug": "submit-w3c-shacl-implementation-reports",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/.stage/submit-w3c-shacl-implementation-reports",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "410a927d9e97d8485711d98b535158ed3e4ce059",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports",
+    "branch:paudley/570-submit-w3c-shacl-implementation-reports",
+    "stage:/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/.stage/submit-w3c-shacl-implementation-reports",
+    "issue:/home/paudley/Active/purrdf/.worktrees/570-submit-w3c-shacl-implementation-reports/.stage/submit-w3c-shacl-implementation-reports/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-17T02:20:02-0600"
+}
