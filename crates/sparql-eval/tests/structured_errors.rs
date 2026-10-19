@@ -17,6 +17,31 @@ use purrdf_testkit::error_capture::{CallerRefusal, Capture};
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[derive(Debug)]
+struct RefusingPresentation {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    limit: u64,
+}
+
+impl core::fmt::Display for RefusingPresentation {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        out.write_str("original partial presentation")?;
+        Err(core::fmt::Error)
+    }
+}
+
+impl std::error::Error for RefusingPresentation {}
+
+impl purrdf_hash::error::StructuredError for RefusingPresentation {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self { calls: _, limit } = self;
+        visitor.variant("caller-presentation-refusal");
+        visitor.value(Some("limit"), ErrorValue::Unsigned(u128::from(*limit)));
+    }
+}
+
 fn erased_function_causes_keep_original_fields_and_identity_without_rendering() {
     let error =
         EvalError::FunctionAdmission(UserFunctionRefusal::new(CallerRefusal { limit: u128::MAX }));
@@ -234,6 +259,45 @@ fn admitted_diagnostics_borrow_original_text_and_clone_the_same_owner() {
         .child("native_cause");
     assert_eq!(cause.code, "sparql-eval-service-unconfigured");
     assert!(matches!(cause.field("message"), ErrorValue::Text(text) if text == message));
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let error = purrdf_sparql_eval::RetainedNativeFailure::error(
+        NativeDiagnosticKind::Function,
+        RefusingPresentation {
+            calls: Arc::clone(&calls),
+            limit: u64::MAX,
+        },
+        &WorkspaceCapability::resident(),
+    );
+    let report = purrdf_sparql_eval::EvaluationFailure::Evaluation(error).into_diagnostic();
+    assert_eq!(
+        report.code,
+        EvalError::UnstableNativeDiagnostic
+            .diagnostic_code()
+            .unwrap()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    let copy = report.clone();
+    drop(report);
+    let original = Capture::read(&copy)
+        .child("attachments")
+        .child("native_cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(original.code, "caller-presentation-refusal");
+    assert!(
+        matches!(original.field("limit"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    let mut source = std::error::Error::source(&copy);
+    loop {
+        let current = source.expect("the original caller source remains reachable");
+        if let Some(original) = current.downcast_ref::<RefusingPresentation>() {
+            assert_eq!(original.limit, u64::MAX);
+            break;
+        }
+        source = current.source();
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 fn actual_service_builder_preserves_original_failure_under_its_admission() {

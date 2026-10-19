@@ -5159,7 +5159,15 @@ impl EvaluationFailure {
         }
     }
 
-    pub(crate) fn into_diagnostic(self) -> RdfDiagnostic {
+    /// Publish this failure as a resident diagnostic, preserving its native cause.
+    /// A cause that refuses presentation produces an explicit diagnostic refusal;
+    /// consumers can still inspect its original typed fields and source chain.
+    ///
+    /// # Panics
+    /// Panics if a resident diagnostic allocation fails. Operationally bounded
+    /// callers use the fallible query interfaces to retain allocation refusals.
+    #[must_use]
+    pub fn into_diagnostic(self) -> RdfDiagnostic {
         match self {
             Self::Diagnostic(diagnostic) => diagnostic,
             Self::RetainedDiagnostic(diagnostic) => diagnostic.diagnostic().clone(),
