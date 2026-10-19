@@ -177,7 +177,12 @@ impl FrozenTerms {
     }
 
     pub(super) fn resolve(&self, id: TermId) -> TermRef<'_> {
-        match &self.terms[id.index()] {
+        self.resolve_interned(&self.terms[id.index()])
+    }
+
+    /// Resolve original lexical ranges without reconstructing a local ID.
+    pub(super) fn resolve_interned(&self, term: &InternedTerm) -> TermRef<'_> {
+        match term {
             InternedTerm::Iri(iri) => TermRef::Iri(arena_str(&self.arena, *iri)),
             InternedTerm::Blank { label, scope } => TermRef::Blank {
                 label: arena_str(&self.arena, *label),

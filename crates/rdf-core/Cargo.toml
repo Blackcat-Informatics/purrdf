@@ -103,6 +103,10 @@ name = "segmented_stack"
 harness = false
 
 [[test]]
+name = "structured_inspection"
+harness = false
+
+[[test]]
 name = "segmented"
 harness = false
 

@@ -54,6 +54,16 @@ pub enum LedgerBuildError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for LedgerBuildError {
+    purrdf_hash::error_visit! {
+        Declaration(cause) => "ledger-build-declaration" { "cause" => Cause(cause) },
+        Reasons(cause) => "ledger-build-reasons" { "cause" => Cause(cause) },
+        DuplicateRow => "ledger-build-duplicate-row" {},
+        NodeCollision => "ledger-build-node-collision" {},
+        Storage(cause) => "ledger-build-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(LedgerBuildError {
     Declaration(LedgerError),
     Storage(StorageError),

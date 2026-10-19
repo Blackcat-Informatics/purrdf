@@ -134,6 +134,13 @@ pub enum Profile {
     Xpath31,
 }
 
+impl purrdf_hash::error::StructuredError for Profile {
+    purrdf_hash::error_visit! {
+        Xpath20 => "xpath-profile-2.0-2010-12-14" {},
+        Xpath31 => "xpath-profile-3.1-2017-03-21" {},
+    }
+}
+
 impl Profile {
     /// The stable name of the dated grammar, including its edition date.
     #[must_use]
@@ -200,6 +207,19 @@ pub enum Resource {
     MatchSlots,
     /// UTF-8 bytes of replacement output.
     OutputBytes,
+}
+
+impl purrdf_hash::error::StructuredError for Resource {
+    purrdf_hash::error_visit! {
+        PatternBytes => "xpath-resource-pattern-bytes" {},
+        CompileSteps => "xpath-resource-compile-steps" {},
+        ProgramNodes => "xpath-resource-program-nodes" {},
+        CompileSlots => "xpath-resource-compile-slots" {},
+        MatchSteps => "xpath-resource-match-steps" {},
+        MatchStates => "xpath-resource-match-states" {},
+        MatchSlots => "xpath-resource-match-slots" {},
+        OutputBytes => "xpath-resource-output-bytes" {},
+    }
 }
 
 impl Resource {
@@ -625,6 +645,15 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
+impl purrdf_hash::error::StructuredError for Refusal {
+    purrdf_hash::error_visit! {
+        @record self { resource, required, limit } => "xpath-resource-refusal" {
+            "resource" => Record(&self.resource), "required" => Unsigned(self.required),
+            "limit" => Unsigned(u128::from(self.limit)),
+        }
+    }
+}
+
 /// A syntax verdict or an operational refusal from the native XPath surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -677,6 +706,31 @@ pub enum Error {
 }
 
 purrdf_lex::variant_from!(Error { Resource(Refusal), Replacement(super::ReplacementError) });
+
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        Flags { offset, flag, profile } => "xpath-invalid-flags" {
+            "offset" => ByteCount(*offset as u128), "flag" => Character(*flag),
+            "profile" => Record(profile),
+        },
+        CompatibilityFlags { offset, flag } => "xpath-compatibility-flags" {
+            "offset" => ByteCount(*offset as u128), "flag" => Character(*flag),
+        },
+        CompatibilitySource { bytes, limit } => "xpath-compatibility-source" {
+            "bytes" => ByteCount(*bytes as u128), "limit" => ByteCount(*limit as u128),
+        },
+        Syntax { offset, message } => "xpath-syntax" {
+            "offset" => ByteCount(*offset as u128), "message" => Text(message),
+        },
+        Resource(error) => "xpath-resource" { "cause" => Cause(error) },
+        Allocation { resource, units } => "xpath-allocation" {
+            "resource" => Record(resource), "units" => Unsigned(u128::from(*units)),
+        },
+        Storage(error) => "xpath-storage" { "cause" => Cause(error) },
+        EmptyMatch => "xpath-empty-match" {},
+        Replacement(error) => "xpath-replacement" { "cause" => Cause(error) },
+    }
+}
 
 impl Error {
     /// Whether this is an operational failure rather than a pattern,

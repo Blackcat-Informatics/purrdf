@@ -84,6 +84,12 @@ pub struct ContentIdScheme {
     prefix: String,
 }
 
+impl purrdf_hash::error::StructuredError for ContentIdScheme {
+    purrdf_hash::error_visit! {
+        @record self { prefix } => "rdf-content-id-scheme" { "prefix" => Text(&self.prefix) }
+    }
+}
+
 impl ContentIdScheme {
     /// Validate and wrap a content-id recognition prefix.
     ///

@@ -37,6 +37,13 @@ impl core::fmt::Display for LexicalScopeError {
 
 impl std::error::Error for LexicalScopeError {}
 
+impl purrdf_hash::error::StructuredError for LexicalScopeError {
+    purrdf_hash::error_visit! {
+        InvalidPredicate => "lexical-scope-invalid-predicate" {},
+        InvalidEncoding => "lexical-scope-invalid-encoding" {},
+    }
+}
+
 /// Borrowed original lexical payload and its optional declared field.
 #[derive(Clone, Copy, Debug)]
 pub struct LexicalQuery<'a> {

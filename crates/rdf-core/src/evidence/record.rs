@@ -24,6 +24,14 @@ pub enum EvidenceRecordError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for EvidenceRecordError {
+    purrdf_hash::error_visit! {
+        Standpoint(cause) => "evidence-record-standpoint" { "cause" => Cause(cause) },
+        ConflictingAggregateBound(column) => "evidence-record-conflicting-bound" { "column" => Record(column) },
+        Storage(cause) => "evidence-record-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(EvidenceRecordError { Storage(StorageError) });
 
 impl core::fmt::Display for EvidenceRecordError {

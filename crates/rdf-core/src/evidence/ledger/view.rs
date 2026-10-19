@@ -38,6 +38,15 @@ pub enum LedgerReadError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for LedgerReadError {
+    purrdf_hash::error_visit! {
+        Declaration(cause) => "ledger-read-declaration" { "cause" => Cause(cause) },
+        ForeignId => "ledger-read-foreign-id" {},
+        SourceChanged => "ledger-read-source-changed" {},
+        Storage(cause) => "ledger-read-storage" { "cause" => Cause(cause) },
+    }
+}
+
 impl core::fmt::Display for LedgerReadError {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
