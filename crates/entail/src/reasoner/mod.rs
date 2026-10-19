@@ -263,7 +263,7 @@ impl Reasoner {
     /// source read. No reasoner is published from an incomplete source prefix.
     /// [`EntailError::Build`] or [`EntailError::Unsatisfiable`] if applying an
     /// `owl:hasKey` axiom exhausts the tableau or finds the ontology already unsatisfiable.
-    pub fn new<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
+    pub fn new<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::build(ds, None)
     }
 
@@ -289,7 +289,7 @@ impl Reasoner {
     /// so this comes back as a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same
     /// input.
-    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
+    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::recorded(ds, SchemaPreparationBudget::default(), None)
     }
 
@@ -300,7 +300,7 @@ impl Reasoner {
     pub fn with_preparation_budget<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, None, budget, None)
     }
 
@@ -310,7 +310,7 @@ impl Reasoner {
     pub fn with_proofs_and_preparation_budget<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::recorded(ds, budget, None)
     }
 
@@ -328,7 +328,7 @@ impl Reasoner {
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::recorded(ds, budget, Some(stop))
     }
 
@@ -336,7 +336,7 @@ impl Reasoner {
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         let input = match stop.as_deref() {
             Some(stop) => crate::owl_dl::proof::try_ontology_identity_with_stop(ds, stop),
             None => crate::owl_dl::proof::try_ontology_identity(ds),
@@ -354,7 +354,7 @@ impl Reasoner {
     pub fn with_stop<D: DatasetView>(
         ds: &D,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, None, SchemaPreparationBudget::default(), Some(stop))
     }
 
@@ -406,7 +406,10 @@ impl Reasoner {
     }
 
     /// The shared body of the two constructors: `input` present is recording on.
-    fn build<D: DatasetView>(ds: &D, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
+    fn build<D: DatasetView>(
+        ds: &D,
+        input: Option<[u8; 32]>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::build_with_preparation(ds, input, SchemaPreparationBudget::default(), None)
     }
 
@@ -415,7 +418,7 @@ impl Reasoner {
         input: Option<[u8; 32]>,
         preparation: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         let mut kb = Kb::from_dataset_recording(ds, stop, preparation, input)?;
         let signal = kb.stop.clone();
         let mut poll = || {
@@ -435,7 +438,7 @@ impl Reasoner {
                 poll()?;
                 Ok((c, kb.table.intern(class_concept(&vocab, c))))
             })
-            .collect::<Result<_, EntailError>>()?;
+            .collect::<Result<_, EntailError<D::ReadError>>>()?;
         let individuals: Vec<u32> = kb
             .individuals
             .iter()
@@ -443,7 +446,7 @@ impl Reasoner {
                 poll()?;
                 Ok(individual)
             })
-            .collect::<Result<_, EntailError>>()?;
+            .collect::<Result<_, EntailError<D::ReadError>>>()?;
         kb.finalize_until(&mut poll)?;
         poll()?;
         let budget = Budget::for_kb(&kb);

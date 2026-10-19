@@ -132,7 +132,9 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
 }
 
 /// A faithful copy of `ds` (the identity closure for `Simple`).
-pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailError> {
+pub(crate) fn copy_of<D: DatasetView>(
+    ds: &D,
+) -> Result<Arc<RdfDataset>, EntailError<D::ReadError>> {
     let mut b = RdfDatasetBuilder::new();
     copy_into(&mut b, ds)?;
     b.freeze().map_err(EntailError::from)
@@ -164,7 +166,7 @@ pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailE
 pub(crate) fn copy_into<D: DatasetView>(
     b: &mut RdfDatasetBuilder,
     ds: &D,
-) -> Result<(), EntailError> {
+) -> Result<(), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         for quad in ds.quads() {
             let s = intern_into(b, &ds.term_value(quad.s)?)?;
@@ -172,7 +174,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let o = intern_into(b, &ds.term_value(quad.o)?)?;
             let g = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_quad(s, p, o, g)?;
         }
@@ -183,7 +187,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let triple = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_reifier_in_graph(reifier, triple, graph)?;
         }
@@ -194,7 +200,9 @@ pub(crate) fn copy_into<D: DatasetView>(
             let object = intern_into(b, &ds.term_value(quad.o)?)?;
             let graph = quad
                 .g
-                .map(|g| intern_into(b, &ds.term_value(g)?))
+                .map(|g| -> Result<_, EntailError<D::ReadError>> {
+                    Ok(intern_into(b, &ds.term_value(g)?)?)
+                })
                 .transpose()?;
             b.push_annotation_in_graph(reifier, predicate, object, graph)?;
         }
@@ -305,7 +313,7 @@ pub(crate) fn close<D: DatasetView>(
     regime: Regime,
     options: &EvalOptions,
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, RunStats), EntailError> {
+) -> Result<(Arc<RdfDataset>, RunStats), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         let (program, attribution) = program_with_attribution(regime);
 
@@ -355,7 +363,7 @@ pub(crate) fn close<D: DatasetView>(
         for conclusion in &default_run.conclusions {
             default_conclusions.insert(conclusion.key());
             stats.commit(conclusion.rule);
-            emit(&mut b, conclusion, None)?;
+            emit(&mut b, conclusion, None).map_err(EntailError::with_read_error)?;
         }
         for graph in named.values() {
             // A dataset is closed graph by graph, so the loop over the named graphs is a
@@ -379,7 +387,7 @@ pub(crate) fn close<D: DatasetView>(
                     continue;
                 }
                 stats.commit(conclusion.rule);
-                emit(&mut b, conclusion, Some(g))?;
+                emit(&mut b, conclusion, Some(g)).map_err(EntailError::with_read_error)?;
             }
         }
         let dataset = b.freeze().map_err(EntailError::from)?;
@@ -394,7 +402,7 @@ pub(crate) fn close<D: DatasetView>(
 /// ended the run, which is a fact about the caller rather than about the program or the
 /// data, so it keeps its own variant all the way out. Every other refusal is what
 /// [`EntailError::Evaluate`] has always meant.
-pub(crate) fn evaluate_error(error: EvalError) -> EntailError {
+pub(crate) fn evaluate_error<E>(error: EvalError) -> EntailError<E> {
     match error {
         EvalError::Stopped { .. } => EntailError::Stopped,
         other => EntailError::Evaluate(other),
@@ -422,7 +430,7 @@ fn refuse<D: DatasetView>(
     regime: Regime,
     stats: &RunStats,
     witness: InconsistencyWitness,
-) -> EntailError {
+) -> EntailError<D::ReadError> {
     match ReasoningReport::of_inconsistent_run(ds, regime, stats, witness.clone()) {
         Ok(report) => EntailError::Inconsistent(Box::new(InconsistentRun::new(witness, report))),
         Err(error) => error,
@@ -543,7 +551,7 @@ fn close_graph<D: DatasetView>(
     input: GraphRunInput<'_>,
     graph: Option<&TermValue>,
     plans: &mut PlanCache,
-) -> Result<GraphRun, EntailError> {
+) -> Result<GraphRun, EntailError<D::ReadError>> {
     let GraphRunInput {
         regime,
         program,
@@ -561,7 +569,8 @@ fn close_graph<D: DatasetView>(
         .iter()
         .any(|clause| clause.head_form() == HeadForm::Existential)
     {
-        return chase_graph(program, attribution, edb, &terms, options, stop);
+        return chase_graph(program, attribution, edb, &terms, options, stop)
+            .map_err(EntailError::with_read_error);
     }
 
     // The plan is a pure function of the clause program, and `close` hands every graph of
@@ -660,7 +669,7 @@ pub(crate) fn seed<D: DatasetView>(
     regime: Regime,
     program: &[DlClause],
     graph: Option<&TermValue>,
-) -> Result<(RelationStore, Terms), EntailError> {
+) -> Result<(RelationStore, Terms), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         let mut terms = Terms::default();
         terms.record_program(program);
@@ -1097,7 +1106,7 @@ impl Refuter {
     ///
     /// [`EntailError::MalformedList`] if an RDF collection an OWL 2 axiom points at is not a
     /// well-formed collection — the same refusal [`seed`] owes any caller.
-    pub(crate) fn seed<D: DatasetView>(&self, ds: &D) -> Result<Seeded, EntailError> {
+    pub(crate) fn seed<D: DatasetView>(&self, ds: &D) -> Result<Seeded, EntailError<D::ReadError>> {
         let (edb, terms) = seed(ds, self.regime, &self.program, None)?;
         Ok(Seeded { edb, terms })
     }

@@ -372,7 +372,7 @@ impl Kb {
     /// that is already unsatisfiable (every identification would then be entailed, so the
     /// key says nothing).
     #[cfg(test)]
-    pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError> {
+    pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
         Self::from_dataset_until(ds, None)
     }
 
@@ -386,7 +386,7 @@ impl Kb {
     pub(crate) fn from_dataset_until<D: DatasetView>(
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::from_dataset_with_preparation(ds, stop, bounds::SchemaPreparationBudget::default())
     }
 
@@ -394,7 +394,7 @@ impl Kb {
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
         budget: bounds::SchemaPreparationBudget,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         Self::from_dataset_recording(ds, stop, budget, None)
     }
 
@@ -403,7 +403,7 @@ impl Kb {
         stop: Option<Arc<dyn StopSignal>>,
         budget: bounds::SchemaPreparationBudget,
         input: Option<[u8; 32]>,
-    ) -> Result<Self, EntailError> {
+    ) -> Result<Self, EntailError<D::ReadError>> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
@@ -413,7 +413,7 @@ impl Kb {
         if kb.stopped() {
             return Err(EntailError::Stopped);
         }
-        kb.apply_keys()?;
+        kb.apply_keys().map_err(EntailError::with_read_error)?;
         Ok(kb)
     }
 

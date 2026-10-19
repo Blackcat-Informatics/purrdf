@@ -560,14 +560,17 @@ pub fn canonicalize_view<D: DatasetView<ReadError = Infallible>>(
 /// [`CanonError::ReservedVocabulary`] if any term of `view` is an IRI in
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
 /// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+/// [`CanonError::Read`] retains the original [`DatasetView::ReadError`] if either
+/// readiness check fails; no canonical result is published or cause formatted.
 pub fn try_canonicalize_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
-) -> Result<Canonicalized<D::Id>, CanonError> {
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     view.checked_read(|view| {
         CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash).run_fallible()
     })
-    .map_err(|error| CanonError::Read(error.to_string()))?
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
 }
 
 /// Canonicalize a view with a caller-owned stop signal throughout preparation,
@@ -582,14 +585,15 @@ pub fn try_canonicalize_view_with_stop<D: DatasetView>(
     view: &D,
     hash: CanonHash,
     stop: &dyn crate::StopSignal,
-) -> Result<Canonicalized<D::Id>, CanonError> {
-    check_stop(Some(stop))?;
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
+    check_stop(Some(stop)).map_err(CanonError::with_read_error)?;
     view.checked_read(|view| {
         CanonState::new(view, CanonScope::Dataset, CanonPresentation::Overlay, hash)
             .with_stop(stop)
             .run_fallible()
     })
-    .map_err(|error| CanonError::Read(error.to_string()))?
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
 }
 
 fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), CanonError> {
@@ -645,18 +649,21 @@ pub fn canonicalize_graph_view<D: DatasetView<ReadError = Infallible>>(
 /// ANOTHER graph does not refuse this one — the projection route has exactly that
 /// property, and a per-graph digest that refused on a neighbour's content would not be
 /// a function of `graph` alone.
+/// [`CanonError::Read`] retains a backing read failure unchanged, even when the
+/// read became incomplete during the graph-scoped computation.
 pub fn try_canonicalize_graph_view<D: DatasetView>(
     view: &D,
     graph: &str,
     hash: CanonHash,
-) -> Result<Canonicalized<D::Id>, CanonError> {
+) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     view.checked_read(|view| match graph_scope(view, graph) {
         Some(scope) => {
             CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
         }
         None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
     })
-    .map_err(|error| CanonError::Read(error.to_string()))?
+    .map_err(CanonError::Read)?
+    .map_err(CanonError::with_read_error)
 }
 
 /// The SHA-256 [`ContentDigest`] of one named graph's canonical form — the value a
@@ -686,7 +693,7 @@ pub fn graph_digest_view<D: DatasetView<ReadError = Infallible>>(
 pub fn try_graph_digest_view<D: DatasetView>(
     view: &D,
     graph: &str,
-) -> Result<ContentDigest, CanonError> {
+) -> Result<ContentDigest, CanonError<D::ReadError>> {
     Ok(ContentDigest::of(
         try_canonicalize_graph_view(view, graph, CanonHash::Sha256)?
             .nquads
@@ -1398,18 +1405,18 @@ fn blanks_in_term<D: DatasetView>(
     stop: Option<&dyn crate::StopSignal>,
     f: &mut impl FnMut(D::Id),
 ) -> Result<(), CanonError> {
-    try_fold_term(
+    let result = try_fold_term(
         ds,
         id,
         |id, term| {
-            check_stop(stop)?;
+            check_stop(stop).map_err(Some)?;
             match term {
                 TermRef::Blank { .. } => f(id),
                 TermRef::Literal {
                     lexical, datatype, ..
                 } => {
                     for id in composite_blanks(ds, lexical, datatype) {
-                        check_stop(stop)?;
+                        check_stop(stop).map_err(Some)?;
                         f(id);
                     }
                 }
@@ -1417,9 +1424,24 @@ fn blanks_in_term<D: DatasetView>(
             }
             Ok(())
         },
-        |_, (), (), ()| check_stop(stop),
-        |error| CanonError::Read(error.to_string()),
-    )
+        |_, (), (), ()| check_stop(stop).map_err(Some),
+        // This walk is provisional inside checked_read/checkpointed_drain,
+        // which retains the sticky source fault and discards the partial result.
+        // Stop the fold here without formatting or replacing that original cause.
+        // A provider that loses its fault violates the checked-drain contract;
+        // do not let provisional output escape as a successful canonical form.
+        |_| {
+            assert!(
+                ds.read_error().is_some(),
+                "DatasetView read_error must retain a failed resolution"
+            );
+            None
+        },
+    );
+    match result {
+        Ok(()) | Err(None) => Ok(()),
+        Err(Some(refusal)) => Err(refusal),
+    }
 }
 
 /// The view ids of the blank nodes a composite literal's lexical form names,
@@ -1995,6 +2017,14 @@ pub struct BudgetExceeded {
     pub blank_count: usize,
 }
 
+impl purrdf_hash::error::StructuredError for BudgetExceeded {
+    purrdf_hash::error_visit! {
+        @record self { blank_count } => "canonical-budget-exceeded" {
+            "blank_count" => Unsigned(self.blank_count as u128),
+        }
+    }
+}
+
 impl std::fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -2025,6 +2055,15 @@ pub enum TermPosition {
     Object,
     /// The graph slot.
     Graph,
+}
+
+impl purrdf_hash::error::StructuredError for TermPosition {
+    purrdf_hash::error_visit! {
+        Subject => "canonical-position-subject" {},
+        Predicate => "canonical-position-predicate" {},
+        Object => "canonical-position-object" {},
+        Graph => "canonical-position-graph" {},
+    }
 }
 
 impl std::fmt::Display for TermPosition {
@@ -2059,6 +2098,15 @@ pub struct ReservedVocabulary {
     pub position: TermPosition,
 }
 
+impl purrdf_hash::error::StructuredError for ReservedVocabulary {
+    purrdf_hash::error_visit! {
+        @record self { iri, position } => "canonical-reserved-vocabulary" {
+            "iri" => Iri(&self.iri),
+            "position" => Record(&self.position),
+        }
+    }
+}
+
 impl std::fmt::Display for ReservedVocabulary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -2082,9 +2130,12 @@ impl std::error::Error for ReservedVocabulary {}
 /// bounds, while a [`ReservedVocabulary`] dataset is one whose acceptance would have
 /// been an identity collision. A consumer auditing a rejection needs to tell those
 /// apart without parsing a message.
+///
+/// View entry points retain their backing reader's error type in `E`. Resident
+/// entry points use [`Infallible`], so their read-failure variant is uninhabited.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum CanonError {
+pub enum CanonError<E = Infallible> {
     /// The rewritten dataset could not be frozen with its original diagnostic.
     Invalid(crate::RdfDiagnostic),
     /// Logical capacity or physical storage refusal during the rewrite.
@@ -2094,12 +2145,23 @@ pub enum CanonError {
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset could not be read completely. No canonical result is returned.
-    Read(String),
+    Read(E),
     /// The caller stopped canonicalization. No canonical identity was published.
     Stopped,
 }
 
-impl std::fmt::Display for CanonError {
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
+    purrdf_hash::error_visit! {
+        Invalid(cause) => "canonical-invalid" { "cause" => Cause(cause) },
+        Storage(cause) => "canonical-storage" { "cause" => Cause(cause) },
+        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
+        ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
+        Read(cause) => "canonical-read" { "cause" => Cause(cause) },
+        Stopped => "canonical-stopped" {},
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(error) => error.fmt(f),
@@ -2112,32 +2174,39 @@ impl std::fmt::Display for CanonError {
     }
 }
 
-impl std::error::Error for CanonError {
+impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Invalid(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
-            Self::Read(_) | Self::Stopped => None,
+            Self::Read(error) => Some(error),
+            Self::Stopped => None,
         }
     }
 }
 
-purrdf_lex::variant_from!(CanonError {
+purrdf_lex::variant_from!(impl<E> CanonError<E> {
     Storage(purrdf_lex::allocation::StorageError),
-    Invalid(crate::RdfDiagnostic)
+    Invalid(crate::RdfDiagnostic),
+    BudgetExceeded(BudgetExceeded),
+    ReservedVocabulary(ReservedVocabulary)
 });
 
-impl From<BudgetExceeded> for CanonError {
-    fn from(err: BudgetExceeded) -> Self {
-        Self::BudgetExceeded(err)
-    }
-}
-
-impl From<ReservedVocabulary> for CanonError {
-    fn from(err: ReservedVocabulary) -> Self {
-        Self::ReservedVocabulary(err)
+impl CanonError {
+    /// Preserve an algorithm refusal while selecting the backing reader's type.
+    /// The algorithm itself has no read fault to convert or format.
+    #[must_use]
+    pub fn with_read_error<E>(self) -> CanonError<E> {
+        match self {
+            Self::Invalid(error) => CanonError::Invalid(error),
+            Self::Storage(error) => CanonError::Storage(error),
+            Self::BudgetExceeded(error) => CanonError::BudgetExceeded(error),
+            Self::ReservedVocabulary(error) => CanonError::ReservedVocabulary(error),
+            Self::Read(error) => match error {},
+            Self::Stopped => CanonError::Stopped,
+        }
     }
 }
 
@@ -5185,6 +5254,16 @@ mod tests {
 
     impl std::error::Error for FlatProbeFault {}
 
+    impl purrdf_hash::error::StructuredError for FlatProbeFault {
+        fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+            visitor.variant("flat-probe-fault");
+            visitor.value(
+                Some("message"),
+                purrdf_hash::error::ErrorValue::Message(self.0),
+            );
+        }
+    }
+
     /// A [`FallibleDatasetView`] wrapping a real [`RdfDataset`] (so a run reads
     /// genuine content, including the RDF 1.2 side tables) whose
     /// [`operation_status`](FallibleDatasetView::operation_status) is driven by two
@@ -5199,6 +5278,7 @@ mod tests {
         inner: Arc<RdfDataset>,
         pre_faulted: bool,
         faulted_by_read: std::cell::Cell<bool>,
+        unlatched_resolution: bool,
     }
 
     impl FlatProbeView {
@@ -5209,6 +5289,7 @@ mod tests {
                 inner,
                 pre_faulted: true,
                 faulted_by_read: std::cell::Cell::new(false),
+                unlatched_resolution: false,
             }
         }
 
@@ -5219,6 +5300,7 @@ mod tests {
                 inner,
                 pre_faulted: false,
                 faulted_by_read: std::cell::Cell::new(false),
+                unlatched_resolution: false,
             }
         }
 
@@ -5226,7 +5308,9 @@ mod tests {
         /// from a lookup accessor, so `faulted_by_read` records "some row stream was
         /// touched" rather than "the view was touched at all".
         fn mark_read(&self) {
-            self.faulted_by_read.set(true);
+            if !self.unlatched_resolution {
+                self.faulted_by_read.set(true);
+            }
         }
     }
 
@@ -5255,6 +5339,9 @@ mod tests {
         /// [`mark_read`](Self::mark_read), so a run that only resolves ids the drain
         /// closure already holds never manufactures a fault it didn't earn.
         fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            if self.unlatched_resolution {
+                return Err(FlatProbeFault("resolution failed without a sticky cause"));
+            }
             self.checked_read(|_| self.inner.as_ref().resolve(id))
         }
 
@@ -5328,6 +5415,18 @@ mod tests {
                 ViewOperationStatus::Ready { evidence: 0 }
             }
         }
+    }
+
+    /// A broken provider must fail at the resolution that violates its contract.
+    #[test]
+    #[should_panic(expected = "DatasetView read_error must retain a failed resolution")]
+    fn canonicalization_rejects_a_reader_that_discards_its_resolution_failure() {
+        let mut view = FlatProbeView::faults_on_first_read(presentation_fixture());
+        view.unlatched_resolution = true;
+        assert!(
+            try_canonicalize_view(&view, CanonHash::Sha256).is_err(),
+            "a failed source must never publish a canonical result"
+        );
     }
 
     /// A view already `Failed` at the FIRST checkpoint is refused before the run
@@ -5408,10 +5507,17 @@ mod tests {
     #[test]
     fn controlled_canonicalization_stops_before_source_admission() {
         let empty = RdfDatasetBuilder::new().freeze().unwrap();
-        assert!(matches!(
-            try_canonicalize_view_with_stop(&*empty, CanonHash::Sha256, &CanonStopAfter::new(0)),
-            Err(CanonError::Stopped)
-        ));
+        let error =
+            try_canonicalize_view_with_stop(&*empty, CanonHash::Sha256, &CanonStopAfter::new(0))
+                .unwrap_err();
+        assert!(matches!(error, CanonError::Stopped));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "canonical-stopped");
+        assert_eq!(
+            error.to_string(),
+            "canonicalization was stopped by the caller"
+        );
+        assert!(std::error::Error::source(&error).is_none());
         let mut builder = RdfDatasetBuilder::new();
         let bad = builder.intern_iri("urn:purrdf:rdfc:forbidden").unwrap();
         let p = iri(&mut builder, "p");
@@ -5525,17 +5631,73 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn view_pack_failures_keep_original_read_causes_and_checkpoint_fields() {
+        use crate::ir::pack::PackBuilder;
+        use purrdf_testkit::error_capture::Capture;
+
+        let source = presentation_fixture();
+        for (view, checkpoint) in [
+            (
+                FlatProbeView::already_failed(source.clone()),
+                "pack-before-rows",
+            ),
+            (
+                FlatProbeView::faults_on_first_read(source.clone()),
+                "pack-after-rows",
+            ),
+        ] {
+            let error = PackBuilder::build_view_bytes(&view).unwrap_err();
+            drop(view);
+            let captured = Capture::read(&error);
+            assert_eq!(captured.code, "pack-view-not-ready");
+            assert_eq!(captured.child("checkpoint").code, checkpoint);
+            let cause = captured.child("cause");
+            assert_eq!(cause.code, "term-lookup-read");
+            let original = cause.child("cause");
+            assert_eq!(original.code, "flat-probe-fault");
+            assert!(matches!(
+                original.field("message"),
+                purrdf_hash::error::ErrorValue::Message("the flat probe view faulted")
+            ));
+            let native = std::error::Error::source(&error)
+                .and_then(std::error::Error::source)
+                .and_then(|cause| cause.downcast_ref::<FlatProbeFault>())
+                .unwrap();
+            assert_eq!(native.0, "the flat probe view faulted");
+        }
+        assert_eq!(
+            PackBuilder::build_view_bytes(&*source).unwrap(),
+            PackBuilder::build_bytes(&source).unwrap()
+        );
+    }
+
     /// The controlled entry point retains the backing view failure channel.
     #[test]
     fn controlled_canonicalization_preserves_read_failures() {
         let view = FlatProbeView::faults_on_first_read(presentation_fixture());
+        let error = try_canonicalize_view_with_stop(
+            &view,
+            CanonHash::Sha256,
+            &CanonStopAfter::new(usize::MAX),
+        )
+        .unwrap_err();
+        let CanonError::Read(cause) = &error else {
+            panic!("the source fault takes precedence over provisional algorithm output");
+        };
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "canonical-read");
+        let captured_cause = captured.child("cause");
+        assert_eq!(captured_cause.code, "flat-probe-fault");
         assert!(matches!(
-            try_canonicalize_view_with_stop(
-                &view,
-                CanonHash::Sha256,
-                &CanonStopAfter::new(usize::MAX)
-            ),
-            Err(CanonError::Read(_))
+            captured_cause.field("message"),
+            purrdf_hash::error::ErrorValue::Message("the flat probe view faulted")
         ));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<FlatProbeFault>(),
+            Some(cause)
+        );
     }
 }

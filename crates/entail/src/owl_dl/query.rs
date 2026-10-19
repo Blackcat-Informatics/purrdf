@@ -226,7 +226,7 @@ enum Task {
 pub fn materialize_dl_reported<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     materialize_dl_reported_until(ds, query_bgp, None)
 }
 
@@ -251,16 +251,22 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     ds: &D,
     query_bgp: &[QTriple],
     stop: Option<&Arc<dyn StopSignal>>,
-) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
     let mut kb = Kb::from_dataset_until(ds, stop.cloned())?;
-    if !kb.is_consistent()? {
+    if !kb.is_consistent().map_err(EntailError::with_read_error)? {
         return Err(EntailError::Unsatisfiable);
     }
     let v = Vocab::intern(&mut kb.interner);
 
     // A `subject → predicate → objects` index over the data (for named-class discovery)
     // and the ground scaffold of the query's class expressions.
-    let data_index = build_data_index(ds, &mut kb.interner);
+    let data_index = build_data_index_until(ds, &mut kb.interner, || {
+        if stop.is_some_and(|signal| signal.stopped()) {
+            Err(EntailError::Stopped)
+        } else {
+            Ok(())
+        }
+    })?;
     let named_classes = collect_named_classes(&kb.interner, &data_index, &v);
 
     // Intern every ground query term and index the all-ground query triples.
@@ -288,7 +294,8 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // can meet a boundary just as one written in the data can, so the extractor's
     // boundaries join the knowledge base's.
     let (raw_tasks, query_boundaries, definitions, mut query_syntax) =
-        extract_tasks(&kb.interner, &mut kb.data_ranges, &q_index, &v, &resolved)?;
+        extract_tasks(&kb.interner, &mut kb.data_ranges, &q_index, &v, &resolved)
+            .map_err(EntailError::with_read_error)?;
     // The same finite class equations used by RDF ontology extraction also
     // constrain query-written cycle cut points. They are internal concept
     // identities and do not declare or emit a library vocabulary.
@@ -328,8 +335,10 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
         .collect();
     let roles = intern_queried_roles(&mut kb, &v, &resolved);
     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
-    kb.finalize()?;
-    if (has_definitions || has_bottom_constraints) && !kb.is_consistent()? {
+    kb.finalize().map_err(EntailError::with_read_error)?;
+    if (has_definitions || has_bottom_constraints)
+        && !kb.is_consistent().map_err(EntailError::with_read_error)?
+    {
         return Err(EntailError::Unsatisfiable);
     }
 
@@ -346,18 +355,20 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // above because an inconsistent knowledge base entails everything and this calculus
     // reads the TBox only.
     let seeds: Vec<u32> = named_cid.values().copied().collect();
-    let taxonomy = saturate(&kb, &seeds)?;
+    let taxonomy = saturate(&kb, &seeds).map_err(EntailError::with_read_error)?;
     // A saturation the caller stopped is not a smaller taxonomy — it is no answer at all
     // here, because the injections below read it as the WHOLE subsumption relation.
     if taxonomy.was_stopped() {
         return Err(EntailError::Stopped);
     }
 
-    inject_classification(&mut b, &kb, &named_cid, &taxonomy)?;
-    inject_realization(&mut b, &kb, &named_cid)?;
-    inject_roles(&mut b, &kb, &roles, &data_index)?;
-    inject_same_as(&mut b, &kb, &data_index)?;
-    inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)?;
+    inject_classification(&mut b, &kb, &named_cid, &taxonomy)
+        .map_err(EntailError::with_read_error)?;
+    inject_realization(&mut b, &kb, &named_cid).map_err(EntailError::with_read_error)?;
+    inject_roles(&mut b, &kb, &roles, &data_index).map_err(EntailError::with_read_error)?;
+    inject_same_as(&mut b, &kb, &data_index).map_err(EntailError::with_read_error)?;
+    inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)
+        .map_err(EntailError::with_read_error)?;
 
     let dataset = b
         .freeze()
@@ -380,9 +391,12 @@ fn resolve_node(interner: &mut Interner, node: &QNode) -> Option<u32> {
 }
 
 /// Index the data's default-graph triples over the (already-populated) interner.
-pub(crate) fn build_data_index<D: DatasetView>(ds: &D, interner: &mut Interner) -> TripleIndex {
-    build_data_index_until(ds, interner, || Ok::<(), core::convert::Infallible>(()))
-        .unwrap_or_else(|never| match never {})
+pub(crate) fn build_data_index<D: DatasetView<ReadError = std::convert::Infallible>>(
+    ds: &D,
+    interner: &mut Interner,
+) -> TripleIndex {
+    build_data_index_until(ds, interner, || Ok::<(), EntailError>(()))
+        .expect("a resident view must resolve its own term identities")
 }
 
 /// The same data index, with a fallible boundary before each source row.
@@ -390,30 +404,27 @@ pub(crate) fn build_data_index_until<D: DatasetView, E>(
     ds: &D,
     interner: &mut Interner,
     mut poll: impl FnMut() -> Result<(), E>,
-) -> Result<TripleIndex, E> {
+) -> Result<TripleIndex, E>
+where
+    E: From<purrdf_core::TermLookupError<D::ReadError>>,
+{
     poll()?;
-    let mut index: TripleIndex = BTreeMap::new();
-    for q in ds.quads() {
-        poll()?;
-        if q.g.is_some() {
-            continue;
+    ds.checked_read(|ds| {
+        let mut index: TripleIndex = BTreeMap::new();
+        for q in ds.quads() {
+            poll()?;
+            if q.g.is_some() {
+                continue;
+            }
+            let s = interner.intern(ds.term_value(q.s).map_err(E::from)?);
+            let p = interner.intern(ds.term_value(q.p).map_err(E::from)?);
+            let o = interner.intern(ds.term_value(q.o).map_err(E::from)?);
+            index_insert(&mut index, s, p, o);
         }
-        let s = interner.intern(
-            ds.term_value(q.s)
-                .expect("an id the view minted resolves to a value"),
-        );
-        let p = interner.intern(
-            ds.term_value(q.p)
-                .expect("an id the view minted resolves to a value"),
-        );
-        let o = interner.intern(
-            ds.term_value(q.o)
-                .expect("an id the view minted resolves to a value"),
-        );
-        index_insert(&mut index, s, p, o);
-    }
-    poll()?;
-    Ok(index)
+        poll()?;
+        Ok(index)
+    })
+    .map_err(|cause| E::from(purrdf_core::TermLookupError::Read(cause)))?
 }
 
 /// The set of named (IRI) classes in the data — every IRI that appears in a
@@ -1026,6 +1037,7 @@ fn reconstruct(
         .get(&root)
         .copied()
         .map_or_else(|| intern_into(b, interner.value(root)), Ok)
+        .map_err(EntailError::from)
 }
 
 /// A union-find over individuals, seeded by `owl:sameAs` pairs, exposing each

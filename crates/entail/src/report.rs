@@ -1094,7 +1094,7 @@ impl DatasetSurvey {
     /// moment both are settled, rather than draining the rest of the dataset. The import
     /// question is the kernel's rule, which costs one term lookup and no pass at all for a
     /// dataset that never mentions `owl:imports`.
-    fn of<D: DatasetView>(ds: &D) -> Result<Self, crate::EntailError> {
+    fn of<D: DatasetView>(ds: &D) -> Result<Self, crate::EntailError<D::ReadError>> {
         ds.checked_read(|ds| {
             let mut survey = Self {
                 ontology_import: !purrdf_core::imports::try_imported_iris(ds, &[])
@@ -1253,7 +1253,7 @@ impl ReasoningReport {
         ds: &D,
         regime: Regime,
         stats: &RunStats,
-    ) -> Result<Self, crate::EntailError> {
+    ) -> Result<Self, crate::EntailError<D::ReadError>> {
         Self::of_chase_run(ds, regime, stats, None)
     }
 
@@ -1276,7 +1276,7 @@ impl ReasoningReport {
         regime: Regime,
         stats: &RunStats,
         witness: InconsistencyWitness,
-    ) -> Result<Self, crate::EntailError> {
+    ) -> Result<Self, crate::EntailError<D::ReadError>> {
         Self::of_chase_run(ds, regime, stats, Some(witness))
     }
 
@@ -1290,7 +1290,7 @@ impl ReasoningReport {
         regime: Regime,
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
-    ) -> Result<Self, crate::EntailError> {
+    ) -> Result<Self, crate::EntailError<D::ReadError>> {
         Ok(Self {
             contract_hash: calculus_contract_hash_with(regime, &stats.options),
             ..Self::new(
@@ -1703,7 +1703,7 @@ fn boundaries<D: DatasetView>(
     ds: &D,
     regime: Regime,
     stats: &RunStats,
-) -> Result<Vec<Boundary>, crate::EntailError> {
+) -> Result<Vec<Boundary>, crate::EntailError<D::ReadError>> {
     let survey = match regime {
         Regime::Rdf | Regime::Rdfs | Regime::OwlRl | Regime::D => DatasetSurvey::of(ds)?,
         // Not this chase's lanes: `Simple` copies faithfully, and the other two never

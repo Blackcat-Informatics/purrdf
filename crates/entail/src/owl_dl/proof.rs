@@ -1743,7 +1743,7 @@ impl ProofAnswer {
 /// independent checking neither validates nor disproves the claimed proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum DlProofError {
+pub enum DlProofError<E = std::convert::Infallible> {
     /// A completion still has an eligible blockable neighbour of a nominal at-most root.
     UnsaturatedIntroduction {
         /// Original at-most clause.
@@ -1865,6 +1865,8 @@ pub enum DlProofError {
         /// The reverse mapper's own account of the failure.
         detail: String,
     },
+    /// The ontology's backing source refused a read with its original cause.
+    SourceRead(E),
     /// The proof states a TRUST BASE this checker does not implement.
     ///
     /// The set is versioned and adding to it is breaking, so a disagreement means the two sides
@@ -2070,10 +2072,207 @@ pub enum DlProofError {
     /// value rather than the panic [`purrdf_core::canonicalize`] would raise for the same
     /// input: a checking context is built from the CALLER's own dataset (a document parsed
     /// at a wasm/Python/C-ABI boundary), so it can never be assumed benign.
-    Canonicalization(purrdf_core::CanonError),
+    Canonicalization(purrdf_core::CanonError<E>),
 }
 
-impl std::fmt::Display for DlProofError {
+impl DlProofError {
+    /// Select a backing reader's type without changing an owned proof refusal.
+    #[must_use]
+    pub fn with_read_error<E>(self) -> DlProofError<E> {
+        match self {
+            Self::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            } => DlProofError::UnsaturatedIntroduction {
+                clause,
+                node,
+                predecessor,
+            },
+            Self::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            } => DlProofError::CausalSupport {
+                run,
+                clash,
+                kind,
+                detail,
+            },
+            Self::Stopped => DlProofError::Stopped,
+            Self::SchemaRecording { obstruction } => DlProofError::SchemaRecording { obstruction },
+            Self::SchemaPreparation { obstruction } => {
+                DlProofError::SchemaPreparation { obstruction }
+            }
+            Self::Storage(cause) => DlProofError::Storage(cause),
+            Self::Malformed { detail } => DlProofError::Malformed { detail },
+            Self::InputMismatch { expected, stated } => {
+                DlProofError::InputMismatch { expected, stated }
+            }
+            Self::ContractMismatch { expected, stated } => {
+                DlProofError::ContractMismatch { expected, stated }
+            }
+            Self::UnknownClause { clause, clauses } => {
+                DlProofError::UnknownClause { clause, clauses }
+            }
+            Self::NotARefutation { clause, form } => DlProofError::NotARefutation { clause, form },
+            Self::FrameTooShort {
+                clause,
+                variable,
+                frame,
+            } => DlProofError::FrameTooShort {
+                clause,
+                variable,
+                frame,
+            },
+            Self::WitnessLengthMismatch {
+                clause,
+                derived,
+                stated,
+            } => DlProofError::WitnessLengthMismatch {
+                clause,
+                derived,
+                stated,
+            },
+            Self::WitnessMismatch {
+                clause,
+                position,
+                derived,
+                stated,
+            } => DlProofError::WitnessMismatch {
+                clause,
+                position,
+                derived,
+                stated,
+            },
+            Self::NodeMismatch {
+                clause,
+                derived,
+                stated,
+            } => DlProofError::NodeMismatch {
+                clause,
+                derived,
+                stated,
+            },
+            Self::Ontology { detail } => DlProofError::Ontology { detail },
+            Self::SourceRead(never) => match never {},
+            Self::TrustBaseMismatch { expected, stated } => {
+                DlProofError::TrustBaseMismatch { expected, stated }
+            }
+            Self::NotADisjunction { clause, form } => {
+                DlProofError::NotADisjunction { clause, form }
+            }
+            Self::AlternativeCountMismatch {
+                branch,
+                clause,
+                derived,
+                stated,
+            } => DlProofError::AlternativeCountMismatch {
+                branch,
+                clause,
+                derived,
+                stated,
+            },
+            Self::AlternativeMismatch {
+                branch,
+                position,
+                derived,
+                stated,
+            } => DlProofError::AlternativeMismatch {
+                branch,
+                position,
+                derived,
+                stated,
+            },
+            Self::IllFormedIntroduction {
+                branch,
+                position,
+                detail,
+            } => DlProofError::IllFormedIntroduction {
+                branch,
+                position,
+                detail,
+            },
+            Self::OutcomeCountMismatch {
+                branch,
+                derived,
+                stated,
+            } => DlProofError::OutcomeCountMismatch {
+                branch,
+                derived,
+                stated,
+            },
+            Self::DanglingOutcome {
+                branch,
+                ordinal,
+                detail,
+            } => DlProofError::DanglingOutcome {
+                branch,
+                ordinal,
+                detail,
+            },
+            Self::BranchNotClosed { branch, ordinal } => {
+                DlProofError::BranchNotClosed { branch, ordinal }
+            }
+            Self::WrongAnswer { expected, stated } => {
+                DlProofError::WrongAnswer { expected, stated }
+            }
+            Self::Truncated => DlProofError::Truncated,
+            Self::NoCompletion => DlProofError::NoCompletion,
+            Self::MalformedCompletion { detail } => DlProofError::MalformedCompletion { detail },
+            Self::ClashInCompletion { clause, node } => {
+                DlProofError::ClashInCompletion { clause, node }
+            }
+            Self::ClauseNotSatisfied { clause, node } => {
+                DlProofError::ClauseNotSatisfied { clause, node }
+            }
+            Self::WrongQuestion { expected, stated } => {
+                DlProofError::WrongQuestion { expected, stated }
+            }
+            Self::AnswerNotCovered { detail } => DlProofError::AnswerNotCovered { detail },
+            Self::ReceiptMismatch { detail } => DlProofError::ReceiptMismatch { detail },
+            Self::UnlicensedMerge { merge, detail } => {
+                DlProofError::UnlicensedMerge { merge, detail }
+            }
+            Self::NotAnIdentification { merge, derived } => {
+                DlProofError::NotAnIdentification { merge, derived }
+            }
+            Self::MergeCauseMismatch {
+                merge,
+                derived,
+                stated,
+            } => DlProofError::MergeCauseMismatch {
+                merge,
+                derived,
+                stated,
+            },
+            Self::MergeNodeMismatch {
+                merge,
+                derived,
+                stated,
+            } => DlProofError::MergeNodeMismatch {
+                merge,
+                derived,
+                stated,
+            },
+            Self::BlockingSignatureMismatch {
+                blocked,
+                blocker,
+                detail,
+            } => DlProofError::BlockingSignatureMismatch {
+                blocked,
+                blocker,
+                detail,
+            },
+            Self::Canonicalization(cause) => {
+                DlProofError::Canonicalization(cause.with_read_error())
+            }
+        }
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for DlProofError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsaturatedIntroduction {
@@ -2159,6 +2358,10 @@ impl std::fmt::Display for DlProofError {
                  the clash node"
             ),
             Self::Ontology { detail } => write!(f, "the ontology could not be read: {detail}"),
+            Self::SourceRead(cause) => write!(
+                f,
+                "the ontology could not be read: entailment source read error: {cause}"
+            ),
             Self::TrustBaseMismatch { expected, stated } => write!(
                 f,
                 "the proof states the trust base [{stated}] but this checker classifies against \
@@ -2304,12 +2507,13 @@ impl std::fmt::Display for DlProofError {
     }
 }
 
-impl std::error::Error for DlProofError {
+impl<E: std::error::Error + 'static> std::error::Error for DlProofError<E> {
     /// [`Self::Canonicalization`] wraps a real cause ([`purrdf_core::CanonError`]); every
     /// other variant is a rejection this checker computed itself and has none to name.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Canonicalization(error) => Some(error),
+            Self::SourceRead(error) => Some(error),
             Self::Storage(error) => Some(error),
             _ => None,
         }
@@ -2835,13 +3039,14 @@ impl std::fmt::Debug for DlProofContext<'_> {
     }
 }
 
-fn proof_source_error(error: EntailError) -> DlProofError {
+fn proof_source_error<E: std::fmt::Display>(error: EntailError<E>) -> DlProofError<E> {
     match error {
         EntailError::Storage(error)
         | EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
             DlProofError::Storage(error)
         }
         EntailError::Stopped => DlProofError::Stopped,
+        EntailError::SourceRead(cause) => DlProofError::SourceRead(cause),
         error => DlProofError::Ontology {
             detail: error.to_string(),
         },
@@ -2853,15 +3058,17 @@ impl DlProofContext<'static> {
     ///
     /// # Errors
     ///
-    /// [`DlProofError::Ontology`] if the source is not a well-formed OWL graph or
-    /// a source read fails during preparation;
+    /// [`DlProofError::Ontology`] if the source is not a well-formed OWL graph;
+    /// [`DlProofError::SourceRead`] retains a source failure during preparation;
     /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
     /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same input.
-    pub fn of_ontology<D: purrdf_core::DatasetView>(ontology: &D) -> Result<Self, DlProofError> {
+    pub fn of_ontology<D: purrdf_core::DatasetView>(
+        ontology: &D,
+    ) -> Result<Self, DlProofError<D::ReadError>> {
         let input = try_input_digest(ontology, None).map_err(DlProofError::Canonicalization)?;
         let mut kb = Kb::from_dataset_recording(
             ontology,
@@ -2870,7 +3077,8 @@ impl DlProofContext<'static> {
             Some(input),
         )
         .map_err(proof_source_error)?;
-        kb.finalize().map_err(proof_source_error)?;
+        kb.finalize()
+            .map_err(|error| proof_source_error(error).with_read_error())?;
         Ok(Self::of_prepared_kb(kb, input))
     }
 
@@ -4603,7 +4811,7 @@ impl DlProof {
 /// [`purrdf_core::canonicalize`] would raise for the same input.
 pub fn prove_consistency<D: purrdf_core::DatasetView>(
     ontology: &D,
-) -> Result<(ProofAnswer, DlProof), EntailError> {
+) -> Result<(ProofAnswer, DlProof), EntailError<D::ReadError>> {
     let input = try_input_digest(ontology, None).map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset_recording(
         ontology,
@@ -4611,7 +4819,7 @@ pub fn prove_consistency<D: purrdf_core::DatasetView>(
         super::bounds::SchemaPreparationBudget::default(),
         Some(input),
     )?;
-    kb.finalize()?;
+    kb.finalize().map_err(EntailError::with_read_error)?;
     let contract = contract_of(&kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
@@ -5782,7 +5990,7 @@ fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
 fn try_input_digest<D: purrdf_core::DatasetView>(
     ontology: &D,
     stop: Option<&dyn purrdf_core::StopSignal>,
-) -> Result<[u8; 32], purrdf_core::CanonError> {
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
     let canonical = match stop {
         Some(stop) => purrdf_core::try_canonicalize_view_with_stop(
             ontology,
@@ -5837,7 +6045,7 @@ pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
 /// [`purrdf_core::CanonError::Read`] if the view refuses a source read.
 pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
     ontology: &D,
-) -> Result<[u8; 32], purrdf_core::CanonError> {
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
     try_input_digest(ontology, None)
 }
 
@@ -5850,7 +6058,7 @@ pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
 pub fn try_ontology_identity_with_stop<D: purrdf_core::DatasetView>(
     ontology: &D,
     stop: &dyn purrdf_core::StopSignal,
-) -> Result<[u8; 32], purrdf_core::CanonError> {
+) -> Result<[u8; 32], purrdf_core::CanonError<D::ReadError>> {
     try_input_digest(ontology, Some(stop))
 }
 
