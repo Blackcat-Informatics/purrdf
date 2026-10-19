@@ -115,7 +115,9 @@ a literal present in both layers. Reversing the delta must recover the indexed
 source fingerprint; missing additions and incomplete deltas are typed refusals.
 The next source also refreshes predicate coverage for nonliteral changes.
 
-Only changed `(graph, subject, language)` documents are analyzed. Their complete
+Only changed documents are analyzed, using their complete key:
+`(graph, subject, language)` for `GraphLanguage`, or `(subject, language)` for
+`GraphFree`. Their complete
 next literal rows are analyzed together, so a retained literal in a changed
 document is analyzed again. Other documents retain their token and source
 projection buffers; their gram positions and pronunciation codes are reused.
@@ -138,12 +140,14 @@ corpus and IDFs; hosts choose their own key representation. See
 [the ranking contract](RANKING.md) for the bound proof, operation order,
 independent arithmetic reference and vocabulary-search ownership decision.
 
-Corpus statistics are computed per `(graph, language)` partition, so a score is a
+Corpus statistics are computed per `(graph, language)` partition for
+`GraphLanguage`, or per language for `GraphFree`, so a score is a
 number relative to one corpus. `?rank` is therefore the 1-based position of a
 document **within its own partition**, never a global position; a rank spanning
 partitions would order numbers computed against different corpora. Rows are
 emitted in `(partition key ASC, rank ASC)` order, and a query wanting one ranked
-list binds `?lang` and `?graph` or uses a single-partition index.
+list binds `?lang` and restricts the graph for `GraphLanguage`, or binds only
+`?lang` for `GraphFree`. A single-partition index also gives one ranked list.
 
 The Rust field is named `Scored::partition_rank` for that reason: nothing about
 the *value* records which corpus produced it, so an answer over a three-language
@@ -151,14 +155,17 @@ index carries three rows of rank 1 and `LIMIT 10` over it is the first ten of th
 partition-major output rather than the ten best documents.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
-assigned only after sorting on `(graph, subject, language)`, so ascending id is
+assigned only after sorting on the complete document key:
+`(graph, subject, language)` for `GraphLanguage`, or `(subject, language)` for
+`GraphFree`. Ascending id is
 ascending canonical order and the tie-break is reproducible across independently
 built indexes. Because ids are distinct, the order is strict and total.
 
 A score reaches a consumer as an `xsd:decimal` of fixed width, so two rows can
 report the same `?score` while carrying different `?rank` — whether their scores
-are exactly equal or merely equal once rounded. `ORDER BY ?rank` is the
-reproducing idiom; `ORDER BY DESC(?score)` can disagree with it.
+are exactly equal or merely equal once rounded. Within one partition,
+`ORDER BY ?rank` reproduces the index order; `ORDER BY DESC(?score)` can
+disagree with it.
 
 ## Part of PurRDF
 
