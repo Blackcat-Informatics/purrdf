@@ -67,37 +67,6 @@ impl Error for UriRefusal {
     }
 }
 
-#[cfg(test)]
-mod uri_tests {
-    use purrdf_hash::error::ErrorValue;
-    use purrdf_testkit::error_capture::Capture;
-
-    #[test]
-    fn schema_resolution_retains_original_uri_and_base_after_input_death() {
-        let base = String::from("https://example.org/schema");
-        let reference = String::from("https://[invalid");
-        let error = crate::registry::resolve(&base, &reference).unwrap_err();
-        let expected = purrdf_iri::parse(&reference).unwrap_err();
-        drop(base);
-        drop(reference);
-        let retained = error.clone();
-        drop(error);
-        let fields = Capture::read(&retained);
-        assert!(matches!(
-            fields.field("uri"),
-            ErrorValue::Iri("https://[invalid")
-        ));
-        let reason = fields.child("reason");
-        assert_eq!(reason.code, "schema-uri-resolve");
-        assert!(matches!(
-            reason.field("base"),
-            ErrorValue::Iri("https://example.org/schema")
-        ));
-        assert_eq!(reason.child("cause").code, Capture::read(&expected).code);
-        assert!(std::error::Error::source(&retained).is_some());
-    }
-}
-
 /// Why an evaluation stopped without reaching a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluationCause {
@@ -500,5 +469,36 @@ impl purrdf_hash::error::StructuredError for SchemaError {
                 visitor.value(Some("reason"), ErrorValue::Cause(reason));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn schema_resolution_retains_original_uri_and_base_after_input_death() {
+        let base = String::from("https://example.org/schema");
+        let reference = String::from("https://[invalid");
+        let error = crate::registry::resolve(&base, &reference).unwrap_err();
+        let expected = purrdf_iri::parse(&reference).unwrap_err();
+        drop(base);
+        drop(reference);
+        let retained = error.clone();
+        drop(error);
+        let fields = Capture::read(&retained);
+        assert!(matches!(
+            fields.field("uri"),
+            ErrorValue::Iri("https://[invalid")
+        ));
+        let reason = fields.child("reason");
+        assert_eq!(reason.code, "schema-uri-resolve");
+        assert!(matches!(
+            reason.field("base"),
+            ErrorValue::Iri("https://example.org/schema")
+        ));
+        assert_eq!(reason.child("cause").code, Capture::read(&expected).code);
+        assert!(std::error::Error::source(&retained).is_some());
     }
 }
