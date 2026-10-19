@@ -247,7 +247,10 @@ impl JobError {
         match &self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
-            ErrorText::ReasoningQuery => ReasoningError::Query(self.diagnostic.clone()).to_string(),
+            ErrorText::ReasoningQuery => {
+                let error: ReasoningError = ReasoningError::Query(self.diagnostic.clone());
+                error.to_string()
+            }
         }
     }
 
@@ -1009,10 +1012,8 @@ mod tests {
                 reasoning.presentation_json().as_deref(),
                 Some(expected.as_str())
             );
-            assert_eq!(
-                reasoning.rendered(),
-                ReasoningError::Query(original).to_string()
-            );
+            let expected: ReasoningError = ReasoningError::Query(original);
+            assert_eq!(reasoning.rendered(), expected.to_string());
         }
         assert!(
             JobError::diagnostic(RdfDiagnostic::error("native-sparql-eval", "x"))

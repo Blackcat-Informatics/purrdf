@@ -660,9 +660,8 @@ fn entailed_query<D: DatasetView>(
         }
         Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
             report::surface(report_target, run.report())?;
-            Err(CliError::Runtime(
-                EntailError::Inconsistent(run).to_string(),
-            ))
+            let error: EntailError = EntailError::Inconsistent(run);
+            Err(CliError::Runtime(error.to_string()))
         }
         Err(purrdf::ReasoningError::Entailment(other)) => Err(report::entailment_refusal(
             regime,

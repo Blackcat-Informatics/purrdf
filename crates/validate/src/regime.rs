@@ -885,7 +885,7 @@ pub fn render_reasoning_report(report: &ReasoningReport) -> String {
 /// carry, so it renders as its own diagnostic and nothing is implied about a closure that
 /// was never assembled.
 #[must_use]
-pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
+pub fn render_entail_error<E: std::fmt::Display>(regime: &str, error: &EntailError<E>) -> String {
     render_entail_error_for(regime, error, RegimeHost::Rust)
 }
 
@@ -894,16 +894,20 @@ pub fn render_entail_error(regime: &str, error: &EntailError) -> String {
 /// `evaluation exceeded the stored-fact limit: N facts observed, M permitted (…); raise it
 /// with <knob>`.
 #[must_use]
-pub fn render_entail_error_for(regime: &str, error: &EntailError, host: RegimeHost) -> String {
+pub fn render_entail_error_for<E: std::fmt::Display>(
+    regime: &str,
+    error: &EntailError<E>,
+    host: RegimeHost,
+) -> String {
     render_entail_error_in(regime, error, host, RegimeService::Materialize)
 }
 
 /// [`render_entail_error_for`] for the entailment `service` the error came out of, naming the
 /// knob of the entry point the caller called ([`RegimeHost::service_knobs`]).
 #[must_use]
-pub fn render_entail_error_in(
+pub fn render_entail_error_in<E: std::fmt::Display>(
     regime: &str,
-    error: &EntailError,
+    error: &EntailError<E>,
     host: RegimeHost,
     service: RegimeService,
 ) -> String {

@@ -149,14 +149,14 @@ impl QueryEntailmentPlan {
 /// Failure from entailment-aware query preparation or evaluation.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum ReasoningError {
+pub enum ReasoningError<E = std::convert::Infallible> {
     /// SPARQL parsing or evaluation failed.
     Query(RdfDiagnostic),
     /// Entailment or rule materialization failed.
-    Entailment(EntailError),
+    Entailment(EntailError<E>),
 }
 
-impl std::fmt::Display for ReasoningError {
+impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Query(error) => write!(f, "SPARQL query failed: {error}"),
@@ -165,7 +165,7 @@ impl std::fmt::Display for ReasoningError {
     }
 }
 
-impl std::error::Error for ReasoningError {
+impl<E: std::error::Error + 'static> std::error::Error for ReasoningError<E> {
     /// The wrapped cause — always present, because every variant is one.
     ///
     /// This type exists ONLY to say which of two subsystems failed; it adds no failure
@@ -180,9 +180,19 @@ impl std::error::Error for ReasoningError {
     }
 }
 
-purrdf_lex::variant_from!(ReasoningError {
+impl ReasoningError {
+    /// Preserve a source-independent failure at a caller-owned view boundary.
+    fn with_read_error<E>(self) -> ReasoningError<E> {
+        match self {
+            Self::Query(cause) => ReasoningError::Query(cause),
+            Self::Entailment(cause) => ReasoningError::Entailment(cause.with_read_error()),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(impl<E> ReasoningError<E> {
     Query(RdfDiagnostic),
-    Entailment(EntailError),
+    Entailment(EntailError<E>),
 });
 
 /// How a caller's **dataset-derived** property-function relations are re-derived over the
@@ -302,11 +312,11 @@ impl<'a> ClosureRelations<'a> {
 /// the whole-vocabulary augmentation instead; a Horn one whose chase fired no existential
 /// rule mints none either. Both keep answering, with their relations derived over the
 /// closure like every other regime's.
-fn relations_over_closure(
+fn relations_over_closure<E>(
     relations: &ClosureRelations<'_>,
     closure: &RdfDataset,
     surrogates: &BTreeSet<String>,
-) -> Result<Option<PropertyFunctionRegistry<'static>>, ReasoningError> {
+) -> Result<Option<PropertyFunctionRegistry<'static>>, ReasoningError<E>> {
     let Some(build) = relations.rebuild else {
         return Ok(None);
     };
@@ -395,7 +405,7 @@ pub fn query_with_entailment<D: DatasetView>(
     entailment: QueryEntailment<'_>,
     options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
-) -> Result<(SparqlResult, ReasoningReport), ReasoningError> {
+) -> Result<(SparqlResult, ReasoningReport), ReasoningError<D::ReadError>> {
     // Parse first so invalid queries fail before potentially expensive closure work.
     // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
     // Registry-aware: `options` decides which predicates in the QUERY become call nodes
@@ -576,39 +586,45 @@ fn close_premise<D: DatasetView>(
     closure: &EntailmentClosure<'_>,
     pattern: &[QTriple],
     stop: Option<&Arc<dyn purrdf_datalog::StopSignal>>,
-) -> Result<Closed, ReasoningError> {
-    let imports = closure.imports;
-    let loaded: Vec<&str> = imports.loaded().collect();
-    if imports.is_empty()
-        && purrdf_entail::entails::imports::try_imported_iris(dataset, &loaded)
-            .map_err(|error| EntailError::SourceRead(error.to_string()))?
-            .is_empty()
-    {
-        return close_lane(dataset, closure.entailment, pattern, &closure.limits, stop);
-    }
-    let premise = dataset_from_view(dataset)?;
-    let merged = purrdf_entail::resolve_imports(&premise, imports)?;
-    let resolved = merged.is_some() || !imports.imported_iris(&premise).is_empty();
-    let run = close_lane(
-        merged.as_deref().unwrap_or(&premise),
-        closure.entailment,
-        pattern,
-        &closure.limits,
-        stop,
-    );
-    if !resolved {
-        return run;
-    }
-    match run {
-        Ok(closed) => Ok(Closed {
-            report: closed.report.with_resolved_imports(),
-            ..closed
-        }),
-        Err(ReasoningError::Entailment(error)) => {
-            Err(ReasoningError::Entailment(error.with_resolved_imports()))
-        }
-        Err(other) => Err(other),
-    }
+) -> Result<Closed, ReasoningError<D::ReadError>> {
+    dataset
+        .checked_read(|dataset| {
+            let imports = closure.imports;
+            let loaded: Vec<&str> = imports.loaded().collect();
+            if imports.is_empty()
+                && purrdf_entail::entails::imports::try_imported_iris(dataset, &loaded)
+                    .map_err(EntailError::SourceRead)?
+                    .is_empty()
+            {
+                return close_lane(dataset, closure.entailment, pattern, &closure.limits, stop);
+            }
+            let premise = dataset_from_view(dataset)?;
+            let merged = purrdf_entail::resolve_imports(&premise, imports)
+                .map_err(EntailError::with_read_error)?;
+            let resolved = merged.is_some() || !imports.imported_iris(&premise).is_empty();
+            let run = close_lane(
+                merged.as_deref().unwrap_or(&premise),
+                closure.entailment,
+                pattern,
+                &closure.limits,
+                stop,
+            )
+            .map_err(ReasoningError::with_read_error);
+            if !resolved {
+                return run;
+            }
+            match run {
+                Ok(closed) => Ok(Closed {
+                    report: closed.report.with_resolved_imports(),
+                    ..closed
+                }),
+                Err(ReasoningError::Entailment(error)) => {
+                    Err(ReasoningError::Entailment(error.with_resolved_imports()))
+                }
+                Err(other) => Err(other),
+            }
+        })
+        .map_err(|cause| ReasoningError::Entailment(EntailError::SourceRead(cause)))?
 }
 
 /// Close `dataset` under one regime — seven modes, one call each.
@@ -627,7 +643,7 @@ fn close_lane<D: DatasetView>(
     pattern: &[QTriple],
     limits: &EvalOptions,
     stop: Option<&Arc<dyn purrdf_datalog::StopSignal>>,
-) -> Result<Closed, ReasoningError> {
+) -> Result<Closed, ReasoningError<D::ReadError>> {
     let plain = |(dataset, report): (Arc<RdfDataset>, ReasoningReport)| Closed {
         dataset,
         report,
@@ -926,7 +942,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
-) -> Result<GovernedEntailment, ReasoningError> {
+) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
     let imports = ImportMap::default();
     query_with_entailment_closure_governed(
         engine,
@@ -968,7 +984,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     options: QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
-) -> Result<GovernedEntailment, ReasoningError> {
+) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
     let entailment = closure.entailment;
     // Parse first, exactly as the ungoverned lane does: an invalid query is a failure rather
     // than a budget, and it must be one before any closure work is charged for. Registry-aware
@@ -2009,7 +2025,7 @@ mod tests {
     fn the_error_chain_reaches_the_wrapped_failure() {
         use std::error::Error as _;
 
-        let inner = EntailError::UnsupportedRegime(Regime::Rif);
+        let inner: EntailError = EntailError::UnsupportedRegime(Regime::Rif);
         let rendered = inner.to_string();
         let wrapped = ReasoningError::Entailment(inner);
 
@@ -2151,6 +2167,127 @@ mod tests {
         builder.push_quad(cat, subclass, animal, None).unwrap();
         builder.push_quad(mittens, rdf_type, cat, None).unwrap();
         builder.freeze().unwrap()
+    }
+
+    struct ReadFailureSource {
+        dataset: Arc<RdfDataset>,
+        cause: Arc<std::io::Error>,
+        passes: std::cell::Cell<usize>,
+        fail_on_pass: usize,
+        failed: std::cell::Cell<bool>,
+    }
+
+    impl ReadFailureSource {
+        fn new(fail_on_pass: usize) -> Self {
+            Self {
+                dataset: hierarchy(),
+                cause: Arc::new(std::io::Error::other("original facade source fault")),
+                passes: std::cell::Cell::new(0),
+                fail_on_pass,
+                failed: std::cell::Cell::new(false),
+            }
+        }
+    }
+
+    impl DatasetView for ReadFailureSource {
+        type Id = purrdf_core::TermId;
+        type ReadError = Arc<std::io::Error>;
+        type TermGuard<'a> = purrdf_core::TermRef<'a>;
+        type ProbePlan = ();
+
+        fn read_error(&self) -> Option<Self::ReadError> {
+            self.failed.get().then(|| Arc::clone(&self.cause))
+        }
+
+        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.passes.set(self.passes.get() + 1);
+            let fail = self.passes.get() >= self.fail_on_pass;
+            let mut rows = self.dataset.quads();
+            std::iter::from_fn(move || {
+                let row = rows.next();
+                if row.is_none() && fail {
+                    self.failed.set(true);
+                }
+                row
+            })
+        }
+
+        fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            Ok(self.dataset.as_ref().resolve(id))
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            Ok(self.dataset.as_ref().term_id_by_value(value))
+        }
+
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            self.dataset.capabilities()
+        }
+
+        fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            (): &Self::ProbePlan,
+            s: Option<Self::Id>,
+            p: Option<Self::Id>,
+            o: Option<Self::Id>,
+            g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> u64 {
+            DatasetView::term_count(self.dataset.as_ref())
+        }
+    }
+
+    #[test]
+    fn generic_query_facade_retains_the_original_completed_read_failure() {
+        let run = |source: &ReadFailureSource, mode| {
+            query_with_entailment(
+                &NativeSparqlEngine::new(),
+                source,
+                SparqlRequest {
+                    query: "ASK { ?s ?p ?o }",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                mode,
+                QueryOptions::EMPTY,
+                &ClosureRelations::NONE,
+            )
+        };
+        for mode in [
+            QueryEntailment::Simple,
+            QueryEntailment::Rdfs,
+            QueryEntailment::OwlDirect,
+        ] {
+            let complete = ReadFailureSource::new(usize::MAX);
+            assert!(matches!(
+                run(&complete, mode).unwrap().0,
+                SparqlResult::Boolean(true)
+            ));
+            let passes = complete.passes.get();
+            assert!(passes > 0);
+            for fail_on_pass in 1..=passes {
+                let source = ReadFailureSource::new(fail_on_pass);
+                let cause = Arc::clone(&source.cause);
+                let error = run(&source, mode).expect_err("a failed source publishes no answer");
+                drop(source);
+                let ReasoningError::Entailment(EntailError::SourceRead(native)) = &error else {
+                    panic!("the original operational cause must survive: {error:?}");
+                };
+                assert!(Arc::ptr_eq(native, &cause));
+                let entailment = std::error::Error::source(&error).unwrap();
+                let native = entailment
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<Arc<std::io::Error>>()
+                    .unwrap();
+                assert!(Arc::ptr_eq(native, &cause));
+            }
+        }
     }
 
     #[test]
