@@ -145,14 +145,17 @@ ranks and score lexicals on every target.
 
 ## Ordering, and the idioms that reproduce it
 
-Corpus statistics are computed per `(graph, language)` partition, so a score is
+For the default `GraphLanguage` profile, corpus statistics are computed per
+`(graph, language)` partition, so a score is
 a number relative to one corpus and `?rank` is a position within that
 partition, never a global one. Rows are emitted in `(partition key ASC, rank
 ASC)` order; within a partition the order is `(score DESC, document id ASC)`,
 and document ids are assigned after sorting on `(graph, subject, language)`, so
-the tie-break is reproducible across independently built indexes. A query that
-wants one ranked list binds `?lang` (and `?graph` through the selector) or
-builds a single-partition index.
+the tie-break is reproducible across independently built indexes. `GraphFree`
+instead uses `(subject, language)` document order and language-only partitions.
+To obtain one ranked list with `GraphLanguage`, bind `?lang` and restrict `?graph`
+through the selector; with `GraphFree`, bind only `?lang`. A single-partition
+index also gives one ranked list.
 
 Two consequences worth knowing:
 

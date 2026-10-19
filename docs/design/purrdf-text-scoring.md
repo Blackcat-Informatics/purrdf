@@ -99,8 +99,9 @@ rank spanning partitions would sort together numbers computed against different
 corpora — an arrangement rather than a ranking. `?rank` is therefore the 1-based
 position of a document **within its own partition**, and every comparison the
 ranker makes stays inside one partition. A query that wants a single ranked list
-binds `?lang` (and the graph where relevant), or runs against a single-partition
-index, which is the common case for a corpus in one language.
+binds `?lang` and restricts the graph for `GraphLanguage`, or binds only `?lang`
+for `GraphFree`. A single-partition index also gives one ranked list, which is
+the common case for a corpus in one language.
 
 Restricting to partitions *before* ranking is sound precisely because ranks are
 per-partition: dropping whole partitions cannot change the rank of any surviving
@@ -124,7 +125,9 @@ nothing downstream — not the row, not the `xsd:integer` cell, not a comparison
 between them — records that they were computed against different corpora. A
 SPARQL answer over a three-language index therefore contains **three** rows of
 rank 1, and `LIMIT 10` over it is the first ten of the partition-major output rather than
-the ten best documents. Restricting both graph and language, or using a single-partition index, makes it one list.
+the ten best documents. `GraphLanguage` requires graph and language restrictions;
+`GraphFree` requires only a language restriction. Those restrictions, or a
+single-partition index, make it one list.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
 assigned only after every document has been sorted by `(graph, subject,
