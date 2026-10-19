@@ -9,12 +9,12 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 302 named cases in 51 integration targets,
-with 312 executions across 56 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 310 named cases in 52 integration targets,
+with 320 executions across 57 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
-carrier, governed-request EXPLAIN, core `structured_inspection` and GTS
+carrier, governed-request EXPLAIN, core `structured_inspection` and `pack_certify`, and GTS
 `structured_errors` and `event_bridge` targets, and the JSON, Markdown, MIME and
 slice `structured_errors` targets, the SPARQL `lexer_owned_admission` target,
 the retrieval `structured_foundations` target, the evaluator and SPARQL results
