@@ -79,7 +79,10 @@ impl From<purrdf_core::CanonError> for GradeError {
         match error {
             purrdf_core::CanonError::Storage(error) => Self::Storage(error),
             purrdf_core::CanonError::Invalid(error) => error.storage_error().map_or_else(
-                || Self::Canonicalization(purrdf_core::CanonError::Invalid(error).to_string()),
+                || {
+                    let cause: purrdf_core::CanonError = purrdf_core::CanonError::Invalid(error);
+                    Self::Canonicalization(cause.to_string())
+                },
                 Self::Storage,
             ),
             other => Self::Canonicalization(other.to_string()),
