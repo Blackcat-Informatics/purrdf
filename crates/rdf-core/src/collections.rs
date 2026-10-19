@@ -116,6 +116,17 @@ pub enum ListErrorKind {
     NonEmptyNil,
 }
 
+impl purrdf_hash::error::StructuredError for ListErrorKind {
+    purrdf_hash::error_visit! {
+        Cycle => "rdf-list-cycle" {},
+        MissingFirst => "rdf-list-missing-first" {},
+        MultipleFirst => "rdf-list-multiple-first" {},
+        MissingRest => "rdf-list-missing-rest" {},
+        MultipleRest => "rdf-list-multiple-rest" {},
+        NonEmptyNil => "rdf-list-nonempty-nil" {},
+    }
+}
+
 impl ListErrorKind {
     const fn describe(self) -> &'static str {
         match self {

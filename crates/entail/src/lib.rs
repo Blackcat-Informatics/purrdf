@@ -343,6 +343,14 @@ impl Materialization<'_> {
 pub use owl_dl::roles::RoleHierarchyError;
 
 /// Why a closure could not be produced.
+///
+/// [`purrdf_hash::error::StructuredError`] exposes the original variant, fields
+/// and nested causes without formatting or cloning them. Generic source-read
+/// failures remain the caller's type and are inspectable when that type provides
+/// the same trait. Inconsistent runs retain both their original witness and
+/// complete reasoning report, including the native budget and calculus identity.
+/// Existing string payloads remain explicit messages; inspection does not parse
+/// those messages into reconstructed causes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntailError<E = std::convert::Infallible> {
@@ -546,6 +554,37 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
     /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
     Canonicalization(purrdf_core::CanonError<E>),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for EntailError<E>
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "entailment-storage" { "cause" => Cause(cause) },
+        Build(message) => "entailment-build" { "message" => Message(message) },
+        Parse(message) => "entailment-parse" { "message" => Message(message) },
+        RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
+        ProofsNotRecorded => "entailment-proofs-not-recorded" {},
+        Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
+        Chase(cause) => "entailment-chase" { "cause" => Cause(cause) },
+        MalformedList(message) => "entailment-malformed-list" { "message" => Message(message) },
+        ForeignTerm(cause) => "entailment-foreign-term" { "cause" => Cause(cause) },
+        SourceRead(cause) => "entailment-source-read" { "cause" => Cause(cause) },
+        Inconsistent(run) => "entailment-inconsistent" { "run" => Record(run.as_ref()) },
+        Unsatisfiable => "entailment-unsatisfiable" {},
+        UnsupportedRegime(regime) => "entailment-unsupported-regime" { "regime" => Code(regime.name()) },
+        UnresolvedImport(iri) => "entailment-unresolved-import" { "iri" => Text(iri) },
+        UnreachedImport { iris, unanchored } => "entailment-unreached-import" {
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Text(iri))),
+            "unanchored" => List(unanchored.iter().map(|iri| purrdf_hash::error::ErrorValue::Text(iri))),
+        },
+        IncompatibleImports(conflicts) => "entailment-incompatible-imports" {
+            "conflicts" => List(conflicts.iter().map(|conflict| purrdf_hash::error::ErrorValue::Record(conflict))),
+        },
+        MatchBudget => "entailment-match-budget" {},
+        Stopped => "entailment-stopped" {},
+        Canonicalization(cause) => "entailment-canonicalization" { "cause" => Cause(cause) },
+    }
 }
 
 impl<E> EntailError<E> {

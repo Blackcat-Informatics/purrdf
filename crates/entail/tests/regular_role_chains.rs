@@ -11,6 +11,211 @@ use purrdf_entail::reasoner::{DlAxiom, DlCompleteness, Question, Reasoner, Verdi
 use purrdf_entail::{EntailError, RoleHierarchyError};
 use purrdf_iri::vocab::{owl, rdf, rdfs};
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+fn role_refusals_keep_native_fields_after_the_source_drops() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::collections::ListErrorKind;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let mut ontology = Ontology::default();
+    let property = ontology.named("original-property");
+    let cell = ontology.blank();
+    ontology.relation(property, owl::PROPERTY_CHAIN_AXIOM, cell);
+    ontology.relation(cell, rdf::FIRST, property);
+    ontology.relation(cell, rdf::REST, cell);
+    let dataset = ontology.finish();
+    let error = match Reasoner::new(&dataset) {
+        Err(EntailError::RoleHierarchy(error)) => error,
+        result => panic!("expected native role-list refusal, got {result:?}"),
+    };
+    drop(dataset);
+    let (original, presentation) = match &error {
+        RoleHierarchyError::Witness {
+            original,
+            presentation,
+        } => (original, presentation),
+        other => panic!("source-bearing refusal lost its witness: {other:?}"),
+    };
+    let node = match original.as_ref() {
+        RoleHierarchyError::MalformedList {
+            node,
+            kind: ListErrorKind::Cycle,
+        } => *node,
+        other => panic!("expected original cycle classification, got {other:?}"),
+    };
+    let buffer = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, buffer);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "role-hierarchy-witness");
+    let native = fields.child("original");
+    assert_eq!(native.code, "role-hierarchy-malformed-list");
+    assert!(
+        matches!(native.field("node"), ErrorValue::Unsigned(value) if value == u128::from(node))
+    );
+    assert_eq!(native.child("kind").code, "rdf-list-cycle");
+    assert!(
+        matches!(fields.field("presentation"), ErrorValue::Record(value)
+        if std::ptr::addr_eq(value, presentation as &dyn purrdf_hash::error::StructuredError))
+    );
+
+    let signed = RoleHierarchyError::OrderConflict {
+        lower: u32::MAX,
+        lower_inverse: true,
+        upper: u32::MAX - 1,
+        upper_inverse: false,
+    };
+    let fields = Capture::read(&signed);
+    assert_eq!(fields.code, "role-hierarchy-order-conflict");
+    assert!(
+        matches!(fields.field("lower"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+    );
+    assert!(
+        matches!(fields.field("upper"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX - 1))
+    );
+    assert!(matches!(
+        fields.field("lower_inverse"),
+        ErrorValue::Boolean(true)
+    ));
+    assert!(matches!(
+        fields.field("upper_inverse"),
+        ErrorValue::Boolean(false)
+    ));
+
+    for (kind, code) in [
+        (ListErrorKind::Cycle, "rdf-list-cycle"),
+        (ListErrorKind::MissingFirst, "rdf-list-missing-first"),
+        (ListErrorKind::MultipleFirst, "rdf-list-multiple-first"),
+        (ListErrorKind::MissingRest, "rdf-list-missing-rest"),
+        (ListErrorKind::MultipleRest, "rdf-list-multiple-rest"),
+        (ListErrorKind::NonEmptyNil, "rdf-list-nonempty-nil"),
+    ] {
+        assert_eq!(Capture::read(&kind).code, code);
+    }
+}
+
+fn entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+    let read = EntailError::SourceRead(CallerRefusal { limit: u128::MAX });
+    let fields = Capture::read(&read);
+    assert_eq!(fields.code, "entailment-source-read");
+    assert!(matches!(
+        fields.child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+
+    let mut ontology = Ontology::default();
+    let subject = ontology.named("original-individual");
+    let nothing = ontology.standard(owl::NOTHING);
+    ontology.relation(subject, rdf::TYPE, nothing);
+    let dataset = ontology.finish();
+    let error =
+        purrdf_entail::materialize(&dataset, purrdf_entail::Materialization::OwlRl).unwrap_err();
+    drop(dataset);
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "entailment-inconsistent");
+    let run = fields.child("run");
+    assert_eq!(run.code, "entailment-inconsistent-run");
+    let witness = run.child("witness");
+    assert!(matches!(
+        witness.field("rule"),
+        ErrorValue::Code("cls-nothing2")
+    ));
+    assert!(matches!(witness.field("graph"), ErrorValue::Absent));
+    let premises = witness.records("premises");
+    assert_eq!(premises.len(), 1);
+    assert_eq!(premises[0].child("subject").code, "rdf-term-iri");
+    let original = match &error {
+        EntailError::Inconsistent(original) => original,
+        other => panic!("original inconsistent run lost: {other:?}"),
+    };
+    let buffer = Vec::with_capacity(1024);
+    let window = CurrentThreadWindow::open();
+    let report = Capture::read_with_buffer(original.report(), buffer);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(report.code, "entailment-report");
+    assert!(matches!(report.field("regime"), ErrorValue::Code("OWL-RL")));
+    assert_eq!(
+        report.records("rules_fired").len(),
+        original.report().rules_fired().len()
+    );
+    assert_eq!(
+        report.records("boundaries").len(),
+        original.report().boundaries().len()
+    );
+    assert!(
+        matches!(report.child("contract_hash").field("digest"), ErrorValue::Bytes(bytes)
+        if bytes == original.report().contract_hash().digest())
+    );
+    assert_eq!(report.child("budget").code, "datalog-budget-report");
+    assert_eq!(
+        report.child("inconsistency").code,
+        "entailment-inconsistency-witness"
+    );
+    assert!(matches!(report.field("termination"), ErrorValue::Absent));
+    assert!(matches!(report.field("mechanism"), ErrorValue::Absent));
+
+    let mut ontology = Ontology::default();
+    let subject = ontology.named("original-individual");
+    let thing = ontology.standard(owl::THING);
+    ontology.relation(subject, rdf::TYPE, thing);
+    let dataset = ontology.finish();
+    assert!(purrdf_entail::materialize(&dataset, purrdf_entail::Materialization::OwlRl).is_ok());
+}
+
+fn import_conflict_inspection_keeps_original_versions_and_default_graph() {
+    use purrdf_core::imports::{VersionConflict, VersionConflictKind};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let error: EntailError = EntailError::IncompatibleImports(vec![VersionConflict {
+        first: None,
+        second: Some("https://example.org/imported".into()),
+        kind: VersionConflictKind::SameSeries {
+            series: "https://example.org/series".into(),
+            first_version: "https://example.org/old".into(),
+            second_version: "https://example.org/new".into(),
+        },
+    }]);
+    let fields = Capture::read(&error);
+    let conflicts = fields.records("conflicts");
+    assert_eq!(conflicts.len(), 1);
+    assert!(matches!(conflicts[0].field("first"), ErrorValue::Absent));
+    assert!(matches!(
+        conflicts[0].field("second"),
+        ErrorValue::Text("https://example.org/imported")
+    ));
+    let kind = conflicts[0].child("kind");
+    assert_eq!(kind.code, "imports-same-series");
+    assert!(matches!(
+        kind.field("series"),
+        ErrorValue::Text("https://example.org/series")
+    ));
+    assert!(matches!(
+        kind.field("first_version"),
+        ErrorValue::Text("https://example.org/old")
+    ));
+    assert!(matches!(
+        kind.field("second_version"),
+        ErrorValue::Text("https://example.org/new")
+    ));
+    let kind = VersionConflictKind::IncompatibleWith {
+        iri: "https://example.org/incompatible".into(),
+    };
+    let fields = Capture::read(&kind);
+    assert_eq!(fields.code, "imports-incompatible-with");
+    assert!(matches!(
+        fields.field("iri"),
+        ErrorValue::Text("https://example.org/incompatible")
+    ));
+}
+
 #[derive(Default)]
 struct Ontology {
     builder: RdfDatasetBuilder,
@@ -836,6 +1041,9 @@ fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
 }
 
 purrdf_testkit::harness_main!(
+    import_conflict_inspection_keeps_original_versions_and_default_graph,
+    entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run,
+    role_refusals_keep_native_fields_after_the_source_drops,
     class_expression_role_refusals_retain_original_source_terms,
     top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling,
     stopping_during_regular_role_reads_never_publishes_a_completed_answer,
