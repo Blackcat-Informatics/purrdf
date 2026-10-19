@@ -81,6 +81,9 @@ use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::Evaluation;
 use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
+mod malformed;
+pub use malformed::ProofMalformed;
+
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
 /// Domain-separation tag leading every [`ProofArena::encode`]d proof.
@@ -118,8 +121,8 @@ where
     /// does not precede the step it justifies, or — for a decoded proof — bytes that are
     /// truncated, mis-tagged, or carry an unknown node kind.
     Malformed {
-        /// A human-readable account of the structural defect.
-        detail: String,
+        /// Original structural defect and operands at the rejecting computation.
+        detail: ProofMalformed,
     },
     /// An axiom leaf's fact is not in the seeded EDB.
     ///
@@ -280,7 +283,38 @@ where
     }
 }
 
-impl<const N: usize> std::error::Error for ProofError<N> where Arity<N>: StoreShape<N> {}
+impl<const N: usize> std::error::Error for ProofError<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(cause) => Some(cause),
+            Self::Malformed { detail } => Some(detail),
+            _ => None,
+        }
+    }
+}
+
+impl<const N: usize> purrdf_hash::error::StructuredError for ProofError<N>
+where
+    Arity<N>: StoreShape<N>,
+    <Arity<N> as StoreShape<N>>::Graph: purrdf_hash::error::StructuredError,
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "datalog-proof-storage" { "cause" => Cause(cause) },
+        Malformed { detail } => "datalog-proof-malformed" { "detail" => Cause(detail) },
+        NotAsserted { goal } => "datalog-proof-not-asserted" { "goal" => Record(goal.as_ref()) },
+        UnknownRule { rule } => "datalog-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
+        NonDatalogRule { rule, form } => "datalog-proof-non-datalog-rule" { "rule" => Unsigned(*rule as u128), "form" => Record(form) },
+        PremiseCountMismatch { rule, body, premises } => "datalog-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
+        PremiseMismatch { rule, body_position, proven } => "datalog-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128), "proven" => Record(proven.as_ref()) },
+        NegatedPremiseSatisfied { rule, body_position } => "datalog-proof-negated-premise-satisfied" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128) },
+        UnboundHeadVariable { rule, variable } => "datalog-proof-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
+        GuardedRule { rule } => "datalog-proof-guarded-rule" { "rule" => Unsigned(*rule as u128) },
+        GoalMismatch { rule, derived, stated } => "datalog-proof-goal-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Record(derived.as_ref()), "stated" => Record(stated.as_ref()) },
+    }
+}
 
 purrdf_lex::variant_from!(impl [const N: usize] ProofError<N> where [Arity<N>: StoreShape<N>] { Storage(StorageError) });
 
@@ -669,16 +703,14 @@ where
             let fact = self.check_step(index, &proven, ctx)?;
             proven.insert(index, fact);
         }
-        proven
-            .remove(&root.address()?)
-            .ok_or_else(|| Self::malformed("the root of a proof is reachable from itself"))
+        proven.remove(&root.address()?).ok_or_else(|| {
+            Self::malformed(ProofMalformed::RootUnestablished { root: root.index() })
+        })
     }
 
     /// A [`ProofError::Malformed`] carrying `detail`.
-    fn malformed(detail: &str) -> ProofError<N> {
-        ProofError::Malformed {
-            detail: detail.to_owned(),
-        }
+    fn malformed(detail: ProofMalformed) -> ProofError<N> {
+        ProofError::Malformed { detail }
     }
 
     /// Every node index reachable from `root`, ASCENDING.
@@ -689,7 +721,10 @@ where
     /// a term set that somehow violated it is rejected instead of silently mis-checked.
     fn reachable_from(&self, root: ProofId) -> Result<BTreeSet<usize>, ProofError<N>> {
         if root.address()? >= self.terms.len() {
-            return Err(Self::malformed("the root is outside this arena"));
+            return Err(Self::malformed(ProofMalformed::RootOutside {
+                root: root.index(),
+                nodes: self.terms.len(),
+            }));
         }
         let mut reachable = BTreeSet::new();
         let mut stack = vec![root.address()?];
@@ -700,9 +735,10 @@ where
             if let ProofTerm::ByRule { premises, .. } = &self.terms[index] {
                 for premise in premises {
                     if premise.address()? >= index {
-                        return Err(Self::malformed(
-                            "a premise must be interned before the step it justifies",
-                        ));
+                        return Err(Self::malformed(ProofMalformed::PremiseOrder {
+                            premise: premise.index(),
+                            position: index,
+                        }));
                     }
                     stack.push(premise.address()?);
                 }
@@ -733,13 +769,14 @@ where
                 goal,
                 rule,
                 premises,
-            } => self.check_rule_step(*rule, premises, goal, proven, ctx),
+            } => self.check_rule_step(index, *rule, premises, goal, proven, ctx),
         }
     }
 
     /// Re-derive one rule application and compare the result against the stated conclusion.
     fn check_rule_step(
         &self,
+        index: usize,
         rule: usize,
         premises: &[ProofId],
         stated: &ShapeFact<N>,
@@ -784,7 +821,10 @@ where
         let mut subst: BTreeMap<&str, &str> = BTreeMap::new();
         for (&(body_position, atom), premise) in positive.iter().zip(premises) {
             let fact = proven.get(&premise.address()?).ok_or_else(|| {
-                Self::malformed("a premise was not established before the step that uses it")
+                Self::malformed(ProofMalformed::PremiseUnestablished {
+                    premise: premise.index(),
+                    position: index,
+                })
             })?;
             if !match_atom(atom, fact, &mut subst)
                 || (atom.read_source() == crate::clause::ReadSource::Base
@@ -815,9 +855,10 @@ where
                     ctx.edb.read_source(crate::clause::ReadSource::Base)
                 }
                 crate::clause::ReadSource::Base => {
-                    return Err(Self::malformed(
-                        "a base premise requires an explicit immutable base context",
-                    ));
+                    return Err(Self::malformed(ProofMalformed::MissingBase {
+                        rule,
+                        body_position,
+                    }));
                 }
             };
             if negated_atom_is_satisfied(atom, &subst, model) {
@@ -979,14 +1020,16 @@ where
     /// [`check`](Self::check)'s re-derivation.
     pub fn decode(bytes: &[u8]) -> Result<(Self, ProofId), ProofError<N>> {
         let mut reader = Reader::new(bytes);
-        if reader.frame()? != Self::encoding_tag().as_bytes() {
-            return Err(Self::malformed(
-                "the proof encoding tag is absent or from another layout",
-            ));
+        let tag = reader.frame()?;
+        if tag != Self::encoding_tag().as_bytes() {
+            return Err(Self::malformed(ProofMalformed::Tag {
+                actual: Memory::new(&mut Resident).collect(tag.iter().copied())?,
+                expected: Self::encoding_tag(),
+            }));
         }
         let count = reader.length()?;
         if count == 0 {
-            return Err(Self::malformed("a proof has at least one node"));
+            return Err(Self::malformed(ProofMalformed::Empty));
         }
 
         let mut arena = Self::default();
@@ -1005,9 +1048,10 @@ where
                     for _ in 0..premise_count {
                         let back = reader.length()?;
                         if back >= position {
-                            return Err(Self::malformed(
-                                "a premise reference must point at an earlier node",
-                            ));
+                            return Err(Self::malformed(ProofMalformed::ForwardReference {
+                                premise: back,
+                                position,
+                            }));
                         }
                         premises.push(ids[back]);
                     }
@@ -1015,20 +1059,23 @@ where
                 }
                 other => {
                     return Err(ProofError::Malformed {
-                        detail: format!("unknown proof node kind {other}"),
+                        detail: ProofMalformed::Kind {
+                            kind: other,
+                            position,
+                        },
                     });
                 }
             };
             ids.push(id);
         }
         if !reader.is_exhausted() {
-            return Err(Self::malformed(
-                "trailing bytes after the proof's last node",
-            ));
+            return Err(Self::malformed(ProofMalformed::Trailing {
+                bytes: reader.rest.len(),
+            }));
         }
         let root = *ids
             .last()
-            .ok_or_else(|| Self::malformed("a proof has at least one node"))?;
+            .ok_or_else(|| Self::malformed(ProofMalformed::Empty))?;
         Ok((arena, root))
     }
 }
@@ -1285,9 +1332,10 @@ where
     /// Take `n` bytes, or report truncation.
     fn take(&mut self, n: usize) -> Result<&'a [u8], ProofError<N>> {
         if self.rest.len() < n {
-            return Err(ProofArena::<N>::malformed(
-                "the proof encoding ends inside a field",
-            ));
+            return Err(ProofArena::<N>::malformed(ProofMalformed::Truncated {
+                required: n,
+                remaining: self.rest.len(),
+            }));
         }
         let (head, tail) = self.rest.split_at(n);
         self.rest = tail;
@@ -1301,12 +1349,8 @@ where
 
     /// Read one little-endian `u64`.
     fn u64(&mut self) -> Result<u64, ProofError<N>> {
-        let (bytes, rest) = self
-            .rest
-            .split_first_chunk()
-            .ok_or_else(|| ProofArena::<N>::malformed("the proof encoding ends inside a field"))?;
-        self.rest = rest;
-        Ok(u64::from_le_bytes(*bytes))
+        Ok(purrdf_core::bytes::read_u64_le(self.take(8)?, 0)
+            .expect("the original field length was checked before decoding"))
     }
 
     /// Read one little-endian `u64` as a `usize`.
@@ -1315,8 +1359,12 @@ where
     /// written on a 64-bit host and read on `wasm32` must fail loudly instead of decoding to
     /// a different proof.
     fn length(&mut self) -> Result<usize, ProofError<N>> {
-        usize::try_from(self.u64()?).map_err(|_| {
-            ProofArena::<N>::malformed("a length in the proof encoding exceeds this target's usize")
+        let value = self.u64()?;
+        usize::try_from(value).map_err(|_| {
+            ProofArena::<N>::malformed(ProofMalformed::Length {
+                value,
+                maximum: usize::MAX,
+            })
         })
     }
 
@@ -1329,8 +1377,13 @@ where
     /// Read one length-prefixed UTF-8 surface.
     fn surface(&mut self) -> Result<String, ProofError<N>> {
         let bytes = self.frame()?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| {
-            ProofArena::<N>::malformed("a term surface in the proof encoding is not UTF-8")
+        let owned = Memory::new(&mut Resident).collect(bytes.iter().copied())?;
+        String::from_utf8(owned).map_err(|error| {
+            let cause = error.utf8_error();
+            ProofArena::<N>::malformed(ProofMalformed::Utf8 {
+                bytes: error.into_bytes(),
+                cause,
+            })
         })
     }
 
@@ -2163,6 +2216,31 @@ mod tests {
             ProofArena::<4>::decode(&bad_utf8),
             Err(ProofError::Malformed { .. })
         ));
+        let failure = ProofArena::<4>::decode(&bad_utf8).unwrap_err();
+        drop(bad_utf8);
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        let detail = fields.child("detail");
+        assert_eq!(detail.code, "proof-utf8");
+        assert!(matches!(
+            detail.field("bytes"),
+            purrdf_hash::error::ErrorValue::Bytes([0xff, 0xfe])
+        ));
+        let utf8 = detail.child("cause");
+        assert!(matches!(
+            utf8.field("valid_up_to"),
+            purrdf_hash::error::ErrorValue::ByteCount(0)
+        ));
+        let failure = ProofArena::<4>::decode(&wrong_kind).unwrap_err();
+        let fields = purrdf_testkit::error_capture::Capture::read(&failure);
+        let detail = fields.child("detail");
+        assert!(matches!(
+            detail.field("kind"),
+            purrdf_hash::error::ErrorValue::Unsigned(9)
+        ));
+        assert!(matches!(
+            detail.field("position"),
+            purrdf_hash::error::ErrorValue::Unsigned(0)
+        ));
     }
 
     /// A clause with a non-Datalog head licenses no step and is refused by name.
@@ -2420,7 +2498,10 @@ mod tests {
     fn rejections_render() {
         let errors: [ProofError; 9] = [
             ProofError::Malformed {
-                detail: "truncated".to_owned(),
+                detail: ProofMalformed::Truncated {
+                    required: 8,
+                    remaining: 0,
+                },
             },
             ProofError::NotAsserted {
                 goal: Box::new(fact("a", P, "b")),

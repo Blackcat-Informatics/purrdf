@@ -169,14 +169,14 @@ impl ClassKey {
         }
     }
 
-    /// This refinement, rendered for a diagnostic.
-    fn render(&self) -> String {
+    /// Borrow the existing diagnostic spelling, without rendering an operand.
+    fn diagnostic_text(&self) -> &str {
         match self {
             // The default graph's surface is the EMPTY surface, which would render as
             // nothing at all; name it instead of printing a blank.
-            Self::Const(surface) if surface.is_empty() => "(default graph)".to_owned(),
-            Self::Const(surface) => surface.clone(),
-            Self::Wildcard => "*".to_owned(),
+            Self::Const(surface) if surface.is_empty() => "(default graph)",
+            Self::Const(surface) => surface,
+            Self::Wildcard => "*",
         }
     }
 }
@@ -259,23 +259,121 @@ impl<const N: usize> Position<N> {
                 .zip(&other.keys)
                 .all(|(left, right)| left.compatible(right))
     }
+}
 
-    /// This position, rendered for a diagnostic — for example
-    /// `[s=?, p=<https://example.org/type>, o=<https://example.org/C>, g=(default graph)]`.
-    fn render(&self) -> String {
-        let rendered: Vec<String> = Slot::ALL[..N]
-            .iter()
-            .enumerate()
-            .map(|(index, slot)| {
-                let key = if index == self.slot.index() {
-                    "?".to_owned()
-                } else {
-                    self.keys[index].render()
-                };
-                format!("{}={key}", slot.name())
-            })
-            .collect();
-        format!("[{}]", rendered.join(", "))
+/// Original refined position retained by a termination refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChasePosition {
+    slot: Slot,
+    keys: Vec<ClassKey>,
+}
+
+impl ChasePosition {
+    fn capture<const N: usize>(position: &Position<N>) -> Self {
+        Self {
+            slot: position.slot,
+            keys: position.keys.to_vec(),
+        }
+    }
+
+    fn diagnostic_keys(&self) -> impl Iterator<Item = &str> {
+        self.keys.iter().enumerate().map(|(index, key)| {
+            if index == self.slot.index() {
+                "?"
+            } else {
+                key.diagnostic_text()
+            }
+        })
+    }
+
+    fn diagnostic_chars(&self) -> impl Iterator<Item = char> + '_ {
+        "[".chars()
+            .chain(self.diagnostic_keys().enumerate().flat_map(|(index, key)| {
+                (if index == 0 { "" } else { ", " })
+                    .chars()
+                    .chain(Slot::ALL[index].name().chars())
+                    .chain("=".chars())
+                    .chain(key.chars())
+            }))
+            .chain("]".chars())
+    }
+}
+
+impl Ord for ChasePosition {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        // Preserve the previous rendered diagnostic ordering, borrowing the
+        // exact components rather than allocating a presentation as a sort key.
+        self.diagnostic_chars()
+            .cmp(other.diagnostic_chars())
+            .then_with(|| self.slot.cmp(&other.slot))
+            .then_with(|| self.keys.cmp(&other.keys))
+    }
+}
+
+impl PartialOrd for ChasePosition {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl fmt::Display for ChasePosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[")?;
+        for (index, text) in self.diagnostic_keys().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}={text}", Slot::ALL[index].name())?;
+        }
+        f.write_str("]")
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ChasePosition {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self { slot, keys } = self;
+        visitor.variant("chase-position");
+        visitor.value(Some("slot"), ErrorValue::Code(slot.name()));
+        purrdf_hash::error::visit_list(
+            visitor,
+            Some("keys"),
+            keys.iter().map(|key| ErrorValue::Record(key)),
+        );
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ClassKey {
+    purrdf_hash::error_visit! {
+        Const(surface) => "chase-position-constant" { "surface" => Text(surface) },
+        Wildcard => "chase-position-wildcard" {},
+    }
+}
+
+/// The existential edge whose return path prevented termination certification.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TerminationViolation {
+    /// Original position at the beginning of the edge.
+    pub from: ChasePosition,
+    /// Original existential destination position.
+    pub to: ChasePosition,
+}
+
+impl purrdf_hash::error::StructuredError for TerminationViolation {
+    purrdf_hash::error_visit! {
+        @record self { from, to } => "chase-existential-cycle" {
+            "from" => Record(&self.from), "to" => Record(&self.to)
+        }
+    }
+}
+
+impl fmt::Display for TerminationViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "existential edge {} -> {} lies in a cycle, so the restricted chase may not terminate",
+            self.from, self.to
+        )
     }
 }
 
@@ -382,7 +480,7 @@ pub enum ChaseTermination {
     /// refuses rather than risk a fixpoint that never closes.
     Unbounded {
         /// One diagnostic per offending edge, sorted and deduplicated.
-        violations: Vec<String>,
+        violations: Vec<TerminationViolation>,
     },
 }
 
@@ -390,6 +488,17 @@ impl ChaseTermination {
     /// Whether the analysis certified termination.
     pub fn is_certified(&self) -> bool {
         matches!(self, Self::WeaklyAcyclic { .. })
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ChaseTermination {
+    purrdf_hash::error_visit! {
+        WeaklyAcyclic { positions, existential_edges } => "chase-weakly-acyclic" {
+            "positions" => Unsigned(*positions as u128), "existential_edges" => Unsigned(*existential_edges as u128)
+        },
+        Unbounded { violations } => "chase-unbounded" {
+            "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        },
     }
 }
 
@@ -484,15 +593,13 @@ pub fn certify<const N: usize>(program: &[DlClause<N>]) -> ChaseTermination {
 
     // A special edge `(u, v)` violates weak acyclicity exactly when `v` reaches `u`: the
     // null created at `v` can flow back to a position that creates another null.
-    let mut violations: Vec<String> = Vec::new();
+    let mut violations = Vec::new();
     for (from, to) in &special {
         if reaches(&adjacency, to, from) {
-            violations.push(format!(
-                "existential edge {} -> {} lies in a cycle, so the restricted chase may not \
-                 terminate",
-                from.render(),
-                to.render()
-            ));
+            violations.push(TerminationViolation {
+                from: ChasePosition::capture(from),
+                to: ChasePosition::capture(to),
+            });
         }
     }
     violations.sort();
@@ -679,7 +786,7 @@ pub enum ChaseError {
     /// list, so the diagnostic points at the edges to fix.
     NonTerminating {
         /// The offending existential edges, sorted and deduplicated.
-        violations: Vec<String>,
+        violations: Vec<TerminationViolation>,
     },
     /// An EXISTENTIAL head has more than one disjunct.
     ///
@@ -769,6 +876,24 @@ pub enum ChaseError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ChaseError {
+    purrdf_hash::error_visit! {
+        BaseReadClause { clause } => "chase-base-read-clause" { "clause" => Unsigned(*clause as u128) },
+        NoOutputClause { clause } => "chase-no-output-clause" { "clause" => Unsigned(*clause as u128) },
+        Storage(cause) => "chase-storage" { "cause" => Cause(cause) },
+        NeverDerive(cause) => "chase-never-derive" { "cause" => Cause(cause) },
+        NonTerminating { violations } => "chase-non-terminating" { "violations" => List(violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))) },
+        DisjunctiveExistentialHead { clause, disjuncts } => "chase-disjunctive-existential-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
+        DisjunctiveHead { clause, disjuncts } => "chase-disjunctive-head" { "clause" => Unsigned(*clause as u128), "disjuncts" => Unsigned(*disjuncts as u128) },
+        InconsistencyClause { clause } => "chase-inconsistency-clause" { "clause" => Unsigned(*clause as u128) },
+        NegatedBodyAtom { clause, body_index } => "chase-negated-body-atom" { "clause" => Unsigned(*clause as u128), "body_index" => Unsigned(*body_index as u128) },
+        GuardedClause { clause } => "chase-guarded-clause" { "clause" => Unsigned(*clause as u128) },
+        UnboundHeadVariable { clause, variable } => "chase-unbound-head-variable" { "clause" => Unsigned(*clause as u128), "variable" => Text(variable) },
+        BudgetExhausted { resource, report } => "chase-budget-exhausted" { "resource" => Record(resource), "report" => Record(report) },
+        Stopped { report } => "chase-stopped" { "report" => Record(report) },
+    }
+}
+
 impl fmt::Display for ChaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -783,11 +908,16 @@ impl fmt::Display for ChaseError {
             Self::Storage(error) => error.fmt(f),
             Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonTerminating { violations } => {
-                write!(
-                    f,
-                    "the restricted chase is not certified to terminate on this program: {}",
-                    violations.join("; ")
-                )
+                f.write_str(
+                    "the restricted chase is not certified to terminate on this program: ",
+                )?;
+                for (index, violation) in violations.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str("; ")?;
+                    }
+                    fmt::Display::fmt(violation, f)?;
+                }
+                Ok(())
             }
             Self::DisjunctiveExistentialHead { clause, disjuncts } => write!(
                 f,
@@ -2036,12 +2166,19 @@ mod tests {
         let ChaseTermination::Unbounded { violations } = &termination else {
             panic!("expected an unbounded verdict: {termination:?}");
         };
-        assert_ne!(violations.as_slice(), [] as [String; 0]);
+        assert_ne!(violations.as_slice(), []);
         let mut sorted = violations.clone();
         sorted.sort();
         sorted.dedup();
         assert_eq!(&sorted, violations, "violations are sorted and deduped");
-        assert!(violations[0].contains("lies in a cycle"), "{violations:?}");
+        let presented: Vec<_> = violations.iter().map(ToString::to_string).collect();
+        let mut presentation_order = presented.clone();
+        presentation_order.sort();
+        assert_eq!(presented, presentation_order);
+        assert!(
+            violations[0].to_string().contains("lies in a cycle"),
+            "{violations:?}"
+        );
         assert!(termination.to_string().contains("not weakly acyclic"));
 
         let refusal = chase(&program, store_of(&[("a", R, "b")]))
@@ -2053,6 +2190,21 @@ mod tests {
             }
         );
         assert!(refusal.to_string().contains("not certified to terminate"));
+        drop(program);
+        let fields = purrdf_testkit::error_capture::Capture::read(&refusal);
+        let edges = fields.records("violations");
+        assert!(!edges.is_empty());
+        for edge in edges {
+            assert_eq!(edge.code, "chase-existential-cycle");
+            for endpoint in ["from", "to"] {
+                let position = edge.child(endpoint);
+                assert!(matches!(
+                    position.field("slot"),
+                    purrdf_hash::error::ErrorValue::Code(_)
+                ));
+                assert_eq!(position.records("keys").len(), 4);
+            }
+        }
     }
 
     /// The constant-refined `type(?x, <C>) → ∃?y. ( p(?x, ?y) ∧ type(?y, <D>) )` IS weakly
@@ -2546,7 +2698,9 @@ mod tests {
     /// readable nodes.
     #[test]
     fn a_position_renders_its_slot_and_refinement() {
-        let rendered = Position::of(&concept("?x", CONCEPT_C), Slot::Subject).render();
+        let rendered =
+            ChasePosition::capture(&Position::of(&concept("?x", CONCEPT_C), Slot::Subject))
+                .to_string();
         assert_eq!(
             rendered,
             format!(
@@ -2555,7 +2709,8 @@ mod tests {
                 iri(CONCEPT_C)
             )
         );
-        let wildcard = Position::of(&role("?x", P, "?y"), Slot::Subject).render();
+        let wildcard =
+            ChasePosition::capture(&Position::of(&role("?x", P, "?y"), Slot::Subject)).to_string();
         assert_eq!(
             wildcard,
             format!("[s=?, p={}, o=*, g=(default graph)]", iri(P))

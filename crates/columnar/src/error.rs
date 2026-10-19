@@ -50,6 +50,21 @@ pub enum ColumnarError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ColumnarError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
+        SourceRead { detail } => "columnar-source-read" { "detail" => Text(detail) },
+        Truncated { context, needed, available } => "columnar-truncated" {
+            "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
+        },
+        Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
+        LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
+            "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
+        },
+    }
+}
+
 impl ColumnarError {
     pub(crate) fn malformed(context: &'static str, detail: impl Into<String>) -> Self {
         Self::Malformed {

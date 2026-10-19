@@ -82,6 +82,51 @@ use crate::stop::{StopSignal, is_stopped};
 use crate::store::Fact;
 use crate::store::{Arity, RelationStore, ShapeFact, StoreShape, TermInterner};
 
+/// The exact rule-partition defect that makes a schedule unusable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleRefusal {
+    /// A scheduled rule does not exist in the program.
+    UnknownRule {
+        /// The original scheduled index.
+        rule: usize,
+        /// The actual program length.
+        rules: usize,
+    },
+    /// One rule occurs more than once.
+    RepeatedRule {
+        /// The original repeated index.
+        rule: usize,
+    },
+    /// A program rule is absent from the schedule.
+    MissingRule {
+        /// The first omitted rule index.
+        rule: usize,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for ScheduleRefusal {
+    purrdf_hash::error_visit! {
+        UnknownRule { rule, rules } => "schedule-unknown-rule" { "rule" => Unsigned(*rule as u128), "rules" => Unsigned(*rules as u128) },
+        RepeatedRule { rule } => "schedule-repeated-rule" { "rule" => Unsigned(*rule as u128) },
+        MissingRule { rule } => "schedule-missing-rule" { "rule" => Unsigned(*rule as u128) },
+    }
+}
+
+impl core::fmt::Display for ScheduleRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownRule { rule, rules } => write!(
+                f,
+                "the schedule names rule {rule}, but the program has {rules} rules"
+            ),
+            Self::RepeatedRule { rule } => write!(f, "rule {rule} is scheduled more than once"),
+            Self::MissingRule { rule } => write!(f, "rule {rule} is not scheduled"),
+        }
+    }
+}
+
+impl std::error::Error for ScheduleRefusal {}
+
 /// One layer of an ordered schedule: its run-once groups and its iterating groups.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Layer {
@@ -240,21 +285,21 @@ where
     for index in schedule.rule_indices() {
         if index >= rules.len() {
             return Err(EvalError::MalformedSchedule {
-                detail: format!(
-                    "the schedule names rule {index}, but the program has {} rules",
-                    rules.len()
-                ),
+                detail: ScheduleRefusal::UnknownRule {
+                    rule: index,
+                    rules: rules.len(),
+                },
             });
         }
         if !seen.insert(index) {
             return Err(EvalError::MalformedSchedule {
-                detail: format!("rule {index} is scheduled more than once"),
+                detail: ScheduleRefusal::RepeatedRule { rule: index },
             });
         }
     }
     if let Some(missing) = (0..rules.len()).find(|index| !seen.contains(index)) {
         return Err(EvalError::MalformedSchedule {
-            detail: format!("rule {missing} is not scheduled"),
+            detail: ScheduleRefusal::MissingRule { rule: missing },
         });
     }
     let plans: Vec<RulePlan<N>> = rules.iter().map(RulePlan::for_rule).collect();
@@ -2104,15 +2149,26 @@ mod tests {
                 vec![atom(v("?x"), "p", v("?y"))],
             )
         };
-        for schedule in [
-            Schedule::new(Vec::new()),
-            Schedule::new(vec![Layer::new(vec![vec![0]], vec![vec![0]])]),
-            Schedule::new(vec![Layer::new(vec![vec![0, 1]], Vec::new())]),
+        for (schedule, code, index) in [
+            (Schedule::new(Vec::new()), "schedule-missing-rule", 0_u128),
+            (
+                Schedule::new(vec![Layer::new(vec![vec![0]], vec![vec![0]])]),
+                "schedule-repeated-rule",
+                0,
+            ),
+            (
+                Schedule::new(vec![Layer::new(vec![vec![0, 1]], Vec::new())]),
+                "schedule-unknown-rule",
+                1,
+            ),
         ] {
-            assert!(matches!(
-                compile_scheduled(vec![rule()], schedule),
-                Err(EvalError::MalformedSchedule { .. })
-            ));
+            let error = compile_scheduled(vec![rule()], schedule).unwrap_err();
+            let fields = purrdf_testkit::error_capture::Capture::read(&error);
+            let detail = fields.child("detail");
+            assert_eq!(detail.code, code);
+            assert!(
+                matches!(detail.field("rule"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == index)
+            );
         }
         let program = compile_scheduled(
             vec![rule()],

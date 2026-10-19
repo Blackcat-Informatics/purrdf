@@ -405,6 +405,16 @@ struct Limits {
     stated: u8,
 }
 
+impl purrdf_hash::error::StructuredError for Limits {
+    purrdf_hash::error_visit! {
+        @record self { join_steps, stored_facts, term_generating_rounds, generated_terms, stated } => "datalog-limits" {
+            "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(u128::from(self.stored_facts)),
+            "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)), "generated_terms" => Unsigned(u128::from(self.generated_terms)),
+            "stated" => Unsigned(u128::from(self.stated))
+        }
+    }
+}
+
 /// [`Limits::stated`]: the join-step limit is the caller's.
 const STATED_JOIN_STEPS: u8 = 1;
 /// [`Limits::stated`]: the stored-fact limit is the caller's.
@@ -467,6 +477,17 @@ pub struct BudgetReport {
     input_terms: u64,
     /// The limits the run was governed by ([`EvalOptions`]).
     limits: Limits,
+}
+
+impl purrdf_hash::error::StructuredError for BudgetReport {
+    purrdf_hash::error_visit! {
+        @record self { join_steps, stored_facts, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
+            "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(self.stored_facts as u128),
+            "term_arena_bytes" => ByteCount(self.term_arena_bytes as u128), "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)),
+            "generated_terms" => Unsigned(u128::from(self.generated_terms)), "input_terms" => Unsigned(u128::from(self.input_terms)),
+            "limits" => Record(&self.limits)
+        }
+    }
 }
 
 impl Default for BudgetReport {
@@ -616,6 +637,16 @@ pub enum BudgetResource {
     TermGeneratingRounds,
     /// The generated-term budget ([`EvalOptions`]) — too many terms added to the store.
     GeneratedTerms,
+}
+
+impl purrdf_hash::error::StructuredError for BudgetResource {
+    purrdf_hash::error_visit! {
+        JoinSteps => "datalog-budget-join-steps" {},
+        StoredFacts => "datalog-budget-stored-facts" {},
+        TermArenaBytes => "datalog-budget-term-arena-bytes" {},
+        TermGeneratingRounds => "datalog-budget-term-generating-rounds" {},
+        GeneratedTerms => "datalog-budget-generated-terms" {},
+    }
 }
 
 impl BudgetResource {
@@ -866,7 +897,7 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// The guard's content identity.
         guard: String,
         /// The evaluator's message.
-        message: String,
+        message: crate::guard::CallbackDiagnostic,
     },
     /// A rule carries a guard that reads the evaluation model
     /// ([`crate::guard::GuardReads::Model`]), which the stratified fixpoint cannot
@@ -896,15 +927,37 @@ pub enum EvalError<E = core::convert::Infallible> {
     /// program's rules: a rule is scheduled twice, never, or does not exist.
     MalformedSchedule {
         /// What is wrong with the schedule.
-        detail: String,
+        detail: crate::schedule::ScheduleRefusal,
     },
     /// The caller's [`LayerHooks`](crate::schedule::LayerHooks) reported an error.
     LayerHook {
         /// The layer whose hook failed, or `None` for the end-of-evaluation hook.
         layer: Option<usize>,
         /// The hook's message.
-        message: String,
+        message: crate::guard::CallbackDiagnostic,
     },
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for EvalError<E> {
+    purrdf_hash::error_visit! {
+        Source(cause) => "datalog-eval-source" { "cause" => Cause(cause) },
+        BaseReadRequiresSchedule { rule } => "datalog-eval-base-requires-schedule" { "rule" => Unsigned(*rule as u128) },
+        MissingBase { rule } => "datalog-eval-missing-base" { "rule" => Unsigned(*rule as u128) },
+        Storage(cause) => "datalog-eval-storage" { "cause" => Cause(cause) },
+        Evidence(cause) => "datalog-eval-evidence" { "cause" => Cause(cause) },
+        NeverDerive(cause) => "datalog-eval-never-derive" { "cause" => Cause(cause) },
+        NonDatalogHead { rule, form } => "datalog-eval-non-datalog-head" { "rule" => Unsigned(*rule as u128), "form" => Record(form) },
+        NonStratifiable { head, negated, cycle } => "datalog-eval-non-stratifiable" { "head" => Text(head), "negated" => Text(negated), "cycle" => List(cycle.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))) },
+        UnboundHeadVariable { rule, variable } => "datalog-eval-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
+        BudgetExhausted { resource, report } => "datalog-eval-budget-exhausted" { "resource" => Record(resource), "report" => Record(report) },
+        TermLimitExceeded { resource, rules, report } => "datalog-eval-term-limit-exceeded" { "resource" => Record(resource), "rules" => List(rules.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))), "report" => Record(report) },
+        Stopped { report } => "datalog-eval-stopped" { "report" => Record(report) },
+        Guard { rule, site, guard, message } => "datalog-eval-guard" { "rule" => Unsigned(*rule as u128), "site" => Record(site), "guard" => Text(guard), "message" => Cause(message) },
+        ModelReadingGuard { rule } => "datalog-eval-model-reading-guard" { "rule" => Unsigned(*rule as u128) },
+        NonStratifiableRules { rule, depends_on, cycle } => "datalog-eval-non-stratifiable-rules" { "rule" => Unsigned(*rule as u128), "depends_on" => Unsigned(*depends_on as u128), "cycle" => List(cycle.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))) },
+        MalformedSchedule { detail } => "datalog-eval-malformed-schedule" { "detail" => Cause(detail) },
+        LayerHook { layer, message } => "datalog-eval-layer-hook" { "layer" => Value(layer.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(value as u128))), "message" => Cause(message) },
+    }
 }
 
 /// Where a report's stored-fact limit came from, for a diagnostic.
@@ -1133,6 +1186,8 @@ impl<E: std::error::Error + 'static> std::error::Error for EvalError<E> {
             Self::Source(error) => Some(error),
             Self::Storage(error) => Some(error),
             Self::Evidence(error) => Some(error),
+            Self::MalformedSchedule { detail } => Some(detail),
+            Self::Guard { message, .. } | Self::LayerHook { message, .. } => Some(message),
             _ => None,
         }
     }
@@ -3278,7 +3333,7 @@ where
         .check_read()
         .map_err(EvalError::Source)?;
     let result = (|| {
-        let refuse = |message: String| EvalError::Guard {
+        let refuse = |message: crate::guard::CallbackDiagnostic| EvalError::Guard {
             rule: call.rule,
             site: call.site,
             guard: call.guard.name().to_owned(),
@@ -3293,10 +3348,10 @@ where
                 return Ok(Vec::new());
             }
             if row.len() != width {
-                return Err(refuse(format!(
-                    "the evaluator answered a row of {} values for {width} outputs",
-                    row.len()
-                )));
+                return Err(refuse(crate::guard::CallbackDiagnostic::RowWidth {
+                    actual: row.len(),
+                    expected: width,
+                }));
             }
         }
         Ok(rows)

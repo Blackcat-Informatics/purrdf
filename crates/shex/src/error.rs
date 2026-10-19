@@ -42,7 +42,7 @@ pub enum ShexError {
         /// The rejected lexical form.
         lexical: String,
         /// The underlying resolution failure.
-        reason: String,
+        reason: purrdf_iri::IriError,
     },
     /// The ShExJ document is not valid JSON or does not match the ShExJ
     /// object model.
@@ -73,6 +73,19 @@ pub enum ShexError {
     /// rather than answering `nonconformant`, which would state a finding about
     /// the DATA that the data had no part in.
     UnknownShape(String),
+}
+
+impl purrdf_hash::error::StructuredError for ShexError {
+    purrdf_hash::error_visit! {
+        StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
+        Lex { reason, at } => "shex-lex" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
+        Syntax { reason, at } => "shex-syntax" { "reason" => Text(reason), "at" => Unsigned(*at as u128) },
+        Iri { lexical, reason } => "shex-iri" { "lexical" => Text(lexical), "cause" => Cause(reason) },
+        Shexj(reason) => "shex-json" { "reason" => Text(reason) },
+        Import { iri, cause } => "shex-import" { "iri" => Iri(iri), "cause" => Cause(&**cause) },
+        ImportConflict(label) => "shex-import-conflict" { "label" => Text(label) },
+        UnknownShape(selector) => "shex-unknown-shape" { "selector" => Text(selector) },
+    }
 }
 
 purrdf_lex::constructors! {
@@ -126,7 +139,7 @@ impl ShexError {
     pub fn iri(lexical: impl Into<String>, cause: &purrdf_iri::IriError) -> Self {
         Self::Iri {
             lexical: lexical.into(),
-            reason: format!("{}: {cause}", cause.diagnostic_code()),
+            reason: cause.clone(),
         }
     }
 
@@ -185,7 +198,11 @@ impl fmt::Display for ShexError {
                 write!(f, "ShExC syntax error at byte {at}: {reason}")
             }
             Self::Iri { lexical, reason } => {
-                write!(f, "invalid IRI {lexical:?}: {reason}")
+                write!(
+                    f,
+                    "invalid IRI {lexical:?}: {}: {reason}",
+                    reason.diagnostic_code()
+                )
             }
             Self::Shexj(reason) => write!(f, "ShExJ error: {reason}"),
             Self::Import { iri, cause } => write!(f, "unresolved IMPORT <{iri}>: {cause}"),
@@ -208,7 +225,10 @@ impl fmt::Debug for ShexError {
     }
 }
 
-impl std::error::Error for ShexError {}
+purrdf_lex::error_source!(ShexError => {
+    Self::Iri { reason, .. } => reason,
+    Self::Import { cause, .. } => &**cause,
+});
 
 /// Convenience alias for fallible ShEx parse operations.
 pub type Result<T> = core::result::Result<T, ShexError>;
@@ -222,6 +242,13 @@ pub enum XPathValidationError {
     ShapeMap(ShexError),
     /// Native pattern execution or construction was operationally refused.
     Regex(purrdf_core::xsd_regex::xpath::Error),
+}
+
+impl purrdf_hash::error::StructuredError for XPathValidationError {
+    purrdf_hash::error_visit! {
+        ShapeMap(cause) => "shex-xpath-shape-map" { "cause" => Cause(cause) },
+        Regex(cause) => "shex-xpath-regex" { "cause" => Cause(cause) },
+    }
 }
 
 purrdf_lex::variant_from!(XPathValidationError {

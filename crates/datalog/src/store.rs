@@ -337,6 +337,12 @@ pub enum WeightError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for WeightError {
+    purrdf_hash::error_visit! {
+        Overflow { lhs, rhs } => "datalog-weight-overflow" { "lhs" => Signed(i128::from(*lhs)), "rhs" => Signed(i128::from(*rhs)) },
+    }
+}
+
 impl fmt::Display for WeightError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1042,6 +1048,15 @@ pub struct Fact<G = String> {
     /// The graph term's lexical surface; EMPTY for the default graph
     /// ([`RelationStore::DEFAULT_GRAPH`]).
     pub graph: G,
+}
+
+impl<G: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for Fact<G> {
+    purrdf_hash::error_visit! {
+        @record self { subject, predicate, object, graph } => "datalog-fact" {
+            "subject" => Text(&self.subject), "predicate" => Text(&self.predicate),
+            "object" => Text(&self.object), "graph" => Record(&self.graph)
+        }
+    }
 }
 
 /// One addressed partition of the store's arity-4 relation: the `(subject, object)`
