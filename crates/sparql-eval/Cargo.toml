@@ -329,6 +329,11 @@ name = "query_completion"
 harness = false
 
 [[test]]
+# Original evaluator causes inspected without human rendering, native and WASM.
+name = "structured_errors"
+harness = false
+
+[[test]]
 # The same original claim/operator/tier/ledger cases on native and WASM.
 name = "evidence_ingress"
 harness = false

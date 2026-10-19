@@ -373,6 +373,18 @@ pub enum ProducerStatus {
     TermsRejected,
 }
 
+impl purrdf_hash::error::StructuredError for ProducerStatus {
+    purrdf_hash::error_visit! {
+        Exhausted { rows_emitted } => "retrieval-producer-exhausted" { "rows_emitted" => Unsigned(u128::from(*rows_emitted)) },
+        DepthReached { rank } => "retrieval-producer-depth-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        RowBoundReached { rank } => "retrieval-producer-row-bound-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        SuppliedQueryEnded { rank } => "retrieval-producer-supplied-query-ended" { "rank" => Unsigned(u128::from(*rank)) },
+        CeilingReached { bound } => "retrieval-producer-ceiling-reached" { "bound" => Record(bound) },
+        ExecutionFailed { reason } => "retrieval-producer-execution-failed" { "reason" => Text(reason.as_ref()) },
+        TermsRejected => "retrieval-producer-terms-rejected" {},
+    }
+}
+
 impl ProducerStatus {
     fn clone_admitted(
         &self,

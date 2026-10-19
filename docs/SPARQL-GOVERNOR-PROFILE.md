@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-English | [简体中文（profile v18）](SPARQL-GOVERNOR-PROFILE.zh-Hans.md)
+English | [简体中文（profile v22）](SPARQL-GOVERNOR-PROFILE.zh-Hans.md)
 
 **Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 22
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.

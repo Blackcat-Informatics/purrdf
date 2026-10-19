@@ -30,6 +30,12 @@ use crate::error::PlanError;
 #[derive(Clone)]
 pub struct Iri(purrdf_sparql_eval::OwnedIri);
 
+impl purrdf_hash::error::StructuredError for Iri {
+    purrdf_hash::error_visit! {
+        @tuple self (_owner) => "retrieval-iri" { "value" => Iri(self.as_str()) }
+    }
+}
+
 impl PartialEq for Iri {
     fn eq(&self, other: &Self) -> bool {
         self.as_str() == other.as_str()
@@ -119,6 +125,12 @@ impl Ord for Iri {
 /// valid against any dataset.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Term(purrdf_lex::allocation::OwnedText);
+
+impl purrdf_hash::error::StructuredError for Term {
+    purrdf_hash::error_visit! {
+        @tuple self (_owner) => "retrieval-term" { "lexical_form" => Text(self.as_str()) }
+    }
+}
 
 purrdf_lex::constructors! {
     impl Term {

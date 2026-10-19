@@ -6,6 +6,9 @@
 use purrdf_hash::error::{ErrorValue, StructuredError};
 use purrdf_testkit::error_capture::Capture;
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 #[derive(Debug)]
 struct SpawnCause(u64);
 
@@ -160,7 +163,129 @@ fn evaluator_conversion_retains_the_original_parser_cause_after_input_disposal()
     );
 }
 
+fn retrieval_actual_iri_failures_keep_original_nested_cause() {
+    let input = String::from("not an iri λ");
+    let original = purrdf_retrieval::Iri::parse(&input).unwrap_err();
+    drop(input);
+    let failure = purrdf_retrieval::SearchError::from(original);
+    let events = Vec::with_capacity(4);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let capture = Capture::read_with_buffer(&failure, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(capture.code, "retrieval-search-plan");
+    let plan = capture.child("cause");
+    assert_eq!(plan.code, "retrieval-plan-invalid-iri");
+    assert!(matches!(
+        plan.field("text"),
+        ErrorValue::Iri("not an iri λ")
+    ));
+    let native = std::error::Error::source(&failure)
+        .unwrap()
+        .source()
+        .unwrap();
+    assert!(native.downcast_ref::<purrdf_core::IriError>().is_some());
+    assert_eq!(
+        plan.child("source").code,
+        Capture::read(native.downcast_ref::<purrdf_core::IriError>().unwrap()).code
+    );
+    assert!(purrdf_retrieval::Iri::parse("https://example.org/accepted").is_ok());
+}
+
+fn retrieval_protocol_lists_preserve_order_and_full_width_counts() {
+    use purrdf_testkit::error_capture::Event;
+    let error = purrdf_retrieval::ProtocolError::UnbackedDomainDeclaration {
+        stratum: "https://example.org/stratum".into(),
+        declared: vec!["second λ".into(), "first β".into(), "second λ".into()],
+        rank: u64::MAX,
+    };
+    let fields = Capture::read(&error);
+    assert!(
+        matches!(fields.field("rank"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    let entries: Vec<_> = fields
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Text(text)) => Some(*text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(entries, ["second λ", "first β", "second λ"]);
+    let error = purrdf_retrieval::FusionError::NonPositiveWeight {
+        stratum: "https://example.org/stratum".into(),
+        weight: purrdf_text::Fixed::from_raw(i128::MIN),
+    };
+    assert!(matches!(
+        Capture::read(&error).child("weight").field("raw"),
+        ErrorValue::Signed(i128::MIN)
+    ));
+}
+
+fn retrieval_request_views_keep_ieee_bits_and_optional_native_values() {
+    use purrdf_retrieval::{Metric, RequestTerm};
+    use purrdf_testkit::error_capture::Event;
+    let bits = [0x8000_0000, 0x7fc0_4321, 0x7f80_0000];
+    let request = RequestTerm::Vector {
+        embedding: bits.map(f32::from_bits).to_vec(),
+        metric: Metric::Dot,
+        index_hint: None,
+    };
+    let fields = Capture::read(&request);
+    let captured: Vec<_> = fields
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Float32Bits(bits)) => Some(*bits),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(captured, bits);
+    assert!(matches!(fields.field("index_hint"), ErrorValue::Absent));
+    assert_eq!(fields.child("metric").code, "retrieval-metric-dot");
+    let request = RequestTerm::Lexical {
+        text: "original λ".into(),
+        language: Some(String::new()),
+        predicate: None,
+    };
+    let fields = Capture::read(&request);
+    assert!(matches!(fields.field("language"), ErrorValue::Text("")));
+    assert!(matches!(fields.field("predicate"), ErrorValue::Absent));
+}
+
+fn retrieval_native_failures_preserve_panicking_caller_cause() {
+    use purrdf_testkit::error_capture::CallerRefusal;
+    let error = purrdf_retrieval::ExecutionError::NativeFailure(
+        purrdf_sparql_eval::EvalError::FunctionAdmission(
+            purrdf_sparql_eval::UserFunctionRefusal::new(CallerRefusal { limit: u128::MAX }),
+        ),
+    );
+    let error = purrdf_retrieval::SearchError::from(error);
+    let fields = Capture::read(&error);
+    let leaf = fields
+        .child("cause")
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(leaf.code, "caller-refused");
+    assert!(matches!(
+        leaf.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+    let mut native = std::error::Error::source(&error).unwrap();
+    while let Some(next) = native.source() {
+        native = next;
+    }
+    assert_eq!(
+        native.downcast_ref::<CallerRefusal>().unwrap().limit,
+        u128::MAX
+    );
+}
+
 purrdf_testkit::harness_main!(
+    retrieval_actual_iri_failures_keep_original_nested_cause,
+    retrieval_protocol_lists_preserve_order_and_full_width_counts,
+    retrieval_request_views_keep_ieee_bits_and_optional_native_values,
+    retrieval_native_failures_preserve_panicking_caller_cause,
     evaluator_conversion_retains_the_original_parser_cause_after_input_disposal,
     stack_refusals_borrow_original_native_causes_and_full_width_counts,
     scoped_bases_retain_the_original_iri_and_directive_provenance,

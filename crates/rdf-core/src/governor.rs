@@ -63,6 +63,13 @@ pub enum StopCause {
     Deadline,
 }
 
+impl purrdf_hash::error::StructuredError for StopCause {
+    purrdf_hash::error_visit! {
+        Cancelled => "stop-cancelled" {},
+        Deadline => "stop-deadline" {},
+    }
+}
+
 impl StopCause {
     /// A stable diagnostic label for this stop cause.
     ///
@@ -126,6 +133,19 @@ pub enum ResourceDimension {
     Pages,
     /// Provider-reported byte charges of admitted pages.
     Bytes,
+}
+
+impl purrdf_hash::error::StructuredError for ResourceDimension {
+    purrdf_hash::error_visit! {
+        Fuel => "governor-fuel" {},
+        AnswerRows => "governor-answer-rows" {},
+        IntermediateCells => "governor-intermediate-cells" {},
+        ScratchBytes => "governor-scratch-bytes" {},
+        RemoteRequests => "governor-remote-requests" {},
+        UdfDepth => "governor-udf-depth" {},
+        Pages => "governor-pages" {},
+        Bytes => "governor-bytes" {},
+    }
 }
 
 impl ResourceDimension {
@@ -321,6 +341,20 @@ pub enum TrippedGovernor {
         /// The planner's estimate that exceeded it. **Not** a measurement.
         estimate: u64,
     },
+}
+
+impl purrdf_hash::error::StructuredError for TrippedGovernor {
+    purrdf_hash::error_visit! {
+        Budget { dimension, limit, consumed } => "governor-budget" {
+            "dimension" => Record(dimension), "limit" => Unsigned(u128::from(*limit)),
+            "consumed" => Unsigned(u128::from(*consumed)),
+        },
+        Stopped { cause } => "governor-stopped" { "cause" => Record(cause) },
+        Refused { dimension, limit, estimate } => "governor-refused" {
+            "dimension" => Record(dimension), "limit" => Unsigned(u128::from(*limit)),
+            "estimate" => Unsigned(u128::from(*estimate)),
+        },
+    }
 }
 
 impl TrippedGovernor {

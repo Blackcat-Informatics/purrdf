@@ -924,6 +924,17 @@ pub enum UnitError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for UnitError {
+    purrdf_hash::error_visit! {
+        ZeroDepth => "retrieval-unit-zero-depth" {},
+        DepthWithoutProbe { depth, ceiling } => "retrieval-unit-depth-without-probe" { "depth" => Unsigned(u128::from(*depth)), "ceiling" => Unsigned(u128::from(*ceiling)) },
+        DepthBeyondDeclaration { depth, declared } => "retrieval-unit-depth-beyond-declaration" { "depth" => Unsigned(u128::from(*depth)), "declared" => Unsigned(u128::from(*declared)) },
+        ExclusionNotRenderable { basis, reason } => "retrieval-unit-exclusion-not-renderable" { "basis" => Code(basis), "reason" => Text(reason) },
+        NotAQuery { reason } => "retrieval-unit-not-a-query" { "reason" => Text(reason) },
+        NotASelect { form } => "retrieval-unit-not-a-select" { "form" => Code(form) },
+    }
+}
+
 impl std::fmt::Display for UnitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

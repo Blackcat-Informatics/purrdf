@@ -283,6 +283,15 @@ impl StructuredError for String {
     }
 }
 
+impl<First: StructuredError, Second: StructuredError> StructuredError for (First, Second) {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        let (first, second) = self;
+        visitor.variant("pair");
+        visitor.value(Some("first"), ErrorValue::Record(first));
+        visitor.value(Some("second"), ErrorValue::Record(second));
+    }
+}
+
 impl<T: StructuredError + ?Sized> StructuredError for &T {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         T::visit(*self, visitor);

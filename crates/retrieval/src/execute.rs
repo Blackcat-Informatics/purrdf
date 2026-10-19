@@ -444,6 +444,115 @@ pub struct CandidateExecutionResult<'d> {
     pub producer_decisions: purrdf_sparql_eval::SharedWorkspace<Vec<crate::plan::ProducerDecision>>,
 }
 
+impl purrdf_hash::error::StructuredError for ReadStratum<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            stratum,
+            plan_id,
+            requested_depth,
+            contract,
+            attestation,
+            stream,
+            admission_failure_settlement,
+        } = self;
+        visitor.variant("retrieval-read-stratum");
+        visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+        visitor.value(Some("plan_id"), ErrorValue::Record(plan_id));
+        visitor.value(
+            Some("requested_depth"),
+            ErrorValue::Unsigned(u128::from(*requested_depth)),
+        );
+        visitor.value(Some("contract"), ErrorValue::Record(contract));
+        visitor.value(Some("attestation"), ErrorValue::Record(attestation));
+        visitor.value(Some("stream"), ErrorValue::Record(stream));
+        match admission_failure_settlement {
+            None => visitor.value(Some("admission_failure_settlement"), ErrorValue::Absent),
+            Some(result) => {
+                visitor.begin_record(
+                    Some("admission_failure_settlement"),
+                    "retrieval-recorded-settlement",
+                );
+                match result {
+                    Ok(attestation) => {
+                        visitor.value(Some("kind"), ErrorValue::Code("settled"));
+                        visitor.value(
+                            Some("attestation"),
+                            attestation
+                                .as_ref()
+                                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                        );
+                    }
+                    Err(error) => {
+                        visitor.value(Some("kind"), ErrorValue::Code("refused"));
+                        visitor.value(Some("cause"), ErrorValue::Cause(error));
+                    }
+                }
+                visitor.end_record();
+            }
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CandidateExecutionResult<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            streams,
+            statuses,
+            plan_id,
+            depths,
+            contracts,
+            unserved_terms,
+            producer_bindings,
+            producer_decisions,
+        } = self;
+        visitor.variant("retrieval-candidate-execution");
+        visitor.value(Some("plan_id"), ErrorValue::Record(plan_id));
+        visitor.value(Some("depths"), ErrorValue::Record(depths));
+        visit_list(
+            visitor,
+            Some("streams"),
+            streams.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visitor.begin_list(Some("statuses"), statuses.len());
+        for (stratum, status) in statuses {
+            visitor.begin_record(None, "retrieval-stratum-status");
+            visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+            visitor.value(Some("status"), ErrorValue::Record(status));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visitor.begin_list(Some("contracts"), contracts.len());
+        for (stratum, contract) in contracts.iter() {
+            visitor.begin_record(None, "retrieval-stratum-contract");
+            visitor.value(Some("stratum"), ErrorValue::Iri(stratum.as_str()));
+            visitor.value(Some("contract"), ErrorValue::Record(contract));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visit_list(
+            visitor,
+            Some("unserved_terms"),
+            unserved_terms.iter().map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_bindings"),
+            producer_bindings
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+        visit_list(
+            visitor,
+            Some("producer_decisions"),
+            producer_decisions
+                .iter()
+                .map(|value| ErrorValue::Record(value)),
+        );
+    }
+}
+
 /// A whole-execution failure, as distinct from a per-stratum one.
 ///
 /// A per-stratum failure is *data* — a [`ProducerStatus::ExecutionFailed`] in
@@ -650,6 +759,19 @@ pub enum ExecutionError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for ExecutionError {
+    purrdf_hash::error_visit! {
+        NativeFailure(cause) => "retrieval-execution-native-failure" { "cause" => Cause(cause) },
+        MissingCandidateScope => "retrieval-execution-missing-candidate-scope" {},
+        SourceRead { reason } => "retrieval-execution-source-read" { "reason" => Text(reason) },
+        RegistryMismatch { expected, got } => "retrieval-execution-registry-mismatch" { "expected" => Record(expected), "got" => Record(got) },
+        InconsistentWitness { stratum, reason } => "retrieval-execution-inconsistent-witness" { "stratum" => Iri(stratum.as_str()), "reason" => Text(reason) },
+        RowBoundBreached { stratum, declared, pulled, mode } => "retrieval-execution-row-bound-breached" { "stratum" => Iri(stratum.as_str()), "declared" => Unsigned(u128::from(*declared)), "pulled" => Unsigned(u128::from(*pulled)), "mode" => Record(mode) },
+        UnitsNotAsAssembled { plan, reason } => "retrieval-execution-units-not-as-assembled" { "plan" => Record(plan), "reason" => Text(reason) },
+        EnvironmentNotDerivable { reason } => "retrieval-execution-environment-not-derivable" { "reason" => Text(reason) },
+    }
+}
+
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -797,6 +919,91 @@ enum RowSource<'d> {
 enum RankedRowsStorage {
     Caller(std::vec::IntoIter<(u64, Term, RowBlock)>),
     Native(purrdf_sparql_eval::AdmittedVecIntoIter<(u64, Term, RowBlock)>),
+}
+
+impl purrdf_hash::error::StructuredError for RankedRowsStorage {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let rows = match self {
+            Self::Caller(rows) => rows.as_slice(),
+            Self::Native(rows) => rows.as_slice(),
+        };
+        visitor.variant("retrieval-unconsumed-rows");
+        visitor.begin_list(Some("rows"), rows.len());
+        for (rank, term, block) in rows {
+            visitor.begin_record(None, "retrieval-ranked-row");
+            visitor.value(Some("rank"), ErrorValue::Unsigned(u128::from(*rank)));
+            visitor.value(Some("term"), ErrorValue::Term(term));
+            visitor.value(Some("block"), ErrorValue::Record(block));
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
+
+impl purrdf_hash::error::StructuredError for StreamEnding {
+    purrdf_hash::error_visit! {
+        Exhausted => "retrieval-stream-exhausted" {},
+        DepthReached { rank } => "retrieval-stream-depth-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        RowBoundReached { rank } => "retrieval-stream-row-bound-reached" { "rank" => Unsigned(u128::from(*rank)) },
+        SuppliedQueryEnded { rank } => "retrieval-stream-supplied-query-ended" { "rank" => Unsigned(u128::from(*rank)) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for OnDemandEnd {
+    purrdf_hash::error_visit! {
+        Ended(ending) => "retrieval-demand-ended" { "ending" => Record(ending) },
+        Failed(reason) => "retrieval-demand-failed" { "reason" => Text(reason.as_ref()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RowSource<'_> {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Materialised {
+                rows,
+                ending,
+                attested,
+            } => {
+                visitor.variant("retrieval-source-materialised");
+                visitor.value(Some("rows"), ErrorValue::Record(rows));
+                visitor.value(Some("ending"), ErrorValue::Record(ending));
+                visitor.value(
+                    Some("attested"),
+                    attested
+                        .as_ref()
+                        .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                );
+            }
+            Self::OnDemand { read: _, ended } => {
+                // The live read is an execution capability. Never call even a
+                // nominally read-only provider method while inspecting a failure.
+                visitor.variant("retrieval-source-on-demand");
+                visitor.value(
+                    Some("ended"),
+                    ended
+                        .as_ref()
+                        .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+                );
+            }
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RankedStreamImpl<'_> {
+    purrdf_hash::error_visit! {
+        @record self { workspace, source, pulled, exhausted, exclusion, materialised,
+            run_invalidated, native_failure } => "retrieval-ranked-stream" {
+            "source" => Record(&self.source),
+            "pulled" => Unsigned(u128::from(self.pulled)),
+            "exhausted" => Boolean(self.exhausted),
+            "has_exclusion" => Boolean(self.exclusion.is_some()),
+            "materialised_counter" => Unsigned(u128::from(self.materialised)),
+            "run_invalidated" => Boolean(self.run_invalidated),
+            "native_failure" => Value(self.native_failure.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Cause(value)))
+        }
+    }
 }
 
 impl Iterator for RankedRowsStorage {
@@ -3557,6 +3764,37 @@ mod tests {
     use crate::compile::{BLOCK_NAME, CANDIDATE_NAME, ReadReach};
     use crate::iri::{Iri, Term};
     use crate::render::decode_term;
+
+    #[test]
+    fn structured_stream_inspection_leaves_unconsumed_rows_and_receipt_intact() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let term = Term::new("<http://example.org/remaining>");
+        let mut stream = super::RankedStreamImpl::new(
+            vec![(u64::MAX, term.clone(), RowBlock::Undeclared)],
+            StreamEnding::DepthReached { rank: u64::MAX },
+        );
+        let fields = Capture::read(&stream);
+        assert!(matches!(fields.field("pulled"), ErrorValue::Unsigned(0)));
+        let source = fields.child("source");
+        let rows = source.child("rows");
+        let entries = rows.records("rows");
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(entries[0].field("rank"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert_eq!(
+            source.child("ending").code,
+            "retrieval-stream-depth-reached"
+        );
+        drop(fields);
+        assert_eq!(
+            crate::block_on(stream.next()).unwrap(),
+            Some((u64::MAX, term, RowBlock::Undeclared))
+        );
+        assert_eq!(stream.rows_emitted(), 1);
+        assert!(crate::block_on(stream.next()).unwrap().is_none());
+    }
 
     #[derive(Debug)]
     struct RefusingProvider {

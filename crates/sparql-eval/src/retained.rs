@@ -526,6 +526,14 @@ impl std::error::Error for RetainedDiagnostic {
     }
 }
 
+impl purrdf_hash::error::StructuredError for RetainedDiagnostic {
+    purrdf_hash::error_visit! {
+        @record self { payload } => "sparql-retained-diagnostic" {
+            "cause" => Cause(self.diagnostic()),
+        }
+    }
+}
+
 impl PartialEq for RetainedDiagnostic {
     fn eq(&self, other: &Self) -> bool {
         self.diagnostic() == other.diagnostic()

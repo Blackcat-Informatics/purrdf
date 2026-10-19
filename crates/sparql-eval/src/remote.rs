@@ -210,6 +210,31 @@ pub enum RemoteError {
     ExchangeIdExhausted,
 }
 
+impl purrdf_hash::error::StructuredError for RemoteError {
+    purrdf_hash::error_visit! {
+        Transport(message) => "service-transport" { "message" => Message(message) },
+        Decode(message) => "service-decode" { "message" => Message(message) },
+        Disabled => "service-disabled" {},
+        Unconfigured(message) => "service-unconfigured" { "message" => Message(message) },
+        Denied(error) => "service-denied" { "cause" => Cause(error) },
+        HostDenied { endpoint, message } => "service-host-denied" {
+            "endpoint" => Iri(endpoint), "message" => Message(message),
+        },
+        HostFault { endpoint, message } => "service-host-fault" {
+            "endpoint" => Iri(endpoint), "message" => Message(message),
+        },
+        Governed(governor) => "service-governed" { "governor" => Record(governor) },
+        GovernedAfterCompletion(governor) => "service-governed-after-completion" {
+            "governor" => Record(governor),
+        },
+        StackExhausted(construct) => "service-stack-exhausted" { "construct" => Text(construct) },
+        HostStackExhausted(construct) => "service-host-stack-exhausted" { "construct" => Text(construct) },
+        SourceRead(message) => "service-source-read" { "message" => Text(message) },
+        WorkspaceStopped => "service-workspace-stopped" {},
+        ExchangeIdExhausted => "service-exchange-id-exhausted" {},
+    }
+}
+
 impl core::fmt::Display for RemoteError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -466,6 +491,14 @@ pub enum ServiceBuildError {
 purrdf_lex::variant_from!(ServiceBuildError { Storage(purrdf_lex::allocation::StorageError) });
 purrdf_lex::variant_from!(ServiceBuildError { Operational(EvalError) });
 
+impl purrdf_hash::error::StructuredError for ServiceBuildError {
+    purrdf_hash::error_visit! {
+        Remote(error) => "service-build-remote" { "cause" => Cause(error) },
+        Operational(error) => "service-build-operational" { "cause" => Cause(error) },
+        Storage(error) => "service-build-storage" { "cause" => Cause(error) },
+    }
+}
+
 #[derive(Debug)]
 struct RemoteErrorPayload {
     error: RemoteError,
@@ -554,7 +587,17 @@ impl fmt::Display for AdmittedRemoteError {
         self.error().fmt(f)
     }
 }
-impl std::error::Error for AdmittedRemoteError {}
+impl std::error::Error for AdmittedRemoteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.error())
+    }
+}
+
+impl purrdf_hash::error::StructuredError for AdmittedRemoteError {
+    purrdf_hash::error_visit! {
+        @record self { payload } => "service-admitted-error" { "cause" => Cause(self.error()) }
+    }
+}
 
 /// Physical failures remain a separate, unsilenceable channel.
 #[derive(Debug)]
@@ -573,7 +616,21 @@ impl fmt::Display for ServiceResolutionError {
         }
     }
 }
-impl std::error::Error for ServiceResolutionError {}
+impl std::error::Error for ServiceResolutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Invocation(error) => Some(error),
+            Self::Operational(error) => Some(error),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ServiceResolutionError {
+    purrdf_hash::error_visit! {
+        Invocation(error) => "service-resolution-invocation" { "cause" => Cause(error) },
+        Operational(error) => "service-resolution-operational" { "cause" => Cause(error) },
+    }
+}
 
 /// Retained federation error preserves the original code, denial classification
 /// and English presentation across nested in-process resolvers.
@@ -671,7 +728,19 @@ impl fmt::Display for RetainedServiceFailure {
         }
     }
 }
-impl std::error::Error for RetainedServiceFailure {}
+impl std::error::Error for RetainedServiceFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RetainedServiceFailure {
+    purrdf_hash::error_visit! {
+        @record self { endpoint, error } => "service-retained-failure" {
+            "endpoint" => Iri(self.endpoint.as_str()), "cause" => Cause(&self.error),
+        }
+    }
+}
 
 /// A source that resolves a forwarded SPARQL `SELECT` query at a `SERVICE`
 /// endpoint. Object-safe so [`EvalCtx`] can hold a `&dyn ServiceResolver`.
