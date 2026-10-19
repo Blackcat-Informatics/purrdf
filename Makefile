@@ -754,6 +754,24 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts \
 				graph_refusal_keeps_original_invalid_edge_without_rendering \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-algebra --test lexer_owned_admission -- --exact \
+				escaped_tokens_keep_exact_original_storage_and_scanner_values \
+				first_token_capacity_refuses_before_allocating \
+				lexical_failure_releases_token_and_decoding_scratch_before_publication \
+				original_iri_cause_is_borrowed_without_rendering_or_reparsing \
+				native_lexical_reasons_keep_original_fields_and_messages \
+				lexical_failure_preserves_the_callers_original_owner \
+				native_refusals_need_no_message_allocation_and_caller_text_stays_message_data \
+				cdt_refusals_retain_the_native_signature_and_full_width_counts \
+				aggregate_refusals_move_the_original_key_without_allocating \
+				aggregate_errors_expose_all_functions_and_private_fields \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-slice --test structured_errors -- --exact \
+				native_io_ownership_conversion_never_renders_the_original_cause \
+				artifact_json_retains_the_original_invalid_member_after_input_disposal \
+				iri_and_rdf_producers_keep_original_causes_and_context \
+				flat_canonicalization_returns_the_native_reserved_vocabulary_refusal \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-json --test structured_errors -- --exact \
 				source_refusals_keep_offsets_and_declared_limits \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \

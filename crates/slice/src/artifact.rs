@@ -39,6 +39,24 @@ pub enum ArtifactRole {
     Other(String),
 }
 
+impl purrdf_hash::error::StructuredError for ArtifactRole {
+    purrdf_hash::error_visit! {
+        Manifest => "artifact-manifest" {},
+        Module => "artifact-module" {},
+        Shapes => "artifact-shapes" {},
+        Mapping => "artifact-mapping" {},
+        CompetencyQuery => "artifact-competency-query" {},
+        VerifyQuery => "artifact-verify-query" {},
+        TestDsl => "artifact-test-dsl" {},
+        Example => "artifact-example" {},
+        CounterExample => "artifact-counter-example" {},
+        Documentation => "artifact-documentation" {},
+        TranslationCatalog => "artifact-translation-catalog" {},
+        Citation => "artifact-citation" {},
+        Other(name) => "artifact-other" { "name" => Text(name) },
+    }
+}
+
 /// A single artifact within a slice: role, path, MIME type, and digests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRecord {
@@ -104,7 +122,12 @@ impl ArtifactRole {
                 .iter()
                 .find(|(_, unit)| *unit == name)
                 .map(|(role, _)| role.clone())
-                .ok_or_else(|| SliceError::Json(format!("unknown artifact role `{name}`")));
+                .ok_or_else(|| {
+                    SliceError::Json(crate::error::JsonRefusal::Unknown {
+                        category: "artifact role",
+                        name: name.to_owned(),
+                    })
+                });
         }
         json_form::newtype_variant(value, "Other").map(Self::Other)
     }

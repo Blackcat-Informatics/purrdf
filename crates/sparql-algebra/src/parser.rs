@@ -367,7 +367,7 @@ impl SparqlParser {
         let base_iri = base_iri.into();
         self.base = BaseIri::parse(&base_iri)
             .map(|base| BaseScope::rooted(base, BaseOrigin::Caller))
-            .map_err(|e| iri_error(&base_iri, &e));
+            .map_err(|e| iri_error(&base_iri, e));
         self
     }
 
@@ -756,17 +756,28 @@ fn anon_label_prefix_with_memory(
     Ok(prefix)
 }
 
-fn iri_error_with_memory(
+fn iri_error_with_memory<S: Admission + ?Sized>(
     lexical: &str,
     error: IriError,
-    memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+    memory: &mut Memory<'_, S>,
 ) -> Result<ParseError> {
-    let reason = memory.format(&format_args!("{}: {error}", error.diagnostic_code()))?;
-    let lexical = memory.string(lexical)?;
-    let bytes = error.owned_text_bytes();
-    drop(error);
-    memory.release_bytes(bytes)?;
-    Ok(ParseError::Iri { lexical, reason })
+    let lexical = match memory.string(lexical) {
+        Ok(lexical) => lexical,
+        Err(refusal) => {
+            let bytes = error.owned_text_bytes();
+            drop(error);
+            // Preserve the original physical refusal if its refund also refuses.
+            let _ = memory.release_bytes(bytes);
+            return Err(refusal.into());
+        }
+    };
+    Ok(ParseError::Iri {
+        lexical,
+        reason: crate::IriTermReason::Validation {
+            cause: error,
+            include_code: true,
+        },
+    })
 }
 
 /// Which grammar production a `SELECT` is being read under.
@@ -1594,9 +1605,7 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
             )),
             Ok(false) => Err(ParseError::Iri {
                 lexical: self.memory.string(text)?,
-                reason: self
-                    .memory
-                    .string("relative IRI reference in term position (no scheme)")?,
+                reason: crate::IriTermReason::Relative,
             }),
             Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
             Err(purrdf_iri::IriReadError::Lexical(error)) => {
@@ -4931,15 +4940,18 @@ fn reject_blank_in_triple_pattern(
     Ok(())
 }
 
-/// Render an [`IriError`] as a typed [`ParseError::Iri`].
+/// Retain an [`IriError`] as a typed [`ParseError::Iri`].
 ///
 /// The reason leads with [`IriError::diagnostic_code`] so that "a relative IRI
 /// reference with no base in scope" reads as the SAME condition here as in every
 /// other codec, rather than as an eighth independently-worded spelling of it.
-fn iri_error(lexical: &str, error: &IriError) -> ParseError {
+fn iri_error(lexical: &str, error: IriError) -> ParseError {
     ParseError::Iri {
         lexical: lexical.to_owned(),
-        reason: format!("{}: {error}", error.diagnostic_code()),
+        reason: crate::IriTermReason::Validation {
+            cause: error,
+            include_code: true,
+        },
     }
 }
 
@@ -5409,6 +5421,19 @@ mod tests {
     use crate::algebra::{AggregateExpression, ArithmeticOperator};
     use crate::algebra::{PurrdfCall, PurrdfFn};
     use crate::tree::{Chain, NonEmpty};
+
+    struct Limit {
+        maximum: usize,
+    }
+    impl Admission for Limit {
+        fn resize(&mut self, live: usize) -> std::result::Result<(), StorageError> {
+            if live > self.maximum {
+                Err(StorageError::AdmissionFailed)
+            } else {
+                Ok(())
+            }
+        }
+    }
 
     const GM: &str =
         "PREFIX purrdf: <https://x/>\nPREFIX rdf: <http://r/>\nPREFIX rdfs: <http://s/>\n";
@@ -7154,6 +7179,55 @@ mod tests {
         assert_eq!(memory.admitted_bytes(), raw);
         drop(query);
         memory.release_bytes(raw).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn admitted_iri_errors_keep_exact_native_storage() {
+        for source in [
+            "SELECT * WHERE { <relative> ?p ?o }",
+            "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
+            "BASE <relative/> SELECT * WHERE { ?s ?p ?o }",
+            "BASE <http://[::gg]/> SELECT * WHERE { ?s ?p ?o }",
+        ] {
+            let mut resident = ResidentParserAdmission;
+            let mut memory = Memory::new(&mut resident as &mut dyn ParserAdmission);
+            let error = SparqlParser::parse_query_admitted(
+                source,
+                &ParserOptions::default(),
+                None,
+                &[],
+                &mut memory,
+            )
+            .expect_err("the original IRI producer refuses");
+            assert!(matches!(error, ParseError::Iri { .. }), "{error}");
+            let retained = error.owned_text_bytes().unwrap();
+            assert_eq!(memory.admitted_bytes(), retained, "{source}");
+            drop(error);
+            memory.release_bytes(retained).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn iri_boundary_refusal_releases_original_native_cause() {
+        let mut storage = Limit {
+            maximum: usize::MAX,
+        };
+        let mut memory = Memory::new(&mut storage);
+        let Err(purrdf_iri::IriReadError::Lexical(cause)) =
+            BaseIri::parse_with_memory("relative/", &mut memory)
+        else {
+            panic!("the base validator returns its original refusal")
+        };
+        assert!(cause.owned_text_bytes() > 0);
+        let live = memory.admitted_bytes();
+        assert_eq!(live, cause.owned_text_bytes());
+        memory.admission_mut().maximum = live;
+        assert_eq!(
+            iri_error_with_memory("relative/", cause, &mut memory),
+            Err(ParseError::Storage(StorageError::AdmissionFailed)),
+        );
         assert_eq!(memory.admitted_bytes(), 0);
     }
 
@@ -10194,18 +10268,6 @@ mod tests {
 
     #[test]
     fn exists_scope_refusal_preserves_enclosing_identity_and_parallel_trails() {
-        struct Limit {
-            maximum: usize,
-        }
-        impl Admission for Limit {
-            fn resize(&mut self, live: usize) -> std::result::Result<(), StorageError> {
-                if live > self.maximum {
-                    Err(StorageError::AdmissionFailed)
-                } else {
-                    Ok(())
-                }
-            }
-        }
         let a = Variable::new("a");
         let b = Variable::new("b");
         let mut storage = Limit {

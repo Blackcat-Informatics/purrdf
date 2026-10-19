@@ -25,6 +25,142 @@ use purrdf_lex::terminals;
 
 use crate::error::{ParseError, Result};
 
+/// Original lexical refusal data, independent of its human presentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LexReason {
+    /// A message supplied by a caller constructing its own parse error.
+    Message(String),
+    /// The scalar starts no token in the SPARQL grammar.
+    UnexpectedCharacter(char),
+    /// A single ampersand was not followed by its required partner.
+    ExpectedAnd {
+        /// The following scalar, absent at end of input.
+        next: Option<char>,
+    },
+    /// A literal reached the end of input without its closing delimiter.
+    UnterminatedString {
+        /// The original single or double quote.
+        quote: char,
+        /// Whether the delimiter has three quotes.
+        long: bool,
+    },
+    /// The final backslash opens no escape character.
+    UnterminatedEscape {
+        /// The original single or double quote.
+        quote: char,
+        /// Whether the delimiter has three quotes.
+        long: bool,
+        /// Original byte offset of the backslash.
+        escape_at: usize,
+    },
+    /// The shared Unicode terminal decoder refused an escape.
+    UnicodeEscape {
+        /// The original decoder category.
+        cause: terminals::UcharError,
+        /// Original byte offset of the backslash.
+        escape_at: usize,
+    },
+    /// The scalar following a backslash is no admitted escape.
+    BadEscape {
+        /// The original scalar, without escaping it into prose.
+        character: char,
+        /// Original byte offset of the backslash.
+        escape_at: usize,
+    },
+    /// A short literal contains an unescaped CR or LF.
+    RawNewline {
+        /// The original CR or LF scalar.
+        character: char,
+    },
+    /// A variable sigil has no valid first name scalar.
+    EmptyVariableName {
+        /// The original question mark or dollar sign.
+        sigil: char,
+        /// The following scalar, absent at end of input.
+        next: Option<char>,
+    },
+    /// A blank label has no valid first name scalar.
+    BlankLabelStart {
+        /// The following scalar, absent at end of input.
+        next: Option<char>,
+    },
+    /// An at-sign has no language-tag characters after it.
+    EmptyLanguageTag {
+        /// The following scalar, absent at end of input.
+        next: Option<char>,
+    },
+}
+
+purrdf_lex::variant_from!(LexReason { Message(String) });
+
+impl LexReason {
+    /// Original raw caller text; native lexical reasons allocate no payload.
+    pub(crate) const fn owned_text_bytes(&self) -> usize {
+        match self {
+            Self::Message(message) => message.capacity(),
+            Self::UnexpectedCharacter(_)
+            | Self::ExpectedAnd { next: _ }
+            | Self::UnterminatedString { quote: _, long: _ }
+            | Self::UnterminatedEscape {
+                quote: _,
+                long: _,
+                escape_at: _,
+            }
+            | Self::UnicodeEscape {
+                cause: _,
+                escape_at: _,
+            }
+            | Self::BadEscape {
+                character: _,
+                escape_at: _,
+            }
+            | Self::RawNewline { character: _ }
+            | Self::EmptyVariableName { sigil: _, next: _ }
+            | Self::BlankLabelStart { next: _ }
+            | Self::EmptyLanguageTag { next: _ } => 0,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for LexReason {
+    purrdf_hash::error_visit! {
+        Message(message) => "sparql-lex-message" { "message" => Message(message) },
+        UnexpectedCharacter(character) => "sparql-lex-unexpected-character" {
+            "character" => Character(*character),
+        },
+        ExpectedAnd { next } => "sparql-lex-expected-and" {
+            "next" => Value(next.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Character)),
+        },
+        UnterminatedString { quote, long } => "sparql-lex-unterminated-string" {
+            "quote" => Character(*quote), "long" => Boolean(*long),
+        },
+        UnterminatedEscape { quote, long, escape_at } => "sparql-lex-unterminated-escape" {
+            "quote" => Character(*quote), "long" => Boolean(*long),
+            "escape_at" => ByteCount(*escape_at as u128),
+        },
+        UnicodeEscape { cause, escape_at } => "sparql-lex-unicode-escape" {
+            "cause" => Cause(cause), "escape_at" => ByteCount(*escape_at as u128),
+        },
+        BadEscape { character, escape_at } => "sparql-lex-bad-escape" {
+            "character" => Character(*character), "escape_at" => ByteCount(*escape_at as u128),
+        },
+        RawNewline { character } => "sparql-lex-raw-newline" { "character" => Character(*character) },
+        EmptyVariableName { sigil, next } => "sparql-lex-empty-variable" {
+            "sigil" => Character(*sigil),
+            "next" => Value(next.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Character)),
+        },
+        BlankLabelStart { next } => "sparql-lex-blank-label-start" {
+            "next" => Value(next.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Character)),
+        },
+        EmptyLanguageTag { next } => "sparql-lex-empty-language-tag" {
+            "next" => Value(next.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Character)),
+        },
+    }
+}
+
+impl std::error::Error for LexReason {}
+
 /// A lexical token. Payload-bearing variants keep the *lexical* form (the AST
 /// owns value-space concerns); keyword recognition is left to the parser, which
 /// matches [`Token::Word`] case-insensitively (except the rdf:type `a` and the
@@ -215,7 +351,7 @@ pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned<'
 
 /// Tokenize through the caller's original physical storage admission.
 /// The caller retains that admission through the returned token buffers and
-/// decoded strings, including any lexical error's reason text.
+/// decoded strings. Native lexical errors retain scalar data without text copies.
 ///
 /// # Errors
 /// Returns the original lexical failure or a distinct physical storage refusal.
@@ -224,7 +360,9 @@ pub fn tokenize_with_memory<'a, S: Admission + ?Sized>(
     options: LexerOptions,
     memory: &mut Memory<'_, S>,
 ) -> Result<Vec<Spanned<'a>>> {
-    Lexer::with_options(input, options, memory).run()
+    // Native lexical refusals are inline. On failure, run has destroyed every
+    // token and decode buffer; refund this child's delta, preserving caller data.
+    memory.try_scope(|memory| Lexer::with_options(input, options, memory).run())
 }
 
 trait LexerStorage {
@@ -243,12 +381,7 @@ trait LexerStorage {
         value: &mut String,
         text: &str,
     ) -> core::result::Result<(), StorageError>;
-    fn format(
-        &mut self,
-        value: &dyn core::fmt::Display,
-    ) -> core::result::Result<String, StorageError>;
     fn release_string(&mut self, value: String) -> core::result::Result<(), StorageError>;
-    fn settle_error(&mut self, error: &ParseError) -> core::result::Result<(), StorageError>;
 }
 
 impl<S: Admission + ?Sized> LexerStorage for Memory<'_, S> {
@@ -273,25 +406,8 @@ impl<S: Admission + ?Sized> LexerStorage for Memory<'_, S> {
     ) -> core::result::Result<(), StorageError> {
         self.push_str(value, text)
     }
-    fn format(
-        &mut self,
-        value: &dyn core::fmt::Display,
-    ) -> core::result::Result<String, StorageError> {
-        self.format(value)
-    }
     fn release_string(&mut self, value: String) -> core::result::Result<(), StorageError> {
         self.release_string(value)
-    }
-    fn settle_error(&mut self, error: &ParseError) -> core::result::Result<(), StorageError> {
-        let retained = match error {
-            ParseError::Lex { reason, .. } => reason.capacity(),
-            _ => 0,
-        };
-        let dead = self
-            .admitted_bytes()
-            .checked_sub(retained)
-            .ok_or(StorageError::SizeOverflow)?;
-        self.release_bytes(dead)
     }
 }
 
@@ -341,13 +457,6 @@ impl<'a, 'm> Lexer<'a, 'm> {
         self.storage
             .as_deref_mut()
             .expect("allocation-producing lexer has its original storage")
-    }
-
-    fn lex_error(&mut self, reason: &dyn core::fmt::Display, at: usize) -> ParseError {
-        match self.storage().format(reason) {
-            Ok(reason) => ParseError::Lex { reason, at },
-            Err(error) => ParseError::Storage(error),
-        }
     }
 
     /// The `ahead`-th char from the cursor without consuming (`ahead == 0` is the
@@ -403,7 +512,6 @@ impl<'a, 'm> Lexer<'a, 'm> {
                 Ok(token) => token,
                 Err(error) => {
                     drop(out);
-                    self.storage().settle_error(&error)?;
                     return Err(error);
                 }
             };
@@ -414,7 +522,6 @@ impl<'a, 'm> Lexer<'a, 'm> {
             {
                 drop(out);
                 let error = ParseError::Storage(error);
-                self.storage().settle_error(&error)?;
                 return Err(error);
             }
         }
@@ -517,7 +624,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
             // `PN_CHARS_U` member that is not in it, `'_'`, opens only a
             // `BLANK_NODE_LABEL` and is handled above.
             _ if terminals::is_pn_chars_base(c) => self.lex_word_or_prefixed(start),
-            _ => Err(self.lex_error(&UnexpectedCharacter(c), start)),
+            _ => Err(ParseError::Lex {
+                reason: LexReason::UnexpectedCharacter(c),
+                at: start,
+            }),
         }
     }
 
@@ -561,7 +671,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
             self.pos += 1;
             Ok(Token::And)
         } else {
-            Err(self.lex_error(&"expected '&&'", start))
+            Err(ParseError::Lex {
+                reason: LexReason::ExpectedAnd { next: self.cur() },
+                at: start,
+            })
         }
     }
 
@@ -678,7 +791,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
                 )
             };
             let Some(stop) = stop else {
-                return Err(self.lex_error(&"unterminated string literal", start));
+                return Err(ParseError::Lex {
+                    reason: LexReason::UnterminatedString { quote, long },
+                    at: start,
+                });
             };
             if stop > 0 {
                 let clean = &self.src[self.pos..self.pos + stop];
@@ -691,7 +807,14 @@ impl<'a, 'm> Lexer<'a, 'm> {
             if c == '\\' {
                 self.pos += 1;
                 let Some(esc) = self.cur() else {
-                    return Err(self.lex_error(&"unterminated escape", start));
+                    return Err(ParseError::Lex {
+                        reason: LexReason::UnterminatedEscape {
+                            quote,
+                            long,
+                            escape_at: self.pos - 1,
+                        },
+                        at: start,
+                    });
                 };
                 if let Some(decoded) = u8::try_from(esc).ok().and_then(terminals::echar_value) {
                     self.storage().push_char(&mut value, decoded)?;
@@ -700,17 +823,32 @@ impl<'a, 'm> Lexer<'a, 'm> {
                 }
                 match esc {
                     'u' | 'U' => {
-                        // Re-decode via read_uchar starting at the backslash.
                         let bs = self.pos - 1;
-                        if let Some((consumed, decoded)) = self.read_uchar(bs) {
-                            self.storage().push_char(&mut value, decoded)?;
-                            self.pos = bs + consumed;
-                            continue;
+                        match terminals::decode_uchar(&self.bytes[bs..]) {
+                            Ok((decoded, consumed)) => {
+                                self.storage().push_char(&mut value, decoded)?;
+                                self.pos = bs + consumed;
+                                continue;
+                            }
+                            Err(cause) => {
+                                return Err(ParseError::Lex {
+                                    reason: LexReason::UnicodeEscape {
+                                        cause,
+                                        escape_at: bs,
+                                    },
+                                    at: start,
+                                });
+                            }
                         }
-                        return Err(self.lex_error(&"bad unicode escape", start));
                     }
                     other => {
-                        return Err(self.lex_error(&format_args!("bad escape \\{other}"), start));
+                        return Err(ParseError::Lex {
+                            reason: LexReason::BadEscape {
+                                character: other,
+                                escape_at: self.pos - 1,
+                            },
+                            at: start,
+                        });
                     }
                 }
             }
@@ -732,7 +870,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
             }
             // Short form only: `stop` landed on a raw CR/LF. SPARQL STRING_LITERAL1/2
             // forbid raw line breaks (only `'''`/`"""` admit them) — reject.
-            return Err(self.lex_error(&"raw newline in short string literal", start));
+            return Err(ParseError::Lex {
+                reason: LexReason::RawNewline { character: c },
+                at: start,
+            });
         }
     }
 
@@ -787,12 +928,20 @@ impl<'a, 'm> Lexer<'a, 'm> {
     /// combining diacriticals and the two ties. Scanning the tail with
     /// `is_pn_chars` instead would admit `'-'` and turn `?a-?b` into one variable;
     /// scanning it with the START class would refuse the lawful `?a\u{300}`.
-    fn lex_variable(&mut self, _sigil: char, start: usize) -> Result<Token<'a>> {
+    fn lex_variable(&mut self, sigil: char, start: usize) -> Result<Token<'a>> {
         self.pos += 1; // sigil
         let begin = self.pos;
         match self.cur() {
             Some(c) if terminals::is_varname_start(c) => self.pos += c.len_utf8(),
-            _ => return Err(self.lex_error(&"empty variable name after sigil", start)),
+            _ => {
+                return Err(ParseError::Lex {
+                    reason: LexReason::EmptyVariableName {
+                        sigil,
+                        next: self.cur(),
+                    },
+                    at: start,
+                });
+            }
         }
         self.take_while(terminals::is_varname_continue);
         Ok(Token::Variable(&self.src[begin..self.pos]))
@@ -831,12 +980,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
         match self.cur() {
             Some(c) if terminals::is_blank_node_label_start(c) => self.pos += c.len_utf8(),
             _ => {
-                return Err(self.lex_error(
-                    &"a blank node label must begin with PN_CHARS_U or [0-9]: \
-                     BLANK_NODE_LABEL ::= '_:' ( PN_CHARS_U | [0-9] ) \
-                     ((PN_CHARS | '.')* PN_CHARS)?",
-                    start,
-                ));
+                return Err(ParseError::Lex {
+                    reason: LexReason::BlankLabelStart { next: self.cur() },
+                    at: start,
+                });
             }
         }
         self.take_while(|c| terminals::is_pn_chars(c) || c == '.');
@@ -889,7 +1036,10 @@ impl<'a, 'm> Lexer<'a, 'm> {
         self.pos += 1; // `@`
         let tag = self.take_while(|c| c.is_ascii_alphanumeric() || c == '-');
         if tag.is_empty() {
-            return Err(self.lex_error(&"empty language tag", start));
+            return Err(ParseError::Lex {
+                reason: LexReason::EmptyLanguageTag { next: self.cur() },
+                at: start,
+            });
         }
         Ok(Token::LangTag(tag))
     }
@@ -1323,33 +1473,57 @@ fn lookup_scalar_name(table: &[(char, &'static str)], c: char) -> Option<&'stati
         .find_map(|&(scalar, name)| (scalar == c).then_some(name))
 }
 
-/// The message for a scalar a reader cannot see: its Unicode name, the
-/// production that refuses it, and what to do instead. `None` for a scalar that
-/// renders as its own visible glyph, which [`unexpected_character`] then reports
-/// the ordinary way.
-///
-/// Total by construction — a lookup miss returns `None` and a hit formats a
-/// `&'static str` — so it cannot panic on input that is already an error.
-struct UnexpectedCharacter(char);
-
-impl core::fmt::Display for UnexpectedCharacter {
+// The invisible-scalar table remains the one home of names and remedies.
+impl core::fmt::Display for LexReason {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let c = self.0;
-        if let Some(name) = lookup_scalar_name(NON_WS_UNICODE_SPACES, c) {
-            return write!(
-                f,
-                "U+{:04X} {name} cannot separate tokens: WS is {WS_MEMBERS}. Replace it with a space.",
-                u32::from(c)
-            );
+        match self {
+            Self::Message(message) => f.write_str(message),
+            Self::UnexpectedCharacter(character) => {
+                let c = *character;
+                if let Some(name) = lookup_scalar_name(NON_WS_UNICODE_SPACES, c) {
+                    return write!(
+                        f,
+                        "U+{:04X} {name} cannot separate tokens: WS is {WS_MEMBERS}. Replace it with a space.",
+                        u32::from(c)
+                    );
+                }
+                if let Some(name) = lookup_scalar_name(INVISIBLE_NON_SPACES, c) {
+                    return write!(
+                        f,
+                        "U+{:04X} {name} is invisible and starts no token: PN_CHARS does not name it, and WS is {WS_MEMBERS}. Delete it.",
+                        u32::from(c)
+                    );
+                }
+                write!(f, "unexpected character {c:?}")
+            }
+            Self::ExpectedAnd { next: _ } => f.write_str("expected '&&'"),
+            Self::UnterminatedString { quote: _, long: _ } => {
+                f.write_str("unterminated string literal")
+            }
+            Self::UnterminatedEscape {
+                quote: _,
+                long: _,
+                escape_at: _,
+            } => f.write_str("unterminated escape"),
+            Self::UnicodeEscape {
+                cause: _,
+                escape_at: _,
+            } => f.write_str("bad unicode escape"),
+            Self::BadEscape {
+                character,
+                escape_at: _,
+            } => write!(f, "bad escape \\{character}"),
+            Self::RawNewline { character: _ } => f.write_str("raw newline in short string literal"),
+            Self::EmptyVariableName { sigil: _, next: _ } => {
+                f.write_str("empty variable name after sigil")
+            }
+            Self::BlankLabelStart { next: _ } => f.write_str(
+                "a blank node label must begin with PN_CHARS_U or [0-9]: \
+             BLANK_NODE_LABEL ::= '_:' ( PN_CHARS_U | [0-9] ) \
+             ((PN_CHARS | '.')* PN_CHARS)?",
+            ),
+            Self::EmptyLanguageTag { next: _ } => f.write_str("empty language tag"),
         }
-        if let Some(name) = lookup_scalar_name(INVISIBLE_NON_SPACES, c) {
-            return write!(
-                f,
-                "U+{:04X} {name} is invisible and starts no token: PN_CHARS does not name it, and WS is {WS_MEMBERS}. Delete it.",
-                u32::from(c)
-            );
-        }
-        write!(f, "unexpected character {c:?}")
     }
 }
 
@@ -1357,7 +1531,7 @@ impl core::fmt::Display for UnexpectedCharacter {
 fn invisible_scalar_diagnostic(c: char) -> Option<String> {
     (lookup_scalar_name(NON_WS_UNICODE_SPACES, c).is_some()
         || lookup_scalar_name(INVISIBLE_NON_SPACES, c).is_some())
-    .then(|| UnexpectedCharacter(c).to_string())
+    .then(|| LexReason::UnexpectedCharacter(c).to_string())
 }
 
 /// The reason text for a scalar that begins no SPARQL token.
@@ -1367,7 +1541,7 @@ fn invisible_scalar_diagnostic(c: char) -> Option<String> {
 /// shows the reader exactly what they typed.
 #[cfg(test)]
 fn unexpected_character(c: char) -> String {
-    UnexpectedCharacter(c).to_string()
+    LexReason::UnexpectedCharacter(c).to_string()
 }
 
 /// Whether `name` is a complete `VARNAME`, sigil already stripped.
@@ -2446,7 +2620,7 @@ mod tests {
     /// The reason text of the lex failure `src` produces.
     fn lex_reason(src: &str) -> String {
         match tokenize(src) {
-            Err(ParseError::Lex { reason, .. }) => reason,
+            Err(ParseError::Lex { reason, .. }) => reason.to_string(),
             other => panic!("expected a lex error for {src:?}, got {other:?}"),
         }
     }

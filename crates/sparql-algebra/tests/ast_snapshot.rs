@@ -139,7 +139,7 @@ fn render_error(error: &ParseError) -> String {
         .map_or_else(|| "-".to_owned(), |at| at.to_string());
     match error {
         ParseError::Lex { .. } => format!("Lex at={at}"),
-        ParseError::Syntax { .. } => format!("Syntax at={at}"),
+        ParseError::Syntax { .. } | ParseError::Aggregate { .. } => format!("Syntax at={at}"),
         ParseError::Unsupported(_) => format!("Unsupported at={at}"),
         ParseError::Iri { .. } => format!("Iri at={at}"),
         ParseError::CdtArity { found, .. } => format!("CdtArity at={at} found={found}"),
