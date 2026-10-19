@@ -82,7 +82,9 @@ included in the profile fingerprint; none is silently chosen for another field.
 
 ## 3. Statistics and `?rank` are per partition
 
-A **partition** is a `(graph, language)` pair. Every BM25 input that describes a
+For the default `GraphLanguage` corpus, a **partition** is a `(graph, language)`
+pair. `GraphFree` omits the graph coordinate and partitions by language alone.
+Every BM25 input that describes a
 *corpus* rather than a document — the document count `N`, the average document
 length `avgdl`, a term's document frequency `df` — is computed within one
 partition and never pooled across partitions.
@@ -110,8 +112,9 @@ row, because no surviving row was ever compared against a dropped one.
 That soundness is also what makes the restriction a **performance** mechanism
 and not merely a filter. A bound language names its partitions directly; a bound
 document names its subject's partitions through
-`TextIndex::partitions_holding_subject`, because `(graph, subject, language)` is
-a document's key and a subject therefore occupies at most one document per
+`TextIndex::partitions_holding_subject`, because a document's key is
+`(graph, subject, language)` for `GraphLanguage` or `(subject, language)` for
+`GraphFree`. A subject therefore occupies at most one document per
 partition. Both are applied before ranking. Without them, an evaluator driving
 the relation once per left row — which is what a bound document position means —
 ranks the whole index per row and then discards all but that row's share of it.
@@ -130,8 +133,9 @@ the ten best documents. `GraphLanguage` requires graph and language restrictions
 single-partition index, make it one list.
 
 Within a partition the order is `(score DESC, document id ASC)`. Document ids are
-assigned only after every document has been sorted by `(graph, subject,
-language)`, so ascending id *is* ascending canonical term order — the tie-break
+assigned only after every document has been sorted by its complete key:
+`(graph, subject, language)` for `GraphLanguage`, or `(subject, language)` for
+`GraphFree`. Ascending id *is* ascending canonical term order — the tie-break
 is meaningful rather than arbitrary, and it is reproducible across independently
 built indexes rather than merely stable within one. Ids are distinct, so this is
 a strict total order and no two rows can tie. That is what lets a bounded heap
