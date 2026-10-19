@@ -4745,6 +4745,39 @@ impl DateTime {
     pub fn owned_heap_bytes(&self) -> u64 {
         self.second.heap_bytes()
     }
+
+    /// Copy exact fractional seconds into the original preparation account.
+    /// Calendar fields and the declared timezone are preserved verbatim. Publish
+    /// through [`Self::publish_detached`] before the value is shared.
+    ///
+    /// # Errors
+    /// Preserves native admission, layout and allocator refusal.
+    pub fn detached_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(Self {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second.detached_with_memory(memory)?,
+            tz: self.tz,
+        })
+    }
+
+    /// Share the prepared seconds under their original immutable lease.
+    /// Clones then retain that owner without copying the limb buffer.
+    ///
+    /// # Errors
+    /// Returns native shared-control refusal before exposing an unowned value.
+    pub fn publish_detached(
+        &mut self,
+        original: &purrdf_lex::allocation::SharedOwned<()>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.second.publish_detached(original)
+    }
     /// XSD canonical lexical form.
     #[must_use]
     pub fn canonical_lexical(&self) -> String {

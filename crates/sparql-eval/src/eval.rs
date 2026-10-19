@@ -575,12 +575,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// never revisits an earlier row's ordinal within the same `Extend` chain.
     pub(crate) bnode_memo:
         crate::AdmittedMap<(u64, purrdf_lex::allocation::SharedText), SolutionTerm<D::Id>>,
-    /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
-    /// context construction from the host platform's real wall clock so all NOW()
-    /// calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
+    /// The evaluation-time value of NOW() — an xsd:dateTime, selected once at
+    /// context construction from the caller's input or the host wall clock so
+    /// all calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
     pub now: purrdf_xsd::XsdValue,
     /// Splitmix64 PRNG state for RAND()/UUID()/STRUUID(), seeded once at context
-    /// construction from real OS/platform entropy.
+    /// construction from the caller's input or real OS/platform entropy.
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
@@ -1304,14 +1304,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn new_admitted(
         dataset: &'d D,
         workspace: &crate::WorkspaceCapability,
+        inputs: impl FnOnce() -> Result<(purrdf_xsd::XsdValue, u64), EvalError>,
     ) -> Result<Self, EvalError> {
         let barrier = ExpressionBarrier::admitted(workspace)?;
-        Ok(Self::at_with_barrier(
-            dataset,
-            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
-            crate::clock::entropy_seed(),
-            barrier,
-        ))
+        let (now, seed) = inputs()?;
+        Ok(Self::at_with_barrier(dataset, now, seed, barrier))
     }
 
     fn at_with_barrier(

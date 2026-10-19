@@ -3002,12 +3002,13 @@ reason = "Resident conveniences for two separate persisted grammars: statement-l
 [[distinct]]
 members = [
     "purrdf_shapes::query_law::replace",
+    "purrdf_shapes::sparql::coordinates::replace",
     "purrdf_shapes::xpath::replace",
 ]
 kind = "shim"
 criterion = "b"
 anchor = "purrdf_shapes::sparql::AmbientContext"
-reason = "Two independently owned typed SHACL request/cause slots: dated query admission retains exact source occurrences and invocation refusals, while native XPath execution retains its profile, finite limits, pattern cache and selected cause. AmbientContext swaps both private CURRENT slots to preserve each owner's admission and exact failure through suspension and nested restoration. Each wrapper forwards to std::RefCell::replace on its own slot; no second admission, regex, executor, cache or context-swap implementation is sanctioned."
+reason = "Three independently owned typed SHACL request slots: dated query admission retains exact source occurrences and invocation refusals; native XPath execution retains its profile, finite limits, pattern cache and selected cause; caller coordinates retain the original immutable timestamp owner and the current query-seed counter. AmbientContext swaps all three private CURRENT slots to preserve each owner's state through suspension and nested restoration. Each wrapper forwards to std::RefCell::replace on its own slot; no second admission, regex, executor, cache, random generator or context-swap implementation is sanctioned."
 
 [[distinct]]
 members = ["purrdf_lex::allocation::ordered::OrderedTable::entry", "purrdf_lex::allocation::ordered::OrderedTable::entry_mut"]

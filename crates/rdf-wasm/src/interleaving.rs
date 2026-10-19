@@ -177,6 +177,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: SHACL_CONTEXT,
     },
     ThreadLocal {
+        file: "crates/shapes/src/sparql/coordinates.rs",
+        name: "CURRENT",
+        safety: Safety::Swapped,
+        reason: SHACL_CONTEXT,
+    },
+    ThreadLocal {
         file: "crates/shapes/src/sparql.rs",
         name: "SPARQL_ENGINE",
         safety: Safety::PerCall,
@@ -513,7 +519,7 @@ mod tests {
     }
 
     /// The swapped entries are exactly the statics of the two contexts `JobAmbient` moves:
-    /// the five of `purrdf_stack::Context` and the ten of the SHACL `AmbientContext`.
+    /// the five of `purrdf_stack::Context` and the eleven of the SHACL `AmbientContext`.
     #[test]
     fn the_swapped_entries_are_the_two_contexts() {
         let swapped: Vec<_> = LEDGER
@@ -537,9 +543,10 @@ mod tests {
                     "crates/shapes/src/sparql.rs"
                         | "crates/shapes/src/query_law.rs"
                         | "crates/shapes/src/xpath.rs"
+                        | "crates/shapes/src/sparql/coordinates.rs"
                 ))
                 .count(),
-            10
+            11
         );
     }
 }

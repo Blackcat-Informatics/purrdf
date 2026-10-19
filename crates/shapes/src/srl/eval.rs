@@ -387,6 +387,7 @@ where
         &FastSet<Term>,
     ) -> Result<Arc<D>, crate::error::ShapesError>,
 {
+    let _coordinates = options.coordinate_scope();
     let source_rules = options.source_rules();
     let governors = options.eval_options();
     for rule in &set.rules {
