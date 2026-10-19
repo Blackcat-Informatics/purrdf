@@ -642,7 +642,7 @@ fn a_body_that_does_not_produce_exactly_one_node_is_a_sparql_error() {
     );
 }
 
-/// G-05: an evaluation failure INSIDE a function body is the call's SPARQL error, not a
+/// An evaluation failure INSIDE a function body is the call's SPARQL error, not a
 /// failure of the validation around it. §7.3: "Otherwise, or if the evaluation produces
 /// an evaluation failure, the result of the SPARQL function call is an error."
 ///
@@ -734,7 +734,7 @@ fn an_unresolvable_shape_in_a_body_is_a_sparql_error() {
     }
 }
 
-/// Neighbour of G-05 (F1): a failure of the PROCESSOR inside a body that is reached through
+/// Neighbour of the evaluation-failure test above: a failure of the PROCESSOR inside a body that is reached through
 /// SPARQL query text is not the call's SPARQL error; validation fails, and the typed cause
 /// is a `ShapesError::Processor`, not a message.
 ///

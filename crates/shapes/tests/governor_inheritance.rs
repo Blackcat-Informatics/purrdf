@@ -299,7 +299,7 @@ fn an_ungoverned_validation_is_unchanged() {
     );
 }
 
-/// G-05 neighbour. An evaluation failure inside a custom function body is that call's
+/// An evaluation failure inside a custom function body is that call's
 /// SPARQL error, but a governor trip inside the body is a failure of the processor and
 /// still ends the validation: the governed entry reports the typed trip, never a report
 /// that treats the starved call as an unbound value.

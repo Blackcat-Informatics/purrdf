@@ -213,7 +213,7 @@ impl ShapesError {
     /// engine refuses with a non-propagating diagnostic code. It must NOT hold a failure
     /// of the processor: storage refusal, governor trip, stop signal, recursion bound,
     /// internal defect and propagating query-engine failure are [`Self::Storage`] or
-    /// [`Self::Processor`] (the audit is recorded in `T3-triage.md`).
+    /// [`Self::Processor`].
     #[must_use]
     pub const fn failure_class(&self) -> FailureClass {
         match self {

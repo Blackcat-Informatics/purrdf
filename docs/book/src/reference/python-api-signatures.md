@@ -820,7 +820,6 @@ _AnnotationRow = tuple[int, int, int, int | None]
 _FoldReifierRow = tuple[int, tuple[int, int, int], int | None]
 _BlobExportRow = tuple[str, bytes]
 _InputTermRow = tuple[int, str | None, int | None, str | None, str | None, int | None, tuple[int, int, int] | None]
-
 GTS_ALL_SCOPE: str
 
 class GtsRelationalRows(TypedDict):
@@ -1059,7 +1058,7 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False) -> None:
+    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None) -> None:
         ...
 
     def validate_nt(self, data_nt: str, *, xpath_regex: str | None=None) -> _ValidationReport:
@@ -1207,7 +1206,7 @@ class shapes:
         ...
 
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None) -> dict[str, builtins.object]:
+    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
