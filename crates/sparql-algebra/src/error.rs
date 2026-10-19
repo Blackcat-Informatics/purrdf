@@ -34,7 +34,7 @@ pub enum IriTermReason {
     /// An original IRI validator refusal, without a rendered copy.
     Validation {
         /// The exact native failure and its original owned payload.
-        cause: purrdf_iri::IriError,
+        cause: Box<purrdf_iri::IriError>,
         /// Whether the existing human spelling leads with the native code.
         include_code: bool,
     },
@@ -59,7 +59,7 @@ impl IriTermReason {
 impl purrdf_hash::error::StructuredError for IriTermReason {
     purrdf_hash::error_visit! {
         Validation { cause, include_code } => "sparql-iri-validation" {
-            "cause" => Cause(cause), "include_code" => Boolean(*include_code),
+            "cause" => Cause(cause.as_ref()), "include_code" => Boolean(*include_code),
         },
         Relative => "sparql-iri-relative-term" {},
     }
@@ -189,6 +189,24 @@ purrdf_lex::constructors! {
 }
 
 impl ParseError {
+    /// Retain a resident IRI refusal without infallible physical allocation.
+    pub(crate) fn iri_validation(
+        lexical: String,
+        cause: purrdf_iri::IriError,
+        include_code: bool,
+    ) -> Self {
+        match purrdf_lex::allocation::try_boxed(cause) {
+            Ok(cause) => Self::Iri {
+                lexical,
+                reason: IriTermReason::Validation {
+                    cause,
+                    include_code,
+                },
+            },
+            Err(_) => Self::Storage(purrdf_lex::allocation::StorageError::AllocationFailed),
+        }
+    }
+
     /// The original parse condition, with stable variant identity and exact typed
     /// fields. Hosts can distinguish a syntax rejection from lexical, IRI,
     /// unsupported-construct and arity failures without interpreting English.
@@ -392,7 +410,7 @@ impl ParseError {
     }
 
     /// Capacity of the original raw error text; intrinsic leaf owners are separate.
-    /// Used only after parser scratch has been destroyed to release its original grant.
+    /// The full retained-storage census is [`Self::owned_bytes`].
     #[must_use]
     pub fn owned_text_bytes(&self) -> Option<usize> {
         match self {
@@ -407,6 +425,20 @@ impl ParseError {
             Self::CdtArity { iri, .. } => Some(iri.capacity()),
             Self::Aggregate { cause, .. } => Some(cause.owned_text_bytes()),
         }
+    }
+
+    /// Original owned storage, including a retained native IRI cause box.
+    /// This destruction census never grants or retroactively admits storage.
+    #[must_use]
+    pub fn owned_bytes(&self) -> Option<usize> {
+        let cause_bytes = match self {
+            Self::Iri {
+                reason: IriTermReason::Validation { .. },
+                ..
+            } => size_of::<purrdf_iri::IriError>(),
+            _ => 0,
+        };
+        self.owned_text_bytes()?.checked_add(cause_bytes)
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
@@ -626,7 +658,7 @@ mod tests {
             ParseError::Iri {
                 lexical: hostile.into(),
                 reason: IriTermReason::Validation {
-                    cause: purrdf_iri::IriError::BadScheme(hostile.into()),
+                    cause: Box::new(purrdf_iri::IriError::BadScheme(hostile.into())),
                     include_code: false,
                 },
             },

@@ -56,7 +56,7 @@ deps = []
 
 [[crate]]
 name = "purrdf-stack"
-deps = []
+deps = ["purrdf-hash"]
 
 [[crate]]
 name = "wasm-link"

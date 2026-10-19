@@ -493,6 +493,87 @@ pub struct PfAttestation {
     pub service: ServiceLevel,
 }
 
+impl purrdf_hash::error::StructuredError for PfAttestation {
+    purrdf_hash::error_visit! {
+        @record self { generation, service } => "pf-attestation" {
+            "generation" => Record(&self.generation), "service" => Record(&self.service)
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for IndexGeneration {
+    purrdf_hash::error_visit! {
+        Undeclared => "index-generation-undeclared" {},
+        Declared(value) => "index-generation-declared" { "value" => Text(value) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ServiceLevel {
+    purrdf_hash::error_visit! {
+        Undeclared => "service-level-undeclared" {},
+        Incomplete { reason } => "service-level-incomplete" { "reason" => Message(reason.as_str()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DuplicatePolicy {
+    purrdf_hash::error_visit! {
+        Unique => "duplicate-policy-unique" {},
+        Allowed => "duplicate-policy-allowed" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RankFidelity {
+    purrdf_hash::error_visit! {
+        @record self { completeness, order } => "rank-fidelity" {
+            "completeness" => Record(&self.completeness), "order" => Record(&self.order)
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Completeness {
+    purrdf_hash::error_visit! {
+        Complete => "completeness-complete" {},
+        Lossy { evidence } => "completeness-lossy" { "evidence" => Text(evidence) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for OrderFidelity {
+    purrdf_hash::error_visit! {
+        Faithful => "order-fidelity-faithful" {},
+        Perturbed { evidence } => "order-fidelity-perturbed" { "evidence" => Text(evidence) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ExclusionBasis {
+    purrdf_hash::error_visit! {
+        Unavailable => "exclusion-basis-unavailable" {},
+        Membership => "exclusion-basis-membership" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DomainTag {
+    purrdf_hash::error_visit! {
+        @tuple self (_value) => "candidate-domain-tag" { "iri" => Iri(self.as_str()) }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CandidateDomains {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Unrestricted => visitor.variant("candidate-domains-unrestricted"),
+            Self::Within(tags) => {
+                visitor.variant("candidate-domains-within");
+                visitor.begin_list(Some("tags"), tags.len());
+                for tag in tags.iter() {
+                    visitor.value(None, ErrorValue::Record(tag));
+                }
+                visitor.end_list();
+            }
+        }
+    }
+}
+
 impl PfAttestation {
     /// The attestation of a relation that declared neither fact — what every cursor
     /// that overrides neither method attests, named once so the "said nothing" value
@@ -1598,6 +1679,18 @@ pub enum RequestFacet {
     LowerBound,
     /// The inclusive upper endpoint of a term that names an interval.
     UpperBound,
+}
+
+impl purrdf_hash::error::StructuredError for RequestFacet {
+    purrdf_hash::error_visit! {
+        Value => "request-facet-value" {},
+        ScopedLexicalValue => "request-facet-scoped-lexical-value" {},
+        Language => "request-facet-language" {},
+        Predicate => "request-facet-predicate" {},
+        MaxDistance => "request-facet-max-distance" {},
+        LowerBound => "request-facet-lower-bound" {},
+        UpperBound => "request-facet-upper-bound" {},
+    }
 }
 
 impl RequestFacet {

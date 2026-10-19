@@ -643,7 +643,17 @@ pub enum StackError {
         available: usize,
     },
     /// The operating system would not start a thread with the requested stack.
-    Spawn(std::io::Error),
+    Spawn(purrdf_hash::error::IoFailure),
+}
+
+impl purrdf_hash::error::StructuredError for StackError {
+    purrdf_hash::error_visit! {
+        ExceedsFloor { requested, available } => "stack-exceeds-floor" {
+            "requested" => ByteCount(*requested as u128),
+            "available" => ByteCount(*available as u128)
+        },
+        Spawn(cause) => "stack-spawn" { "cause" => Cause(cause) },
+    }
 }
 
 impl core::fmt::Display for StackError {
@@ -741,7 +751,7 @@ fn on_thread<'env, R: Send + 'env>(
         let handle = std::thread::Builder::new()
             .stack_size(bytes)
             .spawn_scoped(scope, f)
-            .map_err(StackError::Spawn)?;
+            .map_err(|cause| StackError::Spawn(cause.into()))?;
         match handle.join() {
             Ok(value) => Ok(value),
             Err(payload) => std::panic::resume_unwind(payload),

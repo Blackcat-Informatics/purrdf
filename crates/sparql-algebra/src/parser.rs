@@ -611,7 +611,7 @@ impl SparqlParser {
             // The closure has destroyed the parser and every partial AST.
             // Only this original raw error payload survives; no new grant is
             // inferred or acquired from its census.
-            let retained = error.owned_text_bytes().ok_or(StorageError::SizeOverflow)?;
+            let retained = error.owned_bytes().ok_or(StorageError::SizeOverflow)?;
             let scratch = memory
                 .admitted_bytes()
                 .checked_sub(original_live)
@@ -771,10 +771,23 @@ fn iri_error_with_memory<S: Admission + ?Sized>(
             return Err(refusal.into());
         }
     };
+    let native_text_bytes = error.owned_text_bytes();
+    let cause = match memory.boxed(error) {
+        Ok(cause) => cause,
+        Err(refusal) => {
+            let lexical_bytes = lexical.capacity();
+            drop(lexical);
+            // Boxing has already destroyed the native cause. Preserve its
+            // original refusal even if releasing old payload storage refuses.
+            let _ = memory.release_bytes(lexical_bytes);
+            let _ = memory.release_bytes(native_text_bytes);
+            return Err(refusal.into());
+        }
+    };
     Ok(ParseError::Iri {
         lexical,
         reason: crate::IriTermReason::Validation {
-            cause: error,
+            cause,
             include_code: true,
         },
     })
@@ -4946,13 +4959,7 @@ fn reject_blank_in_triple_pattern(
 /// reference with no base in scope" reads as the SAME condition here as in every
 /// other codec, rather than as an eighth independently-worded spelling of it.
 fn iri_error(lexical: &str, error: IriError) -> ParseError {
-    ParseError::Iri {
-        lexical: lexical.to_owned(),
-        reason: crate::IriTermReason::Validation {
-            cause: error,
-            include_code: true,
-        },
-    }
+    ParseError::iri_validation(lexical.to_owned(), error, true)
 }
 
 /// The clause-terminator / boolean-literal words that end a bare `GROUP BY`
@@ -7201,7 +7208,7 @@ mod tests {
             )
             .expect_err("the original IRI producer refuses");
             assert!(matches!(error, ParseError::Iri { .. }), "{error}");
-            let retained = error.owned_text_bytes().unwrap();
+            let retained = error.owned_bytes().unwrap();
             assert_eq!(memory.admitted_bytes(), retained, "{source}");
             drop(error);
             memory.release_bytes(retained).unwrap();
@@ -7211,24 +7218,27 @@ mod tests {
 
     #[test]
     fn iri_boundary_refusal_releases_original_native_cause() {
-        let mut storage = Limit {
-            maximum: usize::MAX,
-        };
-        let mut memory = Memory::new(&mut storage);
-        let Err(purrdf_iri::IriReadError::Lexical(cause)) =
-            BaseIri::parse_with_memory("relative/", &mut memory)
-        else {
-            panic!("the base validator returns its original refusal")
-        };
-        assert!(cause.owned_text_bytes() > 0);
-        let live = memory.admitted_bytes();
-        assert_eq!(live, cause.owned_text_bytes());
-        memory.admission_mut().maximum = live;
-        assert_eq!(
-            iri_error_with_memory("relative/", cause, &mut memory),
-            Err(ParseError::Storage(StorageError::AdmissionFailed)),
-        );
-        assert_eq!(memory.admitted_bytes(), 0);
+        for extra in [0, "relative/".len()] {
+            let mut storage = Limit {
+                maximum: usize::MAX,
+            };
+            let mut memory = Memory::new(&mut storage);
+            let Err(purrdf_iri::IriReadError::Lexical(cause)) =
+                BaseIri::parse_with_memory("relative/", &mut memory)
+            else {
+                panic!("the base validator returns its original refusal")
+            };
+            assert!(cause.owned_text_bytes() > 0);
+            let live = memory.admitted_bytes();
+            assert_eq!(live, cause.owned_text_bytes());
+            // Refuse either the lexical copy or the following cause box.
+            memory.admission_mut().maximum = live + extra;
+            assert_eq!(
+                iri_error_with_memory("relative/", cause, &mut memory),
+                Err(ParseError::Storage(StorageError::AdmissionFailed)),
+            );
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
     }
 
     #[test]

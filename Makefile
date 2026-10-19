@@ -1053,6 +1053,13 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test lossless -- --exact \
 				production_rdf_round_trip_is_deterministic_for_original_and_broken_messages \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-retrieval --test structured_foundations -- --exact \
+				stack_refusals_borrow_original_native_causes_and_full_width_counts \
+				scoped_bases_retain_the_original_iri_and_directive_provenance \
+				fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits \
+				attestations_preserve_original_generation_and_caller_message_owners \
+				evaluator_conversion_retains_the_original_parser_cause_after_input_disposal \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-jsonschema --test api -- --exact \
 				native_output_keeps_cardinality_after_schema_and_input_destruction \
 				content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal \
