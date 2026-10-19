@@ -262,7 +262,7 @@ fn contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs() {
     use purrdf_sparql_eval::{GovernedOutcome, PartialAnswers, QueryGovernors};
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let engine = NativeSparqlEngine::new();
-    for (policy, expected) in [("exact", "1"), ("2:half-even", "0.67")] {
+    for (policy, expected) in [("exact", "1.0"), ("2:half-even", "0.67")] {
         let options = QueryOptions::EMPTY.with_division(policy.parse().unwrap());
         let query = "SELECT (AVG(?v) AS ?mean) WHERE { VALUES ?x {1 2 3} BIND(?x / 3 AS ?v) }";
         let request = SparqlRequest {

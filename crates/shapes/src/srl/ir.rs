@@ -30,10 +30,12 @@
 //!
 //! # Aggregation
 //!
-//! Neither language defines an aggregation element: SPARQL 1.2 RL's rule elements are
-//! the four above, and SHACL's aggregating node expressions (`shnex:count`, `shnex:sum`,
-//! …) are evaluated inside a producer against the graph the rule runs over. So the IR
-//! has no aggregate literal and the stratifier needs no aggregation stratum.
+//! SPARQL 1.2 RL's abstract syntax describes an aggregation element, but its grammar
+//! gives it no syntax: a rule body is triple patterns plus filters, negation and
+//! assignments, so the parser refuses every aggregate spelling with a syntax error.
+//! SHACL's aggregating node expressions (`shnex:count`, `shnex:sum`, …) are evaluated
+//! inside a producer against the graph the rule runs over. So the IR has no aggregate
+//! literal and the stratifier needs no aggregation stratum.
 
 use purrdf_sparql_algebra::{Expression, Flow, NodeRef, Visit, walk_pre_post};
 
@@ -86,8 +88,10 @@ pub struct IrRule<'a> {
 impl IrRule<'_> {
     /// Whether the rule is a RUN-ONCE rule.
     ///
-    /// For an element rule, SPARQL 1.2 RL's definition: "Rules involving assignments and
-    /// rules that create blank nodes in their rule head are run-once rules." For a SHACL
+    /// For an element rule, SPARQL 1.2 RL's definition: "A rule is a run-once rule if
+    /// any of the following hold: the rule body has an assignment element; […] a triple
+    /// template of the rule head has a blank node; a triple template of the rule head has
+    /// a template for a triple term in which a variable occurs." For a SHACL
     /// rule, SHACL 1.2 Inference Rules': "A rule that has true as its value for
     /// sh:runOnce is a run-once rule" — and only that, since "Custom rule processors may
     /// compute additional run-once rules when sh:runOnce is absent" and the standard
@@ -99,7 +103,9 @@ impl IrRule<'_> {
                 rule.body
                     .iter()
                     .any(|element| matches!(element, Element::Assign { .. }))
-                    || rule.head.iter().any(TriplePattern::has_blank_node)
+                    || rule.head.iter().any(|template| {
+                        template.has_blank_node() || template.has_variable_triple_term()
+                    })
             }
             IrRuleBody::Shacl(_) => self.schedule.run_once,
         }
@@ -233,6 +239,15 @@ impl PatternTerm {
         }
     }
 
+    /// Whether this position is, or nests, a triple term template in which a variable
+    /// occurs.
+    fn has_variable_triple_term(&self) -> bool {
+        match self {
+            Self::Triple(inner) => !inner.variable_names().is_empty(),
+            Self::Variable(_) | Self::BlankNode(_) | Self::Term(_) => false,
+        }
+    }
+
     /// Record the variables of this position, blank nodes excluded.
     fn variables(&self, into: &mut Vec<String>) {
         match self {
@@ -270,6 +285,15 @@ impl TriplePattern {
         self.positions()
             .into_iter()
             .any(PatternTerm::has_blank_node)
+    }
+
+    /// Whether any position is, or nests, a triple term template in which a variable
+    /// occurs.
+    #[must_use]
+    pub fn has_variable_triple_term(&self) -> bool {
+        self.positions()
+            .into_iter()
+            .any(PatternTerm::has_variable_triple_term)
     }
 
     /// The pattern's variables, in first-occurrence order, blank nodes excluded.
@@ -599,5 +623,29 @@ mod tests {
             ..assign
         };
         assert!(!general.is_run_once());
+        let triple_term = |inner: TriplePattern| IrRule {
+            body: IrRuleBody::Elements(rule(
+                vec![TriplePattern::new(
+                    var("x"),
+                    PatternTerm::Term(Term::NamedNode(NamedNode::from("http://example.org/p"))),
+                    PatternTerm::Triple(Box::new(inner)),
+                )],
+                vec![Element::Pattern(pattern(var("x"), "p", var("v")))],
+            )),
+            ..general.clone()
+        };
+        assert!(
+            triple_term(pattern(var("x"), "q", var("v"))).is_run_once(),
+            "a head triple term with a variable makes a run-once rule"
+        );
+        assert!(
+            !triple_term(TriplePattern::new(
+                PatternTerm::Term(Term::NamedNode(NamedNode::from("http://example.org/s"))),
+                PatternTerm::Term(Term::NamedNode(NamedNode::from("http://example.org/p"))),
+                PatternTerm::Term(Term::NamedNode(NamedNode::from("http://example.org/o"))),
+            ))
+            .is_run_once(),
+            "a head triple term without a variable is a constant"
+        );
     }
 }

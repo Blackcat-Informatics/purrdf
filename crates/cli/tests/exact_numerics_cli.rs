@@ -134,7 +134,7 @@ fn division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbo
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("5.123456789012345678901"),
+        stdout(&out).contains("05.123456789012345678901"),
         "{}",
         stdout(&out)
     );

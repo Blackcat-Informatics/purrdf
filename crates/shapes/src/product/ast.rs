@@ -98,7 +98,7 @@
 //! | 1 | `fn_decls` | `seq<decl>` | the custom node-expression function declarations, **sorted by IRI** |
 //! | 2 | `fn_bodies` | `opt<node_expr>` × `fn_decls` count | each declaration's `sh:bodyExpression`, in the same order |
 //! | 3 | `node_shapes` | `seq<shape>` | the shapes graph's top-level node shapes |
-//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool` | the global rules, the rule sets, and whether `sh:RulesEntailment` is declared |
+//! | 4 | `rule_graph` | `seq<rule>`, `seq<rule_set>`, `bool`, `seq<iri>` | the global rules, the rule sets, whether `sh:RulesEntailment` is declared, and the rule sets declared as `sh:entailment` values, **sorted by IRI** |
 //! | 5 | `box_role_vocab` | `opt<box_role_vocab>` | absent = the box-role feature is inactive |
 //! | 6 | `target_types` | `seq<(str, sparql_target_type)>` | `sh:SPARQLTargetType` declarations, **key-sorted** |
 //! | 7 | `shapes_graph` | `opt<str>` | the named-graph IRI the shapes dataset is exposed under |
@@ -671,7 +671,10 @@ impl AstWriter {
 
     /// Write a shape's per-constraint reifier annotations, in the canonical order
     /// the parser keeps them (by constraint).
-    fn constraint_annotations(&mut self, annotations: &[ConstraintAnnotation]) {
+    fn constraint_annotations(
+        &mut self,
+        annotations: &[ConstraintAnnotation],
+    ) -> Result<(), ShapesProductError> {
         self.count(annotations.len());
         for annotation in annotations {
             match annotation.constraint {
@@ -683,7 +686,9 @@ impl AstWriter {
             }
             self.opt_severity(annotation.severity.as_ref());
             self.messages(&annotation.messages);
+            self.node_exprs(&annotation.deactivated_when)?;
         }
+        Ok(())
     }
 
     /// Write an optional severity override.
@@ -1384,8 +1389,9 @@ impl AstWriter {
         self.flag(shape.reification_required);
         self.severity(&shape.severity);
         self.messages(&shape.messages);
-        self.constraint_annotations(&shape.constraint_annotations);
+        self.constraint_annotations(&shape.constraint_annotations)?;
         self.flag(shape.deactivated);
+        self.node_exprs(&shape.deactivated_when)?;
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
             self.named_node(role);
@@ -1412,8 +1418,9 @@ impl AstWriter {
         }
         self.severity(&shape.severity);
         self.messages(&shape.messages);
-        self.constraint_annotations(&shape.constraint_annotations);
+        self.constraint_annotations(&shape.constraint_annotations)?;
         self.flag(shape.deactivated);
+        self.node_exprs(&shape.deactivated_when)?;
         self.count(shape.box_roles.len());
         for role in &shape.box_roles {
             self.named_node(role);
@@ -1536,6 +1543,10 @@ impl AstWriter {
             }
         }
         self.flag(rules.entailment);
+        self.count(rules.entailment_rule_sets.len());
+        for set in &rules.entailment_rule_sets {
+            self.named_node(set);
+        }
         Ok(())
     }
 
@@ -1934,6 +1945,7 @@ impl<'a> AstReader<'a> {
                 constraint,
                 severity: reader.opt_severity()?,
                 messages: reader.messages()?,
+                deactivated_when: reader.seq(AstReader::node_expr)?,
             })
         })?;
         for (position, annotation) in annotations.iter().enumerate() {
@@ -1945,7 +1957,9 @@ impl<'a> AstReader<'a> {
                 position == 0 || annotations[position - 1].constraint < annotation.constraint;
             if !in_range
                 || !ordered
-                || (annotation.severity.is_none() && annotation.messages.is_empty())
+                || (annotation.severity.is_none()
+                    && annotation.messages.is_empty()
+                    && annotation.deactivated_when.is_empty())
             {
                 return Err(malformed(format!(
                     "this product carries a per-constraint annotation for {:?} that the shapes \
@@ -2343,6 +2357,7 @@ impl<'a> AstReader<'a> {
             constraint_annotations: self.constraint_annotations(constraints.len(), true)?,
             constraints,
             deactivated: self.flag()?,
+            deactivated_when: self.seq(Self::node_expr)?,
             box_roles: self.seq(Self::named_node)?,
         };
         self.leave();
@@ -2364,6 +2379,7 @@ impl<'a> AstReader<'a> {
             constraint_annotations: self.constraint_annotations(constraints.len(), false)?,
             constraints,
             deactivated: self.flag()?,
+            deactivated_when: self.seq(Self::node_expr)?,
             box_roles: self.seq(Self::named_node)?,
             rules: self.seq(Self::rule)?,
         };
@@ -2454,10 +2470,13 @@ impl<'a> AstReader<'a> {
                 processors: reader.seq(Self::term)?,
             })
         })?;
+        let entailment = self.flag()?;
+        let entailment_rule_sets = self.seq(Self::named_node)?;
         Ok(RuleGraph {
             global_rules,
             rule_sets,
-            entailment: self.flag()?,
+            entailment,
+            entailment_rule_sets,
         })
     }
 

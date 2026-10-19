@@ -8,6 +8,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Editor's-draft SHACL law (breaking):** `ShaclProfile::ED_20261016`
+  (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at commit
+  `4cd469867a1cc6d2fff80e8a40723b26c695d67a`, with XPath 3.1. It is the working
+  draft law plus four rules first published after that draft: a node expression
+  as `sh:deactivated` on a SPARQL-based or `sh:expression` constraint, the
+  `owl:versionIRI` steps of the `sh:prefixes` path, a blank node as a custom
+  SPARQL function argument being an error, and rule sets as `sh:entailment`
+  values. `ShaclProfile::WD_20260918` now follows the working draft text and
+  refuses or ignores each of the four, `ShaclProfile::REC_20170720` collects
+  prefixes along `sh:prefixes/owl:imports*/sh:declare`, and the compatibility law
+  reads the editor's draft. `ShaclProfile::is_shacl12` selects the two SHACL 1.2
+  laws.
+
+- **Rule sets are typed, and their includes are checked at load (breaking):** a rule
+  set is a SHACL instance of `sh:RuleSet` and nothing else. An untyped subject of
+  `sh:hasRule` or `sh:includesRuleSet` is no longer read as a rule set, and
+  `RuleOptions::with_rule_set` on an untyped IRI is refused as not declared. An
+  `sh:includesRuleSet` value that is not a declared rule set is refused when the shapes
+  graph loads, with or without `sh:RulesEntailment`, where it used to fail only when
+  the rules ran. `validate_change` on a shapes graph that declares `sh:RulesEntailment`
+  or a rule set as `sh:entailment` answers with the whole graph and the reason
+  `rules entailment`, where it used to report the validator as not bound.
+
 - **BLAKE3 modes and extended output:** keyed hashing and context-separated key
   derivation share the existing portable and SIMD kernels. Both streaming buffer
   sizes support keyed and derived input; an owned output reader fills caller

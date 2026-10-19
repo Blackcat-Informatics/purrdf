@@ -47,8 +47,8 @@ use purrdf_sparql_algebra::{
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value,
     numeric::{
-        CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
-        temporal_subtract_cost, timezone_adjust_cost,
+        CostOp, computed_numeric_render_cost, numeric_cost, numeric_render_cost,
+        numeric_to_float_cost, numeric_unary_cost, temporal_subtract_cost, timezone_adjust_cost,
     },
 };
 #[cfg(test)]
@@ -5706,9 +5706,19 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.minute()))?)),
             _ => Ok(None),
         },
-        Function::Seconds => match temporal_value {
-            Some(XsdValue::DateTime(dt)) => borrowed_temporal_seconds_to_term(ctx, dt.second_ref()),
-            Some(XsdValue::Time(t)) => borrowed_temporal_seconds_to_term(ctx, t.second_ref()),
+        // The seconds field of the argument's own lexical form, as written
+        // (`05.500` stays `05.500`). Every argument is an RDF term and so has a
+        // lexical form: a computed dateTime is interned as a literal whose lexical
+        // form is its canonical text, and that is what is read. The parsed value
+        // is not rendered: it has dropped the trailing zeros. A parsed dateTime or
+        // time always ends in a seconds field, so the lookup cannot miss.
+        Function::Seconds => match (temporal_value, arg(vals, 0)) {
+            (
+                Some(XsdValue::DateTime(_) | XsdValue::Time(_)),
+                Some(TermValue::Literal { lexical_form, .. }),
+            ) => purrdf_xsd::temporal::seconds_field_text(lexical_form).map_or(Ok(None), |field| {
+                borrowed_xsd_text_to_term(ctx, &field, purrdf_xsd::datatype::XSD_DECIMAL)
+            }),
             _ => Ok(None),
         },
         Function::Timezone => match temporal_value {
@@ -6126,7 +6136,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 frame.admit(layout)
             });
             return match frame.finish_cast(cast)? {
-                Some(cast) => governed_xsd_to_term(ctx, &cast, cast.datatype().iri()),
+                Some(cast) => governed_cast_to_term(ctx, &cast, cast.datatype().iri()),
                 None => {
                     ctx.record_expression_error(Some(cast_error_code(&value)));
                     Ok(None)
@@ -6166,7 +6176,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                     }
                     Err(_) => return Ok(None),
                 };
-                return governed_xsd_to_term(ctx, &value, target.iri());
+                return governed_cast_to_term(ctx, &value, target.iri());
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -6204,8 +6214,8 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => governed_xsd_to_term(ctx, &value, target.iri()),
-            Ok(value) => governed_xsd_to_term(ctx, &value, value.datatype().iri()),
+            Ok(value) if target.is_calendar() => governed_cast_to_term(ctx, &value, target.iri()),
+            Ok(value) => governed_cast_to_term(ctx, &value, value.datatype().iri()),
             Err(code) => {
                 if target.is_numeric() {
                     ctx.record_expression_error(code);
@@ -6354,7 +6364,7 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
         return Ok(ValueCast::Cast(None));
     };
     if from == target {
-        return xsd_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value)));
+        return xsd_cast_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value)));
     }
     let result = match &*value {
         XsdValue::Duration(duration) => {
@@ -6369,7 +6379,7 @@ fn cast_duration_or_binary<D: DatasetView + Sync>(
                     let value = frame
                         .finish_value(Ok(XsdValue::Duration(duration)))?
                         .expect("duration cast has no numeric value-space error");
-                    Some(xsd_to_term(ctx, &value)?)
+                    Some(xsd_cast_to_term(ctx, &value)?)
                 }
                 Ok(None) | Err(purrdf_xsd::XsdError::TypeMismatch { .. }) => None,
                 Err(purrdf_xsd::XsdError::Storage(error)) => {
@@ -7470,7 +7480,8 @@ fn triple_part<D: DatasetView + Sync>(
 }
 
 /// Convert a computed [`XsdValue`] back into an interned [`SolutionTerm`] using the
-/// canonical typed-literal form. The datatype IRI comes from `v.datatype().iri()`.
+/// typed-literal form of a computed result ([`xsd_workspace_value`]). The datatype IRI
+/// comes from `v.datatype().iri()`.
 pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
@@ -7480,16 +7491,43 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
         .ok_or(EvalError::WorkspaceBoundOverflow)
 }
 
-/// One canonical producer for expressions and aggregate results. Borrowed native
+/// [`xsd_to_term`] for the value a cast or constructor converted: its XSD 1.1
+/// canonical form, never the form of a computed result.
+fn xsd_cast_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    v: &XsdValue,
+) -> Result<SolutionTerm<D::Id>, EvalError> {
+    let value = render_xsd_workspace_value(v, &ctx.growth, v.datatype().iri(), false)?;
+    ctx.intern_workspace_term(value)?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
+}
+
+/// One producer for expressions and aggregate results. A decimal an operator, a
+/// function or an aggregate COMPUTED is spelled with a point and a fractional digit
+/// (`4.0`); the specifications leave a computed literal's lexical form to the
+/// processor, and the SPARQL Query examples spell them so. Borrowed native
 /// inputs and render groups remain owned until the final literal is admitted.
 pub(crate) fn xsd_workspace_value(
     value: &XsdValue,
     workspace: &crate::WorkspaceCapability,
     datatype: &str,
 ) -> Result<crate::WorkspaceTerm, EvalError> {
+    render_xsd_workspace_value(value, workspace, datatype, true)
+}
+
+/// [`xsd_workspace_value`], with a decimal's point required only when `computed`.
+fn render_xsd_workspace_value(
+    value: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+    datatype: &str,
+    computed: bool,
+) -> Result<crate::WorkspaceTerm, EvalError> {
     let mut frame = crate::native_numeric::NumericFrame::new(workspace);
-    let prepared =
-        purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
+    let prepared = if computed {
+        purrdf_xsd::numeric::prepare_computed_numeric_text(value, &mut |layout| frame.admit(layout))
+    } else {
+        purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout))
+    };
     match frame.finish_text(prepared)? {
         Some(text) => numeric_text_value(text, datatype, workspace),
         None => {
@@ -7533,22 +7571,6 @@ fn numeric_text_to_term<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let value = numeric_text_value(text, datatype, &ctx.growth)?;
     ctx.intern_workspace_term(value)
-}
-
-fn borrowed_temporal_seconds_to_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    seconds: &purrdf_xsd::exact::Decimal,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    if !numeric_step_admitted(ctx, purrdf_xsd::numeric::decimal_render_cost(seconds)) {
-        return Ok(None);
-    }
-    let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
-    let prepared =
-        purrdf_xsd::numeric::prepare_decimal_text(seconds, &mut |layout| frame.admit(layout));
-    let text = frame
-        .finish_text(prepared.map(Some))?
-        .ok_or(EvalError::WorkspaceBoundOverflow)?;
-    numeric_text_to_term(ctx, text, purrdf_xsd::datatype::XSD_DECIMAL)
 }
 
 /// The exact writer owns its admitted groups; destination sizing precedes
@@ -7710,10 +7732,34 @@ pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
     value: &XsdValue,
     datatype: &str,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
+    governed_term(ctx, value, datatype, true)
+}
+
+/// [`governed_xsd_to_term`] for a value a cast or constructor converted, or an
+/// operator passed through unchanged: its XSD 1.1 canonical form.
+fn governed_cast_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+    datatype: &str,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    governed_term(ctx, value, datatype, false)
+}
+
+fn governed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+    datatype: &str,
+    computed: bool,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let price = if computed {
+        computed_numeric_render_cost(value)
+    } else {
+        numeric_render_cost(value)
+    };
+    if !numeric_step_admitted(ctx, price) {
         return Ok(None);
     }
-    let value = xsd_workspace_value(value, &ctx.growth, datatype)?;
+    let value = render_xsd_workspace_value(value, &ctx.growth, datatype, computed)?;
     ctx.intern_workspace_term(value)?
         .ok_or(EvalError::WorkspaceBoundOverflow)
         .map(Some)
@@ -7732,6 +7778,13 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     let Some(value) = xsd_of_term(ctx, operand)? else {
         return Ok(None);
     };
+    // Unary plus is the identity (XPath `op:numeric-unary-plus`): the operand
+    // itself, so its spelling is kept (a stored `4.0` stays `4.0`, a computed
+    // `1.5 + 2.5` stays `4.0`, `+"4"^^xsd:decimal` stays `4`) and, doing no work,
+    // it costs nothing. A non-numeric operand is still a type error.
+    if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus {
+        return Ok(value.is_numeric().then_some(operand));
+    }
     apply_unary_numeric(ctx, &value, op)
 }
 
@@ -7763,10 +7816,6 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if !numeric_step_admitted(ctx, numeric_unary_cost(value)) {
         return Ok(None);
-    }
-    // Identity keeps the same immutable parsed allocation, including its subtype.
-    if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
-        return governed_xsd_to_term(ctx, value, value.datatype().iri());
     }
     let capability = ctx.growth.clone();
     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
@@ -9101,26 +9150,26 @@ mod tests {
     #[test]
     fn function_ceil() {
         let ds = empty_ds();
-        // CEIL(2.1) = 3 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
+        // CEIL(2.1) = 3.0 (xsd:decimal; a computed whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Ceil, vec![typed_lit("2.1", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
     }
 
     #[test]
     fn function_floor() {
         let ds = empty_ds();
-        // FLOOR(2.9) = 2 (xsd:decimal; XSD 1.1 whole-decimal lexical has no point)
+        // FLOOR(2.9) = 2.0 (xsd:decimal; a computed whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Floor, vec![typed_lit("2.9", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("2".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("2.0".to_owned()));
     }
 
     #[test]
     fn function_round() {
         let ds = empty_ds();
-        // ROUND(2.5) = 3 (round-half-toward-+infinity per XPath fn:round; XSD 1.1
-        // whole-decimal lexical has no point)
+        // ROUND(2.5) = 3.0 (round-half-toward-+infinity per XPath fn:round; a computed
+        // whole decimal carries its point)
         let expr = Expression::FunctionCall(Function::Round, vec![typed_lit("2.5", XDEC)].into());
-        assert_eq!(lex(&ds, &expr), Some("3".to_owned()));
+        assert_eq!(lex(&ds, &expr), Some("3.0".to_owned()));
     }
 
     // ---- BIND integration: arithmetic column over a real BGP ---------------
@@ -9897,8 +9946,35 @@ mod tests {
         let seconds = Expression::FunctionCall(Function::Seconds, vec![dt].into());
         assert_eq!(lex(&ds, &hours), Some("10".to_owned()));
         assert_eq!(lex(&ds, &minutes), Some("30".to_owned()));
-        // SECONDS returns xsd:decimal; XSD 1.1 whole-decimal lexical has no point.
+        // SECONDS returns the seconds part of the lexical form, as xsd:decimal.
         assert_eq!(lex(&ds, &seconds), Some("45".to_owned()));
+    }
+
+    /// `SECONDS` is "the seconds part of the lexical form of arg": the two-digit
+    /// field, so zero seconds are `00`, a single-digit second keeps its leading
+    /// zero, and a fraction is kept. Its neighbour, a computed whole decimal,
+    /// carries a point instead.
+    #[test]
+    fn seconds_is_the_seconds_field_of_the_lexical_form() {
+        let ds = empty_ds();
+        for (lexical, datatype, expected) in [
+            ("2023-12-25T10:30:00", XSD_DATETIME, "00"),
+            ("2023-12-25T10:30:05Z", XSD_DATETIME, "05"),
+            ("10:30:13.815", XSD_TIME, "13.815"),
+            // The field as written: trailing zeros and the zone survive.
+            ("2023-12-25T10:30:05.500", XSD_DATETIME, "05.500"),
+            ("10:30:00.250", XSD_TIME, "00.250"),
+            ("2023-12-25T10:30:05.500-05:00", XSD_DATETIME, "05.500"),
+            ("-0044-03-15T10:30:07.0Z", XSD_DATETIME, "07.0"),
+        ] {
+            let seconds = Expression::FunctionCall(
+                Function::Seconds,
+                vec![typed_lit(lexical, datatype)].into(),
+            );
+            assert_eq!(lex(&ds, &seconds).as_deref(), Some(expected), "{lexical}");
+        }
+        let whole = Expression::FunctionCall(Function::Ceil, vec![typed_lit("0.5", XDEC)].into());
+        assert_eq!(lex(&ds, &whole).as_deref(), Some("1.0"));
     }
 
     #[test]
@@ -9912,25 +9988,6 @@ mod tests {
             let source = typed_lit(&lexical, datatype);
             let expression = Expression::FunctionCall(Function::Seconds, vec![source].into());
             assert_eq!(lex(&ds, &expression).as_deref(), Some(seconds.as_str()));
-        }
-    }
-
-    #[test]
-    fn borrowed_seconds_keep_zero_exact_work_for_small_values() {
-        let ds = empty_ds();
-        let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(0);
-        for (lexical, accepted) in [
-            ("12:00:45.5Z".to_owned(), true),
-            (format!("12:00:45.{}1Z", "0".repeat(1000)), false),
-        ] {
-            let value = purrdf_xsd::parse(&lexical, XsdDatatype::Time).unwrap();
-            let XsdValue::Time(value) = &value else {
-                unreachable!();
-            };
-            let state = Arc::new(crate::GovernorState::new(&governors));
-            let mut ctx = EvalCtx::new(&ds).with_governors(state);
-            let result = borrowed_temporal_seconds_to_term(&mut ctx, value.second_ref()).unwrap();
-            assert_eq!(result.is_some(), accepted, "{lexical}");
         }
     }
 
@@ -10288,6 +10345,56 @@ mod tests {
             typed_lit("P1D", XSD_DAYTIME_DURATION),
         );
         assert_eq!(lex(&ds, &e), None);
+    }
+
+    /// Unary plus is the identity: the operand's own spelling, stored or computed.
+    /// Its neighbour, unary minus, computes a decimal and so carries its point.
+    #[test]
+    fn unary_plus_keeps_its_operand_spelling() {
+        let ds = empty_ds();
+        let plus = |operand| Expression::UnaryPlus(Child::new(operand));
+        assert_eq!(
+            lex(&ds, &plus(typed_lit("4.0", XDEC))).as_deref(),
+            Some("4.0")
+        );
+        assert_eq!(lex(&ds, &plus(typed_lit("4", XDEC))).as_deref(), Some("4"));
+        assert_eq!(
+            lex(&ds, &plus(typed_lit("+04", XINT))).as_deref(),
+            Some("+04")
+        );
+        let computed = Expression::arithmetic(
+            typed_lit("1.5", XDEC),
+            ArithmeticOperator::Add,
+            typed_lit("2.5", XDEC),
+        );
+        assert_eq!(lex(&ds, &computed).as_deref(), Some("4.0"));
+        assert_eq!(lex(&ds, &plus(computed)).as_deref(), Some("4.0"));
+        let minus = Expression::UnaryMinus(Child::new(typed_lit("4", XDEC)));
+        assert_eq!(lex(&ds, &minus).as_deref(), Some("-4.0"));
+        // Neighbours: a non-numeric operand and an ill-typed numeral are errors.
+        assert_eq!(lex(&ds, &plus(typed_lit("4", XSD_STRING))), None);
+        assert_eq!(lex(&ds, &plus(typed_lit("four", XINT))), None);
+    }
+
+    /// `STR` keeps the spelling of a computed decimal (`4.0`); the `xsd:string`
+    /// cast is XPath `fn:string` of its value (`4`). Both are documented.
+    #[test]
+    fn str_keeps_a_computed_spelling_and_the_string_cast_does_not() {
+        let ds = empty_ds();
+        let computed = || {
+            Expression::arithmetic(
+                typed_lit("1.5", XDEC),
+                ArithmeticOperator::Add,
+                typed_lit("2.5", XDEC),
+            )
+        };
+        let str_of = Expression::FunctionCall(Function::Str, vec![computed()].into());
+        assert_eq!(lex(&ds, &str_of).as_deref(), Some("4.0"));
+        let cast = Expression::FunctionCall(
+            Function::Custom(NamedNode::new_unchecked(XSD_STRING)),
+            vec![computed()].into(),
+        );
+        assert_eq!(lex(&ds, &cast).as_deref(), Some("4"));
     }
 
     #[test]

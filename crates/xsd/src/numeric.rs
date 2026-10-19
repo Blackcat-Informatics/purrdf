@@ -452,7 +452,8 @@ pub fn numeric_to_float_cost(value: &XsdValue) -> crate::exact::Cost {
 }
 
 /// The cost of rendering `value`'s canonical lexical form
-/// ([`XsdValue::canonical_lexical`]) when its exact payload exceeds the inline
+/// ([`XsdValue::canonical_lexical`]; [`computed_numeric_render_cost`] prices the
+/// form an operation emits) when its exact payload exceeds the inline
 /// representation: every byte of the text, the leading zeros of a long
 /// fraction included, so a value whose coefficient is short but whose scale is
 /// vast is priced at the text it becomes. Wide temporal seconds use the same
@@ -472,6 +473,22 @@ pub fn numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
             crate::exact::Cost::new(base.work().saturating_mul(4), base.bytes())
         }
         _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// [`numeric_render_cost`] for the text an operation COMPUTES, which is what
+/// [`prepare_computed_numeric_text`] emits: a wide whole decimal is spelled with
+/// `.0`, two bytes past its canonical text, and is priced at those bytes. Every
+/// other value is spelled as its canonical form.
+#[must_use]
+pub fn computed_numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::Decimal(decimal)
+            if decimal.unscaled().as_i128().is_none() || decimal.scale() > 18 =>
+        {
+            decimal.computed_render_cost()
+        }
+        other => numeric_render_cost(other),
     }
 }
 
@@ -1151,6 +1168,31 @@ pub fn prepare_numeric_text(
             *value,
         )))),
         _ => Ok(None),
+    }
+}
+
+/// Prepare the text of a numeric value an operation COMPUTED. It is
+/// [`prepare_numeric_text`] except that a decimal always carries a point and a
+/// fractional digit (`4.0`, never `4`): the specifications leave the lexical form
+/// of a computed literal to the processor, and this is the one a processor emits
+/// so that a whole-valued decimal is never mistaken for an `xsd:integer` spelling.
+/// The XSD 1.1 canonical text of a stored value stays [`prepare_numeric_text`].
+/// # Errors
+/// As [`prepare_numeric_text`].
+pub fn prepare_computed_numeric_text(
+    value: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<PreparedNumericText>, crate::bigint::LimbScratchError> {
+    match value {
+        XsdValue::Decimal(decimal) => match prepare_decimal_text(decimal, admit)? {
+            PreparedNumericText::Decimal(text) => Ok(Some(PreparedNumericText::Decimal(
+                text.with_required_point(),
+            ))),
+            other => Ok(Some(other)),
+        },
+        other => prepare_numeric_text(other, admit),
     }
 }
 
@@ -2661,6 +2703,76 @@ fn numeric_round_bounded(a: &XsdValue) -> Result<XsdValue, XsdError> {
 
 #[cfg(test)]
 mod tests {
+    fn text(prepared: Option<PreparedNumericText>) -> String {
+        let prepared = prepared.expect("numeric");
+        let mut out = String::with_capacity(prepared.len());
+        prepared.write_to(&mut out).expect("fits");
+        assert_eq!(out.len(), prepared.len(), "the prepared length is exact");
+        out
+    }
+
+    /// A computed decimal carries a point and a fractional digit; the XSD 1.1
+    /// canonical text of a stored decimal, an integer, and a decimal that already
+    /// has a fraction are unchanged by it.
+    #[test]
+    fn a_computed_whole_decimal_carries_a_point_and_nothing_else_changes() {
+        let decimal =
+            |lexical: &str| crate::value::parse(lexical, XsdDatatype::Decimal).expect("decimal");
+        for (lexical, computed, canonical) in [
+            ("4", "4.0", "4"),
+            ("-3", "-3.0", "-3"),
+            ("0", "0.0", "0"),
+            ("2.5", "2.5", "2.5"),
+            ("-0.025", "-0.025", "-0.025"),
+        ] {
+            let value = decimal(lexical);
+            assert_eq!(
+                text(prepare_computed_numeric_text(&value, &mut |_| Ok(())).unwrap()),
+                computed
+            );
+            assert_eq!(
+                text(prepare_numeric_text(&value, &mut |_| Ok(())).unwrap()),
+                canonical
+            );
+        }
+        let integer = crate::value::parse("4", XsdDatatype::Integer).expect("integer");
+        assert_eq!(
+            text(prepare_computed_numeric_text(&integer, &mut |_| Ok(())).unwrap()),
+            "4"
+        );
+    }
+
+    /// The render cost of a computed wide decimal prices the text it emits: a whole
+    /// value carries `.0`, two bytes past its canonical form, and the charge
+    /// follows. Neighbours: a wide fraction and a bounded value gain nothing.
+    #[test]
+    fn computed_render_cost_prices_the_emitted_form() {
+        let decimal = |lexical: &str| crate::value::parse(lexical, XsdDatatype::Decimal).unwrap();
+        let whole = decimal(&format!("1{}", "0".repeat(60)));
+        let XsdValue::Decimal(inner) = &whole else {
+            unreachable!("a decimal parses to a decimal");
+        };
+        assert!(inner.unscaled().as_i128().is_none());
+        let canonical = whole.canonical_lexical().len();
+        let emitted = prepare_computed_numeric_text(&whole, &mut |_| Ok(())).unwrap();
+        assert_eq!(text(emitted).len(), canonical + 2);
+        let plain = numeric_render_cost(&whole);
+        let computed = computed_numeric_render_cost(&whole);
+        assert_eq!(computed.bytes() - plain.bytes(), 2 * 6);
+        assert!(computed.work() > plain.work());
+        // Neighbours.
+        let fraction = decimal(&format!("1{}.5", "0".repeat(60)));
+        assert_eq!(
+            computed_numeric_render_cost(&fraction),
+            numeric_render_cost(&fraction)
+        );
+        let small = decimal("4");
+        assert_eq!(
+            computed_numeric_render_cost(&small),
+            numeric_render_cost(&small)
+        );
+    }
+
     #[test]
     fn bounded_ieee_canonical_writers_preserve_frozen_extremes() {
         for (value, expected) in [

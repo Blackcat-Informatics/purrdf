@@ -370,6 +370,45 @@ Two values show where the rules differ:
 The second double lies exactly halfway between the largest float and the next
 power of two, so rounding to even gives `INF`.
 
+## How computed numbers are spelled
+
+The specifications fix the value of a computed number and its datatype, not
+the lexical form of the literal that carries it. PurRDF spells them as follows.
+
+- A decimal that an operator, a function or an aggregate computes carries a
+  decimal point and at least one fractional digit: `84 / 2` is `42.0`,
+  `CEIL(3.2)` is `4.0`, `SUM` over `4.2` and `37.8` is `42.0`, and `AVG` of
+  `2` and `4` is `3.0`. A decimal with a fraction is unchanged (`2.5`).
+- Casts and constructors, `xsd:integer` results and `xsd:float`/`xsd:double`
+  results keep the XSD 1.1 canonical text: `xsd:decimal(3)` is `3`, `CEIL(3)`
+  over an integer is `3`.
+- Unary plus is the identity and returns its operand as written, so it keeps
+  the operand's spelling: a stored `"4.0"^^xsd:decimal` stays `4.0`, and
+  `+(1.5 + 2.5)` stays `4.0`, because the computed operand was `4.0`. Unary
+  minus computes a new number, so minus a decimal `4` is `-4.0`.
+- `STR` returns a literal's lexical form unchanged, so `STR(1.5 + 2.5)` is
+  `"4.0"`. `xsd:string(...)` and the other casts to string use the XPath
+  `fn:string` text of the value, so `xsd:string(1.5 + 2.5)` is `"4"`. Use
+  `STR` when the spelling of the stored or computed literal matters.
+- `SECONDS` returns the seconds field of its argument's lexical form exactly
+  as written, as the SPARQL text defines it: `00` for
+  `"2023-12-25T10:30:00"^^xsd:dateTime`, `05.500` for
+  `"2023-12-25T10:30:05.500"^^xsd:dateTime`, `00.250` for
+  `"10:30:00.250"^^xsd:time`. Every argument is an RDF term, so it has a
+  lexical form: a dateTime that an expression computed (for example a
+  dateTime plus a duration) is a literal whose lexical form is the canonical
+  one, and `SECONDS` reads that. The SPARQL 1.1 `seconds-01` test expects
+  `"1"`, `"2"`, `"0"`, `"3"` for the fields `01`, `02`, `00`, `03` and is
+  graded by value; no spelling satisfies it term for term and also the SHACL
+  node-expression `seconds-example`, which expects `"00"`.
+- The rule above covers the arithmetic in `purrdf-xsd` and the SPARQL
+  evaluator. Other computed decimals have their own spelling: the scores of
+  the text-search and retrieval extensions (`purrdf-text`, `purrdf-retrieval`)
+  are `xsd:decimal` literals with a fixed 12-digit fraction.
+
+Compare numeric results by value, not by spelling: `"3"^^xsd:decimal` and
+`"3.0"^^xsd:decimal` are the same number but different RDF terms.
+
 ## SPARQL 1.2 temporal arithmetic and adjustment
 
 `+`, `-`, `*`, `/`, and unary `-` extend past the numeric tower to
@@ -386,7 +425,7 @@ Temporal seconds retain every decimal place. For example, adding
 `"PT0.000000000000000000009S"^^xsd:dayTimeDuration` to
 `"2024-01-02T03:04:05.123456789012345678901Z"^^xsd:dateTime` yields
 `"2024-01-02T03:04:05.12345678901234567891Z"^^xsd:dateTime`, and `SECONDS`
-returns `5.12345678901234567891`. The result does not stop at eighteen
+returns `05.12345678901234567891`. The result does not stop at eighteen
 fractional places. A `time` shifted by whole days wraps to the same time of
 day, even when the duration's day count exceeds a machine integer.
 

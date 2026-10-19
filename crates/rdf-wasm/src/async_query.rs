@@ -3362,9 +3362,10 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 23] = [
+const OPTION_SHAPES: [(&str, OptionShape); 24] = [
     ("base", OptionShape::Text),
     ("xpathRegex", OptionShape::Text),
+    ("shaclProfile", OptionShape::Text),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
     ("optionsJson", OptionShape::Text),
@@ -3532,7 +3533,8 @@ impl AsyncOperationKind {
             // The SHACL twins take their synchronous twin's arguments positionally, and
             // no ceiling: only the host options, and the dated XPath law of an entry that
             // takes one, which the synchronous twin takes as its trailing argument.
-            Self::Shacl => spec("shacl", &["xpathRegex"], false, None),
+            // `shaclProfile` is the exact dated SHACL law, taken by the validation twin.
+            Self::Shacl => spec("shacl", &["xpathRegex", "shaclProfile"], false, None),
         }
     }
 
@@ -3624,6 +3626,7 @@ pub struct AsyncJobOptions {
     closure: ClosureInputs,
     accept: Option<String>,
     xpath_regex: Option<Profile>,
+    shacl_profile: Option<String>,
     ceilings: GovernorArgs,
     quantum: u32,
     catalog: Option<NativeServiceCatalog>,
@@ -3986,6 +3989,7 @@ impl AsyncJobOptions {
                     options.xpath_regex =
                         crate::xpath_regex::parse(Some(&name)).map_err(OptionsError::refused)?;
                 }
+                ("shaclProfile", OptionValue::Text(id)) => options.shacl_profile = Some(id),
                 ("format", OptionValue::Text(text)) => options.format = Some(text),
                 ("optionsJson", OptionValue::Text(text)) => options.options_json = Some(text),
                 ("yamlSchemaUrl", OptionValue::Text(text)) => options.yaml_schema_url = Some(text),
@@ -4504,6 +4508,9 @@ fn begin_shacl_job(
         .require_kind(AsyncOperationKind::Shacl)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     request.select_xpath_regex(options.xpath_regex.map(|profile| profile.name().to_owned()));
+    request
+        .select_shacl_profile(options.shacl_profile.clone())
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     register_operation(
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
@@ -7506,6 +7513,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -7522,6 +7530,62 @@ mod tests {
         let job = begin_shacl_job(request, &options).expect("the job begins");
         let status = run_job(job.id());
         (job, status)
+    }
+
+    /// `shaclProfile` belongs to the validation twin: a twin whose synchronous entry takes
+    /// no SHACL law refuses it by name (the options error code) rather than ignoring it,
+    /// beside the validation twin accepting the same option.
+    #[test]
+    fn a_shacl_profile_option_is_refused_by_a_twin_that_takes_no_law() {
+        let ed = "shacl-ed-2026-10-16";
+        let with_law = options().text("shaclProfile", ed);
+        let entail = ShaclJobRequest::entail(
+            core_shapes(),
+            PEOPLE_NT.to_owned(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .into_request();
+        let options_for = |opts: &Opts| {
+            opts.clone()
+                .validate(AsyncOperationKind::Shacl)
+                .expect("options are valid")
+        };
+        let refused = begin_shacl_job(entail, &options_for(&with_law)).expect_err("refused");
+        let text = format!("{refused:?}");
+        assert!(
+            text.contains("shaclProfile applies only to a validation twin")
+                && text.contains(OPTIONS_CODE),
+            "{text}"
+        );
+        // The same twin without the option, and the validation twin with it, are accepted.
+        let (job, status) = run_shacl(
+            ShaclJobRequest::entail(
+                core_shapes(),
+                PEOPLE_NT.to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .into_request(),
+            options(),
+        );
+        assert_eq!(status, RunStatus::Outcome);
+        job.finish();
+        let (job, status) = run_shacl(validate(&core_shapes(), PEOPLE_NT), with_law);
+        assert_eq!(status, RunStatus::Outcome);
+        job.finish();
     }
 
     #[test]
@@ -7877,7 +7941,8 @@ mod tests {
         let (s, d, b, c, i, docs, g, sub) = resolved();
         assert_eq!(
             raw_text(&job),
-            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub, None).expect("sync entry")
+            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub, None, None)
+                .expect("sync entry")
         );
         assert!(job.take_shacl_import_error().is_none());
         job.finish();
@@ -8373,6 +8438,7 @@ ex:PatternShape a sh:NodeShape ;
                 None,
                 None,
                 law.map(str::to_owned),
+                None,
             )
             .expect("sync entry");
             assert_eq!(raw_text(&job), expected, "{law:?}");

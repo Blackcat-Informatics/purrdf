@@ -13,16 +13,16 @@
 # necessary in the first place; there is now only one copy.
 #
 # `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
-# `purrdf-hash-conformance`, `purrdf-envelope-probe`, `purrdf-bench`,
-# `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link` and `helper-census`
-# are deliberately NOT here — see docs/RELEASE.md.
+# `purrdf-hash-conformance`, `purrdf-conformance-kit`, `purrdf-envelope-probe`,
+# `purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link` and
+# `helper-census` are deliberately NOT here — see docs/RELEASE.md.
 #
-# `purrdf-alloc-probe` and `purrdf-testkit` are the ones of those that published
-# crates DEPEND ON, as dev-dependencies. That is safe only because their entries
-# in the root `[workspace.dependencies]` carry a path and NO `version`: cargo
-# strips a versionless path dev-dependency from the manifest it uploads, so the
-# verification step below never looks for them on a registry they will never be
-# on. Give either a version and every dependent's publish breaks.
+# `purrdf-alloc-probe`, `purrdf-conformance-kit` and `purrdf-testkit` are the ones
+# of those that published crates DEPEND ON, as dev-dependencies. That is safe only
+# because their entries in the root `[workspace.dependencies]` carry a path and NO
+# `version`: cargo strips a versionless path dev-dependency from the manifest it
+# uploads, so the verification step below never looks for them on a registry they
+# will never be on. Give any of them a version and every dependent's publish breaks.
 #
 # ORDERING CONTRACT, enforced by scripts/check-publish-order.py on every
 # `make check`. This list must be a topological order of BOTH edge kinds:

@@ -915,7 +915,7 @@ def test_prepare_honours_aggregate_namespace_and_refuses_the_call_without_it() -
     store.load(_NUMBERS_TTL, purrdf.RdfFormat.TURTLE)
 
     solutions = store.prepare(MEDIAN_QUERY, aggregate_namespace=AGG_NS).run()
-    assert [str(row[0].value) for row in solutions] == ["2"]  # type: ignore[union-attr]
+    assert [str(row[0].value) for row in solutions] == ["2.0"]  # type: ignore[union-attr]
 
     with pytest.raises(ValueError) as refused:
         store.prepare(MEDIAN_QUERY)

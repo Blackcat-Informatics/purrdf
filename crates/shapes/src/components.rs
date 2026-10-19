@@ -1072,7 +1072,7 @@ fn parse_validator(
         }
     };
     let header = prefixes
-        .header(data, &[component, validator])
+        .header(data, &[component, validator], profile)
         .map_err(crate::shapes::prefixes::split_syntax_rule)?;
     let query_text = format!("{header}{raw_query}");
 

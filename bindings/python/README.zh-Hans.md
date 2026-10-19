@@ -743,6 +743,25 @@ except ValueError as refusal:
                           #  'parameters': {}, 'detail': None}
 ```
 
+## SHACL 法则
+
+未选择时，SHACL 验证按兼容法则运行。`shacl_profile` 关键字参数则按稳定标识符选择一种精确的、带日期的
+SHACL 法则，可用于 `shapes.validate` 与 `shapes.Shapes` 构造函数：
+
+```python
+# W3C SHACL 1.2 测试套件据以评分的 SHACL 1.2 编辑草案。
+report = shapes.validate(my_shapes, my_data, shacl_profile="shacl-ed-2026-10-16")
+```
+
+标识符为 `shacl-rec-2017-07-20`（2017 年推荐标准）、`shacl-wd-2026-09-18`（SHACL 1.2 工作草案）与
+`shacl-ed-2026-10-16`（测试套件所取自的 data-shapes 编辑草案）。它与 CLI 的
+`purrdf validate --shacl-profile` 选择的是同一种法则，也是 PurRDF 的 EARL 报告据以评分的法则。
+所选法则的文本拒绝的形状图（例如在工作草案下通过版本 IRI 路径声明其 SPARQL 前缀的形状图）会在加载时
+抛出 `ValueError`，而不会改用另一种法则验证。不对应任何法则的标识符（`"shacl-ed-2026-10-17"`）会抛出
+携带 `unsupported-profile` 状态的 `ValueError`，不会替换为相近的版本。带日期的法则自带其 XPath 法则，
+因此指名另一种法则的 `xpath_regex` 会抛出同时列出两者的 `ValueError`。节点表达式与 SPARQL 1.2 RL
+记录与法则无关。
+
 ## 基准 IRI
 
 拼写了相对 IRI 的文档需要一个基准（base）。每个解析入口点都接受可选的 `base=` 关键字

@@ -41,7 +41,7 @@ test("queryGoverned computes MEDIAN through aggregateNamespace", () => {
   assert.equal(outcome.tripped, undefined);
   const rows = outcome.result.rows.toArray();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].m.value, "2");
+  assert.equal(rows[0].m.value, "2.0", "MEDIAN of {1, 2, 3} is the computed decimal 2.0");
 });
 
 test("omitting aggregateNamespace leaves the ten names unregistered, with the existing typed error", () => {
@@ -74,7 +74,7 @@ test("updateGoverned reaches MEDIAN from a DELETE/INSERT WHERE nested SELECT", (
   );
   const rows = check.rows.toArray();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].m.value, "2");
+  assert.equal(rows[0].m.value, "2.0", "the stored MEDIAN of {1, 2, 3} is the computed decimal 2.0");
 });
 
 test("an ungoverned entry refuses aggregateNamespace rather than ignoring it", () => {
@@ -112,7 +112,7 @@ test("queryEntailmentGoverned computes MEDIAN through aggregateNamespace over an
   assert.equal(outcome.isComplete, true);
   const rows = outcome.outcome.result.rows.toArray();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].m.value, "2");
+  assert.equal(rows[0].m.value, "2.0", "MEDIAN of the entailed {1, 2, 3} is the computed decimal 2.0");
 });
 
 test("omitting aggregateNamespace leaves queryEntailmentGoverned's statistical set unregistered", () => {

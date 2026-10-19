@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -75,7 +75,7 @@ BINARYEN_VERSION := 130
 MDBOOK_I18N_HELPERS_VERSION := 0.4.0
 
 help: ## Show this help.
-	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 	cargo metadata --no-deps --format-version 1 >/dev/null
@@ -244,6 +244,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	@$(MAKE) python-release-check
 	@$(MAKE) wasm-pkg-test
 	@$(MAKE) capi-bundle
+	@$(MAKE) w3c-earl
 	@test -z "$$(git status --porcelain)" || { echo "ERROR: full release preflight changed the working tree"; exit 1; }
 	@branch=$$(git branch --show-current); test "$$branch" = "main" || { echo "ERROR: branch changed during release preflight (currently on $$branch)"; exit 1; }
 	@git fetch --quiet origin main
@@ -410,6 +411,23 @@ SCALE_MANIFEST ?=
 SCALE_BIN ?=
 
 $(foreach knob,SCALE_QUADS SCALE_IRIS SCALE_SEED SCALE_SHARDS SCALE_MODE SCALE_OUT SCALE_SINK SCALE_MANIFEST SCALE_BIN,$(eval $(call lane-env,$(knob))))
+
+# The W3C SHACL implementation reports (EARL). Declared through `lane-env` so a
+# path is taken byte for byte, exactly like the scale-corpus knobs above.
+W3C_EARL_DIR ?= target/w3c-earl
+$(eval $(call lane-env,W3C_EARL_DIR))
+
+w3c-earl: ## Write the two W3C SHACL EARL reports for the current clean HEAD under W3C_EARL_DIR (default target/w3c-earl).
+	@test -z "$$(git status --porcelain)" || { echo "ERROR: working tree is dirty — the EARL reports must name a committed HEAD:"; git status --porcelain; exit 1; }
+	@# The test binaries run from their crate directory, so hand them an absolute path.
+	@mkdir -p -- "$$W3C_EARL_DIR" && dir=$$(cd -- "$$W3C_EARL_DIR" && pwd) && \
+		rm -f -- "$$dir/purrdf-shacl12-earl.ttl" "$$dir/purrdf-shacl-earl.ttl" && \
+		PURRDF_W3C_EARL_DIR="$$dir" PURRDF_W3C_EARL_COMMIT="$$(git rev-parse HEAD)" \
+		cargo test --locked -p purrdf-shapes --test w3c12_conformance --test w3c_conformance && \
+		for f in purrdf-shacl12-earl.ttl purrdf-shacl-earl.ttl; do \
+			test -s "$$dir/$$f" || { echo "ERROR: $$dir/$$f is missing or empty after the run"; exit 1; }; \
+		done && \
+		echo "Wrote $$dir/purrdf-shacl12-earl.ttl and $$dir/purrdf-shacl-earl.ttl"
 
 scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
 	@bash scripts/scale-corpus.sh

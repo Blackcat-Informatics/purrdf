@@ -8,9 +8,8 @@
 //! (`purrdf_shapes::shacl_corpora`, shared with the library harness), with its drift guards:
 //! the discovered total and per-type counts are asserted before anything runs. Grading is
 //! its own `sht:EvalNodeExpr` grader (`shacl_corpora::node_expr_grading`): exact RDF 1.2
-//! term equality, in order unless `sht:ignoreOrder true`, with the one table of entries
-//! whose approved result spells a decimal non-canonically applied exactly as the
-//! library harness applies it.
+//! term equality, in order unless `sht:ignoreOrder true`, applied exactly as the library
+//! harness applies it.
 //!
 //! Each entry's expression is an anonymous `[ … ]` node (or a constant) that no caller
 //! could label, so it is named the way the manifest itself names it: from the entry,
@@ -30,11 +29,10 @@ use purrdf_shapes::free_expression::parse_term;
 use purrdf_shapes::term::Term;
 
 use shacl_corpora::file_iri;
-use shacl_corpora::node_expr_grading::{
-    ABSENT_FOCUS, NON_CANONICAL_EXPECTATIONS, NON_CANONICAL_EXPECTATIONS_COUNT,
-    canonical_expectation, compare_outputs,
+use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
+use shacl_corpora::shacl12::{
+    Body, NodeExprCase, SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, shacl12_cases, shacl12_root,
 };
-use shacl_corpora::shacl12::{Body, NodeExprCase, shacl12_cases, shacl12_root};
 
 const MF_ACTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
 const SHT_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#nodeExpr";
@@ -61,7 +59,7 @@ fn focus(tc: &NodeExprCase) -> Result<Term, String> {
 }
 
 /// Run one entry through the binary and grade its output.
-fn run_case(id: &str, entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
+fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
     let file = tc.file.to_str().ok_or("a non-UTF-8 corpus path")?;
     let base = file_iri(&tc.file);
     let focus = focus(tc)?.to_string();
@@ -101,8 +99,7 @@ fn run_case(id: &str, entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> 
     if !stderr.contains(&reported) {
         return Err(format!("stderr does not report {reported:?}: {stderr}"));
     }
-    let expected = canonical_expectation(id, &tc.expected)?;
-    compare_outputs(&produced, &expected, tc.ignore_order)
+    compare_outputs(&produced, &tc.expected, tc.ignore_order)
 }
 
 #[test]
@@ -125,26 +122,32 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         cases
             .iter()
             .filter(|case| matches!(case.body, Body::NodeExpr(_)))
-            .all(|case| case.listed),
+            .all(|case| case.root.is_listed()),
         "every sht:EvalNodeExpr entry is one an upstream manifest lists"
     );
 
+    // The entries the specification text contradicts are the shapes harness's own table
+    // (`shacl12::SPEC_CONTRADICTED`, one home): graded here against the unamended
+    // expectation too, and an entry of it that passes is refused.
+    let spec_ids: Vec<&str> = SPEC_CONTRADICTED.iter().map(|(id, _)| *id).collect();
     let mut passed = 0usize;
-    let mut noncanonical = 0usize;
+    let mut contradicted = 0usize;
     let mut errors: Vec<String> = Vec::new();
     for (id, tc) in &node_expr {
         let entry_iri = format!("{root_iri}/{id}");
-        match run_case(id, &entry_iri, tc) {
-            Ok(()) if NON_CANONICAL_EXPECTATIONS.iter().any(|(e, ..)| e == id) => {
-                noncanonical += 1;
-            }
-            Ok(()) => passed += 1,
-            Err(e) => errors.push(format!("FAIL [{id}]: {e}")),
+        let graded = run_case(&entry_iri, tc);
+        match (graded, spec_ids.contains(id)) {
+            (Ok(()), false) => passed += 1,
+            (Err(_), true) => contradicted += 1,
+            (Err(e), false) => errors.push(format!("FAIL [{id}]: {e}")),
+            (Ok(()), true) => errors.push(format!(
+                "XPASS [{id}]: passes; remove it from SPEC_CONTRADICTED"
+            )),
         }
     }
     println!(
         "W3C SHACL 1.2 sht:EvalNodeExpr through `purrdf node-expr`: passed {passed}, \
-         non-canonical-expected-decimal {noncanonical}, failed {}",
+         spec-contradicted {contradicted}, failed {}",
         errors.len()
     );
     assert!(
@@ -154,14 +157,18 @@ fn every_w3c_node_expression_runs_through_the_cli() {
         errors.join("\n\n")
     );
     assert_eq!(
-        noncanonical, NON_CANONICAL_EXPECTATIONS_COUNT,
-        "every entry with a non-canonical expected decimal is counted as one, and nothing \
-         else is"
+        contradicted,
+        spec_ids
+            .iter()
+            .filter(|id| node_expr.iter().any(|(case, _)| case == *id))
+            .count(),
+        "every spec-contradicted node-expression entry fails unamended"
     );
+    assert!(contradicted <= SPEC_CONTRADICTED_COUNT);
     assert_eq!(
-        passed + noncanonical,
+        passed + contradicted,
         NODE_EXPR_CASES,
-        "every entry is a pass or a non-canonical expected decimal"
+        "every other entry is a pass"
     );
 }
 
@@ -220,4 +227,69 @@ fn an_entry_walk_that_reaches_nothing_is_refused() {
         stderr.contains("step 3") && stderr.contains("reaches 0 values"),
         "{stderr}"
     );
+}
+
+/// The spec-contradicted `hasLang-example` calls `sparql:hasLang` with two arguments and
+/// the binary refuses it (exit 1, naming the count); the neighbouring one-argument call
+/// evaluates to `true`.
+#[test]
+fn a_two_argument_has_lang_is_refused_and_the_one_argument_neighbour_evaluates() {
+    let root = shacl12_root();
+    let source = root.join("node-expr/shnex-sparql/hasLang.ttl");
+    let text = std::fs::read_to_string(&source).expect("the vendored file reads");
+    let one = text.replace("( \"hello\"@en \"en\" )", "( \"hello\"@en )");
+    assert_ne!(one, text, "the fixture carries the two-argument call");
+    let dir = std::env::temp_dir().join(format!("purrdf-has-lang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let run = |file: &std::path::Path| {
+        let base = file_iri(file);
+        let entry = format!("{}/hasLang-example", file_iri(file.parent().expect("dir")));
+        let file = file.to_str().expect("UTF-8 path");
+        Command::new(env!("CARGO_BIN_EXE_purrdf"))
+            .args([
+                "node-expr",
+                "--shapes",
+                file,
+                "--shapes-base",
+                &base,
+                "--expr-at",
+                &entry,
+                "--expr-via",
+                MF_ACTION,
+                "--expr-via",
+                SHT_NODE_EXPR,
+                "--focus",
+                "http://example.org/ns#nowhere",
+                "--base",
+                &base,
+                file,
+            ])
+            .output()
+            .expect("spawn purrdf")
+    };
+    let two_file = dir.join("two.ttl");
+    std::fs::write(&two_file, &text).expect("write");
+    let two = run(&two_file);
+    assert_eq!(
+        two.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&two.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&two.stderr).contains("takes exactly 1 argument"),
+        "{}",
+        String::from_utf8_lossy(&two.stderr)
+    );
+    let one_file = dir.join("one.ttl");
+    std::fs::write(&one_file, &one).expect("write");
+    let one = run(&one_file);
+    assert_eq!(
+        one.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&one.stderr)
+    );
+    assert!(String::from_utf8_lossy(&one.stdout).contains("true"));
+    std::fs::remove_dir_all(&dir).ok();
 }

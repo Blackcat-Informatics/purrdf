@@ -50,7 +50,8 @@ use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
 use crate::report::ConformanceDisallows;
 use crate::shapes::{
-    ClosedMode, ComponentValidator, Constraint, NodeKindValue, Path, PropertyShape, Shape, Target,
+    AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
+    NodeKindValue, Path, PropertyShape, Shape, Target,
 };
 use crate::term::{NamedNode, Term};
 use crate::unique_values::{UniqueGroups, UniqueSpec};
@@ -265,6 +266,10 @@ pub(crate) struct LoweredShapes {
     /// [`LoweredByTypes::index`] — one per shared index, however many
     /// constraints share it.
     closed_types: Box<[LoweredTypeIndex]>,
+    /// Whether any shape, constraint reifier or `sh:property` reifier of the shapes
+    /// graph states a node-expression `sh:deactivated`. A shape that reaches shapes
+    /// only by name, at evaluation, takes this graph-wide answer as its closure's.
+    any_deactivation: bool,
 }
 
 impl LoweredShapes {
@@ -385,14 +390,14 @@ impl LoweredShapes {
         binding: &'a DatasetBinding,
         classes: &'a ClassCatalog,
         targets: &'a PreparedTargets,
-    ) -> Result<ShapePlan<'a>, String> {
+    ) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
         let lowered = self.shapes.get(position).ok_or_else(|| {
-            format!(
+            crate::error::ShapesError::internal(format!(
                 "internal validation-plan defect: shape {position} was evaluated against a \
                  lowering covering only {} shape(s), so the shape list and its lowering have \
                  diverged",
                 self.shapes.len()
-            )
+            ))
         })?;
         Ok(ShapePlan {
             shape,
@@ -402,6 +407,21 @@ impl LoweredShapes {
             classes,
             targets,
         })
+    }
+
+    /// [`plan`](Self::plan) for a shape evaluated against its own focus nodes: the
+    /// walk's own class catalog and the empty target index, which is what every
+    /// caller that resolves its focus nodes itself passes.
+    ///
+    /// # Errors
+    /// As [`plan`](Self::plan).
+    pub(crate) fn untargeted_plan<'a>(
+        &'a self,
+        shape: &'a Shape,
+        position: usize,
+        binding: &'a DatasetBinding,
+    ) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
+        self.plan(shape, position, binding, self.classes(), self.no_targets())
     }
 
     /// The empty target index nested plans carry.
@@ -440,6 +460,20 @@ struct LoweredIndex {
 /// traversal that could drift from the first.
 #[derive(Debug)]
 pub(crate) struct LoweredShape {
+    /// The lowered `sh:deactivated` expressions, one per entry of
+    /// [`Shape::deactivated_when`].
+    deactivated_when: Box<[LoweredExpr]>,
+    /// The lowered reifier `sh:deactivated` expressions of each entry of
+    /// [`Shape::constraint_annotations`], positionally parallel to it.
+    annotation_deactivations: Box<[Box<[LoweredExpr]>]>,
+    /// Whether the lowering of this shape, everything it nests included, met a
+    /// node-expression `sh:deactivated`: on a shape, a constraint reifier or a
+    /// `sh:property` reifier. Computed by the one walk, from the tree it just built.
+    deactivates: bool,
+    /// Whether that lowering met a reference it cannot follow to a shape lowered
+    /// here: a shape index resolved per value node, or a custom function body,
+    /// which is lowered once however many calls name it.
+    reaches_opaque: bool,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[LoweredProperty]>,
 }
@@ -454,6 +488,12 @@ pub(crate) struct LoweredProperty {
     /// The lowered `sh:defaultValue` expression, exactly when the property shape
     /// has one.
     default_value: Option<LoweredExpr>,
+    /// The lowered `sh:deactivated` expressions, one per entry of
+    /// [`PropertyShape::deactivated_when`].
+    deactivated_when: Box<[LoweredExpr]>,
+    /// The lowered reifier `sh:deactivated` expressions of each entry of
+    /// [`PropertyShape::constraint_annotations`], positionally parallel to it.
+    annotation_deactivations: Box<[Box<[LoweredExpr]>]>,
     constraints: Box<[LoweredConstraint]>,
     properties: Box<[Self]>,
     reifiers: Box<[LoweredShape]>,
@@ -787,14 +827,14 @@ impl DatasetBinding {
         &self,
         classes: &ClassCatalog,
         class: &NamedNode,
-    ) -> Result<Option<TermId>, String> {
+    ) -> Result<Option<TermId>, crate::error::ShapesError> {
         let position = classes.position(class).ok_or_else(|| {
-            format!(
+            crate::error::ShapesError::internal(format!(
                 "internal validation-plan defect: the class <{}> is reached during evaluation but \
                  was never collected by the class-planning walk, so its dataset identity was \
                  never resolved",
                 class.as_str()
-            )
+            ))
         })?;
         Ok(self.class_ids[position])
     }
@@ -807,7 +847,7 @@ impl DatasetBinding {
     /// # Errors
     /// Returns an error when the slot is not one the lowering allocated.
     #[inline]
-    pub(crate) fn term(&self, slot: TermSlot) -> Result<Option<TermId>, String> {
+    pub(crate) fn term(&self, slot: TermSlot) -> Result<Option<TermId>, crate::error::ShapesError> {
         self.terms
             .get(slot as usize)
             .copied()
@@ -816,7 +856,7 @@ impl DatasetBinding {
 
     /// The dataset identity set in `slot`.
     #[inline]
-    fn set(&self, slot: SetSlot) -> Result<&FastSet<TermId>, String> {
+    fn set(&self, slot: SetSlot) -> Result<&FastSet<TermId>, crate::error::ShapesError> {
         self.sets
             .get(slot as usize)
             .ok_or_else(|| slot_defect("id-set", slot))
@@ -824,7 +864,10 @@ impl DatasetBinding {
 
     /// The `index`-th `sh:closed sh:ByTypes` index, by type identity.
     #[inline]
-    fn closed_types(&self, index: u32) -> Result<&FastMap<TermId, FastSet<TermId>>, String> {
+    fn closed_types(
+        &self,
+        index: u32,
+    ) -> Result<&FastMap<TermId, FastSet<TermId>>, crate::error::ShapesError> {
         self.closed_types
             .get(index as usize)
             .ok_or_else(|| slot_defect("closed-type-index", index))
@@ -842,7 +885,11 @@ impl DatasetBinding {
     /// # Errors
     /// Returns an error when the index position is not one the lowering handed out.
     #[inline]
-    pub(crate) fn indexed_node(&self, index: u32, id: TermId) -> Result<Option<&Term>, String> {
+    pub(crate) fn indexed_node(
+        &self,
+        index: u32,
+        id: TermId,
+    ) -> Result<Option<&Term>, crate::error::ShapesError> {
         self.indexes
             .get(index as usize)
             .map(|nodes| nodes.get(&id))
@@ -852,22 +899,25 @@ impl DatasetBinding {
 
 /// The message a slot the lowering never handed out is refused with.
 #[cold]
-fn slot_defect(kind: &str, slot: u32) -> String {
-    format!(
+fn slot_defect(kind: &str, slot: u32) -> crate::error::ShapesError {
+    crate::error::ShapesError::internal(format!(
         "internal validation-plan defect: the evaluator asked for {kind} slot {slot}, which the \
          shape lowering never allocated, so the constraint it belongs to was never lowered"
-    )
+    ))
 }
 
 /// The message a lowering that does not describe the constraint beside it is
 /// refused with.
 #[cold]
-pub(crate) fn lowering_defect(constraint: &str, lowered: &impl std::fmt::Debug) -> String {
-    format!(
+pub(crate) fn lowering_defect(
+    constraint: &str,
+    lowered: &impl std::fmt::Debug,
+) -> crate::error::ShapesError {
+    crate::error::ShapesError::internal(format!(
         "internal validation-plan defect: the constraint {constraint} was paired with the \
          lowering {lowered:?}, which describes a different constraint kind, so the shape lowering \
          and the shape it lowered have diverged"
-    )
+    ))
 }
 
 // ── The plan handed to the evaluator ────────────────────────────────────────────
@@ -909,6 +959,76 @@ impl<'a> ShapePlan<'a> {
     #[inline]
     pub(crate) fn shape(&self) -> &'a Shape {
         self.shape
+    }
+
+    /// The `sh:deactivated` expressions of the shape, each paired with its
+    /// lowering.
+    ///
+    /// # Errors
+    /// Returns an error when the shape and its lowering disagree on how many it has.
+    pub(crate) fn deactivated_when(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>,
+        crate::error::ShapesError,
+    > {
+        pair(
+            &self.shape.deactivated_when,
+            &self.lowered.deactivated_when,
+            "sh:deactivated",
+        )
+    }
+
+    /// The reifier `sh:deactivated` expressions of the shape's constraint `which`,
+    /// each paired with its lowering; none when no annotation states one.
+    ///
+    /// # Errors
+    /// Returns an error when the annotations and their lowering disagree.
+    pub(crate) fn constraint_deactivation(
+        &self,
+        which: AnnotatedConstraint,
+    ) -> Result<
+        impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>,
+        crate::error::ShapesError,
+    > {
+        pair_annotation(
+            &self.shape.constraint_annotations,
+            &self.lowered.annotation_deactivations,
+            which,
+        )
+    }
+
+    /// Whether a conformance question about this shape must be answered by walking
+    /// its whole reachable closure instead of stopping at the first answer.
+    ///
+    /// True exactly when the closure (`sh:or`, `sh:and`, `sh:xone`, `sh:not`,
+    /// `sh:node`, `sh:property`, `sh:qualifiedValueShape`, filter and
+    /// `shnex:conformsToShape` shapes, member and some-value shapes) holds a
+    /// node-expression `sh:deactivated`. Such an expression that is ill-formed at a
+    /// focus node fails the validation, so a short-circuit that skipped it would make
+    /// the verdict depend on member order. A shape that reaches shapes only through
+    /// a name resolved at evaluation, or a function body, takes the graph-wide
+    /// answer. False for every graph without a deactivation expression, so the
+    /// short-circuits there are untouched.
+    ///
+    /// The short-circuits it lifts are those over an unordered set of members: the
+    /// member loops of `sh:and` and `sh:or`, the `sh:memberShape` loop, the sibling
+    /// check of `sh:qualifiedValueShape`, and the conformance probe that stops at the
+    /// first violation.
+    ///
+    /// It does not reach the two node-expression kinds that read an ORDERED sequence
+    /// of input nodes. `shnex:findFirst` returns at the first conforming input node and
+    /// `shnex:matchAll` at the first non-conforming one, so a deactivation expression
+    /// in their filter shape is evaluated only at the input nodes up to that one. That
+    /// is a decision, not an omission: each is defined by that node (the first input
+    /// node that conforms; every input node conforms, which one failing settles), so
+    /// the inputs after it are not part of the answer, and the order they are read in
+    /// is the order of the sequence, which the expression's own result already depends
+    /// on. Walking them would make a later input's ill-formed deactivation expression
+    /// fail an expression whose value it cannot change.
+    #[inline]
+    pub(crate) fn exhaustive(&self) -> bool {
+        self.lowered.deactivates || (self.lowered.reaches_opaque && self.graph.any_deactivation)
     }
 
     /// This shape's prepared target index.
@@ -958,8 +1078,7 @@ impl<'a> ShapePlan<'a> {
         let built = UniqueGroups::build(data, spec, self.binding, self.classes)?;
         // A lost race publishes nothing and reads the winner's grouping.
         let _ = cell.set(built);
-        cell.get()
-            .ok_or_else(|| slot_defect("unique-values", slot).into())
+        cell.get().ok_or_else(|| slot_defect("unique-values", slot))
     }
 
     /// Whether the lowering this plan belongs to holds any `sh:uniqueValuesFor`
@@ -997,7 +1116,10 @@ impl<'a> ShapePlan<'a> {
     /// constraints, which is a defect in the walk rather than in any input.
     pub(crate) fn constraints(
         &self,
-    ) -> Result<impl Iterator<Item = (&'a Constraint, &'a LoweredConstraint)>, String> {
+    ) -> Result<
+        impl Iterator<Item = (&'a Constraint, &'a LoweredConstraint)>,
+        crate::error::ShapesError,
+    > {
         pair(&self.shape.constraints, &self.lowered.constraints, "shape")
     }
 
@@ -1008,7 +1130,10 @@ impl<'a> ShapePlan<'a> {
     /// property shapes it has.
     pub(crate) fn properties(
         &self,
-    ) -> Result<impl Iterator<Item = (&'a PropertyShape, PropertyPlan<'a>)>, String> {
+    ) -> Result<
+        impl Iterator<Item = (&'a PropertyShape, PropertyPlan<'a>)>,
+        crate::error::ShapesError,
+    > {
         let plan = *self;
         Ok(pair(
             &self.shape.property_shapes,
@@ -1024,7 +1149,10 @@ impl<'a> ShapePlan<'a> {
     ///
     /// # Errors
     /// Returns an error when the lowering names a slot the walk never handed out.
-    fn pair_path(&self, lowered: &'a LoweredPath) -> Result<PairPath<'a>, String> {
+    fn pair_path(
+        &self,
+        lowered: &'a LoweredPath,
+    ) -> Result<PairPath<'a>, crate::error::ShapesError> {
         Ok(match lowered {
             LoweredPath::Predicate(slot) => PairPath::Predicate(self.binding.term(*slot)?),
             path => PairPath::Path(path),
@@ -1064,7 +1192,7 @@ impl<'a> ShapePlan<'a> {
         index: u32,
         id: &Term,
         shapes: &'a FastMap<Term, Shape>,
-    ) -> Result<Option<Self>, String> {
+    ) -> Result<Option<Self>, crate::error::ShapesError> {
         let lowered = self
             .graph
             .indexes
@@ -1115,7 +1243,7 @@ impl<'a> PropertyPlan<'a> {
     pub(crate) fn values(
         &self,
         property: &'a PropertyShape,
-    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, crate::error::ShapesError> {
         pair_optional(
             property.values.as_ref(),
             self.lowered.values.as_ref(),
@@ -1131,11 +1259,51 @@ impl<'a> PropertyPlan<'a> {
     pub(crate) fn default_value(
         &self,
         property: &'a PropertyShape,
-    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, String> {
+    ) -> Result<Option<(&'a NodeExpr, &'a LoweredExpr)>, crate::error::ShapesError> {
         pair_optional(
             property.default_value.as_ref(),
             self.lowered.default_value.as_ref(),
             "sh:defaultValue",
+        )
+    }
+
+    /// The `sh:deactivated` expressions of the property shape, each paired with its
+    /// lowering. They are evaluated at the parent's focus node, like `sh:values`.
+    ///
+    /// # Errors
+    /// Returns an error when the property shape and its lowering disagree on how
+    /// many it has.
+    pub(crate) fn deactivated_when(
+        &self,
+        property: &'a PropertyShape,
+    ) -> Result<
+        impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>,
+        crate::error::ShapesError,
+    > {
+        pair(
+            &property.deactivated_when,
+            &self.lowered.deactivated_when,
+            "sh:deactivated",
+        )
+    }
+
+    /// The reifier `sh:deactivated` expressions of the property shape's constraint
+    /// `which`, each paired with its lowering; none when no annotation states one.
+    ///
+    /// # Errors
+    /// Returns an error when the annotations and their lowering disagree.
+    pub(crate) fn constraint_deactivation(
+        &self,
+        property: &'a PropertyShape,
+        which: AnnotatedConstraint,
+    ) -> Result<
+        impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>,
+        crate::error::ShapesError,
+    > {
+        pair_annotation(
+            &property.constraint_annotations,
+            &self.lowered.annotation_deactivations,
+            which,
         )
     }
 
@@ -1147,7 +1315,10 @@ impl<'a> PropertyPlan<'a> {
     pub(crate) fn constraints(
         &self,
         property: &'a PropertyShape,
-    ) -> Result<impl Iterator<Item = (&'a Constraint, &'a LoweredConstraint)>, String> {
+    ) -> Result<
+        impl Iterator<Item = (&'a Constraint, &'a LoweredConstraint)>,
+        crate::error::ShapesError,
+    > {
         pair(
             &property.constraints,
             &self.lowered.constraints,
@@ -1163,7 +1334,7 @@ impl<'a> PropertyPlan<'a> {
     pub(crate) fn properties(
         &self,
         property: &'a PropertyShape,
-    ) -> Result<impl Iterator<Item = (&'a PropertyShape, Self)>, String> {
+    ) -> Result<impl Iterator<Item = (&'a PropertyShape, Self)>, crate::error::ShapesError> {
         let plan = self.plan;
         Ok(pair(
             &property.property_shapes,
@@ -1181,7 +1352,7 @@ impl<'a> PropertyPlan<'a> {
     pub(crate) fn reifiers(
         &self,
         property: &'a PropertyShape,
-    ) -> Result<impl Iterator<Item = (&'a Shape, ShapePlan<'a>)>, String> {
+    ) -> Result<impl Iterator<Item = (&'a Shape, ShapePlan<'a>)>, crate::error::ShapesError> {
         let plan = self.plan;
         Ok(pair(
             &property.reifier_shapes,
@@ -1516,7 +1687,7 @@ impl<'a> ShapePlan<'a> {
         &self,
         constraint: &'a Constraint,
         lowered: &'a LoweredConstraint,
-    ) -> Result<PlannedConstraint<'a>, String> {
+    ) -> Result<PlannedConstraint<'a>, crate::error::ShapesError> {
         Ok(match (constraint, lowered) {
             (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
                 PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
@@ -1763,14 +1934,14 @@ impl<'a> ShapePlan<'a> {
 fn shape_list<'a>(
     shapes: &'a [Shape],
     lowered: &'a [LoweredShape],
-) -> Result<ShapeList<'a>, String> {
+) -> Result<ShapeList<'a>, crate::error::ShapesError> {
     if shapes.len() != lowered.len() {
-        return Err(format!(
+        return Err(crate::error::ShapesError::internal(format!(
             "internal validation-plan defect: a constraint declares {} shape(s) but its lowering \
              holds {}, so the shape lowering and the shape it lowered have diverged",
             shapes.len(),
             lowered.len()
-        ));
+        )));
     }
     Ok(ShapeList { shapes, lowered })
 }
@@ -1844,11 +2015,15 @@ impl LoweredExpr {
     /// [`Self::has_constant_class`]), or when its slot is not one the binding
     /// holds — both defects in the walk.
     #[inline]
-    pub(crate) fn constant_class_id(&self, plan: ShapePlan<'_>) -> Result<Option<TermId>, String> {
+    pub(crate) fn constant_class_id(
+        &self,
+        plan: ShapePlan<'_>,
+    ) -> Result<Option<TermId>, crate::error::ShapesError> {
         let slot = self.class.ok_or_else(|| {
-            "internal validation-plan defect: a constant shnex:instancesOf class was read from a \
-             lowering that records none"
-                .to_owned()
+            crate::error::ShapesError::internal(
+                "internal validation-plan defect: a constant shnex:instancesOf class was read from a \
+             lowering that records none",
+            )
         })?;
         plan.binding.term(slot)
     }
@@ -1858,7 +2033,7 @@ impl LoweredExpr {
     /// # Errors
     /// Returns an error when the lowering holds no such path.
     #[inline]
-    pub(crate) fn path(&self, position: usize) -> Result<&LoweredPath, String> {
+    pub(crate) fn path(&self, position: usize) -> Result<&LoweredPath, crate::error::ShapesError> {
         self.paths
             .get(position)
             .ok_or_else(|| expr_defect("path", position, self.paths.len()))
@@ -1874,7 +2049,7 @@ impl LoweredExpr {
         plan: ShapePlan<'a>,
         position: usize,
         shape: &'a Shape,
-    ) -> Result<ShapePlan<'a>, String> {
+    ) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
         let lowered = self
             .shapes
             .get(position)
@@ -1887,7 +2062,7 @@ impl LoweredExpr {
     /// # Errors
     /// Returns an error when the lowering holds no such operand.
     #[inline]
-    pub(crate) fn operand(&self, position: usize) -> Result<&Self, String> {
+    pub(crate) fn operand(&self, position: usize) -> Result<&Self, crate::error::ShapesError> {
         self.operands
             .get(position)
             .ok_or_else(|| expr_defect("operand", position, self.operands.len()))
@@ -1898,11 +2073,12 @@ impl LoweredExpr {
     /// # Errors
     /// Returns an error when the lowering records none.
     #[inline]
-    pub(crate) fn index(&self) -> Result<u32, String> {
+    pub(crate) fn index(&self) -> Result<u32, crate::error::ShapesError> {
         self.index.ok_or_else(|| {
-            "internal validation-plan defect: a computed shape argument was evaluated against a \
-             lowering that records no shape index, so the shapes it resolves to were never lowered"
-                .to_owned()
+            crate::error::ShapesError::internal(
+                "internal validation-plan defect: a computed shape argument was evaluated against a \
+             lowering that records no shape index, so the shapes it resolves to were never lowered",
+            )
         })
     }
 
@@ -1914,11 +2090,12 @@ impl LoweredExpr {
     /// text, which — like every other slot here — is a defect in the walk rather
     /// than anything an input can cause.
     #[inline]
-    pub(crate) fn scalar_query(&self) -> Result<&str, String> {
+    pub(crate) fn scalar_query(&self) -> Result<&str, crate::error::ShapesError> {
         self.query.as_deref().ok_or_else(|| {
-            "internal validation-plan defect: a function-call node expression was evaluated \
-             against a lowering that records no query text, so its callee was never rendered"
-                .to_owned()
+            crate::error::ShapesError::internal(
+                "internal validation-plan defect: a function-call node expression was evaluated \
+             against a lowering that records no query text, so its callee was never rendered",
+            )
         })
     }
 
@@ -1927,22 +2104,23 @@ impl LoweredExpr {
     /// # Errors
     /// Returns an error when the lowering records none.
     #[inline]
-    pub(crate) fn body_iri(&self) -> Result<&str, String> {
+    pub(crate) fn body_iri(&self) -> Result<&str, crate::error::ShapesError> {
         self.body.as_deref().ok_or_else(|| {
-            "internal validation-plan defect: a custom node-expression call was evaluated against \
-             a lowering that records no function IRI, so its body was never lowered"
-                .to_owned()
+            crate::error::ShapesError::internal(
+                "internal validation-plan defect: a custom node-expression call was evaluated against \
+             a lowering that records no function IRI, so its body was never lowered",
+            )
         })
     }
 }
 
 /// The message an expression lowering that is short of an operand is refused with.
 #[cold]
-fn expr_defect(what: &str, position: usize, held: usize) -> String {
-    format!(
+fn expr_defect(what: &str, position: usize, held: usize) -> crate::error::ShapesError {
+    crate::error::ShapesError::internal(format!(
         "internal validation-plan defect: a node expression asked for {what} {position} of a \
          lowering holding {held}, so the expression and its lowering have diverged"
-    )
+    ))
 }
 
 /// Pair an AST slice with its lowering, refusing a length mismatch loudly.
@@ -1954,16 +2132,50 @@ fn pair<'a, A, B>(
     ast: &'a [A],
     lowered: &'a [B],
     what: &str,
-) -> Result<impl Iterator<Item = (&'a A, &'a B)>, String> {
+) -> Result<impl Iterator<Item = (&'a A, &'a B)>, crate::error::ShapesError> {
     if ast.len() != lowered.len() {
-        return Err(format!(
+        return Err(crate::error::ShapesError::internal(format!(
             "internal validation-plan defect: a {what} declares {} item(s) but its lowering holds \
              {}, so the shape lowering and the shape it lowered have diverged",
             ast.len(),
             lowered.len()
-        ));
+        )));
     }
     Ok(ast.iter().zip(lowered.iter()))
+}
+
+/// The reifier `sh:deactivated` expressions of the annotation of constraint `which`,
+/// paired with their lowerings; none when no annotation names `which`.
+///
+/// `lowered` is positionally parallel to `annotations`.
+fn pair_annotation<'a>(
+    annotations: &'a [ConstraintAnnotation],
+    lowered: &'a [Box<[LoweredExpr]>],
+    which: AnnotatedConstraint,
+) -> Result<
+    impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a>,
+    crate::error::ShapesError,
+> {
+    if annotations.len() != lowered.len() {
+        return Err(crate::error::ShapesError::internal(format!(
+            "internal validation-plan defect: a shape declares {} constraint annotation(s) but \
+             its lowering holds {}, so the shape lowering and the shape it lowered have diverged",
+            annotations.len(),
+            lowered.len()
+        )));
+    }
+    match annotations
+        .iter()
+        .zip(lowered.iter())
+        .find(|(annotation, _)| annotation.constraint == which)
+    {
+        Some((annotation, lowered)) => pair(
+            &annotation.deactivated_when,
+            lowered,
+            "reifier sh:deactivated",
+        ),
+        None => pair(&[], &[], "reifier sh:deactivated"),
+    }
 }
 
 /// Pair an optional AST node with its optional lowering, refusing when exactly one
@@ -1972,12 +2184,12 @@ fn pair_optional<'a, A, B>(
     ast: Option<&'a A>,
     lowered: Option<&'a B>,
     what: &str,
-) -> Result<Option<(&'a A, &'a B)>, String> {
+) -> Result<Option<(&'a A, &'a B)>, crate::error::ShapesError> {
     match (ast, lowered) {
         (Some(ast), Some(lowered)) => Ok(Some((ast, lowered))),
         (None, None) => Ok(None),
-        (ast, _) => Err(format!(
-            "internal validation-plan defect: a property shape {} {what} but its lowering {}, so \
+        (ast, _) => Err(crate::error::ShapesError::internal(format!(
+            "internal validation-plan defect: a shape {} {what} but its lowering {}, so \
              the shape lowering and the shape it lowered have diverged",
             if ast.is_some() {
                 "declares"
@@ -1989,7 +2201,7 @@ fn pair_optional<'a, A, B>(
             } else {
                 "holds one"
             },
-        )),
+        ))),
     }
 }
 
@@ -2072,6 +2284,12 @@ struct ShapeWalk {
     unique_values: Vec<UniqueSpec>,
     /// Every `sh:closed sh:ByTypes` index lowered so far, in position order.
     closed_types: Vec<LoweredTypeIndex>,
+    /// How many node-expression `sh:deactivated` values the walk has lowered. A
+    /// shape's closure holds one exactly when this grew while it was lowered.
+    deactivations: usize,
+    /// How many references to a shape or body not lowered inline the walk has met
+    /// (see [`LoweredShape::reaches_opaque`]).
+    opaque_references: usize,
     /// The position each shared `sh:closed sh:ByTypes` index was lowered at, by
     /// the address of its `Arc` allocation — so a shapes graph's one index is
     /// lowered once however many constraints share it.
@@ -2199,11 +2417,15 @@ impl ShapeWalk {
             footprint,
             unique_values: self.unique_values.into_boxed_slice(),
             closed_types: self.closed_types.into_boxed_slice(),
+            any_deactivation: self.deactivations > 0,
         }
     }
 
     /// The position of the lowered form of `index`, entering it exactly once.
     fn index_position(&mut self, index: &Arc<OnceLock<FastMap<Term, Shape>>>) -> u32 {
+        // Whichever shape of the index a value node resolves to is chosen at
+        // evaluation, so no shape lowered inline here describes it.
+        self.opaque_references += 1;
         let cell = Arc::as_ptr(index).addr();
         if let Some(position) = self
             .indexes
@@ -2284,6 +2506,10 @@ pub(crate) fn lower_standalone_expression(expr: &NodeExpr) -> StandaloneLowering
         expr: lowered,
         root: standalone_root(),
         root_lowered: LoweredShape {
+            deactivated_when: Box::new([]),
+            annotation_deactivations: Box::new([]),
+            deactivates: false,
+            reaches_opaque: false,
             constraints: Box::new([]),
             properties: Box::new([]),
         },
@@ -2387,6 +2613,7 @@ fn standalone_root() -> Shape {
         messages: Vec::new(),
         constraint_annotations: vec![],
         deactivated: false,
+        deactivated_when: Vec::new(),
         box_roles: Vec::new(),
         rules: Vec::new(),
     }
@@ -2395,6 +2622,8 @@ fn standalone_root() -> Shape {
 /// Lower one shape: its targets' classes, its own constraints and its property
 /// shapes.
 fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
+    let deactivations = walk.deactivations;
+    let opaque_references = walk.opaque_references;
     let scope = walk.footprint.enter_shape();
     for target in &shape.targets {
         walk.footprint.record_target(target);
@@ -2414,13 +2643,30 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweredShape {
             | Target::NodeExpression(_) => {}
         }
     }
-    let lowered = LoweredShape {
-        constraints: lower_constraints(&shape.constraints, &shape.property_shapes, walk),
-        properties: shape
-            .property_shapes
+    // `sh:deactivated` is evaluated at the focus node the shape is validated at, so
+    // its reads are recorded from the node the walk stands on, before the constraints.
+    let deactivated_when = lower_expressions(&shape.deactivated_when, walk);
+    let annotation_deactivations =
+        lower_annotation_deactivations(&shape.constraint_annotations, walk);
+    walk.deactivations += shape.deactivated_when.len()
+        + shape
+            .constraint_annotations
             .iter()
-            .map(|property| lower_property(property, walk))
-            .collect(),
+            .map(|annotation| annotation.deactivated_when.len())
+            .sum::<usize>();
+    let constraints = lower_constraints(&shape.constraints, &shape.property_shapes, walk);
+    let properties = shape
+        .property_shapes
+        .iter()
+        .map(|property| lower_property(property, walk))
+        .collect();
+    let lowered = LoweredShape {
+        deactivated_when,
+        annotation_deactivations,
+        deactivates: walk.deactivations > deactivations,
+        reaches_opaque: walk.opaque_references > opaque_references,
+        constraints,
+        properties,
     };
     walk.footprint.leave(scope);
     lowered
@@ -2446,6 +2692,16 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         .default_value
         .as_ref()
         .map(|expr| lower_expression(expr, walk));
+    // `sh:deactivated` is evaluated at the same focus node.
+    let deactivated_when = lower_expressions(&property.deactivated_when, walk);
+    let annotation_deactivations =
+        lower_annotation_deactivations(&property.constraint_annotations, walk);
+    walk.deactivations += property.deactivated_when.len()
+        + property
+            .constraint_annotations
+            .iter()
+            .map(|annotation| annotation.deactivated_when.len())
+            .sum::<usize>();
     // Every step of the path is a read, and everything below applies to the nodes
     // the path arrives at — so the footprint moves to those value nodes here, while
     // remembering the declaring node the property-pair comparands are read from.
@@ -2492,10 +2748,32 @@ fn lower_property(property: &PropertyShape, walk: &mut ShapeWalk) -> LoweredProp
         path,
         values,
         default_value,
+        deactivated_when,
+        annotation_deactivations,
         constraints,
         properties,
         reifiers,
     }
+}
+
+/// Lower each of `exprs`, in order.
+fn lower_expressions(exprs: &[NodeExpr], walk: &mut ShapeWalk) -> Box<[LoweredExpr]> {
+    exprs
+        .iter()
+        .map(|expr| lower_expression(expr, walk))
+        .collect()
+}
+
+/// Lower the reifier `sh:deactivated` expressions of each of `annotations`,
+/// positionally parallel to it.
+fn lower_annotation_deactivations(
+    annotations: &[ConstraintAnnotation],
+    walk: &mut ShapeWalk,
+) -> Box<[Box<[LoweredExpr]>]> {
+    annotations
+        .iter()
+        .map(|annotation| lower_expressions(&annotation.deactivated_when, walk))
+        .collect()
 }
 
 /// Lower one SHACL property path, resolving every predicate step to a slot.
@@ -2896,6 +3174,9 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweredExpr {
                 .map(|(_, arg)| lower_expression(arg, walk))
                 .collect();
             let iri = func.iri.as_str().to_owned();
+            // The body is lowered once, at the first call site met; every call
+            // site reaches whatever shapes it holds.
+            walk.opaque_references += 1;
             // The body is lowered ONCE per function: it is shared by `Arc` and
             // names the same terms at every call site, and it may call this very
             // function, so re-entering it would not terminate. The in-flight list
@@ -3220,6 +3501,13 @@ ex:FlagShape a sh:NodeShape ;
         shape: &super::LoweredShape,
         out: &mut Vec<&'a str>,
     ) {
+        for expr in shape
+            .deactivated_when
+            .iter()
+            .chain(shape.annotation_deactivations.iter().flatten())
+        {
+            collect_expr_class_slots(lowered, expr, out);
+        }
         for constraint in &shape.constraints {
             collect_constraint_class_slots(lowered, constraint, out);
         }
@@ -3233,7 +3521,13 @@ ex:FlagShape a sh:NodeShape ;
         property: &super::LoweredProperty,
         out: &mut Vec<&'a str>,
     ) {
-        for expr in property.values.iter().chain(&property.default_value) {
+        for expr in property
+            .values
+            .iter()
+            .chain(&property.default_value)
+            .chain(&property.deactivated_when)
+            .chain(property.annotation_deactivations.iter().flatten())
+        {
             collect_expr_class_slots(lowered, expr, out);
         }
         for constraint in &property.constraints {
@@ -3399,7 +3693,8 @@ ex:FlagShape a sh:NodeShape ;
         let error = computed
             .expr()
             .constant_class_id(computed.plan(&computed_binding))
-            .expect_err("asking a computed lowering for a constant class is a defect");
+            .expect_err("asking a computed lowering for a constant class is a defect")
+            .to_string();
         assert!(error.contains("records none"), "got: {error}");
 
         // …and the neighbouring case: the constant form over a data graph that
@@ -3483,7 +3778,8 @@ ex:Shape a sh:NodeShape ;
         )));
         let error = plan
             .planned(&other, lowering)
-            .expect_err("an sh:hasValue beside an sh:in's lowering is a plan defect");
+            .expect_err("an sh:hasValue beside an sh:in's lowering is a plan defect")
+            .to_string();
         assert!(
             error.contains("sh:hasValue") && error.contains("In("),
             "the refusal must name the constraint and the lowering it was paired with, got: \
@@ -3525,6 +3821,14 @@ ex:Shape a sh:NodeShape ;
         let error = lowered
             .plan(stray, 99, &binding, lowered.classes(), &targets)
             .expect_err("position 99 is past the shapes this lowering covers");
+        assert!(
+            matches!(
+                error.as_processor(),
+                Some(crate::error::ProcessorFailure::Internal { .. })
+            ),
+            "a plan defect is an internal processor failure, never an evaluation failure: {error:?}"
+        );
+        let error = error.to_string();
         assert!(
             error.contains("diverged"),
             "the refusal must say the shape list and its lowering disagree, got: {error}"

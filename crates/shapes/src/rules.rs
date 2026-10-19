@@ -243,6 +243,15 @@ pub struct RuleGraph {
     /// that do support the SHACL rules entailment regime execute the rules following the
     /// rules execution instructions prior to performing the actual validation."
     pub entailment: bool,
+    /// The rule sets the shapes graph names as values of `sh:entailment`, in IRI order.
+    /// Empty under a law that does not define them: the working draft (which refuses
+    /// the declaration at load) and the 2017 Recommendation. The editor's draft
+    /// (`shacl-ed-2026-10-16`) of SHACL 1.2 Inference Rules, "Entailment using Rule
+    /// Sets", defines them: "If the shapes graph has
+    /// more than one such value for sh:entailment, or also has the value
+    /// sh:RulesEntailment, then the rules of all of them are executed together as a
+    /// single rule set."
+    pub entailment_rule_sets: Vec<NamedNode>,
 }
 
 /// What a host declares a `sh:ruleProcessor` value to mean.
@@ -269,8 +278,8 @@ pub enum RuleProcessor {
 pub struct RuleOptions {
     /// The `sh:ruleProcessor` values the host handles, and how.
     processors: Vec<(Term, RuleProcessor)>,
-    /// The rule set to execute; `None` for the default rule set.
-    rule_set: Option<NamedNode>,
+    /// The rule sets to execute together as one; `None` for the default rule set.
+    rule_sets: Option<Vec<NamedNode>>,
     /// Whether to track each inferred triple's rule with `sh:sourceRule`.
     source_rules: bool,
     /// The caller's term-generating round limit ([`Self::with_max_term_generating_rounds`]).
@@ -301,7 +310,17 @@ impl RuleOptions {
     /// is the set of all rules in the graph."
     #[must_use]
     pub fn with_rule_set(mut self, iri: NamedNode) -> Self {
-        self.rule_set = Some(iri);
+        self.rule_sets = Some(vec![iri]);
+        self
+    }
+
+    /// Execute the rule sets `iris` together as a single rule set instead of the default
+    /// rule set. SHACL 1.2 Inference Rules at the editor's draft, "Entailment using Rule
+    /// Sets": "the rules of all of them are executed together as a single rule set." The rules of each set
+    /// include those of the sets it includes; an empty `iris` executes no rule.
+    #[must_use]
+    pub fn with_rule_sets(mut self, iris: impl IntoIterator<Item = NamedNode>) -> Self {
+        self.rule_sets = Some(iris.into_iter().collect());
         self
     }
 
@@ -423,10 +442,10 @@ impl RuleOptions {
             .map(|(_, processor)| *processor)
     }
 
-    /// The rule set to execute, if not the default.
+    /// The rule sets to execute together, if not the default rule set.
     #[must_use]
-    pub fn rule_set(&self) -> Option<&NamedNode> {
-        self.rule_set.as_ref()
+    pub fn rule_sets(&self) -> Option<&[NamedNode]> {
+        self.rule_sets.as_deref()
     }
 
     /// Whether inferred triples are tracked with `sh:sourceRule`.
@@ -1004,9 +1023,9 @@ pub fn shacl_rule_set<'a>(
             }
         }
     }
-    let members = match options.rule_set() {
+    let members = match options.rule_sets() {
         None => None,
-        Some(iri) => Some(rule_set_members(&shapes.rules.rule_sets, iri)?),
+        Some(iris) => Some(rule_set_members(&shapes.rules.rule_sets, iris)?),
     };
     let selected = |rule: &Rule| members.as_ref().is_none_or(|set| set.contains(&rule.id));
 
@@ -1110,14 +1129,14 @@ fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
     }
 }
 
-/// The rules of rule set `iri`, its included rule sets' transitively.
+/// The rules of the rule sets `iris`, their included rule sets' transitively.
 ///
 /// # Errors
 ///
-/// When `iri`, or a rule set it includes, is not a declared rule set.
-fn rule_set_members(sets: &[RuleSetDeclaration], iri: &NamedNode) -> Result<Vec<Term>, String> {
+/// When an IRI, or a rule set it includes, is not a declared rule set.
+fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<Vec<Term>, String> {
     let mut members: Vec<Term> = Vec::new();
-    let mut pending = vec![iri.clone()];
+    let mut pending = iris.to_vec();
     let mut seen: Vec<NamedNode> = Vec::new();
     while let Some(next) = pending.pop() {
         if seen.contains(&next) {
@@ -1254,7 +1273,9 @@ fn discover(
     shape: &Shape,
     gained: &[[Term; 3]],
 ) -> Option<Vec<Term>> {
-    if !rule.conditions.is_empty() {
+    // Which focus nodes a node-expression `sh:deactivated` leaves is decided over the
+    // graph as it stands, not from the triples gained.
+    if !rule.conditions.is_empty() || !shape.deactivated_when.is_empty() {
         return None;
     }
     let mut classes: Vec<&str> = Vec::new();
@@ -1319,9 +1340,23 @@ fn eligible_focus_nodes(
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
     let governors = crate::sparql::current_governors();
+    let shape_plan = plan.shape_plan()?;
     let mut focus_nodes = Vec::new();
     for focus in plan.focus_nodes(data)? {
         crate::sparql::poll_between_evaluations(governors.as_deref())?;
+        // SHACL 1.2 Inference Rules: a shape rule is executed "for each target node of
+        // each of the linked and non-deactivated shapes", and Core decides a shape's
+        // deactivation per focus node when its `sh:deactivated` is a node expression.
+        if crate::constraints::deactivated_at(
+            data,
+            shape_plan,
+            0,
+            &crate::engine::FocusNode::resolve(data.core_view(), &focus),
+            &shape.id,
+            shape_plan.deactivated_when()?,
+        )? {
+            continue;
+        }
         if conditions_hold(data, &focus, &plan)? {
             focus_nodes.push(focus);
         }
@@ -1764,7 +1799,7 @@ pub(crate) fn expected_derived_triples(
         let binding = lowered.bind(data.core_view(), lowered.classes());
         let focus_nodes =
             resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
-        let plan = lowered.plan(shape, 0, &binding, lowered.classes(), lowered.no_targets())?;
+        let plan = lowered.untargeted_plan(shape, 0, &binding)?;
         for (ps, property_plan) in plan.properties()? {
             if !derives_expected(ps, expected) {
                 continue;
@@ -1775,6 +1810,26 @@ pub(crate) fn expected_derived_triples(
             for focus in &focus_nodes {
                 let focus = focus.to_term(data.core_view());
                 if !focus.is_subject() {
+                    continue;
+                }
+                // A node-expression `sh:deactivated` deactivates the shape, or the
+                // property shape, at the focus nodes where it produces `true`.
+                let focus_node = crate::engine::FocusNode::resolve(data.core_view(), &focus);
+                if crate::constraints::deactivated_at(
+                    data,
+                    plan,
+                    0,
+                    &focus_node,
+                    &shape.id,
+                    plan.deactivated_when()?,
+                )? || crate::constraints::deactivated_at(
+                    data,
+                    plan,
+                    0,
+                    &focus_node,
+                    &ps.id,
+                    property_plan.deactivated_when(ps)?,
+                )? {
                     continue;
                 }
                 for value in
@@ -1836,15 +1891,26 @@ impl<'a> RulePlan<'a> {
         })
     }
 
+    /// The plan of `shape`, the `position`-th shape this rule lowered.
+    fn plan_at<'b>(
+        &'b self,
+        shape: &'b Shape,
+        position: usize,
+    ) -> Result<crate::plan::ShapePlan<'b>, crate::error::ShapesError> {
+        self.lowered.untargeted_plan(shape, position, &self.binding)
+    }
+
+    /// The plan of the rule's own shape.
+    fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
+        self.plan_at(self.shape, 0)
+    }
+
     /// The plan of the `position`-th `sh:condition` shape.
-    fn condition(&self, position: usize) -> Result<crate::plan::ShapePlan<'_>, String> {
-        self.lowered.plan(
-            &self.conditions[position],
-            position + 1,
-            &self.binding,
-            self.lowered.classes(),
-            self.lowered.no_targets(),
-        )
+    fn condition(
+        &self,
+        position: usize,
+    ) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
+        self.plan_at(&self.conditions[position], position + 1)
     }
 }
 

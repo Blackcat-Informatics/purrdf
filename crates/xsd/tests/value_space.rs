@@ -713,3 +713,36 @@ fn double_extreme_canonical_roundtrip() {
         );
     }
 }
+
+/// `SECONDS` returns the seconds field of the lexical form exactly as written; this is
+/// the function behind it, over the zone shapes and signs a `dateTime` or `time` can
+/// carry. Each field keeps its leading zero and the trailing zeros of its fraction.
+#[test]
+fn seconds_field_text_returns_the_field_as_written() {
+    use purrdf_xsd::temporal::seconds_field_text;
+
+    let cases: [(&str, Option<&str>); 14] = [
+        // A zone of every shape leaves the field alone.
+        ("2023-12-25T10:30:05.500Z", Some("05.500")),
+        ("2023-12-25T10:30:05.500+05:30", Some("05.500")),
+        ("2023-12-25T10:30:05.500-08:00", Some("05.500")),
+        ("2023-12-25T10:30:05.500-00:00", Some("05.500")),
+        ("2023-12-25T10:30:05.500", Some("05.500")),
+        // The field is the text, so padding and fraction digits survive.
+        ("2023-12-25T10:30:00", Some("00")),
+        ("2023-12-25T10:30:59.9990Z", Some("59.9990")),
+        // A negative year puts a '-' before the body, not in the field.
+        ("-0044-03-15T12:00:07.250Z", Some("07.250")),
+        // xsd:time has the same tail.
+        ("10:30:00.250Z", Some("00.250")),
+        ("23:59:59", Some("59")),
+        // Not shaped like a time of day: no seconds field.
+        ("2023-12-25", None),
+        ("not a time", None),
+        ("2023-12-25T10:30:xx", None),
+        ("", None),
+    ];
+    for (lexical, expected) in cases {
+        assert_eq!(seconds_field_text(lexical), expected, "{lexical:?}");
+    }
+}

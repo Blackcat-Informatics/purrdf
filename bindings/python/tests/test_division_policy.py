@@ -69,7 +69,7 @@ def test_a_scale_and_rounding_policy_rounds_the_quotient() -> None:
     assert _value(store.query(_select("3/8"), division="2:half-even")) == "0.38"
     # The bare digit count truncates toward zero.
     assert _value(store.query(_select("2/3"), division="5")) == "0.66666"
-    assert _value(store.query(_select('SECONDS("2024-01-02T03:04:05.123456789012345678901Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>)'))) == "5.123456789012345678901"
+    assert _value(store.query(_select('SECONDS("2024-01-02T03:04:05.123456789012345678901Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>)'))) == "05.123456789012345678901"
 
 
 def test_the_default_keeps_terminating_digits_and_rounds_repeating_quotients() -> None:

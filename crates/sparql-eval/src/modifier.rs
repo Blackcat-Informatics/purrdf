@@ -6410,9 +6410,9 @@ mod tests {
         };
         let seq = eval(&group, &mut ctx).expect("avg");
         let result = agg_lex(&ds, &ctx, &seq, "avg");
-        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal);
-        // XSD 1.1 whole-decimal lexical has no point ("3", not "3.0").
-        assert_eq!(result, "3", "AVG(2,4) should be 3, got {result}");
+        // AVG(2, 4) = 6 / 2 = 3 — result is decimal (integer ÷ integer → decimal),
+        // spelled with its point like every computed whole decimal.
+        assert_eq!(result, "3.0", "AVG(2,4) should be 3.0, got {result}");
     }
 
     #[test]
@@ -6639,7 +6639,7 @@ mod tests {
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
         assert_eq!(
             result.as_deref(),
-            Some(max.as_str()),
+            Some(format!("{max}.0").as_str()),
             "AVG({{i128::MAX, i128::MAX}}) must answer i128::MAX exactly, not unbound"
         );
     }
@@ -8620,7 +8620,7 @@ mod tests {
             "VAR_POP's chunked within-group fold must agree with the sequential one"
         );
         assert_eq!(
-            var_sequential, "4",
+            var_sequential, "4.0",
             "population variance of REPEATS copies of the known dataset is still exactly 4"
         );
 
@@ -8856,28 +8856,30 @@ mod numeric_chain_tests {
         const ROWS: usize = 2048;
         let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
+        // A computed whole decimal carries its point.
+        let sum = format!("{big}.0");
         let mut group = vec![lit("0", XDEC); ROWS];
         group[chunk_size - 1] = lit(big, XDEC);
         group[chunk_size] = lit(big, XDEC);
         group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
         assert_eq!(
             sequential(ValueAggregate::Sum, &group),
-            Some(lit(big, XDEC))
+            Some(lit(&sum, XDEC))
         );
         assert_eq!(
             partial_sum_tree(&group, chunk_size, ValueAggregate::Sum),
-            Some(lit(big, XDEC)),
+            Some(lit(&sum, XDEC)),
             "the tree and the chain are both exact"
         );
         assert_eq!(
             fold_values(ValueAggregate::Sum, &group).expect("fold"),
-            Some(lit(big, XDEC))
+            Some(lit(&sum, XDEC))
         );
 
         let mut neighbour = group.clone();
         neighbour[chunk_size] = lit("0", XDEC);
         let expected = sequential(ValueAggregate::Sum, &neighbour);
-        assert_eq!(expected, Some(lit("0", XDEC)));
+        assert_eq!(expected, Some(lit("0.0", XDEC)));
         assert_eq!(
             fold_values(ValueAggregate::Sum, &neighbour).expect("fold"),
             expected

@@ -104,7 +104,7 @@ pub use ast::{
 pub use error::{ParseError, Result};
 pub use parser::{
     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
-    builtin_function_keyword,
+    builtin_function_keyword, builtin_keyword_arity,
 };
 pub use projection::{ProjectionIter, ProjectionNames, ProjectionNamesIter, ProjectionVars};
 pub use scope::{

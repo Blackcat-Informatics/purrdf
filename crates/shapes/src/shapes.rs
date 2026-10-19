@@ -681,8 +681,12 @@ pub enum AnnotatedConstraint {
 ///
 /// A reifier `sh:deactivated true` has no annotation here: "the constraints that
 /// use the triple are called deactivated constraints. Deactivated constraints are
-/// ignored during validation", so the parser does not emit the constraint at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// ignored during validation", so the parser does not emit the constraint at all. A
+/// reifier whose `sh:deactivated` is a node expression cannot be decided when the
+/// shapes graph is read, so the constraint is emitted with the expression in
+/// [`Self::deactivated_when`], and is ignored at the focus nodes where it
+/// produces `true`.
+#[derive(Debug, Clone)]
 pub struct ConstraintAnnotation {
     /// The constraint the override applies to.
     pub constraint: AnnotatedConstraint,
@@ -692,6 +696,11 @@ pub struct ConstraintAnnotation {
     /// The reifier `sh:message` values — the whole set — which beat the shape's
     /// (and a constraint node's own) messages; empty when the reifier states none.
     pub messages: Vec<Literal>,
+    /// The `sh:deactivated` node expressions of the reifiers, and of a SHACL-SPARQL
+    /// constraint node's own `sh:deactivated`: the constraint is ignored at a focus
+    /// node where any of them produces `true` as its only output node (see
+    /// [`Shape::deactivated_when`]). Empty when none is stated.
+    pub deactivated_when: Vec<NodeExpr>,
 }
 
 /// The annotation for `which`, if the shape's sorted annotation list has one.
@@ -764,6 +773,12 @@ pub struct PropertyShape {
     /// Whether `sh:deactivated true` is set — a deactivated property shape
     /// validates nothing.
     pub deactivated: bool,
+    /// The `sh:deactivated` node expressions of this property shape that are
+    /// evaluated at each focus node (see [`Shape::deactivated_when`]); empty when
+    /// the shape states no `sh:deactivated`, or states `true` or `false`, which
+    /// [`Self::deactivated`] holds. More than one when a reifier of the
+    /// `sh:property` statement that reaches the shape states one of its own.
+    pub deactivated_when: Vec<NodeExpr>,
     /// Optional graph-box role annotations on this property shape, read via the
     /// caller-supplied [`BoxRoleVocab`] (empty when no vocab is configured).
     pub box_roles: Vec<NamedNode>,
@@ -793,6 +808,20 @@ pub struct Shape {
     pub constraint_annotations: Vec<ConstraintAnnotation>,
     /// Whether `sh:deactivated true` is set.
     pub deactivated: bool,
+    /// The `sh:deactivated` node expressions that are evaluated at each focus node;
+    /// empty when the shape states no `sh:deactivated` or states `true` or `false`,
+    /// which [`Self::deactivated`] holds.
+    ///
+    /// SHACL 1.2 Core, "Deactivating Shapes and Constraints": "The value of
+    /// `sh:deactivated` is a node expression that must have either `true` or `false`
+    /// as the (only) output node. [...] If `evalExpr(expr, data graph, focus node,
+    /// {})` produces `true` as its only output node, the shape is called
+    /// deactivated." The expression is evaluated for the focus node being
+    /// validated, so a shape can be deactivated at some focus nodes and not at
+    /// others. The shape is deactivated at a focus node where any of them produces
+    /// `true`. A shape's own value is one; the others come from reifiers of the
+    /// statements that reach it.
+    pub deactivated_when: Vec<NodeExpr>,
     /// Optional graph-box role annotations on this shape, read via the
     /// caller-supplied [`BoxRoleVocab`] (empty when no vocab is configured).
     pub box_roles: Vec<NamedNode>,
@@ -1615,6 +1644,19 @@ pub(crate) enum InFlight {
     NodeExpr(Term),
 }
 
+/// Where a `sh:deactivated` value is written, which decides the law that reads a
+/// node expression there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeactivationSite {
+    /// A node shape or a property shape: SHACL 1.2 Core, "Deactivating Shapes and
+    /// Constraints", defines a node expression there.
+    Shape,
+    /// A SPARQL-based constraint or an `sh:expression` constraint node. The working
+    /// draft's SPARQL Extensions give the value as "either true or false"; the
+    /// editor's draft makes it a node expression "as for shapes".
+    Constraint,
+}
+
 pub(crate) struct Parser<'s> {
     data: &'s RdfDataset,
     /// One immutable policy and declaration applicability law for this parse.
@@ -2412,6 +2454,7 @@ impl<'s> Parser<'s> {
         let rules = self.parse_rules(&id)?;
         let ps = self.parse_property_shape(&id)?;
         let deactivated = ps.deactivated;
+        let deactivated_when = ps.deactivated_when.clone();
         Ok(Shape {
             id,
             targets,
@@ -2421,6 +2464,7 @@ impl<'s> Parser<'s> {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated,
+            deactivated_when,
             box_roles: vec![],
             rules,
         })
@@ -2510,7 +2554,7 @@ impl<'s> Parser<'s> {
     /// When the prefix declarations the query reaches make the shapes graph
     /// ill-formed ([`prefixes::PrefixResolver::header`]).
     fn prefix_header(&self, owners: &[&Term]) -> Result<String, String> {
-        self.prefix_resolver.header(self.data, owners)
+        self.prefix_resolver.header(self.data, owners, self.profile)
     }
 
     /// The `sh:message` values of `node`, every one, in
@@ -2550,21 +2594,136 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// Whether `node` is deactivated: its `sh:deactivated` value must be a
+    /// Whether the rule `node` is deactivated: its `sh:deactivated` value must be a
     /// well-typed `xsd:boolean` literal, and only the term `true` deactivates (see
-    /// [`parser::node_expr::boolean_value`] for why the comparison is by term). A
-    /// node-expression value is a SHACL 1.2 form this engine does not evaluate,
-    /// and is refused rather than read as `false`.
+    /// [`parser::node_expr::boolean_value`] for why the comparison is by term).
+    ///
+    /// SHACL 1.2 Inference Rules, "Deactivated Rules": "The values of
+    /// `sh:deactivated` are either of the `xsd:boolean` literals `true` or `false`."
+    /// A node expression is therefore refused for a rule, not read as `false`; a shape
+    /// or a constraint reads its value with [`Self::deactivation_of`].
     pub(crate) fn deactivated_of(&self, node: &Term) -> Result<bool, String> {
         match self.first_object_of(node, sh::DEACTIVATED) {
             None => Ok(false),
             Some(value) => parser::node_expr::boolean_value(&value).ok_or_else(|| {
                 format!(
-                    "sh:deactivated on {node} must be an xsd:boolean literal, got {value}; a \
-                     node-expression value of sh:deactivated is not evaluated by this engine"
+                    "sh:deactivated on {node} must be an xsd:boolean literal, got {value}; SHACL \
+                     1.2 Inference Rules: \"The values of sh:deactivated are either of the \
+                     xsd:boolean literals true or false\""
                 )
             }),
         }
+    }
+
+    /// Whether the shape `node` is deactivated by a constant `sh:deactivated true`.
+    /// A node-expression value is not a constant: it is evaluated at the focus node
+    /// the shape judges, which is `false` here.
+    pub(crate) fn constantly_deactivated(&self, node: &Term) -> Result<bool, String> {
+        match self.first_object_of(node, sh::DEACTIVATED) {
+            Some(value @ Term::BlankNode(_)) if !self.is_bare_blank_node(&value) => Ok(false),
+            _ => self.deactivated_of(node),
+        }
+    }
+
+    /// What the `sh:deactivated` of `node` says: the constant `true` or `false`, or
+    /// the node expressions to evaluate at each focus node. `node` is a shape, or a
+    /// SPARQL-based or expression constraint node, and `owner` the shape whose
+    /// prefixes the expression's queries use.
+    ///
+    /// SHACL 1.2 Core, "Deactivating Shapes and Constraints": "The value of
+    /// `sh:deactivated` is a node expression that must have either `true` or `false`
+    /// as the (only) output node. Let `expr` be the value of `sh:deactivated` in a
+    /// shape. If `evalExpr(expr, data graph, focus node, {})` produces `true` as its
+    /// only output node, the shape is called deactivated." The editor's draft
+    /// ([`crate::profile::ShaclProfile::ED_20261016`]) of SHACL 1.2 SPARQL
+    /// Extensions, "Syntax of SPARQL-based Constraints", says the same of a
+    /// SPARQL-based constraint: its value "is a node expression that must have
+    /// either `true` or `false` as its (only) output node, as for shapes". The
+    /// working draft says only that "this value is either true or false", so a
+    /// node expression at a [`DeactivationSite::Constraint`] is refused under it.
+    ///
+    /// A structured expression (a blank node with properties) is parsed with `owner`
+    /// as its prefix owner, as a constraint's is, and evaluated per focus node; the
+    /// other nodes are constant expressions whose one output node is themselves, so
+    /// only a boolean literal can satisfy the rule. An IRI, any other literal and the
+    /// empty expression (a blank node with no properties) cannot, and are refused
+    /// where they are read. Under the 2017 Recommendation, which allows `true` and
+    /// `false` alone, a node expression is refused too.
+    ///
+    /// # Errors
+    ///
+    /// A value that is no boolean literal and no well-formed node expression, or
+    /// whose constant output is not `true` or `false`, or a node expression under
+    /// the 2017 Recommendation, or at a constraint under the working draft.
+    pub(crate) fn deactivation_of(
+        &mut self,
+        node: &Term,
+        owner: &Term,
+        site: DeactivationSite,
+    ) -> Result<(bool, Vec<NodeExpr>), String> {
+        let Some(value) = self.first_object_of(node, sh::DEACTIVATED) else {
+            return Ok((false, Vec::new()));
+        };
+        match &value {
+            Term::BlankNode(_) if !self.is_bare_blank_node(&value) => {
+                if self.profile == crate::profile::ShaclProfile::REC_20170720 {
+                    return Err(format!(
+                        "sh:deactivated on {node} is a node expression, but SHACL REC \
+                         2017-07-20 allows only the xsd:boolean literals true and false (\"The \
+                         value of sh:deactivated in a shape must be either true or false\")"
+                    ));
+                }
+                if site == DeactivationSite::Constraint
+                    && !self.profile.reads_editors_draft_semantics()
+                {
+                    return Err(format!(
+                        "sh:deactivated on {node} is a node expression, but under {} the value \
+                         of sh:deactivated on a SPARQL-based or expression constraint is \
+                         boolean (SHACL 1.2 SPARQL Extensions, \"Syntax of SPARQL-based \
+                         Constraints\": \"this value is either true or false\"); a node \
+                         expression there is first defined by the editor's draft {}",
+                        self.profile,
+                        crate::profile::ShaclProfile::ED_20261016
+                    ));
+                }
+                let expr = self.parse_deactivation_expression(owner, &value)?;
+                Ok((false, vec![expr]))
+            }
+            Term::BlankNode(_) => Err(format!(
+                "sh:deactivated on {node} is the empty node expression, which produces no output \
+                 node; SHACL 1.2 Core: \"The value of sh:deactivated is a node expression that \
+                 must have either true or false as the (only) output node\""
+            )),
+            _ => parser::node_expr::boolean_value(&value)
+                .map(|flag| (flag, Vec::new()))
+                .ok_or_else(|| {
+                    format!(
+                        "sh:deactivated on {node} is the constant node expression {value}, whose \
+                         only output node is not true or false; SHACL 1.2 Core: \"The value of \
+                         sh:deactivated is a node expression that must have either true or false \
+                         as the (only) output node\""
+                    )
+                }),
+        }
+    }
+
+    /// Parse the structured node expression `node`, a value of `sh:deactivated`, with
+    /// `owner` as its prefix owner.
+    ///
+    /// # Errors
+    ///
+    /// When `node` is not a well-formed node expression.
+    pub(crate) fn parse_deactivation_expression(
+        &mut self,
+        owner: &Term,
+        node: &Term,
+    ) -> Result<NodeExpr, String> {
+        let saved_shape = self.current_shape.replace(owner.clone());
+        let parsed = self.parse_node_expr(node);
+        self.current_shape = saved_shape;
+        parsed.map_err(|e| {
+            format!("sh:deactivated on {owner} is not a well-formed node expression: {e}")
+        })
     }
 
     /// Whether `node` is a bare blank node: one that is the subject of no triple of
@@ -2594,6 +2753,7 @@ impl<'s> Parser<'s> {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
                 rules: vec![],
             });
@@ -2613,7 +2773,8 @@ impl<'s> Parser<'s> {
         let messages = self.messages_of(id)?;
 
         // -- Deactivated --
-        let deactivated = self.deactivated_of(id)?;
+        let (deactivated, deactivated_when) =
+            self.deactivation_of(id, id, DeactivationSite::Shape)?;
 
         // -- Targets (only for top-level node shapes; anonymous shapes have none) --
         let targets = self.parse_targets(id)?;
@@ -2625,9 +2786,7 @@ impl<'s> Parser<'s> {
         for ps_node in property_shape_nodes {
             let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &ps_node)])?;
             let ps = self.parse_property_shape(&ps_node)?;
-            if let Some(ps) = annotate_property_edge(ps, annotated) {
-                property_shapes.push(ps);
-            }
+            property_shapes.push(annotate_property_edge(ps, annotated));
         }
 
         // -- Node-level constraints --
@@ -2646,6 +2805,7 @@ impl<'s> Parser<'s> {
             messages,
             constraint_annotations: parsed.annotations,
             deactivated,
+            deactivated_when,
             box_roles,
             rules,
         })
@@ -3060,7 +3220,8 @@ impl<'s> Parser<'s> {
         let messages = self.messages_of(ps_node)?;
 
         // sh:deactivated — a deactivated property shape validates nothing.
-        let deactivated = self.deactivated_of(ps_node)?;
+        let (deactivated, deactivated_when) =
+            self.deactivation_of(ps_node, ps_node, DeactivationSite::Shape)?;
 
         // constraints on the property shape
         let parsed = self.parse_constraints(ps_node, true)?;
@@ -3093,7 +3254,7 @@ impl<'s> Parser<'s> {
                     continue;
                 }
                 match self.parse_property_shape(&nested) {
-                    Ok(parsed) => property_shapes.extend(annotate_property_edge(parsed, annotated)),
+                    Ok(parsed) => property_shapes.push(annotate_property_edge(parsed, annotated)),
                     Err(e) => {
                         self.in_flight.remove(&key);
                         return Err(e);
@@ -3142,12 +3303,18 @@ impl<'s> Parser<'s> {
             }
             Annotated::Plain
         };
-        let reifier_deactivated = reifier_annotation == Annotated::Deactivated;
-        if let Annotated::Override { severity, messages } = reifier_annotation {
+        let reifier_deactivated = matches!(reifier_annotation, Annotated::Deactivated);
+        if let Annotated::Override {
+            severity,
+            messages,
+            deactivated_when,
+        } = reifier_annotation
+        {
             constraint_annotations.push(ConstraintAnnotation {
                 constraint: AnnotatedConstraint::Reifier,
                 severity,
                 messages,
+                deactivated_when,
             });
         }
         let mut reifier_shapes = Vec::new();
@@ -3182,6 +3349,7 @@ impl<'s> Parser<'s> {
             messages,
             constraint_annotations,
             deactivated,
+            deactivated_when,
             box_roles,
         })
     }
@@ -3440,6 +3608,7 @@ impl<'s> Parser<'s> {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
                 rules: vec![],
             });
@@ -3460,6 +3629,7 @@ impl<'s> Parser<'s> {
                 messages: vec![],
                 constraint_annotations: vec![],
                 deactivated: false,
+                deactivated_when: Vec::new(),
                 box_roles: vec![],
                 rules: vec![],
             })
@@ -3477,24 +3647,41 @@ impl<'s> Parser<'s> {
 /// and "the validation results are the results of validating v as focus node
 /// against the property shape $property" — the results that constraint causes
 /// are the property shape's. So a reifier on the `sh:property` statement
-/// annotates exactly those results: `sh:deactivated true` drops this reach of
+/// annotates exactly those results: `sh:deactivated true` deactivates this reach of
 /// the property shape (the same shape reached through another, unannotated
-/// statement still validates), and `sh:severity` / `sh:message` take the place of
+/// statement still validates, and the reach keeps its path in `sh:closed`'s
+/// permitted set), and `sh:severity` / `sh:message` take the place of
 /// the property shape's own for this reach, below any reifier annotation on the
 /// property shape's own constraint statements, which names the constraint that
-/// caused the result more narrowly still.
-fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option<PropertyShape> {
+/// caused the result more narrowly still. A node-expression `sh:deactivated` joins
+/// the property shape's own, so this reach is deactivated where any of them produces
+/// `true`.
+fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> PropertyShape {
     match annotated {
-        Annotated::Deactivated => None,
-        Annotated::Plain => Some(ps),
-        Annotated::Override { severity, messages } => {
+        // The edge stays: `sh:closed`'s permitted set P is syntactic, "the set of IRI
+        // properties that can be reached from the current shape via the SPARQL path
+        // sh:property/sh:path", and `sh:property` is no parameter of the closed
+        // constraint, so a deactivated reach must not shrink it. Marked deactivated, the
+        // property shape validates nothing here — exactly as its own `sh:deactivated
+        // true` does — and the always-true expression spelling already keeps it.
+        Annotated::Deactivated => {
+            ps.deactivated = true;
+            ps
+        }
+        Annotated::Plain => ps,
+        Annotated::Override {
+            severity,
+            messages,
+            deactivated_when,
+        } => {
             if let Some(severity) = severity {
                 ps.severity = severity;
             }
             if !messages.is_empty() {
                 ps.messages = messages;
             }
-            Some(ps)
+            ps.deactivated_when.extend(deactivated_when);
+            ps
         }
     }
 }

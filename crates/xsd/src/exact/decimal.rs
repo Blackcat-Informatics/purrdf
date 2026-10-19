@@ -28,6 +28,8 @@ pub struct PreparedDecimalText {
     digits: crate::bigint::PreparedDecimalDigits,
     scale: usize,
     length: usize,
+    /// Spell a whole-number value with a point and one fractional zero.
+    point_required: bool,
 }
 
 struct DecimalPointWriter<'a, W: fmt::Write + ?Sized> {
@@ -76,7 +78,21 @@ impl PreparedDecimalText {
             digits,
             scale,
             length,
+            point_required: false,
         })
+    }
+
+    /// The same value spelled with a decimal point and at least one fractional
+    /// digit: a whole number `4` becomes `4.0`, every other value is unchanged.
+    /// This is the form of a decimal an operation computes; the XSD 1.1
+    /// canonical form ([`Decimal::canonical_lexical`]) is the one without it.
+    #[must_use]
+    pub const fn with_required_point(mut self) -> Self {
+        if self.scale == 0 && !self.point_required {
+            self.point_required = true;
+            self.length += 2;
+        }
+        self
     }
 
     /// Exact final length, known before allocating an output destination.
@@ -106,7 +122,12 @@ impl PreparedDecimalText {
             out.write_str("-")?;
         }
         if self.scale == 0 {
-            return self.digits.write_unsigned(out);
+            self.digits.write_unsigned(out)?;
+            return if self.point_required {
+                out.write_str(".0")
+            } else {
+                Ok(())
+            };
         }
         if self.digits.digits_len() > self.scale {
             self.digits.write_unsigned(&mut DecimalPointWriter {
@@ -1357,6 +1378,14 @@ impl Decimal {
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
         cost::decimal_to_float(self.shape())
+    }
+
+    /// The cost of rendering this value as a computed decimal
+    /// ([`PreparedDecimalText::with_required_point`]): [`Self::render_cost`] with
+    /// the two bytes of `.0` a whole value carries.
+    #[must_use]
+    pub fn computed_render_cost(&self) -> Cost {
+        cost::render_shape_spelled(self.shape(), if self.scale == 0 { 2 } else { 0 })
     }
 
     /// The cost of rendering [`Self::canonical_lexical`]: every byte of the text,

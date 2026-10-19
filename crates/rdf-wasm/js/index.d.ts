@@ -120,6 +120,15 @@ export interface GovernorOptions {
  */
 export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
 
+/**
+ * The stable id of one exact, dated SHACL law: the 2017 Recommendation
+ * (`shacl-rec-2017-07-20`), the SHACL 1.2 working draft (`shacl-wd-2026-09-18`) or the
+ * data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under
+ * (`shacl-ed-2026-10-16`). Ids are matched exactly; any other string is refused with the
+ * `unsupported-profile` status, and no nearby edition is substituted.
+ */
+export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
+
 export interface QueryOptions {
   readonly base?: string | null;
   /**
@@ -2837,6 +2846,14 @@ export interface ShaclSarifMessage {
  * selects no law throws, naming the accepted ones. A pattern the law's grammar refuses
  * stays an ordinary validation result; a resource refusal throws with the resource's code
  * and no report.
+ *
+ * `shaclProfile` is the exact dated SHACL law the validation runs under (see
+ * {@link ShaclLaw}), the same law the CLI selects as `purrdf validate --shacl-profile`.
+ * Omitted, the compatibility law runs, unchanged. An id that names no law throws with the
+ * `unsupported-profile` status; a shapes graph the law's text refuses (the working draft
+ * refuses a prefix declared through a version-IRI path that the editor's draft admits)
+ * throws at load; and an `xpathRegex` that names a law other than the one the dated SHACL
+ * law requires throws.
  */
 export function shaclValidateToSarif(
   shapesTtl: string,
@@ -2848,6 +2865,7 @@ export function shaclValidateToSarif(
   shapesGraph?: string,
   subClassOfInShapesGraph?: boolean,
   xpathRegex?: XPathRegexLaw,
+  shaclProfile?: ShaclLaw,
 ): string;
 
 /**
@@ -3101,6 +3119,12 @@ export interface AsyncShaclOptions extends AsyncHostOptions {}
  */
 export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
   readonly xpathRegex?: XPathRegexLaw | null;
+  /**
+   * The exact dated SHACL law (see {@link ShaclLaw}), which only `shaclValidateToSarifAsync`
+   * takes, as its synchronous twin takes it as its last argument. Another twin refuses it by
+   * name rather than ignoring it.
+   */
+  readonly shaclProfile?: ShaclLaw | null;
 }
 
 /**

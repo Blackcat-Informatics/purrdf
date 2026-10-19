@@ -53,6 +53,7 @@
 use wasm_bindgen::prelude::*;
 
 use purrdf_core::xsd_regex::xpath::Profile;
+use purrdf_shapes::ShaclProfile;
 use purrdf_validate::{
     SelectedProductError, ShapesError, ShapesProductRefusal, XPathValidationError,
 };
@@ -166,6 +167,7 @@ pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
         ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
         ShapesError::Imports(error) => error.to_string(),
         ShapesError::Invalid(message) => message.clone(),
+        ShapesError::Processor(failure) => failure.to_string(),
         ShapesError::ShaclJs(refusal) => refusal.message().to_owned(),
         ShapesError::IllFormed(refusal) => refusal.to_string(),
         ShapesError::Prebinding(violation) => violation.to_string(),
@@ -246,6 +248,7 @@ pub(crate) fn validate_to_sarif_impl(
         shapes_graph,
         false,
         None,
+        None,
     )
     .map_err(|error| match error {
         XPathValidationError::Shapes(error) => error,
@@ -262,7 +265,8 @@ pub(crate) fn validate_to_sarif_impl(
 /// `None` is SHACL's default set, and an empty list or a non-IRI is an error.
 ///
 /// `profile` is the dated XPath law the request selected, or `None` for the
-/// compatibility regular expressions.
+/// compatibility regular expressions. `shacl_profile` is the exact dated SHACL law, or
+/// `None` for the compatibility law.
 #[allow(clippy::too_many_arguments)] // one argument per request input, as the JS signature
 #[allow(clippy::fn_params_excessive_bools)] // one argument per request input
 pub(crate) fn validate_to_sarif_with_options_impl(
@@ -275,10 +279,14 @@ pub(crate) fn validate_to_sarif_with_options_impl(
     shapes_graph: Option<&str>,
     subclass_of_in_shapes_graph: bool,
     profile: Option<Profile>,
+    shacl_profile: Option<ShaclProfile>,
 ) -> Result<String, XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    let base_options = purrdf_validate::ValidationOptions::default()
+    let mut base_options = purrdf_validate::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
+    if let Some(law) = shacl_profile {
+        base_options = base_options.with_profile(law);
+    }
     let validation = match conformance_disallows {
         None => base_options,
         Some(iris) => base_options
@@ -1224,6 +1232,18 @@ fn shapes_profile(name: Option<&str>) -> Result<Option<Profile>, ShapesError> {
     crate::xpath_regex::parse(name).map_err(ShapesError::Invalid)
 }
 
+/// The SHACL law a validating entry's `shaclProfile` selects, beside the `xpathRegex` it
+/// was called with: the one reading every host shares
+/// ([`purrdf_validate::requested_shacl_profile`]), refused as the shapes-graph entries' own
+/// error. `None` is the compatibility law.
+fn requested_law(
+    name: Option<&str>,
+    xpath_regex: Option<Profile>,
+) -> Result<Option<ShaclProfile>, ShapesError> {
+    purrdf_validate::requested_shacl_profile(name, xpath_regex)
+        .map_err(|message| ShapesError::Invalid(format!("shaclProfile {message}")))
+}
+
 /// [`shapes_profile`] for a product entry: refused before the product is opened, so
 /// the refusal names no admission dimension.
 fn product_profile(name: Option<&str>) -> Result<Option<Profile>, ShaclProductRefusal> {
@@ -1327,7 +1347,7 @@ macro_rules! shacl_entries {
     ($(
         $(#[$meta:meta])*
         $js:ident: fn $sync:ident($($param:ident: $ty:ty),* $(,)?)
-            selecting $selection:ident -> Result<$out:ty, $err:ty>
+            selecting $selection:ident $(law $law:ident)? -> Result<$out:ty, $err:ty>
             => $variant:ident, $ctor_js:ident / $ctor:ident
             $body:block
     )*) => {
@@ -1343,7 +1363,7 @@ macro_rules! shacl_entries {
                 #[allow(clippy::too_many_arguments)] // one argument per request input
                 #[allow(clippy::needless_pass_by_value)] // the request owns its arguments
                 pub(crate) fn $ctor(
-                    $($param: $ty,)* $selection: Option<String>,
+                    $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
                 ) -> Result<$out, $err> $body
             )*
         }
@@ -1354,7 +1374,7 @@ macro_rules! shacl_entries {
         pub(crate) enum ShaclRequest {
             $(
                 #[doc = concat!("`", stringify!($js), "`'s arguments.")]
-                $variant { $($param: $ty,)* $selection: Option<String>, },
+                $variant { $($param: $ty,)* $selection: Option<String>, $($law: Option<String>,)? },
             )*
         }
 
@@ -1363,8 +1383,8 @@ macro_rules! shacl_entries {
             /// carried as the value its synchronous entry returns or throws.
             pub(crate) fn run_job(self) -> JobOutcome {
                 match self {
-                    $(Self::$variant { $($param,)* $selection, } => {
-                        requests::$ctor($($param,)* $selection,)
+                    $(Self::$variant { $($param,)* $selection, $($law,)? } => {
+                        requests::$ctor($($param,)* $selection $(, $law)?)
                             .map_or_else(ShaclFailure::into_outcome, ShaclAnswer::into_outcome)
                     })*
                 }
@@ -1376,6 +1396,26 @@ macro_rules! shacl_entries {
                     $(Self::$variant { $selection, .. } => *$selection = name,)*
                 }
             }
+
+            /// Install the exact dated SHACL law the job's options name, by its stable id.
+            ///
+            /// # Errors
+            /// A request whose synchronous entry takes no SHACL law: the option would be
+            /// read and ignored, so it is refused by name.
+            pub(crate) fn select_shacl_profile(
+                &mut self,
+                name: Option<String>,
+            ) -> Result<(), String> {
+                match self {
+                    $($(Self::$variant { $law, .. } => {
+                        *$law = name;
+                        Ok(())
+                    })?)*
+                    _ => name.map_or(Ok(()), |_| {
+                        Err("shaclProfile applies only to a validation twin".to_owned())
+                    }),
+                }
+            }
         }
 
         $(
@@ -1384,9 +1424,9 @@ macro_rules! shacl_entries {
             #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
             #[allow(clippy::too_many_arguments)] // one argument per request input
             pub fn $sync(
-                $($param: $ty,)* $selection: Option<String>,
+                $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
             ) -> Result<$out, JsValue> {
-                requests::$ctor($($param,)* $selection,)
+                requests::$ctor($($param,)* $selection $(, $law)?)
                     .map_err(ShaclFailure::into_rejection)
             }
         )*
@@ -1420,7 +1460,7 @@ macro_rules! shacl_entries {
                 pub fn $ctor($($param: $ty),*) -> Self {
                     Self {
                         request: ShaclRequest::$variant {
-                            $($param,)* $selection: None,
+                            $($param,)* $selection: None, $($law: None,)?
                         },
                     }
                 }
@@ -1474,6 +1514,13 @@ shacl_entries! {
     /// selects no law throws, listing the accepted names. A pattern the law's grammar
     /// refuses stays an ordinary validation result; a native resource refusal throws with
     /// its resource code and no report.
+    ///
+    /// `shaclProfile` is the stable id of the exact dated SHACL law the validation runs
+    /// under: `"shacl-rec-2017-07-20"`, `"shacl-wd-2026-09-18"` or `"shacl-ed-2026-10-16"`,
+    /// decoded once, exactly, by `purrdf_validate::complete_profile`. Omitted, the
+    /// compatibility law runs, unchanged. An id that names no law throws with the
+    /// `unsupported-profile` status, a shapes graph the law's text refuses throws at load,
+    /// and an `xpathRegex` naming a law other than the one the dated law requires throws.
     shaclValidateToSarif: fn shacl_validate_to_sarif(
         shapes_ttl: String,
         data_nt: String,
@@ -1483,8 +1530,9 @@ shacl_entries! {
         import_documents: Option<Vec<String>>,
         shapes_graph: Option<String>,
         subclass_of_in_shapes_graph: Option<bool>,
-    ) selecting xpath_regex -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
+    ) selecting xpath_regex law shacl_profile -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
     {
+        let xpath_profile = shapes_profile(xpath_regex.as_deref())?;
         validate_to_sarif_with_options_impl(
             &shapes_ttl,
             shapes_base.as_deref(),
@@ -1494,7 +1542,8 @@ shacl_entries! {
             import_documents.as_deref().unwrap_or_default(),
             shapes_graph.as_deref(),
             subclass_of_in_shapes_graph.unwrap_or(false),
-            shapes_profile(xpath_regex.as_deref())?,
+            xpath_profile,
+            requested_law(shacl_profile.as_deref(), xpath_profile)?,
         )
     }
 
@@ -2121,8 +2170,19 @@ pub(crate) mod tests {
             <http://example.org/bob> \
             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
         let run = |on: bool| {
-            validate_to_sarif_with_options_impl(shapes, None, data, None, &[], &[], None, on, None)
-                .expect("validates")
+            validate_to_sarif_with_options_impl(
+                shapes,
+                None,
+                data,
+                None,
+                &[],
+                &[],
+                None,
+                on,
+                None,
+                None,
+            )
+            .expect("validates")
         };
         let off = run(false);
         assert!(off.contains("http://example.org/bob"), "{off}");
@@ -2160,6 +2220,104 @@ pub(crate) mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A vendored SHACL 1.2 suite file's text.
+    fn suite(relative: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/../../vectors/shacl12/tests/{relative}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .expect("the vendored suite file")
+    }
+
+    /// `shaclValidateToSarif` under the SHACL law `law` names, over a suite entry.
+    fn validate_under(
+        shapes: &str,
+        data: &str,
+        xpath: Option<Profile>,
+        law: Option<&str>,
+    ) -> Result<String, XPathValidationError> {
+        validate_to_sarif_with_options_impl(
+            shapes,
+            Some("https://example.org/suite/entry.ttl"),
+            data,
+            None,
+            &[],
+            &[],
+            None,
+            false,
+            xpath,
+            requested_law(law, xpath)?,
+        )
+    }
+
+    /// `pre-binding-009` (a `VALUES` over a variable that is not pre-bound): the compatibility
+    /// law refuses the shapes graph at load; the editor's-draft law validates it.
+    #[test]
+    fn the_shacl_profile_separates_the_compatibility_law_from_the_editors_draft() {
+        let shapes = suite("sparql/pre-binding/pre-binding-009.ttl");
+        let data = concat!(
+            "<http://example.com/ns#InvalidResource> <http://example.com/ns#property> \"forbidden\" .\n",
+            "<http://example.com/ns#ValidResource1> <http://example.com/ns#property> \"fine\" .\n",
+        );
+        let refused = validate_under(&shapes, data, None, None).expect_err("compatibility law");
+        assert!(
+            refused.to_string().contains("VALUES is not allowed"),
+            "{refused}"
+        );
+        let sarif = validate_under(&shapes, data, None, Some("shacl-ed-2026-10-16"))
+            .expect("the editor's draft validates it");
+        assert!(sarif.contains("InvalidResource"), "{sarif}");
+        assert!(!sarif.contains("ValidResource1"), "{sarif}");
+    }
+
+    /// `prefixes-003` (a prefix reached through the version-IRI path): the working draft
+    /// refuses the shapes graph at load; the editor's draft validates it.
+    #[test]
+    fn the_working_draft_refuses_what_the_editors_draft_validates() {
+        let shapes = suite("sparql/node/prefixes-003.ttl");
+        let data = "<http://example.com/ns#InvalidResource1> <http://example.com/ns#property> <http://test.com/ns#Value> .\n";
+        let refused = validate_under(&shapes, data, None, Some("shacl-wd-2026-09-18"))
+            .expect_err("working draft");
+        assert!(
+            refused.to_string().contains("undeclared prefix"),
+            "{refused}"
+        );
+        let sarif = validate_under(&shapes, data, None, Some("shacl-ed-2026-10-16"))
+            .expect("the editor's draft validates it");
+        assert!(sarif.contains("InvalidResource1"), "{sarif}");
+    }
+
+    /// An id no law has is `complete_profile`'s `unsupported-profile` status, and a dated law
+    /// refuses an XPath override of another law while accepting its own.
+    #[test]
+    fn an_unknown_shacl_profile_and_an_xpath_conflict_are_refused() {
+        let shapes = suite("sparql/node/prefixes-003.ttl");
+        let data = "<http://example.com/ns#InvalidResource1> <http://example.com/ns#property> <http://test.com/ns#Value> .\n";
+        for unknown in ["shacl-ed-2026-10-17", "SHACL-ED-2026-10-16", ""] {
+            let refused = validate_under(&shapes, data, None, Some(unknown)).expect_err(unknown);
+            assert!(
+                refused.to_string().contains("unsupported-profile"),
+                "{refused}"
+            );
+        }
+        let conflict = validate_under(
+            &shapes,
+            data,
+            Some(Profile::Xpath20),
+            Some("shacl-ed-2026-10-16"),
+        )
+        .expect_err("ED requires XPath 3.1");
+        assert!(conflict.to_string().contains("requires"), "{conflict}");
+        let same = validate_under(
+            &shapes,
+            data,
+            Some(Profile::Xpath31),
+            Some("shacl-ed-2026-10-16"),
+        )
+        .expect("ED with its own XPath law");
+        assert!(same.contains("InvalidResource1"), "{same}");
     }
 
     #[test]

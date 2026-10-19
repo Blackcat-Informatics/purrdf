@@ -1071,7 +1071,9 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// (`sh:path`), whose value nodes `sh:values` or `sh:defaultValue` compute
 /// (dropped whole, one entry per term), or that nests property shapes
 /// (`sh:property`, on a property or member shape), a `sh:reifierShape` or
-/// `sh:reificationRequired`; and a constraint whose results carry a severity
+/// `sh:reificationRequired`; a shape whose `sh:deactivated` is a node
+/// expression (projected as active, one entry on the shape,
+/// `sh:deactivated`); and a constraint whose results carry a severity
 /// outside the default conformance-disallow set (`sh:severity`). Everything
 /// else is projected and records nothing: `sh:datatype`, `sh:nodeKind`,
 /// `sh:in`, `sh:hasValue`, `sh:languageIn`, `sh:minLength`, `sh:maxLength` and
@@ -1278,6 +1280,12 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          evaluated at validation as value nodes, which a JSON document does not carry; \
          projecting its constraints onto the document's own values would require what a \
          computed value supplies, so the property shape is dropped.",
+    ),
+    (
+        "sh:deactivated",
+        "A SHACL 1.2 shape whose sh:deactivated is a node expression is deactivated at the focus \
+         nodes where the expression produces true; a JSON Schema cannot state a condition on the \
+         focus node, so the shape is projected as active.",
     ),
     (
         "sh:defaultValue",

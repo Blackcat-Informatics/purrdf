@@ -32,7 +32,7 @@ use support::{empty_dataset, numeric_cell as cell, squaring_chain_from};
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// The transcript's FNV-1a digest, as both targets compute it.
-const GOLDEN_DIGEST: u64 = 0x3704_a651_3912_7bbd;
+const GOLDEN_DIGEST: u64 = 0x0e9e_af3a_d6fc_61db;
 
 /// `i128::MAX`.
 const MAX: &str = "170141183460469231731687303715884105727";

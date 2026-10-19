@@ -1907,7 +1907,28 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// conservative physical bounds instead of claiming exact effective counts.
 /// Changed orders move candidate, intermediate and scratch charges; consumers
 /// must remeasure their query ceilings even when complete answers are unchanged.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 20;
+///
+/// # v21
+///
+/// The point schedule stays unchanged. A decimal that an operator, function or
+/// aggregate computes is rendered with a decimal point and a fractional digit
+/// (`4.0`, not `4`), and `SECONDS` returns the seconds field of the lexical form,
+/// keeping its leading zero (`05.5`, `00`). Both lengthen the rendered text, so
+/// scratch charges and the corpus's pinned costs move even when the numeric value
+/// is unchanged; consumers must remeasure their scratch ceilings.
+///
+/// # v22
+///
+/// The point schedule stays unchanged. `SECONDS` copies the seconds field of its
+/// argument's lexical form (`05.500`, trailing zeros kept) instead of rendering the
+/// parsed value, so it no longer charges the decimal rendering work of a wide
+/// field and charges the bytes of the field as written. Unary plus returns its
+/// operand term as written, so it charges neither the unary operation nor a
+/// rendering. The render charge of a computed whole decimal wider than the inline
+/// representation prices the emitted text including its `.0`, two bytes more than
+/// before. Even when a query's answer is unchanged, its fuel and scratch cut points
+/// can move; consumers must remeasure those ceilings.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 22;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2296,7 +2317,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f";
+    "d8dba125e92664037fdc00ef736906cb04bdfd4345bbfb4c0e6958c50204c4ac";
 
 #[cfg(test)]
 mod tests {
@@ -2979,7 +3000,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 20);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 22);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(

@@ -80,7 +80,16 @@ use purrdf_shapes::product::{ProductDimension, ShapesProduct, ShapesProfile};
 /// name (the `included-graphs` component, row 12): its label and its empty-set value —
 /// a framed eight-byte count — join the identity section, and the preamble writes the
 /// set's one-byte count (+32, container alignment included).
-const GOLDEN_LEN: usize = 4_728;
+///
+/// 4,736 since a shape and a property shape carry their `sh:deactivated` expression: each
+/// writes one presence flag, and the fixture's four node shapes and four property shapes
+/// declare none (+8).
+///
+/// 4,744 since the rules section writes the rule sets a shapes graph declares as
+/// its `sh:entailment` (`entailment_rule_sets`, after the `sh:RulesEntailment`
+/// flag): the fixture declares none, so the section gains one count byte, the
+/// empty set's, and the container's zero padding turns that byte into eight (+8).
+const GOLDEN_LEN: usize = 4_744;
 
 /// The product artifact frozen by the commit that introduced the prepared-product
 /// format, for the forward-compatibility proof. See

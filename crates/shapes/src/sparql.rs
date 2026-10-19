@@ -1128,17 +1128,16 @@ pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
 /// back off the state, which [`GovernorState::poll_stop`] latched, exactly as they do for
 /// a trip inside a query. The message exists so the `Err` that unwinds the validation
 /// names what happened if some caller reads it anyway.
-pub(crate) fn stopped_between_evaluations(cause: StopCause) -> String {
-    format!(
-        "validation stopped between evaluations ({cause:?}); a conformance verdict cannot be \
-         computed from a validation that did not finish"
-    )
+pub(crate) fn stopped_between_evaluations(cause: StopCause) -> crate::error::ShapesError {
+    crate::error::ProcessorFailure::Stopped(cause).into()
 }
 
 /// Poll the stop signal of `governors` — the state read once, before a loop, with
 /// [`current_governors`] — and turn a fired signal into the error that unwinds the
 /// validation. `None` (the ungoverned path) costs one branch.
-pub(crate) fn poll_between_evaluations(governors: Option<&GovernorState>) -> Result<(), String> {
+pub(crate) fn poll_between_evaluations(
+    governors: Option<&GovernorState>,
+) -> Result<(), crate::error::ShapesError> {
     match governors.and_then(GovernorState::poll_stop) {
         Some(cause) => Err(stopped_between_evaluations(cause)),
         None => Ok(()),
@@ -1210,7 +1209,7 @@ fn run_query_view<
                     options,
                 )
             })
-            .map_err(|error| format!("query evaluation error: {error}"))?;
+            .map_err(crate::xpath::query_error)?;
         law.admit(invocation, prepared.source_query())?;
     }
 
@@ -1225,7 +1224,7 @@ fn run_query_view<
             engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
         })
         .map_err(crate::xpath::query_error)?;
-    certify_governed(outcome).map_err(crate::error::ShapesError::from)
+    certify_governed(outcome)
 }
 
 /// Read a governed run's receipt and reduce it to the answer a conformance verdict
@@ -1237,7 +1236,9 @@ fn run_query_view<
 /// checking. A `conforms` computed over a truncated bag, or over a relation that
 /// declared its index was not whole, is not a verdict; both are refused here by
 /// name.
-fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R, String> {
+fn certify_governed<R>(
+    outcome: InternedGoverned<Result<R, String>>,
+) -> Result<R, crate::error::ShapesError> {
     match outcome {
         InternedGoverned::Complete {
             value, relations, ..
@@ -1260,19 +1261,16 @@ fn certify_governed<R>(outcome: InternedGoverned<Result<R, String>>) -> Result<R
                 })
                 .collect();
             if !incomplete.is_empty() {
-                return Err(format!(
-                    "a relation this query invoked declares its index was not whole ({}); a \
-                     conformance verdict cannot be computed over an index that was not whole",
-                    incomplete.join("; ")
-                ));
+                return Err(crate::error::ProcessorFailure::IncompleteRelation {
+                    relations: incomplete,
+                }
+                .into());
             }
-            value
+            value.map_err(crate::error::ShapesError::from)
         }
-        InternedGoverned::BudgetExhausted(exhausted) => Err(format!(
-            "validation budget exhausted: {}; a conformance verdict cannot be computed \
-             from a truncated solution bag",
-            exhausted.tripped
-        )),
+        InternedGoverned::BudgetExhausted(exhausted) => {
+            Err(crate::error::ProcessorFailure::Governor(exhausted.tripped).into())
+        }
     }
 }
 
@@ -1567,7 +1565,11 @@ impl ShaclExecution {
     /// The pre-binding rewrite binds a parameter in every property-function call in
     /// the query — an `OPTIONAL` arm, an unprojected sub-`SELECT`, an `EXISTS` body —
     /// so the plan admits calls there with the parameter bound.
-    fn prepare(query: &str, parameters: &[&str], scopes: &AmbientScopes) -> Result<Self, String> {
+    fn prepare(
+        query: &str,
+        parameters: &[&str],
+        scopes: &AmbientScopes,
+    ) -> Result<Self, crate::error::ShapesError> {
         debug_assert!(
             parameters_are_distinct(parameters),
             "a repeated parameter name has no single slot to bind and must fall back to the \
@@ -1659,7 +1661,7 @@ fn declared_shape_context(parameters: &[&str], scopes: &AmbientScopes) -> &'stat
     if scopes
         .query_law
         .as_ref()
-        .is_some_and(|law| law.profile() == crate::profile::ShaclProfile::WD_20260918)
+        .is_some_and(|law| law.profile().is_shacl12())
     {
         &[]
     } else {
@@ -1749,7 +1751,7 @@ fn run_bound_view<
             )
         })
         .map_err(crate::xpath::query_error)?;
-    certify_governed(outcome).map_err(crate::error::ShapesError::from)
+    certify_governed(outcome)
 }
 
 /// How many distinct query texts one worker keeps prepared.
@@ -1823,7 +1825,7 @@ fn checkout_execution(
     query: &str,
     parameters: &[&str],
     scopes: &AmbientScopes,
-) -> Result<ShaclExecution, String> {
+) -> Result<ShaclExecution, crate::error::ShapesError> {
     let cached = PREPARED_EXECUTIONS.with(|cache| {
         cache.borrow_mut().get_mut(query).and_then(|entries| {
             entries
@@ -2449,8 +2451,7 @@ pub fn current_call_depth() -> u32 {
 /// `$currentShape` are the query's own variables there, valued or not. The
 /// compatibility law and the 2017 Recommendation pre-bind both.
 fn law_binds_shape_context() -> bool {
-    crate::query_law::current()
-        .is_none_or(|law| law.profile() != crate::profile::ShaclProfile::WD_20260918)
+    crate::query_law::current().is_none_or(|law| !law.profile().is_shacl12())
 }
 
 /// The shape context the selected law pre-binds: as given, or none under a law that

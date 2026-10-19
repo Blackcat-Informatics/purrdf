@@ -22,7 +22,7 @@ fails the build. A deliberate re-vendor regenerates that manifest with
 - Upstream: <https://github.com/w3c/data-shapes> — the W3C Data Shapes Working Group's
   repository for SHACL 1.2 (Core, the node-expression extension `shnex`, the
   SPARQL bindings, and the conformance test suite).
-- Pinned commit: `5069ed3519c31cfcf074d2cf779542abc37ce80d` — pinned for reproducible builds and to track
+- Pinned commit: `4cd469867a1cc6d2fff80e8a40723b26c695d67a` — pinned for reproducible builds and to track
   upstream errata explicitly, the same hygiene every vendored suite in this
   repo follows.
 - License: **W3C Software and Document License** (<http://www.w3.org/Consortium/Legal/copyright-software>), per the upstream
@@ -30,7 +30,7 @@ fails the build. A deliberate re-vendor regenerates that manifest with
   this tree as `LICENSE.md`.
 - Retrieval: `scripts/vendor-shacl12.py` fetches the pinned commit's full
   source tree as a tarball from the GitHub REST API
-  (`GET https://api.github.com/repos/w3c/data-shapes/tarball/5069ed3519c31cfcf074d2cf779542abc37ce80d`, which redirects
+  (`GET https://api.github.com/repos/w3c/data-shapes/tarball/4cd469867a1cc6d2fff80e8a40723b26c695d67a`, which redirects
   to a `codeload.github.com` archive of that exact commit) and extracts the
   `shacl12-vocabularies/` and `shacl12-test-suite/tests/` subtrees verbatim —
   no per-file API calls, no upstream `git` clone.

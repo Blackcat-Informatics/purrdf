@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The `PREFIX` header of a SHACL-SPARQL query, against SHACL 1.2 SPARQL
-//! Extensions, "Prefix Declarations for SPARQL Queries":
+//! The `PREFIX` header of a SHACL-SPARQL query, against the editor's draft
+//! (`shacl-ed-2026-10-16`) of SHACL 1.2 SPARQL Extensions, "Prefix Declarations for
+//! SPARQL Queries" (the default compatibility law reads it; the working draft and the
+//! 2017 Recommendation have their own paths, see
+//! [`each_law_collects_prefixes_along_its_own_path`]):
 //!
 //! > A SHACL processor collects a set of prefix mappings as the union of all
 //! > individual prefix mappings that are values of the SPARQL property path
-//! > `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare` of the SPARQL-based
-//! > constraint or validator. [...] If such a collection of prefix declarations
+//! > `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare` of
+//! > the SPARQL-based constraint, validator or SPARQL-based node expression. [...] If such a collection of prefix declarations
 //! > contains multiple different namespaces for the same value of `sh:prefix`, then
 //! > the shapes graph is ill-formed. (Note that SHACL processors MAY ignore prefix
 //! > declarations that are never reached). If a SPARQL query has no value for
@@ -21,8 +24,13 @@
 //! to: `target#` reports exactly one violation, and every other binding reports
 //! none. Each treatment sits beside a control whose report differs from it.
 
-use purrdf_shapes::engine::{parse_shapes, validate_graphs};
-use purrdf_shapes::{ShapesError, ShapesImportError};
+#[path = "support/turtle.rs"]
+mod turtle;
+
+use purrdf_shapes::engine::{
+    ValidationOptions, parse_shapes, validate_graphs, validate_graphs_with_options,
+};
+use purrdf_shapes::{ShaclProfile, ShapesError, ShapesImportError, ShapesImports};
 
 const PREFIXES: &str = "
 @prefix ex:   <http://example.org/ns#> .
@@ -83,13 +91,6 @@ fn target_violation() -> Vec<String> {
     vec![format!("<{TARGET}Value>")]
 }
 
-fn load_error(shapes: &str) -> String {
-    match parse_shapes(shapes, None) {
-        Ok(_) => panic!("the shapes graph must be refused:\n{shapes}"),
-        Err(error) => error.to_string(),
-    }
-}
-
 // ── A PREFIX inside a query literal stays in that query ─────────────────────────
 
 /// The regression: a `PREFIX` line inside ONE constraint's query literal was read
@@ -111,7 +112,7 @@ SELECT $this ?value WHERE {{ $this ex:property ?value . FILTER (?value = t:Nothi
 "#,
         shape("")
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(
         error.contains("unparsable sh:select") && error.contains("undeclared prefix \"t\""),
         "ex:C1 names an undeclared prefix: {error}"
@@ -181,14 +182,14 @@ fn a_query_with_prefixes_does_not_use_the_implicit_declarations() {
         shape("sh:prefixes ex:Decls ;"),
         declare_t(TARGET)
     );
-    let error = load_error(&shapes);
+    let error = turtle::refusal_text("", &shapes);
     assert!(error.contains("undeclared prefix \"t\""), "{error}");
 }
 
 // ── The sh:prefixes path ─────────────────────────────────────────────────────────
 
-/// `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`: the version IRI a query
-/// names is navigated back to its graph, whose imports are followed.
+/// `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`: the
+/// version IRI a query names is navigated back to its graph, whose imports are followed.
 ///
 /// The path is prefix collection over the shapes graph as it stands. `ex:G`, `ex:Q` and
 /// `ex:R` are nodes of the shapes graph, and `ex:G` is neither the shapes graph's IRI nor an
@@ -236,6 +237,175 @@ fn the_prefixes_path_follows_version_iris_and_imports() {
     );
 }
 
+/// The same path reaches the declarations on the node `sh:prefixes` names, on the graph
+/// its version IRI belongs to, and on each import in either spelling: the node an
+/// `owl:imports` step arrives at, or the graph whose `owl:versionIRI` it is.
+///
+/// `ex:V2` is the version IRI of `ex:Shapes`, which declares `t:`; `ex:Shapes` imports
+/// `ex:BaseV1`, the version IRI of `ex:Base`, which declares `o:`. The query uses both
+/// labels. The neighbours each cut one hop of the path and the query that needs it is
+/// refused, so the test fails on a path that is too short and on one that reaches everything.
+#[test]
+fn the_prefixes_path_reaches_declarations_on_each_hop() {
+    let query_using = |labels: &str| {
+        format!(
+            "{PREFIXES}ex:Shape a sh:NodeShape ; sh:targetNode ex:Focus ; sh:sparql ex:C1 .\n\
+             ex:C1 sh:prefixes ex:V2 ; sh:select \"\"\"\n\
+             SELECT $this ?value WHERE {{ $this ex:property ?value . {labels} }}\"\"\" .\n"
+        )
+    };
+    let graph = |declarations: &str| {
+        format!(
+            "{}ex:Shapes owl:versionIRI ex:V2 ; owl:imports ex:BaseV1 .\n\
+             ex:Base owl:versionIRI ex:BaseV1 .\n{declarations}",
+            query_using("FILTER (?value = t:Value) FILTER (?value != o:Value)")
+        )
+    };
+    let both = format!(
+        "ex:Shapes sh:declare {} .\nex:Base sh:declare {} .\n",
+        declare_t(TARGET),
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert_eq!(violations(&graph(&both)), target_violation());
+
+    // Neighbours: a declaration the path does not reach leaves its label unbound.
+    let only_shapes = format!("ex:Shapes sh:declare {} .\n", declare_t(TARGET));
+    assert!(turtle::refusal_text("", &graph(&only_shapes)).contains("undeclared prefix \"o\""));
+    let only_base = format!(
+        "ex:Base sh:declare {} .\n",
+        r#"[ sh:prefix "o" ; sh:namespace "http://example.org/other#"^^xsd:anyURI ]"#
+    );
+    assert!(turtle::refusal_text("", &graph(&only_base)).contains("undeclared prefix \"t\""));
+}
+
+/// The violations of validating [`DATA`] against `shapes` under `law`, or the refusal.
+fn violations_under(law: ShaclProfile, shapes: &str) -> Result<Vec<String>, String> {
+    let report = validate_graphs_with_options(
+        DATA,
+        shapes,
+        None,
+        &ValidationOptions::default().with_profile(law),
+        &ShapesImports::new(),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(report
+        .results
+        .iter()
+        .map(|result| {
+            result
+                .value
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string)
+        })
+        .collect())
+}
+
+/// Each dated law collects prefixes along the path its own text states.
+///
+/// * SHACL REC 2017-07-20: `sh:prefixes/owl:imports*/sh:declare`. No `owl:versionIRI`
+///   step exists, so a version IRI is an ordinary node.
+/// * The working draft: `sh:prefixes/(^owl:versionIRI?/owl:imports)*/sh:declare`. A
+///   step may move from a version IRI to the graph it versions and then import, but
+///   the graph a version IRI leads to is a stepping stone, not a holder.
+/// * The editor's draft:
+///   `sh:prefixes/(^owl:versionIRI)?/(owl:imports/(^owl:versionIRI)?)*/sh:declare`,
+///   which also reads the declarations of the graph a version IRI leads to.
+///
+/// Three graphs separate the three paths; each refusal has the neighbour that every law
+/// accepts:
+///
+/// 1. `ex:V1` is the version IRI of `ex:G`, which imports `ex:Q` (declaring `t:`):
+///    the REC refuses (it never leaves `ex:V1`), the WD and the ED accept.
+/// 2. `ex:V2` is the version IRI of `ex:Shapes`, which declares `t:` itself: the REC and
+///    the WD refuse, the ED accepts.
+/// 3. The neighbour, a plain `owl:imports` chain, is accepted under all three.
+#[test]
+fn each_law_collects_prefixes_along_its_own_path() {
+    let rec = ShaclProfile::REC_20170720;
+    let wd = ShaclProfile::WD_20260918;
+    let ed = ShaclProfile::ED_20261016;
+    let outcomes = |shapes: &str| {
+        [rec, wd, ed, ShaclProfile::LEGACY]
+            .map(|law| violations_under(law, shapes).map(|values| values == target_violation()))
+    };
+    let accepted = |outcome: &Result<bool, String>| matches!(outcome, Ok(true));
+    let refused = |outcome: &Result<bool, String>| {
+        outcome
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.contains("undeclared prefix \"t\""))
+    };
+
+    // 1. A version IRI whose graph imports the declaring graph.
+    let through_the_graph = format!(
+        "{PREFIXES}{}\nex:G owl:versionIRI ex:V1 ; owl:imports ex:Q .\nex:Q sh:declare {} .\n",
+        shape("sh:prefixes ex:V1 ;"),
+        declare_t(TARGET)
+    );
+    let [by_rec, by_wd, by_ed, by_legacy] = outcomes(&through_the_graph);
+    assert!(
+        refused(&by_rec),
+        "the REC has no versionIRI step: {by_rec:?}"
+    );
+    assert!(
+        accepted(&by_wd),
+        "the WD follows the version IRI: {by_wd:?}"
+    );
+    assert!(
+        accepted(&by_ed),
+        "the ED follows the version IRI: {by_ed:?}"
+    );
+    assert!(
+        accepted(&by_legacy),
+        "the compatibility law reads the ED: {by_legacy:?}"
+    );
+
+    // 2. A declaration on the graph the version IRI leads to.
+    let on_the_graph = format!(
+        "{PREFIXES}{}\nex:Shapes owl:versionIRI ex:V2 ; sh:declare {} .\n",
+        shape("sh:prefixes ex:V2 ;"),
+        declare_t(TARGET)
+    );
+    let [by_rec, by_wd, by_ed, by_legacy] = outcomes(&on_the_graph);
+    assert!(refused(&by_rec), "the REC does not leave ex:V2: {by_rec:?}");
+    assert!(
+        refused(&by_wd),
+        "the WD graph is a stepping stone: {by_wd:?}"
+    );
+    assert!(
+        accepted(&by_ed),
+        "the ED reads the versioned graph: {by_ed:?}"
+    );
+    assert!(
+        accepted(&by_legacy),
+        "the compatibility law reads the ED: {by_legacy:?}"
+    );
+
+    // The neighbours of both refusals: the declaration on the named node itself, and a
+    // plain `owl:imports` chain, are on every law's path.
+    let on_the_node = format!(
+        "{PREFIXES}{}\nex:V2 sh:declare {} .\nex:Shapes owl:versionIRI ex:V2 .\n",
+        shape("sh:prefixes ex:V2 ;"),
+        declare_t(TARGET)
+    );
+    let plain_import = format!(
+        "{PREFIXES}{}\nex:P owl:imports ex:Q .\nex:Q sh:declare {} .\n",
+        shape("sh:prefixes ex:P ;"),
+        declare_t(TARGET)
+    );
+    for (what, shapes) in [
+        ("the node itself", on_the_node),
+        ("a plain import", plain_import),
+    ] {
+        for (law, outcome) in [rec, wd, ed, ShaclProfile::LEGACY]
+            .into_iter()
+            .zip(outcomes(&shapes))
+        {
+            assert!(accepted(&outcome), "{what} under {law}: {outcome:?}");
+        }
+    }
+}
+
 // ── Conflicts ────────────────────────────────────────────────────────────────────
 
 /// Two different namespaces for `t` among the declarations a query reaches make
@@ -261,7 +431,7 @@ fn a_conflicting_prefix_is_refused_and_an_agreeing_one_loads() {
         )
     };
     for build in [&explicit as &dyn Fn(&str) -> String, &implicit] {
-        let error = load_error(&build(OTHER));
+        let error = turtle::refusal_text("", &build(OTHER));
         assert!(
             error.contains("ill-formed")
                 && error.contains("\"t\"")
@@ -323,13 +493,13 @@ fn a_malformed_reached_declaration_is_refused() {
             "{PREFIXES}{}\nex:P sh:declare {declaration} .\n",
             shape("sh:prefixes ex:P ;")
         );
-        let error = load_error(&shapes);
+        let error = turtle::refusal_text("", &shapes);
         assert!(
             error.contains("ill-formed") && error.contains(expected),
             "{declaration}: {error}"
         );
     }
-    let error = load_error(&format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
+    let error = turtle::refusal_text("", &format!("{PREFIXES}{}", shape(r#"sh:prefixes "ex" ;"#)));
     assert!(error.contains("not an IRI or a blank node"), "{error}");
 }
 

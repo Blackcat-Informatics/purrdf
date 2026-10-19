@@ -119,6 +119,33 @@ pub fn complete_profile(
     ShaclProfile::from_id(id).map_err(|error| (CompleteValidationStatus::UnsupportedProfile, error))
 }
 
+/// The SHACL law a host's optional `shacl_profile` request selects, beside the native
+/// XPath law the same request selects.
+///
+/// This is the one reading every host (the CLI, Python, WebAssembly and the C ABI) shares
+/// for that pair, so their refusals use one set of words. `None` is the compatibility law
+/// (`Ok(None)`: the host leaves its request options unchanged). The id is decoded exactly,
+/// once, by [`complete_profile`]; a dated law's required XPath bundle is checked against
+/// `xpath_regex` here, before parsing or execution can substitute another law.
+///
+/// # Errors
+/// The message of an id no law has, led by its `unsupported-profile` status label, or of
+/// an `xpath_regex` that names a law other than the one the selected dated law requires.
+pub fn requested_shacl_profile(
+    id: Option<&str>,
+    xpath_regex: Option<purrdf_core::xsd_regex::xpath::Profile>,
+) -> Result<Option<ShaclProfile>, String> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let profile =
+        complete_profile(id).map_err(|(status, error)| format!("{}: {error}", status.label()))?;
+    profile
+        .resolve_xpath(xpath_regex.map(|law| (law, purrdf_core::xsd_regex::xpath::Limits::new())))
+        .map_err(|conflict| conflict.to_string())?;
+    Ok(Some(profile))
+}
+
 /// Validate native immutable acquisitions, retaining deliberate source aliasing.
 /// # Errors
 /// Returns the engine's actual profile, source, semantic or operational refusal.
