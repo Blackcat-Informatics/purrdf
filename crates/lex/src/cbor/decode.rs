@@ -28,7 +28,7 @@ impl Default for Limits {
 }
 
 /// What is wrong with a CBOR item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DecodeErrorKind {
     /// The input ends inside the item.
     Truncated,
@@ -51,11 +51,25 @@ pub enum DecodeErrorKind {
     /// Bytes follow the item where the whole input was to be one item.
     Trailing,
     /// The reader failed.
-    Io(io::ErrorKind),
+    Io(purrdf_hash::error::IoFailure),
+    /// A reader violated its buffer-length contract.
+    ReadCount {
+        /// Number of bytes the reader claimed to write.
+        actual: usize,
+        /// Number of bytes supplied for writing.
+        maximum: usize,
+    },
+    /// Consumed bytes exceed the decoder's address space.
+    OffsetOverflow {
+        /// Position before the read.
+        position: usize,
+        /// Bytes consumed by this read.
+        additional: usize,
+    },
 }
 
 /// A refused CBOR item: what is wrong, and the byte offset where.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodeError {
     kind: DecodeErrorKind,
     offset: usize,
@@ -67,8 +81,8 @@ impl DecodeError {
     }
 
     /// What is wrong.
-    pub const fn kind(&self) -> DecodeErrorKind {
-        self.kind
+    pub fn kind(&self) -> DecodeErrorKind {
+        self.kind.clone()
     }
 
     /// The byte offset of the defect, from the start of the input.
@@ -80,7 +94,7 @@ impl DecodeError {
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CBOR byte {}: ", self.offset)?;
-        match self.kind {
+        match &self.kind {
             DecodeErrorKind::Truncated => f.write_str("the input ends inside an item"),
             DecodeErrorKind::Malformed(rule) => write!(f, "not well-formed: {rule}"),
             DecodeErrorKind::InvalidUtf8 => f.write_str("a text string is not UTF-8"),
@@ -92,12 +106,25 @@ impl fmt::Display for DecodeError {
                 write!(f, "not deterministically encoded: {rule}")
             }
             DecodeErrorKind::Trailing => f.write_str("bytes follow the item"),
-            DecodeErrorKind::Io(kind) => write!(f, "read failed: {kind}"),
+            DecodeErrorKind::Io(cause) => write!(f, "read failed: {}", cause.kind()),
+            DecodeErrorKind::ReadCount { actual, maximum } => write!(
+                f,
+                "reader returned {actual} bytes for a {maximum}-byte buffer"
+            ),
+            DecodeErrorKind::OffsetOverflow {
+                position,
+                additional,
+            } => write!(
+                f,
+                "read of {additional} bytes at {position} exceeds the address space"
+            ),
         }
     }
 }
 
-impl std::error::Error for DecodeError {}
+crate::error_source!(DecodeError => {
+    Self { kind: DecodeErrorKind::Io(cause), .. } => cause,
+});
 
 impl purrdf_hash::error::StructuredError for DecodeErrorKind {
     purrdf_hash::error_visit! {
@@ -108,7 +135,9 @@ impl purrdf_hash::error::StructuredError for DecodeErrorKind {
         TooLong => "cbor-length-overflow" {},
         NotDeterministic(rule) => "cbor-not-deterministic" { "rule" => Text(rule) },
         Trailing => "cbor-trailing-data" {},
-        Io(kind) => "cbor-io" { "kind" => Record(kind) },
+        Io(cause) => "cbor-io" { "cause" => Cause(cause) },
+        ReadCount { actual, maximum } => "cbor-reader-count" { "actual" => Unsigned(*actual as u128), "maximum" => Unsigned(*maximum as u128) },
+        OffsetOverflow { position, additional } => "cbor-offset-overflow" { "position" => Unsigned(*position as u128), "additional" => Unsigned(*additional as u128) },
     }
 }
 
@@ -180,15 +209,34 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
 
     fn byte(&mut self) -> Result<u8, DecodeError> {
         let mut byte = [0_u8];
-        self.reader.read_exact(&mut byte).map_err(|error| {
-            let kind = if error.kind() == io::ErrorKind::UnexpectedEof {
-                DecodeErrorKind::Truncated
-            } else {
-                DecodeErrorKind::Io(error.kind())
-            };
-            DecodeError::new(kind, self.pos)
+        loop {
+            match self.reader.read(&mut byte) {
+                Ok(1) => break,
+                Ok(0) => return Err(DecodeError::new(DecodeErrorKind::Truncated, self.pos)),
+                Ok(actual) => {
+                    return Err(DecodeError::new(
+                        DecodeErrorKind::ReadCount { actual, maximum: 1 },
+                        self.pos,
+                    ));
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    return Err(DecodeError::new(
+                        DecodeErrorKind::Io(error.into()),
+                        self.pos,
+                    ));
+                }
+            }
+        }
+        self.pos = self.pos.checked_add(1).ok_or_else(|| {
+            DecodeError::new(
+                DecodeErrorKind::OffsetOverflow {
+                    position: self.pos,
+                    additional: 1,
+                },
+                self.pos,
+            )
         })?;
-        self.pos += 1;
         Ok(byte[0])
     }
 
@@ -199,8 +247,16 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
         let read = (&mut *self.reader)
             .take(len)
             .read_to_end(out)
-            .map_err(|error| DecodeError::new(DecodeErrorKind::Io(error.kind()), self.pos))?;
-        self.pos += read;
+            .map_err(|error| DecodeError::new(DecodeErrorKind::Io(error.into()), self.pos))?;
+        self.pos = self.pos.checked_add(read).ok_or_else(|| {
+            DecodeError::new(
+                DecodeErrorKind::OffsetOverflow {
+                    position: self.pos,
+                    additional: read,
+                },
+                self.pos,
+            )
+        })?;
         if (out.len() - before) as u64 == len {
             Ok(())
         } else {
@@ -671,6 +727,63 @@ pub fn read_from<R: Read + ?Sized>(
 /// — the offset of that item, where a torn append begins. The intact prefix is
 /// returned either way.
 pub fn decode_sequence(bytes: &[u8], limits: Limits) -> (Vec<(usize, Value)>, Option<usize>) {
+    decode_sequence_with(bytes, limits, |offset, _cause| offset)
+}
+
+/// A complete sequence prefix and its original optional decode refusal.
+#[derive(Debug, Default)]
+pub struct DecodedSequence {
+    /// Complete items in input order, with their original byte offsets.
+    pub items: Vec<(usize, Value)>,
+    /// First refusal, boxed only on failure to keep successful results compact.
+    pub failure: Option<Box<SequenceError>>,
+}
+
+/// A sequence item refused at its original start offset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SequenceError {
+    /// Byte offset where the refused item starts.
+    pub offset: usize,
+    /// Original refusal, whose offset is relative to that item.
+    pub cause: DecodeError,
+}
+
+impl fmt::Display for SequenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CBOR sequence item at byte {}: {}",
+            self.offset, self.cause
+        )
+    }
+}
+
+crate::error_source!(SequenceError, cause);
+
+impl purrdf_hash::error::StructuredError for SequenceError {
+    purrdf_hash::error_visit! {
+        @record self { offset, cause } => "cbor-sequence-refusal" {
+            "offset" => ByteCount(self.offset as u128), "cause" => Cause(&self.cause)
+        }
+    }
+}
+
+/// Decode a sequence once, retaining the complete prefix and original refusal.
+///
+/// The ordinary [`decode_sequence`] projects only the torn-item offset from
+/// this same parser for callers that need its established tuple result.
+pub fn decode_sequence_checked(bytes: &[u8], limits: Limits) -> DecodedSequence {
+    let (items, failure) = decode_sequence_with(bytes, limits, |offset, cause| {
+        Box::new(SequenceError { offset, cause })
+    });
+    DecodedSequence { items, failure }
+}
+
+fn decode_sequence_with<E>(
+    bytes: &[u8],
+    limits: Limits,
+    refuse: impl FnOnce(usize, DecodeError) -> E,
+) -> (Vec<(usize, Value)>, Option<E>) {
     let mut items = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
@@ -679,8 +792,91 @@ pub fn decode_sequence(bytes: &[u8], limits: Limits) -> (Vec<(usize, Value)>, Op
                 items.push((at, value));
                 at += used;
             }
-            Err(_) => return (items, Some(at)),
+            Err(cause) => return (items, Some(refuse(at, cause))),
         }
     }
     (items, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_refuses_invalid_read_counts_and_counter_overflow() {
+        struct InvalidRead;
+        impl Read for InvalidRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Ok(usize::MAX)
+            }
+        }
+        let error = read_from(&mut InvalidRead, Limits::DEFAULT).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            DecodeErrorKind::ReadCount {
+                actual: usize::MAX,
+                maximum: 1
+            }
+        ));
+        // Counter state is positioned directly; no huge stream is executed.
+        let mut cursor = io::Cursor::new([0]);
+        let mut stream = Stream {
+            reader: &mut cursor,
+            pos: usize::MAX,
+        };
+        assert!(matches!(
+            stream.byte().unwrap_err().kind(),
+            DecodeErrorKind::OffsetOverflow {
+                position: usize::MAX,
+                additional: 1
+            }
+        ));
+        assert_eq!(stream.pos, usize::MAX);
+        let mut cursor = io::Cursor::new([7]);
+        let mut stream = Stream {
+            reader: &mut cursor,
+            pos: usize::MAX,
+        };
+        assert!(matches!(
+            stream.take(1, &mut Vec::new()).unwrap_err().kind(),
+            DecodeErrorKind::OffsetOverflow {
+                position: usize::MAX,
+                additional: 1
+            }
+        ));
+        assert_eq!(stream.pos, usize::MAX);
+    }
+
+    #[test]
+    fn native_causes_preserve_decode_and_success_result_layouts() {
+        #[expect(
+            dead_code,
+            reason = "the former representations are frozen layout witnesses only"
+        )]
+        enum FormerKind {
+            Truncated,
+            Malformed(&'static str),
+            InvalidUtf8,
+            Depth { limit: usize },
+            TooLong,
+            NotDeterministic(&'static str),
+            Trailing,
+            Io(io::ErrorKind),
+        }
+        #[expect(
+            dead_code,
+            reason = "the former representation is a frozen layout witness only"
+        )]
+        struct FormerError {
+            kind: FormerKind,
+            offset: usize,
+        }
+        assert_eq!(size_of::<DecodeErrorKind>(), size_of::<FormerKind>());
+        assert_eq!(size_of::<DecodeError>(), size_of::<FormerError>());
+        assert_eq!(
+            size_of::<Result<Value, DecodeError>>(),
+            size_of::<Result<Value, FormerError>>()
+        );
+        assert!(size_of::<DecodedSequence>() <= size_of::<(Vec<(usize, Value)>, Option<usize>)>());
+    }
 }

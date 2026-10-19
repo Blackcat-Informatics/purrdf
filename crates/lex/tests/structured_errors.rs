@@ -13,11 +13,144 @@ struct Fields<'error> {
     list_ends: usize,
 }
 
-struct RefusingRead;
+struct RefusingRead {
+    kind: std::io::ErrorKind,
+    interrupted_once: bool,
+}
+
+purrdf_lex::message_error! {
+    /// Exercise the exported macro from a downstream crate without the accessor.
+    #[derive(Debug)]
+    struct CallerMessage;
+}
+purrdf_lex::message_error! {
+    /// Exercise the accessor arm and original Unicode/text preservation.
+    #[derive(Debug)]
+    struct DetailedCallerMessage, detail;
+}
+
+#[test]
+fn message_macro_and_debug_refusals_keep_original_borrowed_payloads() {
+    use purrdf_testkit::error_capture::Capture;
+
+    let plain = CallerMessage::new("a\n\"b\" 🐈");
+    let detailed = DetailedCallerMessage::new("caller context");
+    for (error, code, original) in [
+        (
+            &plain as &dyn StructuredError,
+            "message-CallerMessage",
+            "a\n\"b\" 🐈",
+        ),
+        (
+            &detailed as &dyn StructuredError,
+            "message-DetailedCallerMessage",
+            detailed.detail(),
+        ),
+    ] {
+        let captured = Capture::read(error);
+        assert_eq!(captured.code, code);
+        assert!(matches!(captured.field("detail"), ErrorValue::Text(text) if text == original));
+    }
+    let storage = purrdf_lex::walk::DebugWriteError::Storage(StorageError::SizeOverflow);
+    let captured = Capture::read(&storage);
+    assert_eq!(captured.code, "debug-storage");
+    assert_eq!(captured.child("cause").code, "storage-size-overflow");
+    let format = purrdf_lex::walk::DebugWriteError::Format(core::fmt::Error);
+    let captured = Capture::read(&format);
+    assert_eq!(captured.code, "debug-format");
+    assert_eq!(captured.child("cause").code, "std-format");
+}
+
+#[test]
+fn record_failures_keep_native_values_names_lists_and_external_messages() {
+    use purrdf_lex::json::{
+        Value,
+        record::{DecodeError, FromJson, Within},
+    };
+    use purrdf_testkit::error_capture::{Capture, Event};
+
+    let original = Value::String("a\n\"b".to_owned());
+    let error = bool::from_json(&original)
+        .expect_err("a string is not a boolean")
+        .within("a/b~c");
+    let record = Capture::read(&error);
+    assert!(matches!(
+        record.field("pointer"),
+        ErrorValue::Text("/a~1b~0c")
+    ));
+    assert!(matches!(
+        record.field("external_message"),
+        ErrorValue::Absent
+    ));
+    let cause = record.child("cause");
+    assert_eq!(cause.code, "json-record-invalid-type");
+    assert!(matches!(
+        cause.field("expected"),
+        ErrorValue::Text("a boolean")
+    ));
+    let found = cause.child("found");
+    assert_eq!(found.code, "json-record-found-string");
+    assert!(matches!(found.field("value"), ErrorValue::Text("a\n\"b")));
+
+    let error = DecodeError::unknown_variant("unlisted", &["first", "second", "third"]);
+    let cause = Capture::read(&error).child("cause");
+    assert_eq!(cause.code, "json-record-unknown-variant");
+    assert!(matches!(
+        cause.events.as_slice(),
+        [
+            Event::Value(Some("variant"), ErrorValue::Text("unlisted")),
+            Event::BeginList(Some("expected"), 3),
+            Event::Value(None, ErrorValue::Text("first")),
+            Event::Value(None, ErrorValue::Text("second")),
+            Event::Value(None, ErrorValue::Text("third")),
+            Event::EndList,
+        ]
+    ));
+    let empty = DecodeError::unknown_field("extra", &[]);
+    assert!(matches!(
+        Capture::read(&empty).child("cause").events.as_slice(),
+        [
+            Event::Value(Some("field"), ErrorValue::Text("extra")),
+            Event::BeginList(Some("expected"), 0),
+            Event::EndList,
+        ]
+    ));
+    let external = DecodeError::custom("a genuine external message");
+    assert!(matches!(
+        Capture::read(&external).field("external_message"),
+        ErrorValue::Message("a genuine external message")
+    ));
+}
+
+#[test]
+fn record_json_transport_keeps_original_parser_cause_and_offset() {
+    use purrdf_lex::json::{self, record};
+    use purrdf_testkit::error_capture::Capture;
+
+    let input = b"\"\\uDEAD\"";
+    let original = json::read_slice(input, json::Limits::DEFAULT).expect_err("unpaired surrogate");
+    let error = record::from_slice::<String>(input).expect_err("the original document is invalid");
+    let parser = Capture::read(&error).child("cause").child("cause");
+    assert_eq!(parser.code, "json-document");
+    assert!(
+        matches!(parser.field("offset"), ErrorValue::ByteCount(offset) if offset == original.offset() as u128)
+    );
+    assert_eq!(
+        parser.child("kind").child("cause").code,
+        "json-escape-unpaired-low"
+    );
+}
 
 impl std::io::Read for RefusingRead {
     fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-        Err(std::io::ErrorKind::PermissionDenied.into())
+        if self.interrupted_once {
+            self.interrupted_once = false;
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        Err(purrdf_hash::error::io_error(
+            self.kind,
+            purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
+        ))
     }
 }
 
@@ -36,6 +169,15 @@ impl<'error> ErrorVisitor<'error> for Fields<'error> {
 
     fn end_list(&mut self) {
         self.list_ends += 1;
+    }
+
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str) {
+        self.entries
+            .push((name.unwrap_or("record"), ErrorValue::Code(code)));
+    }
+
+    fn end_record(&mut self) {
+        self.entries.push(("record-end", ErrorValue::Absent));
     }
 }
 
@@ -348,8 +490,14 @@ fn html_inspection_preserves_reference_ranges_and_destination_refusal() {
 fn cbor_reader_preserves_original_io_category_and_depth_limit() {
     use purrdf_lex::cbor::{Limits, decode, read_from};
 
-    let error = read_from(&mut RefusingRead, Limits::DEFAULT)
-        .expect_err("the actual caller's reader refuses");
+    let error = read_from(
+        &mut RefusingRead {
+            kind: std::io::ErrorKind::PermissionDenied,
+            interrupted_once: false,
+        },
+        Limits::DEFAULT,
+    )
+    .expect_err("the actual caller's reader refuses");
     let mut outer = Fields::default();
     error.visit(&mut outer);
     assert!(matches!(
@@ -365,7 +513,12 @@ fn cbor_reader_preserves_original_io_category_and_depth_limit() {
         refusal.entries[0],
         ("variant", ErrorValue::Code("cbor-io"))
     ));
-    let ErrorValue::Record(category) = refusal.entries[1].1 else {
+    let ErrorValue::Cause(original) = refusal.entries[1].1 else {
+        panic!("the native I/O refusal must retain its original cause");
+    };
+    let mut native = Fields::default();
+    original.visit(&mut native);
+    let ErrorValue::Record(category) = native.entries[1].1 else {
         panic!("the native I/O category must remain a typed record");
     };
     let mut io = Fields::default();
@@ -395,4 +548,77 @@ fn cbor_reader_preserves_original_io_category_and_depth_limit() {
         depth.entries[1],
         ("limit", ErrorValue::Unsigned(0))
     ));
+}
+
+#[test]
+fn cbor_stream_and_sequence_keep_original_native_causes() {
+    use purrdf_lex::cbor::{Limits, decode_sequence, decode_sequence_checked, read_from};
+    use purrdf_testkit::error_capture::Capture;
+    use std::io::Read as _;
+    for (prefix, kind, interrupted_once) in [
+        (vec![], std::io::ErrorKind::Other, false),
+        (vec![0x43, 1], std::io::ErrorKind::Other, false),
+        (vec![], std::io::ErrorKind::UnexpectedEof, false),
+        (vec![], std::io::ErrorKind::Other, true),
+    ] {
+        let error = {
+            let mut reader = std::io::Cursor::new(prefix).chain(RefusingRead {
+                kind,
+                interrupted_once,
+            });
+            read_from(&mut reader, Limits::DEFAULT)
+                .expect_err("the terminal reader failure is not clean EOF")
+        };
+        let retained = error.clone();
+        let original = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<purrdf_hash::error::IoFailure>()
+            .unwrap();
+        let copied = std::error::Error::source(&retained)
+            .unwrap()
+            .downcast_ref::<purrdf_hash::error::IoFailure>()
+            .unwrap();
+        assert!(core::ptr::eq(original.original(), copied.original()));
+        assert_eq!(original.kind(), kind);
+        assert!(error.to_string().contains("read failed:"));
+        drop(error);
+        let fields = Capture::read(&retained).child("kind");
+        assert_eq!(fields.code, "cbor-io");
+        let io = fields.child("cause");
+        assert_eq!(io.code, "std-io");
+        assert!(matches!(io.field("message"), ErrorValue::Absent));
+        let caller = io.child("cause").child("cause");
+        assert_eq!(caller.code, "caller-refused");
+        assert!(matches!(
+            caller.field("limit"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+    }
+    assert!(
+        read_from(&mut std::io::empty(), Limits::DEFAULT)
+            .unwrap()
+            .is_none()
+    );
+    let bytes = [0x01, 0x5a];
+    let decoded = decode_sequence_checked(&bytes, Limits::DEFAULT);
+    assert_eq!(
+        decoded.items,
+        vec![(0, purrdf_lex::cbor::Value::from(1_u8))]
+    );
+    let error = *decoded.failure.unwrap();
+    assert_eq!(
+        decode_sequence(&bytes, Limits::DEFAULT),
+        (decoded.items, Some(1))
+    );
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "cbor-sequence-refusal");
+    assert!(matches!(fields.field("offset"), ErrorValue::ByteCount(1)));
+    let cause = fields.child("cause");
+    assert!(matches!(cause.field("offset"), ErrorValue::ByteCount(1)));
+    assert_eq!(cause.child("kind").code, "cbor-truncated");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_lex::cbor::DecodeError>()
+    );
 }

@@ -239,16 +239,18 @@ fn validate_ip_literal_with(
         // IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
         // ABNF string literals are case-insensitive.
         let Some((version, address)) = inner[1..].split_once('.') else {
-            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
-                "IPvFuture at byte {base_off} requires a version and '.'"
-            ))?)
-            .into());
+            return Err(
+                IriError::BadAuthority(crate::AuthorityError::IpvFutureVersion {
+                    offset: base_off,
+                })
+                .into(),
+            );
         };
         if version.is_empty() || address.is_empty() {
-            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
-                "IPvFuture at byte {base_off} needs a nonempty version and address"
-            ))?)
-            .into());
+            return Err(
+                IriError::BadAuthority(crate::AuthorityError::IpvFutureEmpty { offset: base_off })
+                    .into(),
+            );
         }
         for (at, ch) in version.char_indices() {
             if !ch.is_ascii_hexdigit() {
@@ -266,9 +268,10 @@ fn validate_ip_literal_with(
     if is_ipv6_address(inner) {
         Ok(())
     } else {
-        Err(IriError::BadAuthority(diagnostics.message(format_args!(
-            "invalid IPv6 address {inner:?} at byte {base_off}"
-        ))?)
+        Err(IriError::BadAuthority(crate::AuthorityError::InvalidIpv6 {
+            offset: base_off,
+            address: diagnostics.message(format_args!("{inner}"))?,
+        })
         .into())
     }
 }

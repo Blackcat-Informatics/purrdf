@@ -60,8 +60,8 @@ pub mod head;
 mod value;
 
 pub use decode::{
-    DecodeError, DecodeErrorKind, Limits, decode, decode_deterministic, decode_prefix,
-    decode_sequence, read_from,
+    DecodeError, DecodeErrorKind, DecodedSequence, Limits, SequenceError, decode,
+    decode_deterministic, decode_prefix, decode_sequence, decode_sequence_checked, read_from,
 };
 pub use encode::{
     canonical, canonical_into, encode, encode_into, encoded_len, write, write_canonical,

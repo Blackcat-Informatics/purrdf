@@ -330,7 +330,7 @@ fn both_writer_produced_components_and_frame_content_are_mandatory() {
         result
             .errors
             .iter()
-            .any(|error| error.contains("DamagedFrame"))
+            .any(|error| error.to_string().contains("DamagedFrame"))
     );
 }
 
@@ -529,7 +529,12 @@ fn existing_openpgp_resolution_uses_the_same_integrity_core() {
         let invalid = verify_file_with_options(&damaged, &options);
         assert!(!invalid.ok);
         assert_eq!(invalid.valid, 1);
-        assert!(invalid.errors.iter().any(|e| e.contains("DamagedFrame")));
+        assert!(
+            invalid
+                .errors
+                .iter()
+                .any(|e| e.to_string().contains("DamagedFrame"))
+        );
     }
     let mut unsigned = Writer::new("purrdf.gts");
     unsigned.add_blob(b"unsigned", None, None);

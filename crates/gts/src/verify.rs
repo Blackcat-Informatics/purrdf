@@ -8,6 +8,9 @@
 //! every COSE_Sign1 frame, and returns a data result suitable for libraries and
 //! CLIs. Trust-policy findings remain separate from cryptographic validity.
 
+mod error;
+pub use error::{TransportKeyError, VerificationError};
+
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -195,8 +198,8 @@ pub struct VerificationResult {
     pub invalid: usize,
     /// Number of signatures whose key id could not be resolved.
     pub unverified: usize,
-    /// Human-readable verification errors.
-    pub errors: Vec<String>,
+    /// Native verification errors; Display retains their human presentation.
+    pub errors: Vec<VerificationError>,
     /// Reader diagnostics produced while folding the file.
     pub diagnostics: Vec<Diagnostic>,
     /// Profile and trust-policy findings layered above core verification.
@@ -262,7 +265,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
                 (kid, public, raw_public, fingerprint, None)
             }
             Err(err) => {
-                errors.push(format!("cannot load trusted key: {err}"));
+                errors.push(VerificationError::TrustedPublicKey(err));
                 return VerificationResult {
                     ok: false,
                     errors,
@@ -276,7 +279,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
             if !options.require_signatures && first.signatures.is_empty() {
                 return verify_graph_with_keyring(first, &Keyring::default(), options);
             }
-            errors.push("no gts:transportKey found in file metadata".to_string());
+            errors.push(VerificationError::MissingTransportKey);
             return VerificationResult {
                 ok: false,
                 errors,
@@ -291,7 +294,10 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
                 (kid, public, raw_public, fingerprint, Some(first))
             }
             Err(err) => {
-                errors.push(format!("cannot load embedded transport key: {err}"));
+                errors.push(VerificationError::EmbeddedKey {
+                    kid: transport.kid.clone(),
+                    cause: err,
+                });
                 return VerificationResult {
                     ok: false,
                     kid: Some(transport.kid),
@@ -374,7 +380,7 @@ struct KeyringVerification {
     invalid: usize,
     unverified: usize,
     trusted: usize,
-    errors: Vec<String>,
+    errors: Vec<VerificationError>,
     profile_findings: Vec<ProfileFinding>,
     ok: bool,
 }
@@ -410,15 +416,13 @@ fn verify_against_keyring<K: SignatureKeyring + ?Sized>(
 
     let mut errors = integrity_errors(&graph.diagnostics);
     if invalid > 0 {
-        errors.push(format!("{invalid} signature(s) invalid"));
+        errors.push(VerificationError::Invalid { count: invalid });
     }
     if unverified > 0 {
-        errors.push(format!(
-            "{unverified} signature(s) unverified (no key resolved)"
-        ));
+        errors.push(VerificationError::Unverified { count: unverified });
     }
     if options.require_signatures && signed == 0 {
-        errors.push("no signed frames found".to_string());
+        errors.push(VerificationError::Unsigned);
     }
 
     let has_profile_error = profile_findings
@@ -438,7 +442,7 @@ fn verify_against_keyring<K: SignatureKeyring + ?Sized>(
     }
 }
 
-fn integrity_errors(diagnostics: &[Diagnostic]) -> Vec<String> {
+fn integrity_errors(diagnostics: &[Diagnostic]) -> Vec<VerificationError> {
     // Damaged frames can be withheld from the folded signature list. Valid
     // signatures on survivors cannot establish file integrity. MissingKey and
     // UnknownCodec still permit authentication of opaque ciphertext/payloads.
@@ -455,16 +459,22 @@ fn integrity_errors(diagnostics: &[Diagnostic]) -> Vec<String> {
                     | "ResourceLimit"
             )
         })
-        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.detail))
+        .cloned()
+        .map(VerificationError::Integrity)
         .collect()
 }
 
 fn provider_from_armor(
     armored: &str,
     kid: Option<&str>,
-) -> Result<(String, VerifyingKey, [u8; 32], String), String> {
-    let parsed = parse_transport_key(armored).map_err(|e| e.to_string())?;
-    let public = VerifyingKey::from_bytes(&parsed.raw_public).map_err(|e| e.to_string())?;
+) -> Result<(String, VerifyingKey, [u8; 32], String), TransportKeyError> {
+    let parsed = parse_transport_key(armored).map_err(TransportKeyError::OpenPgp)?;
+    let public = VerifyingKey::from_bytes(&parsed.raw_public).map_err(|source| {
+        TransportKeyError::PublicKey {
+            key: parsed.raw_public,
+            source,
+        }
+    })?;
     let resolved_kid = kid.unwrap_or(&parsed.fingerprint).to_string();
     Ok((resolved_kid, public, parsed.raw_public, parsed.fingerprint))
 }

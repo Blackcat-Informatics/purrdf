@@ -789,6 +789,12 @@ pub enum NativeBuildError {
     /// The original RDF diagnostic; its producer's Memory retains its buffers.
     Diagnostic(RdfDiagnostic),
 }
+impl purrdf_hash::error::StructuredError for NativeBuildError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "native-build-storage" { "cause" => Cause(cause) },
+        Diagnostic(cause) => "native-build-diagnostic" { "cause" => Cause(cause) },
+    }
+}
 purrdf_lex::variant_from!(NativeBuildError { Storage(StorageError) });
 purrdf_lex::variant_from!(NativeBuildError { Diagnostic(RdfDiagnostic) });
 impl core::fmt::Display for NativeBuildError {

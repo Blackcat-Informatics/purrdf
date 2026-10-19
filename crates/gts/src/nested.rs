@@ -87,6 +87,7 @@ fn visit(
         }
         if depth >= max_depth {
             graph.diagnostics.push(Diagnostic {
+                cause: None,
                 code: "RecursionLimit".to_string(),
                 detail: format!("nested GTS blob {digest} exceeds max depth {max_depth}"),
                 frame_index: None,
@@ -98,6 +99,7 @@ fn visit(
             Ok(None) => continue,
             Err(err) => {
                 graph.diagnostics.push(Diagnostic {
+                    cause: None,
                     code: "DamagedFrame".to_string(),
                     detail: format!("nested GTS blob {digest} decode failed: {err:?}"),
                     frame_index: None,
@@ -108,6 +110,7 @@ fn visit(
         let nested_len = nested_bytes.len();
         if nested_len > *remaining {
             graph.diagnostics.push(Diagnostic {
+                cause: None,
                 code: "RecursionLimit".to_string(),
                 detail: format!(
                     "nested GTS decoded-size budget exceeded at {digest}: {} > {}",
@@ -129,6 +132,7 @@ fn visit(
         );
         if child.segment_heads.is_empty() {
             graph.diagnostics.push(Diagnostic {
+                cause: None,
                 code: "DamagedFrame".to_string(),
                 detail: format!("nested GTS blob {digest} could not be parsed"),
                 frame_index: None,

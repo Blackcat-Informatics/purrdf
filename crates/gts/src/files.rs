@@ -3,6 +3,11 @@
 
 //! Files-profile pack/unpack/diff logic for GTS archives (§13.2, §14.2).
 
+mod error;
+mod fs_error;
+pub use error::FileError;
+pub use fs_error::FsRefusal;
+
 use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
@@ -87,7 +92,7 @@ impl FileEntryKind {
     /// # Errors
     ///
     /// Returns an error when `value` is not a known files-profile entry kind.
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, FileError> {
         match value {
             "file" => Ok(Self::File),
             "directory" => Ok(Self::Directory),
@@ -97,7 +102,9 @@ impl FileEntryKind {
             "chardev" => Ok(Self::CharDev),
             "blockdev" => Ok(Self::BlockDev),
             "socket" => Ok(Self::Socket),
-            other => Err(format!("unknown files:type value: {other}")),
+            other => Err(FileError::Kind {
+                actual: other.to_owned(),
+            }),
         }
     }
 }
@@ -277,50 +284,54 @@ impl TermBuilder {
     }
 }
 
-fn safe_archive_path(name: &str) -> Result<(), String> {
+fn safe_archive_path(name: &str) -> Result<(), FileError> {
     if name.is_empty() {
-        return Err("empty archive path".to_string());
+        return Err(FileError::EmptyPath);
     }
     let normalized = name.replace('\\', "/");
     let drive_relative =
         name.len() >= 2 && name.as_bytes()[1] == b':' && name.as_bytes()[0].is_ascii_alphabetic();
     if drive_relative || normalized.starts_with('/') {
-        return Err(format!(
-            "absolute or drive-relative path not allowed in archive: {name}"
-        ));
+        return Err(FileError::AbsolutePath {
+            path: name.to_owned(),
+        });
     }
     let parts: Vec<&str> = normalized.split('/').collect();
     for part in &parts {
         if *part == ".." {
-            return Err(format!("path traversal not allowed in archive: {name}"));
+            return Err(FileError::TraversalPath {
+                path: name.to_owned(),
+            });
         }
     }
     if name.contains('\\') {
-        return Err(format!(
-            "backslash path separator not allowed in archive: {name}"
-        ));
+        return Err(FileError::BackslashPath {
+            path: name.to_owned(),
+        });
     }
     if parts.iter().any(|part| part.is_empty() || *part == ".") {
-        return Err(format!(
-            "empty or current-directory path component not allowed in archive: {name}"
-        ));
+        return Err(FileError::ComponentPath {
+            path: name.to_owned(),
+        });
     }
     Ok(())
 }
 
-fn to_posix_path(path: &Path) -> Result<String, String> {
+fn to_posix_path(path: &Path) -> Result<String, FileError> {
     let mut parts = Vec::new();
     for c in path.components() {
         let s = c
             .as_os_str()
             .to_str()
-            .ok_or_else(|| format!("non-UTF-8 path component in {path:?}"))?;
+            .ok_or_else(|| FsRefusal::NonUtf8Path {
+                path: path.to_path_buf(),
+            })?;
         parts.push(s.to_string());
     }
     Ok(parts.join("/"))
 }
 
-fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, FileError> {
     fn recurse(out: &mut Vec<PathBuf>, dir: &Path) -> Result<(), std::io::Error> {
         let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(fs::DirEntry::file_name);
@@ -328,9 +339,9 @@ fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
             let path = entry.path();
             let ftype = entry.file_type()?;
             if ftype.is_symlink() {
-                return Err(std::io::Error::new(
+                return Err(purrdf_hash::error::io_error(
                     std::io::ErrorKind::InvalidInput,
-                    format!("symlink not supported: {}", path.display()),
+                    FsRefusal::Symlink { path },
                 ));
             }
             if ftype.is_dir() {
@@ -342,45 +353,62 @@ fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
         Ok(())
     }
     let mut out = Vec::new();
-    recurse(&mut out, dir).map_err(|e| format!("walk {dir:?}: {e}"))?;
+    recurse(&mut out, dir).map_err(|cause| FileError::Io {
+        operation: "walk",
+        path: Some(dir.to_path_buf()),
+        cause: cause.into(),
+    })?;
     Ok(out)
 }
 
-fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> {
+fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, FileError> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
     let mut seen: FastSet<String> = FastSet::default();
     for src in sources {
-        let meta = fs::symlink_metadata(src).map_err(|e| format!("{src:?}: {e}"))?;
+        let meta = fs::symlink_metadata(src).map_err(|cause| FileError::Io {
+            operation: "",
+            path: Some(src.to_path_buf()),
+            cause: cause.into(),
+        })?;
         if meta.file_type().is_symlink() {
-            return Err(format!("symlink not supported: {}", src.display()));
+            return Err(FsRefusal::Symlink {
+                path: src.to_path_buf(),
+            }
+            .into());
         }
         if meta.is_file() {
             let name = src
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| format!("invalid source name: {src:?}"))?
+                .ok_or_else(|| FsRefusal::InvalidSourceName {
+                    path: src.to_path_buf(),
+                })?
                 .to_string();
             safe_archive_path(&name)?;
             if !seen.insert(name.clone()) {
-                return Err(format!("duplicate archive path: {name}"));
+                return Err(FileError::DuplicateArchivePath { path: name });
             }
             entries.push((src.to_path_buf(), name));
         } else if meta.is_dir() {
             let files = walk_dir_sorted(src)?;
             for fspath in files {
-                let relpath = to_posix_path(
-                    fspath
-                        .strip_prefix(src)
-                        .map_err(|_| format!("path outside source: {fspath:?}"))?,
-                )?;
+                let relpath = to_posix_path(fspath.strip_prefix(src).map_err(|_| {
+                    FsRefusal::OutsideSource {
+                        path: fspath.clone(),
+                        base: src.to_path_buf(),
+                    }
+                })?)?;
                 safe_archive_path(&relpath)?;
                 if !seen.insert(relpath.clone()) {
-                    return Err(format!("duplicate archive path: {relpath}"));
+                    return Err(FileError::DuplicateArchivePath { path: relpath });
                 }
                 entries.push((fspath, relpath));
             }
         } else {
-            return Err(format!("unsupported source type: {src:?}"));
+            return Err(FsRefusal::UnsupportedSource {
+                path: src.to_path_buf(),
+            }
+            .into());
         }
     }
     entries.sort_by(|a, b| a.1.cmp(&b.1));
@@ -489,9 +517,12 @@ fn copy_counted_and_hash<R: Read, W: Write>(
         written += n as u64;
     }
     if written != expected_size {
-        return Err(std::io::Error::new(
+        return Err(purrdf_hash::error::io_error(
             std::io::ErrorKind::UnexpectedEof,
-            format!("blob source changed size: expected {expected_size}, read {written}"),
+            FileError::BlobSize {
+                expected: expected_size,
+                actual: written,
+            },
         ));
     }
     Ok((digest_label(digest.finalize().as_bytes()), written))
@@ -537,12 +568,12 @@ fn write_blob_frame<R: Read, W: Write>(
     write_head(writer, BYTES, meta.size)?;
     let (observed_digest, _) = copy_counted_and_hash(reader, writer, meta.size)?;
     if observed_digest != meta.digest {
-        return Err(std::io::Error::new(
+        return Err(purrdf_hash::error::io_error(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "blob source changed digest: expected {}, read {observed_digest}",
-                meta.digest
-            ),
+            FileError::BlobChangedDigest {
+                expected: meta.digest.to_owned(),
+                actual: observed_digest,
+            },
         ));
     }
     write_text(writer, "t")?;
@@ -560,11 +591,14 @@ fn append_blob_path<W: Write>(
     prev: &mut Vec<u8>,
     source: &FileBlobSource,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let media_type = source.media_type.as_deref();
     let representation = source.representation.as_deref();
-    let mut file =
-        fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
+    let mut file = fs::File::open(&source.path).map_err(|cause| FileError::Io {
+        operation: "read",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         write_blob_preimage(
@@ -575,17 +609,26 @@ fn append_blob_path<W: Write>(
             representation,
             prev,
         )
-        .map_err(|e| format!("hash blob {:?}: {e}", source.path))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash blob",
+            path: Some(source.path.clone()),
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for {:?}: expected {expected_digest}, read {digest}",
-            source.path
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "file",
+            path: Some(source.path.clone()),
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
-    file.rewind()
-        .map_err(|e| format!("seek {:?}: {e}", source.path))?;
+    file.rewind().map_err(|cause| FileError::Io {
+        operation: "seek",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     let meta = BlobFrameMeta {
         size: source.size,
         id: &id,
@@ -594,8 +637,11 @@ fn append_blob_path<W: Write>(
         representation,
         prev,
     };
-    write_blob_frame(writer, &mut file, &meta)
-        .map_err(|e| format!("write blob {:?}: {e}", source.path))?;
+    write_blob_frame(writer, &mut file, &meta).map_err(|cause| FileError::Io {
+        operation: "write blob",
+        path: Some(source.path.clone()),
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -605,7 +651,7 @@ fn append_blob_bytes<W: Write>(
     prev: &mut Vec<u8>,
     source: FileBlobBytes<'_>,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         write_blob_preimage(
@@ -616,12 +662,19 @@ fn append_blob_bytes<W: Write>(
             source.representation,
             prev,
         )
-        .map_err(|e| format!("hash inline blob: {e}"))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob",
+            path: None,
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for inline blob: expected {expected_digest}, read {digest}"
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "inline blob",
+            path: None,
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
     let meta = BlobFrameMeta {
@@ -632,7 +685,11 @@ fn append_blob_bytes<W: Write>(
         representation: source.representation,
         prev,
     };
-    write_blob_frame(writer, source.data, &meta).map_err(|e| format!("write inline blob: {e}"))?;
+    write_blob_frame(writer, source.data, &meta).map_err(|cause| FileError::Io {
+        operation: "write inline blob",
+        path: None,
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -643,12 +700,16 @@ fn append_blob_range<R: Read + Seek, W: Write>(
     reader: &mut R,
     source: FileBlobRange<'_>,
     expected_digest: &str,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         reader
             .seek(SeekFrom::Start(source.offset))
-            .map_err(|e| format!("seek inline blob: {e}"))?;
+            .map_err(|cause| FileError::Io {
+                operation: "seek inline blob",
+                path: None,
+                cause: cause.into(),
+            })?;
         write_blob_preimage(
             &mut hasher,
             reader.take(source.size),
@@ -657,17 +718,28 @@ fn append_blob_range<R: Read + Seek, W: Write>(
             source.representation,
             prev,
         )
-        .map_err(|e| format!("hash inline blob range: {e}"))?
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob range",
+            path: None,
+            cause: cause.into(),
+        })?
     };
     if digest != expected_digest {
-        return Err(format!(
-            "digest mismatch for inline blob range: expected {expected_digest}, read {digest}"
-        ));
+        return Err(FileError::BlobDigest {
+            kind: "inline blob range",
+            path: None,
+            expected: expected_digest.to_owned(),
+            actual: digest,
+        });
     }
     let id = hasher.finalize().as_bytes().to_vec();
     reader
         .seek(SeekFrom::Start(source.offset))
-        .map_err(|e| format!("seek inline blob: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "seek inline blob",
+            path: None,
+            cause: cause.into(),
+        })?;
     let meta = BlobFrameMeta {
         size: source.size,
         id: &id,
@@ -676,8 +748,11 @@ fn append_blob_range<R: Read + Seek, W: Write>(
         representation: source.representation,
         prev,
     };
-    write_blob_frame(writer, reader.take(source.size), &meta)
-        .map_err(|e| format!("write inline blob range: {e}"))?;
+    write_blob_frame(writer, reader.take(source.size), &meta).map_err(|cause| FileError::Io {
+        operation: "write inline blob range",
+        path: None,
+        cause: cause.into(),
+    })?;
     *prev = id;
     Ok(())
 }
@@ -685,21 +760,39 @@ fn append_blob_range<R: Read + Seek, W: Write>(
 pub(crate) fn digest_blob_range<R: Read + Seek>(
     reader: &mut R,
     source: FileBlobRange<'_>,
-) -> Result<String, String> {
+) -> Result<String, FileError> {
     reader
         .seek(SeekFrom::Start(source.offset))
-        .map_err(|e| format!("seek inline blob: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "seek inline blob",
+            path: None,
+            cause: cause.into(),
+        })?;
     let mut sink = std::io::sink();
     let (digest, _) = copy_counted_and_hash(reader.take(source.size), &mut sink, source.size)
-        .map_err(|e| format!("hash inline blob range: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "hash inline blob range",
+            path: None,
+            cause: cause.into(),
+        })?;
     Ok(digest)
 }
 
-fn digest_file(path: &Path, expected_size: u64) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|e| format!("read {path:?}: {e}"))?;
+fn digest_file(path: &Path, expected_size: u64) -> Result<String, FileError> {
+    let mut file = fs::File::open(path).map_err(|cause| FileError::Io {
+        operation: "read",
+        path: Some(path.to_path_buf()),
+        cause: cause.into(),
+    })?;
     let mut sink = std::io::sink();
-    let (digest, _) = copy_counted_and_hash(&mut file, &mut sink, expected_size)
-        .map_err(|e| format!("hash {path:?}: {e}"))?;
+    let (digest, _) =
+        copy_counted_and_hash(&mut file, &mut sink, expected_size).map_err(|cause| {
+            FileError::Io {
+                operation: "hash",
+                path: Some(path.to_path_buf()),
+                cause: cause.into(),
+            }
+        })?;
     Ok(digest)
 }
 
@@ -714,17 +807,23 @@ struct ResolvedFile {
     media_type: String,
 }
 
-fn resolved_files_with_metadata(sources: &[&Path]) -> Result<Vec<ResolvedFile>, String> {
+fn resolved_files_with_metadata(sources: &[&Path]) -> Result<Vec<ResolvedFile>, FileError> {
     let entries = resolve_sources(sources)?;
     let mut out = Vec::with_capacity(entries.len());
     for (fspath, relpath) in entries {
-        let meta = fs::metadata(&fspath).map_err(|e| format!("stat {fspath:?}: {e}"))?;
+        let meta = fs::metadata(&fspath).map_err(|cause| FileError::Io {
+            operation: "stat",
+            path: Some(fspath.clone()),
+            cause: cause.into(),
+        })?;
         let size = meta.len();
         let mode = 0o644_u32;
-        let mtime = meta
-            .modified()
-            .map_err(|e| format!("mtime {fspath:?}: {e}"))?;
-        let modified = format_datetime(&mtime).map_err(|e| format!("datetime {fspath:?}: {e}"))?;
+        let mtime = meta.modified().map_err(|cause| FileError::Io {
+            operation: "mtime",
+            path: Some(fspath.clone()),
+            cause: cause.into(),
+        })?;
+        let modified = format_datetime(&mtime, &fspath)?;
         let media_type = media_type_for_path(&fspath).to_string();
         let digest = digest_file(&fspath, size)?;
         out.push(ResolvedFile {
@@ -741,7 +840,7 @@ fn resolved_files_with_metadata(sources: &[&Path]) -> Result<Vec<ResolvedFile>, 
 }
 
 /// Pack files/directories into a deterministic GTS files-profile archive.
-pub fn pack(sources: &[&Path]) -> Result<Vec<u8>, String> {
+pub fn pack(sources: &[&Path]) -> Result<Vec<u8>, FileError> {
     let mut out = Vec::new();
     pack_to_writer(sources, &mut out)?;
     Ok(out)
@@ -749,7 +848,7 @@ pub fn pack(sources: &[&Path]) -> Result<Vec<u8>, String> {
 
 /// Pack files/directories into a deterministic GTS files-profile archive without
 /// retaining regular-file payloads in memory.
-pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), String> {
+pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), FileError> {
     let mut w = Writer::new("files");
 
     let shared = vec![
@@ -821,7 +920,11 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
     let mut prev = w.head().to_vec();
     output
         .write_all(&w.into_bytes())
-        .map_err(|e| format!("write files-profile metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     let mut seen: FastSet<String> = FastSet::default();
     for entry in &entries {
         if !seen.insert(entry.digest.clone()) {
@@ -842,7 +945,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
 ///
 /// This helper is the Rust foundation for the tar bridge. The default
 /// [`pack`] command continues to emit v1 archives.
-pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, String> {
+pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, FileError> {
     let mut out = Vec::new();
     pack_entries_v2_to_writer(entries, &mut out)?;
     Ok(out)
@@ -852,12 +955,16 @@ pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, String> {
 pub fn pack_entries_v2_to_writer<W: Write>(
     entries: &[FileEntry],
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, (data, media_type)) in blobs {
         append_blob_bytes(
             &mut output,
@@ -878,12 +985,16 @@ pub fn pack_entries_v2_with_blob_bytes<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobBytes<'_>>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_bytes(&mut output, &mut prev, *source, digest)?;
     }
@@ -896,12 +1007,16 @@ pub fn pack_entries_v2_with_blob_ranges<R: Read + Seek, W: Write>(
     reader: &mut R,
     blob_sources: &BTreeMap<String, FileBlobRange<'_>>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_range(&mut output, &mut prev, reader, *source, digest)?;
     }
@@ -917,21 +1032,27 @@ pub fn pack_entries_v2_with_blob_paths<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobSource>,
     mut output: W,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
     let mut prev = writer.head().to_vec();
     output
         .write_all(&writer.into_bytes())
-        .map_err(|e| format!("write files-profile-v2 metadata: {e}"))?;
+        .map_err(|cause| FileError::Io {
+            operation: "write files-profile-v2 metadata",
+            path: None,
+            cause: cause.into(),
+        })?;
     for (digest, source) in blob_sources {
         append_blob_path(&mut output, &mut prev, source, digest)?;
     }
     Ok(())
 }
 
-fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobMap<'_>), String> {
+fn build_entries_v2_prefix(
+    entries: &[FileEntry],
+) -> Result<(Writer, InlineBlobMap<'_>), FileError> {
     if entries.is_empty() {
-        return Err("files-profile v2 archive needs at least one entry".to_string());
+        return Err(FileError::EmptyEntries);
     }
 
     let mut entries: Vec<&FileEntry> = entries.iter().collect();
@@ -945,7 +1066,9 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
     for (idx, entry) in entries.iter().enumerate() {
         safe_archive_path(&entry.path)?;
         if !seen_paths.insert(entry.path.clone()) {
-            return Err(format!("duplicate archive path: {}", entry.path));
+            return Err(FileError::DuplicateArchivePath {
+                path: entry.path.clone(),
+            });
         }
         validate_v2_entry(entry)?;
 
@@ -1036,7 +1159,7 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
             ..WriterOptions::default()
         },
     )
-    .map_err(|err| format!("cannot author files v2 header: {err}"))?;
+    .map_err(FileError::Writer)?;
     writer.add_meta(profile_meta);
     if !builder.terms.is_empty() {
         writer.add_terms(&builder.terms);
@@ -1051,29 +1174,38 @@ fn files_v2_profile_meta() -> Value {
     Value::Map(vec![("profileVersion".into(), Value::from(2_u64))])
 }
 
-fn validate_v2_entry(entry: &FileEntry) -> Result<(), String> {
+fn validate_v2_entry(entry: &FileEntry) -> Result<(), FileError> {
     match entry.kind {
         FileEntryKind::File => {
             let _ = file_digest_and_size(entry)?;
         }
         FileEntryKind::Directory => {
             if entry.data.is_some() || entry.digest.is_some() || entry.size.is_some() {
-                return Err(format!(
-                    "directory entry {} must not carry file bytes, digest, or size",
-                    entry.path
-                ));
+                return Err(FileError::EntryPayload {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    data_size: entry.data.as_ref().map(Vec::len),
+                    digest: entry.digest.clone(),
+                    size: entry.size,
+                });
             }
         }
         FileEntryKind::Symlink => {
             if entry.link_target.as_deref().unwrap_or("").is_empty() {
-                return Err(format!("symlink entry {} needs linkTarget", entry.path));
+                return Err(FileError::LinkTarget {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                });
             }
             reject_payload_fields(entry)?;
         }
         FileEntryKind::Hardlink => {
             let target = entry.link_target.as_deref().unwrap_or("");
             if target.is_empty() {
-                return Err(format!("hardlink entry {} needs linkTarget", entry.path));
+                return Err(FileError::LinkTarget {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                });
             }
             safe_archive_path(target)?;
             reject_payload_fields(entry)?;
@@ -1084,61 +1216,79 @@ fn validate_v2_entry(entry: &FileEntry) -> Result<(), String> {
         FileEntryKind::CharDev | FileEntryKind::BlockDev => {
             reject_payload_fields(entry)?;
             if entry.dev_major.is_none() || entry.dev_minor.is_none() {
-                return Err(format!(
-                    "{} entry {} needs devMajor and devMinor",
-                    entry.kind.as_str(),
-                    entry.path
-                ));
+                return Err(FileError::Device {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                    major: entry.dev_major,
+                    minor: entry.dev_minor,
+                });
             }
         }
     }
     Ok(())
 }
 
-fn reject_payload_fields(entry: &FileEntry) -> Result<(), String> {
+fn reject_payload_fields(entry: &FileEntry) -> Result<(), FileError> {
     if entry.data.is_some() || entry.digest.is_some() || entry.size.is_some() {
-        return Err(format!(
-            "{} entry {} must not carry file bytes, digest, or size",
-            entry.kind.as_str(),
-            entry.path
-        ));
+        return Err(FileError::EntryPayload {
+            path: entry.path.clone(),
+            kind: entry.kind,
+            data_size: entry.data.as_ref().map(Vec::len),
+            digest: entry.digest.clone(),
+            size: entry.size,
+        });
     }
     Ok(())
 }
 
-fn file_digest_and_size(entry: &FileEntry) -> Result<(String, u64), String> {
+fn file_digest_and_size(entry: &FileEntry) -> Result<(String, u64), FileError> {
     match (&entry.data, &entry.digest, entry.size) {
         (Some(data), digest, size) => {
             let computed_digest = digest_string(data);
-            if digest
-                .as_deref()
-                .is_some_and(|value| value != computed_digest)
-            {
-                return Err(format!("digest mismatch for {}", entry.path));
+            if let Some(expected) = digest.as_ref().filter(|value| **value != computed_digest) {
+                return Err(FileError::EntryDigest {
+                    path: entry.path.clone(),
+                    expected: expected.clone(),
+                    actual: computed_digest,
+                });
             }
             let computed_size = data.len() as u64;
-            if size.is_some_and(|value| value != computed_size) {
-                return Err(format!("size mismatch for {}", entry.path));
+            if let Some(expected) = size.filter(|value| *value != computed_size) {
+                return Err(FileError::EntrySize {
+                    path: entry.path.clone(),
+                    expected,
+                    actual: computed_size,
+                });
             }
             Ok((computed_digest, computed_size))
         }
         (None, Some(digest), Some(size)) => Ok((digest.clone(), size)),
-        (None, _, _) => Err(format!(
-            "regular file entry {} needs data or digest+size",
-            entry.path
-        )),
+        (None, _, _) => Err(FileError::MissingPayload {
+            path: entry.path.clone(),
+            digest: entry.digest.clone(),
+            size: entry.size,
+        }),
     }
 }
 
-fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
+fn format_datetime(time: &std::time::SystemTime, path: &Path) -> Result<String, FsRefusal> {
     let duration = time
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("mtime before unix epoch: {e}"))?;
-    let secs = duration.as_secs();
-    i64::try_from(secs)
-        .map_err(|_| "out of range")
-        .and_then(|secs| crate::rfc3339::format(secs, 0))
-        .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))
+        .map_err(|cause| FsRefusal::DateTimeBeforeEpoch {
+            path: path.to_path_buf(),
+            cause,
+        })?;
+    let seconds = duration.as_secs();
+    let signed = i64::try_from(seconds).map_err(|cause| FsRefusal::DateTimeRange {
+        path: path.to_path_buf(),
+        seconds,
+        cause,
+    })?;
+    crate::rfc3339::format(signed, 0).map_err(|cause| FsRefusal::DateTimeFormat {
+        path: path.to_path_buf(),
+        seconds,
+        cause,
+    })
 }
 
 /// Read typed files-profile entries from a folded graph, keyed by `files:path`.
@@ -1147,7 +1297,7 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
 ///
 /// Returns an error when the graph is not a files-profile archive, an entry
 /// carries an invalid field value, or two entries share the same path.
-pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String> {
+pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, FileError> {
     let mut type_ids: FastSet<usize> = FastSet::default();
     let mut file_entry_ids: FastSet<usize> = FastSet::default();
     let mut field_name_by_id: FastMap<usize, String> = FastMap::default();
@@ -1167,10 +1317,10 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
         }
     }
     if type_ids.is_empty() {
-        return Err("not a files-profile archive: missing rdf:type".to_string());
+        return Err(FileError::MissingVocabulary { term: "rdf:type" });
     }
     if file_entry_ids.is_empty() {
-        return Err("not a files-profile archive: missing FileEntry".to_string());
+        return Err(FileError::MissingVocabulary { term: "FileEntry" });
     }
 
     let mut direct: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
@@ -1230,7 +1380,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
             data: None,
         };
         if by_path.contains_key(path) {
-            return Err(format!("duplicate files:path in archive: {path}"));
+            return Err(FileError::DuplicatePath { path: path.clone() });
         }
         by_path.insert(path.clone(), entry);
     }
@@ -1244,7 +1394,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
 /// Propagates the same failures as [`read_entries`].
 pub fn read_file_entries(
     graph: &Graph,
-) -> Result<BTreeMap<String, BTreeMap<String, String>>, String> {
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, FileError> {
     read_entries(graph).map(|entries| {
         entries
             .into_iter()
@@ -1257,18 +1407,23 @@ fn read_xattrs(
     subject: usize,
     direct: &BTreeMap<usize, BTreeMap<String, String>>,
     links: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<FileXattr>, String> {
+) -> Result<Vec<FileXattr>, FileError> {
     let mut out = Vec::new();
     for node in links.get(&subject).into_iter().flatten() {
-        let fields = direct
-            .get(node)
-            .ok_or_else(|| format!("files:xattr node {node} has no fields"))?;
-        let name = fields
-            .get("xattrName")
-            .ok_or_else(|| format!("files:xattr node {node} missing xattrName"))?;
-        let value = fields
-            .get("xattrValue")
-            .ok_or_else(|| format!("files:xattr node {node} missing xattrValue"))?;
+        let fields = direct.get(node).ok_or(FileError::MissingFields {
+            role: "xattr",
+            node: *node,
+        })?;
+        let name = fields.get("xattrName").ok_or(FileError::MissingField {
+            role: "xattr",
+            node: *node,
+            field: "xattrName",
+        })?;
+        let value = fields.get("xattrValue").ok_or(FileError::MissingField {
+            role: "xattr",
+            node: *node,
+            field: "xattrValue",
+        })?;
         out.push(FileXattr {
             name: name.clone(),
             value: value.clone(),
@@ -1282,18 +1437,23 @@ fn read_pax_records(
     subject: usize,
     direct: &BTreeMap<usize, BTreeMap<String, String>>,
     links: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<FilePaxRecord>, String> {
+) -> Result<Vec<FilePaxRecord>, FileError> {
     let mut out = Vec::new();
     for node in links.get(&subject).into_iter().flatten() {
-        let fields = direct
-            .get(node)
-            .ok_or_else(|| format!("files:paxRecord node {node} has no fields"))?;
-        let key = fields
-            .get("paxKey")
-            .ok_or_else(|| format!("files:paxRecord node {node} missing paxKey"))?;
-        let value = fields
-            .get("paxValue")
-            .ok_or_else(|| format!("files:paxRecord node {node} missing paxValue"))?;
+        let fields = direct.get(node).ok_or(FileError::MissingFields {
+            role: "paxRecord",
+            node: *node,
+        })?;
+        let key = fields.get("paxKey").ok_or(FileError::MissingField {
+            role: "paxRecord",
+            node: *node,
+            field: "paxKey",
+        })?;
+        let value = fields.get("paxValue").ok_or(FileError::MissingField {
+            role: "paxRecord",
+            node: *node,
+            field: "paxValue",
+        })?;
         out.push(FilePaxRecord {
             key: key.clone(),
             value: value.clone(),
@@ -1308,17 +1468,18 @@ fn read_pax_records(
 fn parse_optional_integer<T>(
     fields: &BTreeMap<String, String>,
     key: &str,
-) -> Result<Option<T>, String>
+) -> Result<Option<T>, FileError>
 where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
+    T: std::str::FromStr<Err = core::num::ParseIntError>,
 {
     fields
         .get(key)
         .map(|value| {
-            value
-                .parse::<T>()
-                .map_err(|err| format!("invalid files:{key} integer {value:?}: {err}"))
+            value.parse::<T>().map_err(|cause| FileError::Integer {
+                field: key.to_owned(),
+                actual: value.clone(),
+                cause,
+            })
         })
         .transpose()
 }
@@ -1366,14 +1527,16 @@ fn entry_to_field_map(entry: &FileEntry) -> BTreeMap<String, String> {
     fields
 }
 
-fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
+fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, FileError> {
     safe_archive_path(archive_path)?;
     // Resolve the destination itself (e.g. `/tmp` -> `/private/tmp` on macOS),
     // then resolve the closest existing target ancestor so an existing
     // symlinked directory below the destination cannot redirect writes.
-    let dest_canon = dest
-        .canonicalize()
-        .map_err(|e| format!("resolve destination {dest:?}: {e}"))?;
+    let dest_canon = dest.canonicalize().map_err(|cause| FileError::Io {
+        operation: "resolve destination",
+        path: Some(dest.to_path_buf()),
+        cause: cause.into(),
+    })?;
     let target = dest_canon.join(archive_path);
 
     let mut ancestor = target
@@ -1386,11 +1549,18 @@ fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
         };
         ancestor = parent.to_path_buf();
     }
-    let ancestor_canon = ancestor
-        .canonicalize()
-        .map_err(|e| format!("resolve target ancestor {ancestor:?}: {e}"))?;
+    let ancestor_canon = ancestor.canonicalize().map_err(|cause| FileError::Io {
+        operation: "resolve target ancestor",
+        path: Some(ancestor.clone()),
+        cause: cause.into(),
+    })?;
     if !ancestor_canon.starts_with(&dest_canon) {
-        return Err(format!("path escapes destination: {archive_path}"));
+        return Err(FsRefusal::DestinationEscape {
+            path: archive_path.to_owned(),
+            root: dest_canon,
+            ancestor: ancestor_canon,
+        }
+        .into());
     }
     Ok(target)
 }
@@ -1430,7 +1600,7 @@ fn suppressed_blob_digests(graph: &Graph) -> FastSet<String> {
 }
 
 /// Extract FileEntry quads from a folded graph into dest.
-pub fn unpack(graph: &Graph, dest: &Path, include_suppressed: bool) -> Result<(), String> {
+pub fn unpack(graph: &Graph, dest: &Path, include_suppressed: bool) -> Result<(), FileError> {
     unpack_with_options(
         graph,
         dest,
@@ -1446,14 +1616,18 @@ pub fn unpack_with_options(
     graph: &Graph,
     dest: &Path,
     options: &UnpackOptions,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     let entries = read_entries(graph)?;
     let suppressed = if options.include_suppressed {
         FastSet::default()
     } else {
         suppressed_blob_digests(graph)
     };
-    fs::create_dir_all(dest).map_err(|e| format!("create {dest:?}: {e}"))?;
+    fs::create_dir_all(dest).map_err(|cause| FileError::Io {
+        operation: "create",
+        path: Some(dest.to_path_buf()),
+        cause: cause.into(),
+    })?;
     let blob_entries: BTreeMap<&str, &crate::model::BlobEntry> =
         graph.blobs.iter().map(|(d, e)| (d.as_str(), e)).collect();
     let mut decoded_cache: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -1465,14 +1639,18 @@ pub fn unpack_with_options(
 
         match entry.kind {
             FileEntryKind::Directory => {
-                fs::create_dir_all(&target).map_err(|e| format!("create dir {target:?}: {e}"))?;
+                fs::create_dir_all(&target).map_err(|cause| FileError::Io {
+                    operation: "create dir",
+                    path: Some(target.clone()),
+                    cause: cause.into(),
+                })?;
                 deferred_dirs.push((target, entry));
             }
             FileEntryKind::File => {
                 let digest = entry
                     .digest
                     .as_ref()
-                    .ok_or_else(|| format!("missing digest for {path}"))?;
+                    .ok_or_else(|| FsRefusal::MissingDigest { path: path.clone() })?;
                 if suppressed.contains(digest) {
                     continue;
                 }
@@ -1482,22 +1660,35 @@ pub fn unpack_with_options(
                     let decoded = blob_entries
                         .get(digest.as_str())
                         .map(|entry| {
-                            entry
-                                .decoded_vec()
-                                .map_err(|err| format!("decode inline blob for {path}: {err:?}"))
+                            entry.decoded_vec().map_err(|cause| FsRefusal::BlobDecode {
+                                path: path.clone(),
+                                cause,
+                            })
                         })
                         .transpose()?
-                        .ok_or_else(|| format!("missing inline blob for {path}: {digest}"))?;
+                        .ok_or_else(|| FsRefusal::MissingBlob {
+                            path: path.clone(),
+                            digest: digest.clone(),
+                        })?;
                     decoded_cache.insert(digest.clone(), decoded.clone());
                     decoded
                 };
-                if digest_string(&data) != *digest {
-                    return Err(format!("integrity failure for {path}: {digest}"));
+                let actual = digest_string(&data);
+                if actual != *digest {
+                    return Err(FsRefusal::Integrity {
+                        path: path.clone(),
+                        digest: digest.clone(),
+                        actual,
+                    }
+                    .into());
                 }
 
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| format!("create dir {parent:?}: {e}"))?;
+                    fs::create_dir_all(parent).map_err(|cause| FileError::Io {
+                        operation: "create dir",
+                        path: Some(parent.to_path_buf()),
+                        cause: cause.into(),
+                    })?;
                 }
                 write_file_without_following_symlink(&target, &data, &path)?;
 
@@ -1505,27 +1696,41 @@ pub fn unpack_with_options(
             }
             FileEntryKind::Symlink => {
                 if !options.allow_symlinks {
-                    return Err(format!(
-                        "refusing symlink entry {path}: use --allow-symlinks"
-                    ));
+                    return Err(FsRefusal::Refused {
+                        path,
+                        kind: entry.kind,
+                        option: "--allow-symlinks",
+                    }
+                    .into());
                 }
-                let link_target = entry
-                    .link_target
-                    .as_deref()
-                    .ok_or_else(|| format!("symlink entry {path} needs linkTarget"))?;
+                let link_target =
+                    entry
+                        .link_target
+                        .as_deref()
+                        .ok_or_else(|| FileError::LinkTarget {
+                            path: path.clone(),
+                            kind: entry.kind,
+                        })?;
                 validate_symlink_target(&path, link_target)?;
                 deferred_links.push((target, entry));
             }
             FileEntryKind::Hardlink => {
                 if !options.allow_symlinks {
-                    return Err(format!(
-                        "refusing hardlink entry {path}: use --allow-symlinks"
-                    ));
+                    return Err(FsRefusal::Refused {
+                        path,
+                        kind: entry.kind,
+                        option: "--allow-symlinks",
+                    }
+                    .into());
                 }
-                let link_target = entry
-                    .link_target
-                    .as_deref()
-                    .ok_or_else(|| format!("hardlink entry {path} needs linkTarget"))?;
+                let link_target =
+                    entry
+                        .link_target
+                        .as_deref()
+                        .ok_or_else(|| FileError::LinkTarget {
+                            path: path.clone(),
+                            kind: entry.kind,
+                        })?;
                 safe_archive_path(link_target)?;
                 let _ = dest_path(dest, link_target)?;
                 deferred_links.push((target, entry));
@@ -1535,14 +1740,19 @@ pub fn unpack_with_options(
             | FileEntryKind::BlockDev
             | FileEntryKind::Socket => {
                 if !options.allow_special {
-                    return Err(format!(
-                        "refusing {} entry {path}: use --allow-special",
-                        entry.kind.as_str()
-                    ));
+                    return Err(FsRefusal::Refused {
+                        path,
+                        kind: entry.kind,
+                        option: "--allow-special",
+                    }
+                    .into());
                 }
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| format!("create dir {parent:?}: {e}"))?;
+                    fs::create_dir_all(parent).map_err(|cause| FileError::Io {
+                        operation: "create dir",
+                        path: Some(parent.to_path_buf()),
+                        cause: cause.into(),
+                    })?;
                 }
                 create_special_node(&target, &entry)?;
                 restore_path_metadata(&target, &entry, options)?;
@@ -1563,13 +1773,15 @@ fn write_file_without_following_symlink(
     target: &Path,
     data: &[u8],
     archive_path: &str,
-) -> Result<(), String> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| format!("missing parent for {target:?}"))?;
+) -> Result<(), FileError> {
+    let parent = target.parent().ok_or_else(|| FsRefusal::MissingParent {
+        path: target.to_path_buf(),
+    })?;
     let name = target
         .file_name()
-        .ok_or_else(|| format!("missing file name for {target:?}"))?
+        .ok_or_else(|| FsRefusal::MissingFileName {
+            path: target.to_path_buf(),
+        })?
         .to_string_lossy();
     for attempt in 0..100 {
         let temp = parent.join(format!(".{name}.gts-tmp-{}-{attempt}", std::process::id()));
@@ -1584,11 +1796,18 @@ fn write_file_without_following_symlink(
                     // target.
                     {
                         let mut file = file;
-                        file.write_all(data)
-                            .map_err(|e| format!("write {temp:?}: {e}"))?;
+                        file.write_all(data).map_err(|cause| FileError::Io {
+                            operation: "write",
+                            path: Some(temp.clone()),
+                            cause: cause.into(),
+                        })?;
                     }
                     prepare_replace_target(target, archive_path)?;
-                    fs::rename(&temp, target).map_err(|e| format!("replace {target:?}: {e}"))?;
+                    fs::rename(&temp, target).map_err(|cause| FileError::Io {
+                        operation: "replace",
+                        path: Some(target.to_path_buf()),
+                        cause: cause.into(),
+                    })?;
                     Ok(())
                 })();
                 if result.is_err() {
@@ -1597,36 +1816,64 @@ fn write_file_without_following_symlink(
                 return result;
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(format!("create temp file for {target:?}: {err}")),
+            Err(cause) => {
+                return Err(FileError::Io {
+                    operation: "create temp file for",
+                    path: Some(target.to_path_buf()),
+                    cause: cause.into(),
+                });
+            }
         }
     }
-    Err(format!(
-        "create temp file for {target:?}: too many attempts"
-    ))
+    Err(FsRefusal::TempAttempts {
+        path: target.to_path_buf(),
+        attempts: 100,
+    }
+    .into())
 }
 
-fn prepare_replace_target(target: &Path, archive_path: &str) -> Result<(), String> {
+fn prepare_replace_target(target: &Path, archive_path: &str) -> Result<(), FileError> {
     match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "refusing to write through symlink for {archive_path}: {target:?}"
-        )),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(FsRefusal::WriteThroughSymlink {
+            archive_path: archive_path.to_owned(),
+            path: target.to_path_buf(),
+        }
+        .into()),
         Ok(metadata) if metadata.is_file() => {
-            fs::remove_file(target).map_err(|e| format!("remove existing {target:?}: {e}"))
+            fs::remove_file(target).map_err(|cause| FileError::Io {
+                operation: "remove existing",
+                path: Some(target.to_path_buf()),
+                cause: cause.into(),
+            })
         }
         Ok(_) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!("inspect {target:?}: {err}")),
+        Err(cause) => Err(FileError::Io {
+            operation: "inspect",
+            path: Some(target.to_path_buf()),
+            cause: cause.into(),
+        }),
     }
 }
 
-fn prepare_create_node_target(target: &Path, archive_path: &str) -> Result<(), String> {
+fn prepare_create_node_target(target: &Path, archive_path: &str) -> Result<(), FileError> {
     match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.is_dir() => Err(format!(
-            "refusing to replace directory for {archive_path}: {target:?}"
-        )),
-        Ok(_) => fs::remove_file(target).map_err(|e| format!("remove existing {target:?}: {e}")),
+        Ok(metadata) if metadata.is_dir() => Err(FsRefusal::ReplaceDirectory {
+            archive_path: archive_path.to_owned(),
+            path: target.to_path_buf(),
+        }
+        .into()),
+        Ok(_) => fs::remove_file(target).map_err(|cause| FileError::Io {
+            operation: "remove existing",
+            path: Some(target.to_path_buf()),
+            cause: cause.into(),
+        }),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!("inspect {target:?}: {err}")),
+        Err(cause) => Err(FileError::Io {
+            operation: "inspect",
+            path: Some(target.to_path_buf()),
+            cause: cause.into(),
+        }),
     }
 }
 
@@ -1639,23 +1886,30 @@ fn prepare_create_node_target(target: &Path, archive_path: &str) -> Result<(), S
 /// that would climb above the root is refused, together with absolute,
 /// drive-relative and backslash-separated targets, so a hostile archive cannot
 /// plant a link that points outside the destination.
-fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), String> {
+fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), FileError> {
     if link_target.is_empty() {
-        return Err(format!("symlink entry {archive_path} needs linkTarget"));
+        return Err(FileError::LinkTarget {
+            path: archive_path.to_owned(),
+            kind: FileEntryKind::Symlink,
+        });
     }
     let normalized = link_target.replace('\\', "/");
     let drive_relative = link_target.len() >= 2
         && link_target.as_bytes()[1] == b':'
         && link_target.as_bytes()[0].is_ascii_alphabetic();
     if drive_relative || normalized.starts_with('/') {
-        return Err(format!(
-            "symlink target escapes destination for {archive_path}: {link_target}"
-        ));
+        return Err(FsRefusal::SymlinkEscape {
+            path: archive_path.to_owned(),
+            target: link_target.to_owned(),
+        }
+        .into());
     }
     if link_target.contains('\\') {
-        return Err(format!(
-            "backslash symlink target not allowed for {archive_path}: {link_target}"
-        ));
+        return Err(FsRefusal::SymlinkBackslash {
+            path: archive_path.to_owned(),
+            target: link_target.to_owned(),
+        }
+        .into());
     }
 
     let mut parts: Vec<&str> = archive_path
@@ -1668,74 +1922,93 @@ fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), 
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    return Err(format!(
-                        "symlink target escapes destination for {archive_path}: {link_target}"
-                    ));
+                    return Err(FsRefusal::SymlinkEscape {
+                        path: archive_path.to_owned(),
+                        target: link_target.to_owned(),
+                    }
+                    .into());
                 }
             }
             value => parts.push(value),
         }
     }
     if parts.is_empty() {
-        return Err(format!(
-            "symlink target resolves to destination root for {archive_path}: {link_target}"
-        ));
+        return Err(FsRefusal::SymlinkRoot {
+            path: archive_path.to_owned(),
+            target: link_target.to_owned(),
+        }
+        .into());
     }
     safe_archive_path(&parts.join("/"))
 }
 
-fn materialize_link(dest: &Path, target: &Path, entry: &FileEntry) -> Result<(), String> {
+fn materialize_link(dest: &Path, target: &Path, entry: &FileEntry) -> Result<(), FileError> {
     match entry.kind {
-        FileEntryKind::Symlink => materialize_symlink(target, entry),
+        FileEntryKind::Symlink => refuse_host_extraction(entry),
         FileEntryKind::Hardlink => {
-            let link_target = entry
-                .link_target
-                .as_deref()
-                .ok_or_else(|| format!("hardlink entry {} needs linkTarget", entry.path))?;
+            let link_target =
+                entry
+                    .link_target
+                    .as_deref()
+                    .ok_or_else(|| FileError::LinkTarget {
+                        path: entry.path.clone(),
+                        kind: entry.kind,
+                    })?;
             let source = dest_path(dest, link_target)?;
             prepare_create_node_target(target, &entry.path)?;
-            fs::hard_link(&source, target)
-                .map_err(|e| format!("create hardlink {target:?} -> {source:?}: {e}"))
+            fs::hard_link(&source, target).map_err(|cause| {
+                FsRefusal::HardLinkIo {
+                    target: target.to_path_buf(),
+                    source,
+                    cause: cause.into(),
+                }
+                .into()
+            })
         }
-        _ => Err(format!("{} is not a link entry", entry.path)),
+        _ => Err(FsRefusal::NotLink {
+            path: entry.path.clone(),
+            kind: entry.kind,
+        }
+        .into()),
     }
 }
 
-fn materialize_symlink(_target: &Path, entry: &FileEntry) -> Result<(), String> {
-    Err(format!(
-        "symlink extraction is host-specific and is not performed by the portable core: {}",
-        entry.path
-    ))
+fn refuse_host_extraction(entry: &FileEntry) -> Result<(), FileError> {
+    Err(FsRefusal::UnsupportedExtraction {
+        path: entry.path.clone(),
+        kind: entry.kind,
+    }
+    .into())
 }
 
-fn create_special_node(target: &Path, entry: &FileEntry) -> Result<(), String> {
+fn create_special_node(target: &Path, entry: &FileEntry) -> Result<(), FileError> {
     prepare_create_node_target(target, &entry.path)?;
-    create_special_node_platform(target, entry)
-}
-
-fn create_special_node_platform(_target: &Path, entry: &FileEntry) -> Result<(), String> {
-    Err(format!(
-        "{} extraction is host-specific and is not performed by the portable core: {}",
-        entry.kind.as_str(),
-        entry.path
-    ))
+    refuse_host_extraction(entry)
 }
 
 fn restore_path_metadata(
     target: &Path,
     entry: &FileEntry,
     options: &UnpackOptions,
-) -> Result<(), String> {
+) -> Result<(), FileError> {
     restore_owner(target, entry, options)?;
 
-    // Symlink entries never reach this point: `materialize_symlink` refuses every
+    // Symlink entries never reach this point: `refuse_host_extraction` refuses every
     // one before metadata is restored, so the only targets here are regular files,
     // hardlinks (which name a regular file) and directories.
     if let Some(modified) = &entry.modified {
         let (seconds, nanos) = parse_modified(modified)?;
-        let instant = system_time_from_unix(seconds, nanos)
-            .ok_or_else(|| format!("mtime {modified} is not representable on this host"))?;
-        set_modified_time(target, instant).map_err(|e| format!("set mtime for {target:?}: {e}"))?;
+        let instant =
+            system_time_from_unix(seconds, nanos).ok_or_else(|| FsRefusal::MtimeHost {
+                actual: modified.clone(),
+                seconds,
+                nanos,
+            })?;
+        set_modified_time(target, instant).map_err(|cause| FileError::Io {
+            operation: "set mtime for",
+            path: Some(target.to_path_buf()),
+            cause: cause.into(),
+        })?;
     }
     Ok(())
 }
@@ -1793,22 +2066,34 @@ fn open_for_set_times(target: &Path) -> std::io::Result<fs::File> {
         .open(target)
 }
 
-fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> Result<(), String> {
+fn restore_owner(
+    _target: &Path,
+    entry: &FileEntry,
+    options: &UnpackOptions,
+) -> Result<(), FileError> {
     if options.same_owner && (entry.uid.is_some() || entry.gid.is_some()) {
-        return Err(format!(
-            "ownership restoration is host-specific and is not performed by the portable core: {}",
-            entry.path
-        ));
+        return Err(FsRefusal::UnsupportedOwner {
+            path: entry.path.clone(),
+            uid: entry.uid,
+            gid: entry.gid,
+        }
+        .into());
     }
     Ok(())
 }
 
-fn parse_modified(text: &str) -> Result<(i64, u32), String> {
-    crate::rfc3339::parse(text).map_err(|e| format!("parse datetime {text}: {e}"))
+fn parse_modified(text: &str) -> Result<(i64, u32), FileError> {
+    crate::rfc3339::parse(text).map_err(|cause| {
+        FsRefusal::ParseModified {
+            actual: text.to_owned(),
+            cause,
+        }
+        .into()
+    })
 }
 
 /// Compare an archive to a directory by content digest.
-pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
+pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, FileError> {
     let entries = read_entries(graph)?;
     let archive_digests: BTreeMap<String, String> = entries
         .iter()
@@ -1817,18 +2102,26 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
         .collect();
 
     if !directory.exists() {
-        return Err(format!("diff destination does not exist: {directory:?}"));
+        return Err(FsRefusal::MissingDirectory {
+            path: directory.to_path_buf(),
+        }
+        .into());
     }
 
     let mut disk_digests: BTreeMap<String, String> = BTreeMap::new();
     let files = walk_dir_sorted(directory)?;
     for fspath in files {
-        let relpath = to_posix_path(
-            fspath
-                .strip_prefix(directory)
-                .map_err(|_| format!("path outside directory: {fspath:?}"))?,
-        )?;
-        let data = fs::read(&fspath).map_err(|e| format!("read {fspath:?}: {e}"))?;
+        let relpath = to_posix_path(fspath.strip_prefix(directory).map_err(|_| {
+            FsRefusal::OutsideDirectory {
+                path: fspath.clone(),
+                base: directory.to_path_buf(),
+            }
+        })?)?;
+        let data = fs::read(&fspath).map_err(|cause| FileError::Io {
+            operation: "read",
+            path: Some(fspath.clone()),
+            cause: cause.into(),
+        })?;
         disk_digests.insert(relpath, digest_string(&data));
     }
 

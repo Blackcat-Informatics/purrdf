@@ -172,7 +172,7 @@ pub use curie::{
     PrefixMap, contract, contract_where, curie_prefix, expand_curie, local_name, resolve,
     split_local_name,
 };
-pub use error::{IriError, Result};
+pub use error::{AuthorityError, IriError, Result};
 pub use parse::{
     Iri, IriReadError, absolute_verdict, is_absolute, is_absolute_with_memory, parse, parse_uri,
     parse_with_memory,

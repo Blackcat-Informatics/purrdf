@@ -728,6 +728,39 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		bash scripts/check-wasm-test-runner.sh \
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test structured_errors -- --exact \
+				policy_findings_keep_native_counts_identifiers_and_vocabulary \
+				reader_preserves_terminal_io_and_sequence_causes \
+				replication_callers_keep_native_findings_heads_and_full_width_ranges \
+				verification_errors_keep_original_key_integrity_and_signature_counts \
+				reader_layout_findings_keep_counts_heads_and_roots \
+				reader_file_and_chain_diagnostics_retain_native_inputs \
+				reader_row_diagnostics_keep_native_widths_ids_and_term_kinds \
+				tar_blob_sources_keep_observed_size_and_digest_refusals \
+				tar_and_files_public_io_retain_unformattable_original_causes \
+				tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes \
+				proof_json_retains_rejected_values_without_formatting_or_number_rounding \
+				proof_verification_keeps_native_bounds_and_reconstructed_hashes \
+				file_proof_keeps_original_identity_faults_and_valid_proofs \
+				compaction_keeps_timestamp_and_authoring_causes \
+				compaction_provenance_lists_and_signature_failures_keep_native_fields \
+				compaction_identifier_decoders_retain_original_rejected_values \
+				memory_example_keeps_confidence_bits_and_original_io_cause \
+				writer_catalog_and_frame_failures_keep_original_fields \
+				append_and_header_failures_keep_native_values_and_sources \
+				invalid_header_cause_survives_graph_and_streaming_diagnostics \
+				transport_retains_native_source_errors_before_foreign_formatting \
+				native_transport_framing_and_decoder_fields_survive \
+				dictionary_and_key_envelope_errors_keep_native_fields \
+				reader_causes_survive_input_graph_and_streaming_owners \
+				reader_missing_catalog_keeps_ordered_native_cbor_fields \
+				reader_blob_budget_keeps_original_counts_and_priority \
+				diagnostic_native_owners_release_without_rendering_the_cause \
+				codec_selection_and_configuration_retain_original_values \
+				codec_native_corruption_and_budget_remain_distinct \
+				ulid_native_counts_and_decoder_causes_are_exact \
+				caller_messages_remain_message_data \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test mmr_preimages -- --exact \
 				streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
@@ -828,6 +861,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-deflate --test deflate_conformance -- --exact \
 				selected_backend_is_reported \
+				bad_crc_refused_in_first_and_second_member \
+				decompressed_limit_refuses_bomb \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_wasm_determinism -- --exact \
 				the_hand_values_are_reproduced_on_this_target \
