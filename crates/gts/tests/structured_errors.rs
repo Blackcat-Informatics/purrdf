@@ -349,7 +349,8 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     let samples: &[&[u8]] = &[b"", b""];
     let raw = raw_content_dict(samples, 1024).unwrap_err();
     let trained = trained_dict(samples, 1024, DictSeed::FromCorpus).unwrap_err();
-    assert_eq!(raw, trained);
+    assert_ne!(raw, trained, "the native authoring operations differ");
+    assert_eq!(raw.detail(), trained.detail());
     for (error, operation) in [(raw, "raw-content"), (trained, "train")] {
         let fields = Capture::read(&error);
         assert_eq!(fields.code, "gts-dictionary-empty-corpus");

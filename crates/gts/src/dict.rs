@@ -59,7 +59,7 @@ use structured_zstd::dictionary::{
 };
 
 /// A dictionary could not be built from the supplied corpus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DictError {
     /// All supplied samples were empty.
@@ -117,13 +117,6 @@ impl DictError {
         }
     }
 }
-
-impl PartialEq for DictError {
-    fn eq(&self, other: &Self) -> bool {
-        self.detail() == other.detail()
-    }
-}
-impl Eq for DictError {}
 
 impl core::fmt::Display for DictError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
