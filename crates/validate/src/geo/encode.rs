@@ -681,18 +681,23 @@ pub(super) fn term(
 fn exact_rational(value: &Rat, decode: &Decode<'_, '_, '_, '_>) -> Result<Value, GeoCallError> {
     match super::profile::exact_decimal(value, decode) {
         Ok(text) => Ok(Value::String(text)),
-        Err(GeoCallError::Engine(GeoError::Domain(_))) => Ok(Object::new()
-            .with_memory_cell(
-                "numerator",
-                decode.integer_text(&value.numerator())?,
-                decode.storage.memory(),
-            )?
-            .with_memory_cell(
-                "denominator",
-                decode.integer_text(&value.denominator())?,
-                decode.storage.memory(),
-            )?
-            .into()),
+        Err(GeoCallError::Engine(error))
+            if matches!(error.original(), GeoError::GeometryDomain(cause)
+                if matches!(&**cause, purrdf_geo_kernel::GeometryDomainError::NonDecimalParameter { .. })) =>
+        {
+            Ok(Object::new()
+                .with_memory_cell(
+                    "numerator",
+                    decode.integer_text(&value.numerator())?,
+                    decode.storage.memory(),
+                )?
+                .with_memory_cell(
+                    "denominator",
+                    decode.integer_text(&value.denominator())?,
+                    decode.storage.memory(),
+                )?
+                .into())
+        }
         Err(original) => Err(original),
     }
 }
