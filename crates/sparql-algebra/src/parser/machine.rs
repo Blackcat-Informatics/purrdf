@@ -1057,26 +1057,6 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
         ))
     }
 
-    /// Human-readable spelling of a SEP-0009 signature, for
-    /// [`ParseError::CdtArity`].
-    fn describe_cdt_arity(&mut self, arity: crate::algebra::CdtArity) -> Result<String> {
-        use crate::algebra::CdtArity;
-        Ok(match arity {
-            CdtArity::Fixed(1) => self.memory.string("exactly 1 argument")?,
-            CdtArity::Fixed(n) => self.memory.format(&format_args!("exactly {n} arguments"))?,
-            CdtArity::Range { min, max } => self
-                .memory
-                .format(&format_args!("{min} to {max} arguments"))?,
-            CdtArity::AtLeast(0) => self.memory.string("any number of arguments")?,
-            CdtArity::AtLeast(min) => self
-                .memory
-                .format(&format_args!("at least {min} arguments"))?,
-            CdtArity::Pairs => self
-                .memory
-                .string("an even number of arguments (key/value pairs)")?,
-        })
-    }
-
     /// An IRI in expression position: a function call when `(` follows, the IRI
     /// otherwise.
     fn iri_or_function(&mut self) -> Result<Step> {
@@ -1161,7 +1141,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 if !fn_kind.arity().admits(args.len()) {
                     return Err(ParseError::CdtArity {
                         iri,
-                        expected: self.describe_cdt_arity(fn_kind.arity())?,
+                        expected: fn_kind.arity(),
                         found: args.len(),
                         at,
                     });
@@ -1489,7 +1469,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             fold.order_by,
             fold.distinct,
         )
-        .map_err(|error| super::native_syntax(&error, self.span(), self.memory))?;
+        .map_err(|cause| ParseError::Aggregate {
+            cause,
+            at: self.span(),
+        })?;
         self.finish_aggregate(agg)
     }
 
