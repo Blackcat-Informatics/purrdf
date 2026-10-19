@@ -17,7 +17,12 @@ on:
       - crates/shapes/Cargo.toml
       - crates/shapes/src/**
       - crates/shapes/tests/rule_coordinates.rs
+      - crates/xsd/Cargo.toml
       - crates/xsd/src/**
+      - crates/xsd/tests/exact_governance.rs
+      - scripts/wasm-test-runner.sh
+      - scripts/check-wasm-test-runner.sh
+      - .github/actions/wasm-toolchain/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,6 +45,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - package: purrdf-xsd
+            target: exact_governance
           - package: purrdf-sparql-eval
             target: query_coordinates
           - package: purrdf-shapes
