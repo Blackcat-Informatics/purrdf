@@ -185,6 +185,26 @@ pub enum MarkdownError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for MarkdownError {
+    purrdf_hash::error_visit! {
+        InvalidUtf8 { valid_up_to } => "markdown-invalid-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
+        EmptySourceId => "markdown-empty-source-id" {},
+        InvalidSourceId { found } => "markdown-invalid-source-id" { "found" => Character(*found) },
+        RelativeSourceId { id } => "markdown-relative-source-id" { "id" => Iri(id) },
+        MalformedSourceId { id, cause } => "markdown-malformed-source-id" { "id" => Iri(id), "cause" => Cause(cause) },
+        InvalidVocabulary { field, iri } => "markdown-invalid-vocabulary" { "field" => Code(field), "iri" => Iri(iri) },
+        MalformedVocabulary { field, iri, cause } => "markdown-malformed-vocabulary" { "field" => Code(field), "iri" => Iri(iri), "cause" => Cause(cause) },
+        InvalidMaxBytes { max_bytes, least } => "markdown-invalid-max-bytes" { "max_bytes" => ByteCount(*max_bytes as u128), "least" => ByteCount(*least as u128) },
+        InvalidOverlap { overlap, max_bytes } => "markdown-invalid-overlap" { "overlap" => ByteCount(*overlap as u128), "max_bytes" => ByteCount(*max_bytes as u128) },
+        InvalidProfileName { found } => "markdown-invalid-profile-name" { "found" => Character(*found) },
+        InvalidCanonBase { base } => "markdown-invalid-canon-base" { "base" => Iri(base) },
+        MalformedCanonBase { base, cause } => "markdown-malformed-canon-base" { "base" => Iri(base), "cause" => Cause(cause) },
+        InvalidAnchor { anchor, verses } => "markdown-invalid-anchor" { "anchor" => Text(anchor), "first_verse" => Unsigned(u128::from(verses.0)), "last_verse" => Unsigned(u128::from(verses.1)) },
+        TamperedUnit { span, cause } => "markdown-tampered-unit" { "start" => ByteCount(u128::from(span.0)), "end" => ByteCount(u128::from(span.1)), "cause" => Cause(cause) },
+        CoverDefect { cause } => "markdown-cover-defect" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for MarkdownError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

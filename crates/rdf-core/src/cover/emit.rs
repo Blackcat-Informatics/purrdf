@@ -26,6 +26,13 @@ pub enum EmitError {
     Cover(ReconstructError),
 }
 
+impl purrdf_hash::error::StructuredError for EmitError {
+    purrdf_hash::error_visit! {
+        Range { start, end, byte_length } => "cover-emit-range" { "start" => ByteCount(u128::from(*start)), "end" => ByteCount(u128::from(*end)), "byte_length" => ByteCount(u128::from(*byte_length)) },
+        Cover(cause) => "cover-emit-cover" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for EmitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
