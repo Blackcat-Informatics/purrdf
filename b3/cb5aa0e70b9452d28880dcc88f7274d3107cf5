@@ -1,0 +1,17 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: f8251295df2c515251c4b3bbe4199fc92c751edc
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 631
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/631
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: de30c8f54044015b98d25a9a5e4bc3376dda82bd
+GhpRsq-Head-Ref: delivery/628-resident-diagnostic-refusal
+GhpRsq-Head-OID: f8251295df2c515251c4b3bbe4199fc92c751edc
+GhpRsq-Result-Tree: 488a103e8efda3849a2dc2f6668054ae91a1328c
+GhpRsq-Result-Commit: b3cb5aa0e70b9452d28880dcc88f7274d3107cf5
+GhpRsq-Parent-Hashes: f8251295df2c515251c4b3bbe4199fc92c751edc
+GhpRsq-Squash-Notes-SHA256: e1328ad860d29c11cab5caf9f1e10c248dcfd80a8063aff253c63939583a2481
