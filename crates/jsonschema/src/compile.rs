@@ -67,12 +67,12 @@ pub(crate) fn compile_unchecked(
 ) -> Result<(Schema, BTreeSet<usize>), SchemaError> {
     let parsed = purrdf_iri::parse(uri).map_err(|error| SchemaError::InvalidUri {
         uri: uri.to_owned(),
-        reason: error.to_string(),
+        reason: crate::UriRefusal::Parse(error),
     })?;
     if !parsed.has_scheme() {
         return Err(SchemaError::InvalidUri {
             uri: uri.to_owned(),
-            reason: "a schema is compiled from an absolute URI".to_owned(),
+            reason: crate::UriRefusal::CompilationRelative,
         });
     }
     let location = registry
@@ -172,7 +172,7 @@ pub(crate) fn check(validator: &Schema, document: &Document) -> Result<(), Schem
                 (
                     unit.keyword_location.clone(),
                     unit.instance_location.clone(),
-                    unit.error.clone().unwrap_or_default(),
+                    unit.error.clone(),
                 )
             })
             .collect(),
@@ -200,10 +200,18 @@ fn at(location: &str, keyword: &str) -> String {
     )
 }
 
-fn invalid(location: &str, keyword: &str, reason: &str) -> SchemaError {
+fn invalid(
+    location: &str,
+    keyword: &str,
+    value: &Value,
+    expected: crate::KeywordRequirement,
+) -> SchemaError {
     SchemaError::InvalidKeyword {
         location: at(location, keyword),
-        reason: reason.to_owned(),
+        reason: crate::KeywordRefusal::Requirement {
+            expected,
+            actual: value.clone(),
+        },
     }
 }
 
@@ -313,7 +321,10 @@ impl Compiler<'_> {
             _ => {
                 return Err(SchemaError::InvalidKeyword {
                     location: absolute,
-                    reason: "a schema must be an object or a boolean".to_owned(),
+                    reason: crate::KeywordRefusal::Requirement {
+                        expected: crate::KeywordRequirement::Schema,
+                        actual: value.clone(),
+                    },
                 });
             }
         };
@@ -332,7 +343,12 @@ impl Compiler<'_> {
         value: &Value,
     ) -> Result<(NodeId, String), SchemaError> {
         let Some(reference) = value.as_str() else {
-            return Err(invalid(context.absolute, keyword, "must be a string"));
+            return Err(invalid(
+                context.absolute,
+                keyword,
+                value,
+                crate::KeywordRequirement::String,
+            ));
         };
         let resolved = crate::registry::resolve(context.base, reference)?;
         let target = self
@@ -352,7 +368,8 @@ impl Compiler<'_> {
             return Err(invalid(
                 context.absolute,
                 keyword,
-                "must be a non-empty array of schemas",
+                value,
+                crate::KeywordRequirement::NonEmptySchemas,
             ));
         };
         Ok((0..items.len())
@@ -370,7 +387,8 @@ impl Compiler<'_> {
             return Err(invalid(
                 context.absolute,
                 keyword,
-                "must be an object of schemas",
+                value,
+                crate::KeywordRequirement::ObjectSchemas,
             ));
         };
         Ok(map
@@ -395,7 +413,12 @@ impl Compiler<'_> {
     /// `format`: its name, and the check when it asserts here.
     fn format(&self, context: &Context<'_>, value: &Value) -> Result<Kind, SchemaError> {
         let Some(format) = value.as_str() else {
-            return Err(invalid(context.absolute, "format", "must be a string"));
+            return Err(invalid(
+                context.absolute,
+                "format",
+                value,
+                crate::KeywordRequirement::String,
+            ));
         };
         let vocabularies = context.vocabularies;
         let check = if vocabularies.has(Vocabulary::FormatAssertion) {
@@ -423,7 +446,8 @@ impl Compiler<'_> {
             return Err(invalid(
                 context.absolute,
                 "$recursiveRef",
-                "the only value 2019-09 defines for `$recursiveRef` is \"#\"",
+                value,
+                crate::KeywordRequirement::RecursiveReference,
             ));
         }
         let (target, _) = self.reference(context, "$recursiveRef", value)?;
@@ -503,7 +527,12 @@ impl Compiler<'_> {
                 "type" if validation => Some((&mut assertions, Kind::Type(types(context, value)?))),
                 "enum" if validation => {
                     let Some(values) = value.as_array() else {
-                        return Err(invalid(context.absolute, keyword, "must be an array"));
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            value,
+                            crate::KeywordRequirement::Array,
+                        ));
                     };
                     Some((&mut assertions, Kind::Enum(values.clone())))
                 }
@@ -511,7 +540,12 @@ impl Compiler<'_> {
                 "multipleOf" if validation => {
                     let number = number(context, keyword, value)?;
                     if !number.is_positive() {
-                        return Err(invalid(context.absolute, keyword, "must be greater than 0"));
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            value,
+                            crate::KeywordRequirement::Positive,
+                        ));
                     }
                     Some((&mut assertions, Kind::MultipleOf(number, value.clone())))
                 }
@@ -541,7 +575,12 @@ impl Compiler<'_> {
                 )),
                 "pattern" if validation => {
                     let Some(source) = value.as_str() else {
-                        return Err(invalid(context.absolute, keyword, "must be a string"));
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            value,
+                            crate::KeywordRequirement::String,
+                        ));
                     };
                     Some((
                         &mut assertions,
@@ -559,7 +598,14 @@ impl Compiler<'_> {
                 "uniqueItems" if validation => match value.as_bool() {
                     Some(true) => Some((&mut assertions, Kind::UniqueItems)),
                     Some(false) => None,
-                    None => return Err(invalid(context.absolute, keyword, "must be a boolean")),
+                    None => {
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            value,
+                            crate::KeywordRequirement::Boolean,
+                        ));
+                    }
                 },
                 "maxProperties" if validation => Some((
                     &mut assertions,
@@ -641,7 +687,12 @@ impl Compiler<'_> {
                     // meta-schemas still describe: array members are
                     // `dependentRequired`, schema members `dependentSchemas`.
                     let Some(members) = value.as_object() else {
-                        return Err(invalid(context.absolute, keyword, "must be an object"));
+                        return Err(invalid(
+                            context.absolute,
+                            keyword,
+                            value,
+                            crate::KeywordRequirement::Object,
+                        ));
                     };
                     let mut required = Vec::new();
                     let mut schemas = Vec::new();
@@ -831,17 +882,28 @@ struct Context<'a> {
 }
 
 fn number(context: &Context<'_>, keyword: &str, value: &Value) -> Result<Decimal, SchemaError> {
-    value
-        .as_number()
-        .map(crate::number::exact)
-        .ok_or_else(|| invalid(context.absolute, keyword, "must be a number"))
+    value.as_number().map(crate::number::exact).ok_or_else(|| {
+        invalid(
+            context.absolute,
+            keyword,
+            value,
+            crate::KeywordRequirement::Number,
+        )
+    })
 }
 
 fn count(context: &Context<'_>, keyword: &str, value: &Value) -> Result<u64, SchemaError> {
     value
         .as_number()
         .and_then(|number| crate::number::exact(number).to_u64_saturating())
-        .ok_or_else(|| invalid(context.absolute, keyword, "must be a non-negative integer"))
+        .ok_or_else(|| {
+            invalid(
+                context.absolute,
+                keyword,
+                value,
+                crate::KeywordRequirement::NonNegativeInteger,
+            )
+        })
 }
 
 fn strings(
@@ -857,7 +919,14 @@ fn strings(
                 .map(|item| item.as_str().map(ToOwned::to_owned))
                 .collect::<Option<Vec<_>>>()
         })
-        .ok_or_else(|| invalid(context.absolute, keyword, "must be an array of strings"))
+        .ok_or_else(|| {
+            invalid(
+                context.absolute,
+                keyword,
+                value,
+                crate::KeywordRequirement::Strings,
+            )
+        })
 }
 
 fn dependent_required(
@@ -869,7 +938,8 @@ fn dependent_required(
         return Err(invalid(
             context.absolute,
             keyword,
-            "must be an object of string arrays",
+            value,
+            crate::KeywordRequirement::ObjectStringArrays,
         ));
     };
     members
@@ -886,9 +956,14 @@ fn types(context: &Context<'_>, value: &Value) -> Result<Vec<JsonType>, SchemaEr
     names
         .into_iter()
         .map(|name| {
-            name.as_str()
-                .and_then(JsonType::parse)
-                .ok_or_else(|| invalid(context.absolute, "type", "must name JSON Schema types"))
+            name.as_str().and_then(JsonType::parse).ok_or_else(|| {
+                invalid(
+                    context.absolute,
+                    "type",
+                    name,
+                    crate::KeywordRequirement::TypeNames,
+                )
+            })
         })
         .collect()
 }

@@ -9,7 +9,9 @@
 
 use std::fmt::Write as _;
 
-use super::{Ast, Class, ClassItem, MAX_GROUP_NESTING, PatternError, Property, property_ranges};
+use super::{
+    Ast, Class, ClassItem, MAX_GROUP_NESTING, PatternError, PatternLimit, Property, property_ranges,
+};
 
 /// ECMA-262 `LineTerminator` (§12.3): LF, CR, LS, PS — `.` matches every
 /// other code point.
@@ -44,7 +46,10 @@ fn write_ast(ast: &Ast, out: &mut String, depth: usize) -> Result<(), PatternErr
     if depth > MAX_GROUP_NESTING {
         return Err(PatternError::Resource {
             offset: 0,
-            message: format!("group nesting exceeds {MAX_GROUP_NESTING}"),
+            reason: PatternLimit::GroupNesting {
+                depth,
+                maximum: MAX_GROUP_NESTING,
+            },
         });
     }
     match ast {

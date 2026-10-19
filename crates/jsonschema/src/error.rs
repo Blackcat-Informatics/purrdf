@@ -14,6 +14,90 @@ use std::fmt;
 
 use crate::ecma::PatternError;
 
+mod keyword;
+pub use keyword::{IdentifierRefusal, KeywordRefusal, KeywordRequirement};
+
+/// Original URI grammar, resolution or schema-location refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UriRefusal {
+    /// The original URI grammar refusal.
+    Parse(purrdf_iri::IriError),
+    /// Resolving against the original base failed.
+    Resolve {
+        /// Base URI used by the resolver.
+        base: String,
+        /// Original resolver cause.
+        cause: purrdf_iri::IriError,
+    },
+    /// A compiled schema must have an absolute location.
+    CompilationRelative,
+    /// A registered resource must have an absolute retrieval location.
+    RetrievalRelative,
+    /// A resource location cannot carry a nonempty fragment.
+    Fragment,
+}
+
+impl purrdf_hash::error::StructuredError for UriRefusal {
+    purrdf_hash::error_visit! {
+        Parse(cause) => "schema-uri-parse" { "cause" => Cause(cause) },
+        Resolve { base, cause } => "schema-uri-resolve" { "base" => Iri(base), "cause" => Cause(cause) },
+        CompilationRelative => "schema-uri-compilation-relative" {},
+        RetrievalRelative => "schema-uri-retrieval-relative" {},
+        Fragment => "schema-uri-fragment" {},
+    }
+}
+
+impl fmt::Display for UriRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(cause) | Self::Resolve { cause, .. } => cause.fmt(f),
+            Self::CompilationRelative => f.write_str("a schema is compiled from an absolute URI"),
+            Self::RetrievalRelative => f.write_str("a retrieval URI must be absolute"),
+            Self::Fragment => f.write_str("a resource URI may not carry a non-empty fragment"),
+        }
+    }
+}
+
+impl Error for UriRefusal {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parse(cause) | Self::Resolve { cause, .. } => Some(cause),
+            Self::CompilationRelative | Self::RetrievalRelative | Self::Fragment => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn schema_resolution_retains_original_uri_and_base_after_input_death() {
+        let base = String::from("https://example.org/schema");
+        let reference = String::from("https://[invalid");
+        let error = crate::registry::resolve(&base, &reference).unwrap_err();
+        let expected = purrdf_iri::parse(&reference).unwrap_err();
+        drop(base);
+        drop(reference);
+        let retained = error.clone();
+        drop(error);
+        let fields = Capture::read(&retained);
+        assert!(matches!(
+            fields.field("uri"),
+            ErrorValue::Iri("https://[invalid")
+        ));
+        let reason = fields.child("reason");
+        assert_eq!(reason.code, "schema-uri-resolve");
+        assert!(matches!(
+            reason.field("base"),
+            ErrorValue::Iri("https://example.org/schema")
+        ));
+        assert_eq!(reason.child("cause").code, Capture::read(&expected).code);
+        assert!(std::error::Error::source(&retained).is_some());
+    }
+}
+
 /// Why an evaluation stopped without reaching a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvaluationCause {
@@ -23,6 +107,13 @@ pub enum EvaluationCause {
     /// More than [`crate::MAX_REF_CHAIN`] references were followed in a row
     /// at one instance location.
     ReferenceChain,
+}
+
+impl purrdf_hash::error::StructuredError for EvaluationCause {
+    purrdf_hash::error_visit! {
+        Pattern(cause) => "schema-evaluation-pattern" { "cause" => Cause(cause) },
+        ReferenceChain => "schema-evaluation-reference-chain" { "limit" => Unsigned(crate::MAX_REF_CHAIN as u128) },
+    }
 }
 
 impl fmt::Display for EvaluationCause {
@@ -48,6 +139,14 @@ pub struct EvaluationError {
     pub instance_location: String,
     /// The bound that was hit.
     pub cause: EvaluationCause,
+}
+
+impl purrdf_hash::error::StructuredError for EvaluationError {
+    purrdf_hash::error_visit! {
+        @record self { keyword_location, instance_location, cause } => "schema-evaluation-error" {
+            "keyword_location" => Iri(&self.keyword_location), "instance_location" => Text(&self.instance_location), "cause" => Cause(&self.cause)
+        }
+    }
 }
 
 impl fmt::Display for EvaluationError {
@@ -80,7 +179,7 @@ pub enum SchemaError {
         /// The URI or reference as given.
         uri: String,
         /// What is wrong with it.
-        reason: String,
+        reason: UriRefusal,
     },
     /// A reference (or the URI asked to be compiled) resolves to a location
     /// that no registered resource provides.
@@ -105,17 +204,21 @@ pub enum SchemaError {
         /// The URI of the refused document.
         uri: String,
         /// Each failure the meta-schema reported, as
-        /// `(keyword location, instance location, message)`: where in the
+        /// `(keyword location, instance location, native reason)`: where in the
         /// meta-schema the failing keyword is, where in the refused document
-        /// the failing value is, and what the meta-schema said about it.
-        errors: Vec<(String, String, String)>,
+        /// the failing value is, and the original keyword's typed refusal.
+        errors: Vec<(
+            String,
+            String,
+            Option<std::sync::Arc<crate::ValidationRefusal>>,
+        )>,
     },
     /// A keyword's value is malformed in a way that prevents compiling it.
     InvalidKeyword {
         /// The absolute location of the keyword.
         location: String,
         /// What is wrong with its value.
-        reason: String,
+        reason: KeywordRefusal,
     },
     /// A `pattern` or `patternProperties` regular expression could not be
     /// compiled as an ECMA-262 regular expression.
@@ -161,7 +264,7 @@ pub enum SchemaError {
         /// The absolute location of the identifying keyword.
         location: String,
         /// What is wrong with it.
-        reason: String,
+        reason: IdentifierRefusal,
     },
 }
 
@@ -228,15 +331,15 @@ impl SchemaError {
                     "the schema `{uri}` does not conform to its meta-schema \
                      ({count} {noun})"
                 )?;
-                for (keyword, instance, message) in errors {
+                for (keyword, instance, reason) in errors {
                     let instance = if instance.is_empty() {
                         "the document root"
                     } else {
                         instance
                     };
                     write!(f, "\n  - at {instance} (meta-schema keyword {keyword})")?;
-                    if !message.is_empty() {
-                        write!(f, ": {message}")?;
+                    if let Some(reason) = reason {
+                        write!(f, ": {reason}")?;
                     }
                 }
                 Ok(())
@@ -294,8 +397,108 @@ impl fmt::Display for SchemaError {
 impl Error for SchemaError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Evaluation(cause) => Some(cause),
             Self::Pattern { error, .. } => Some(error),
+            Self::InvalidUri { reason, .. } => Some(reason),
+            Self::InvalidKeyword { reason, .. } => Some(reason),
+            Self::InvalidIdentifier { reason, .. } => Some(reason),
             _ => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SchemaError {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        match self {
+            Self::Evaluation(cause) => {
+                visitor.variant("schema-evaluation");
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
+            }
+            Self::InvalidUri { uri, reason } => {
+                visitor.variant("schema-invalid-uri");
+                visitor.value(Some("uri"), ErrorValue::Iri(uri));
+                visitor.value(Some("reason"), ErrorValue::Cause(reason));
+            }
+            Self::UnresolvedReference {
+                location,
+                reference,
+                resolved,
+            } => {
+                visitor.variant("schema-unresolved-reference");
+                visitor.value(Some("location"), ErrorValue::Iri(location));
+                visitor.value(Some("reference"), ErrorValue::Iri(reference));
+                visitor.value(Some("resolved"), ErrorValue::Iri(resolved));
+            }
+            Self::MissingMetaschema {
+                metaschema,
+                resource,
+            } => {
+                visitor.variant("schema-missing-metaschema");
+                visitor.value(Some("metaschema"), ErrorValue::Iri(metaschema));
+                visitor.value(Some("resource"), ErrorValue::Iri(resource));
+            }
+            Self::InvalidSchema { uri, errors } => {
+                visitor.variant("schema-invalid-schema");
+                visitor.value(Some("uri"), ErrorValue::Iri(uri));
+                visitor.begin_list(Some("errors"), errors.len());
+                for (keyword, instance, reason) in errors {
+                    visitor.begin_record(None, "schema-validation-finding");
+                    visitor.value(Some("keyword_location"), ErrorValue::Iri(keyword));
+                    visitor.value(Some("instance_location"), ErrorValue::Text(instance));
+                    visitor.value(
+                        Some("reason"),
+                        match reason {
+                            Some(reason) => ErrorValue::Cause(&**reason),
+                            None => ErrorValue::Absent,
+                        },
+                    );
+                    visitor.end_record();
+                }
+                visitor.end_list();
+            }
+            Self::InvalidKeyword { location, reason } => {
+                visitor.variant("schema-invalid-keyword");
+                visitor.value(Some("location"), ErrorValue::Iri(location));
+                visitor.value(Some("reason"), ErrorValue::Cause(reason));
+            }
+            Self::Pattern {
+                location,
+                pattern,
+                error,
+            } => {
+                visitor.variant("schema-pattern");
+                visitor.value(Some("location"), ErrorValue::Iri(location));
+                visitor.value(Some("pattern"), ErrorValue::Text(pattern));
+                visitor.value(Some("error"), ErrorValue::Cause(error));
+            }
+            Self::UnsupportedFormat { location, format } => {
+                visitor.variant("schema-unsupported-format");
+                visitor.value(Some("location"), ErrorValue::Iri(location));
+                visitor.value(Some("format"), ErrorValue::Text(format));
+            }
+            Self::DuplicateResource { uri } => {
+                visitor.variant("schema-duplicate-resource");
+                visitor.value(Some("uri"), ErrorValue::Iri(uri));
+            }
+            Self::UnsupportedDialect { resource, dialect } => {
+                visitor.variant("schema-unsupported-dialect");
+                visitor.value(Some("resource"), ErrorValue::Iri(resource));
+                visitor.value(Some("dialect"), ErrorValue::Iri(dialect));
+            }
+            Self::UnsupportedVocabulary {
+                metaschema,
+                vocabulary,
+            } => {
+                visitor.variant("schema-unsupported-vocabulary");
+                visitor.value(Some("metaschema"), ErrorValue::Iri(metaschema));
+                visitor.value(Some("vocabulary"), ErrorValue::Iri(vocabulary));
+            }
+            Self::InvalidIdentifier { location, reason } => {
+                visitor.variant("schema-invalid-identifier");
+                visitor.value(Some("location"), ErrorValue::Iri(location));
+                visitor.value(Some("reason"), ErrorValue::Cause(reason));
+            }
         }
     }
 }

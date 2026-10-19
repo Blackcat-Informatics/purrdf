@@ -35,7 +35,7 @@ use crate::ecma::{self, CompiledPattern, MatchLimits, PatternError};
 use crate::error::{EvaluationCause, EvaluationError};
 use crate::format::Format;
 use crate::number::Decimal;
-use crate::output::{Output, OutputUnit};
+use crate::output::{Output, OutputUnit, ValidationRefusal};
 use crate::pointer;
 use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
 use crate::unique_items;
@@ -170,7 +170,7 @@ impl State {
 }
 
 /// A keyword's verdict: its annotation when it passed, its error when not.
-type Verdict = Result<Option<Value>, String>;
+type Verdict = Result<Option<Value>, ValidationRefusal>;
 
 /// The value a subschema is applied to.
 #[derive(Clone)]
@@ -615,7 +615,7 @@ impl<'s> Evaluator<'s> {
                     Box::new(self.unit(
                         node,
                         false,
-                        Some("the false schema accepts nothing".to_owned()),
+                        Some(ValidationRefusal::FalseSchema),
                         Vec::new(),
                     ))
                 }),
@@ -810,7 +810,7 @@ impl<'s> Evaluator<'s> {
         &self,
         node: &Node,
         valid: bool,
-        error: Option<String>,
+        error: Option<ValidationRefusal>,
         children: Vec<OutputUnit>,
     ) -> OutputUnit {
         OutputUnit {
@@ -818,7 +818,7 @@ impl<'s> Evaluator<'s> {
             keyword_location: self.keyword_path.clone(),
             absolute_keyword_location: node.location.clone(),
             instance_location: self.instance_path.clone(),
-            error,
+            error: error.map(std::sync::Arc::new),
             annotation: None,
             children,
         }
@@ -833,7 +833,7 @@ impl<'s> Evaluator<'s> {
     ) -> OutputUnit {
         let (valid, error, annotation) = match verdict {
             Ok(annotation) => (true, None, annotation),
-            Err(error) => (false, Some(error), None),
+            Err(error) => (false, Some(std::sync::Arc::new(error)), None),
         };
         OutputUnit {
             valid,
@@ -1039,10 +1039,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if outcome.valid {
                     Ok(None)
                 } else {
-                    Err(format!(
-                        "the referenced schema {} failed",
-                        self.schema.nodes[target].location
-                    ))
+                    Err(ValidationRefusal::Reference {
+                        target: self.schema.nodes[target].location.clone(),
+                    })
                 })
             }
             Cursor::Conditional {
@@ -1082,7 +1081,7 @@ impl<'s> Evaluator<'s> {
                         let verdict = if outcome.valid {
                             Ok(None)
                         } else {
-                            Err(format!("the `{name}` subschema failed"))
+                            Err(ValidationRefusal::Branch { name })
                         };
                         if output {
                             let unit = self.keyword_unit(node, name, verdict.clone(), children);
@@ -1103,7 +1102,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(*index);
                         if !output {
-                            return Resume::Done(Err(format!("subschemas {failed:?} failed")));
+                            return Resume::Done(Err(ValidationRefusal::AllOf {
+                                failed: std::mem::take(failed),
+                            }));
                         }
                     }
                     *index += 1;
@@ -1119,7 +1120,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     Ok(None)
                 } else {
-                    Err(format!("subschemas {failed:?} failed"))
+                    Err(ValidationRefusal::AllOf {
+                        failed: std::mem::take(failed),
+                    })
                 })
             }
             Cursor::AnyOf {
@@ -1144,7 +1147,7 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if *any {
                     Ok(None)
                 } else {
-                    Err("no subschema passed".to_owned())
+                    Err(ValidationRefusal::NoSubschema)
                 })
             }
             Cursor::OneOf {
@@ -1176,14 +1179,16 @@ impl<'s> Evaluator<'s> {
                         state.absorb(outcome);
                         Ok(None)
                     }
-                    (0, _) => Err("no subschema passed".to_owned()),
-                    _ => Err(format!("more than one subschema passed: {passed:?}")),
+                    (0, _) => Err(ValidationRefusal::NoSubschema),
+                    _ => Err(ValidationRefusal::OneOf {
+                        passed: std::mem::take(passed),
+                    }),
                 })
             }
             Cursor::Not(schema) => match delivered {
                 None => Resume::Apply(Request::here(*schema, instance, false, Token::None)),
                 Some(outcome) => Resume::Done(if outcome.valid {
-                    Err("the value must not be valid against the subschema".to_owned())
+                    Err(ValidationRefusal::Not)
                 } else {
                     Ok(None)
                 }),
@@ -1199,9 +1204,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(dependencies[*index].0.as_str());
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "the dependent schemas of {failed:?} failed"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::DependentSchemas {
+                                failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                            }));
                         }
                     }
                     *index += 1;
@@ -1220,7 +1225,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     Ok(None)
                 } else {
-                    Err(format!("the dependent schemas of {failed:?} failed"))
+                    Err(ValidationRefusal::DependentSchemas {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
             Cursor::PrefixItems {
@@ -1237,9 +1244,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(*index);
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "items {failed:?} failed their prefix schemas"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::PrefixItems {
+                                failed: std::mem::take(failed),
+                            }));
                         }
                     }
                     *index += 1;
@@ -1253,9 +1260,9 @@ impl<'s> Evaluator<'s> {
                     ));
                 }
                 if !failed.is_empty() {
-                    return Resume::Done(Err(format!(
-                        "items {failed:?} failed their prefix schemas"
-                    )));
+                    return Resume::Done(Err(ValidationRefusal::PrefixItems {
+                        failed: std::mem::take(failed),
+                    }));
                 }
                 if *applied == 0 {
                     return Resume::Done(Ok(None));
@@ -1280,9 +1287,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(*index);
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "items {failed:?} failed the items schema"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::Items {
+                                failed: std::mem::take(failed),
+                            }));
                         }
                     }
                     *index += 1;
@@ -1296,7 +1303,9 @@ impl<'s> Evaluator<'s> {
                     ));
                 }
                 if !failed.is_empty() {
-                    return Resume::Done(Err(format!("items {failed:?} failed the items schema")));
+                    return Resume::Done(Err(ValidationRefusal::Items {
+                        failed: std::mem::take(failed),
+                    }));
                 }
                 Resume::Done(if items.len() > *skip {
                     self.annotate(Value::Bool(true))
@@ -1334,16 +1343,18 @@ impl<'s> Evaluator<'s> {
                 }
                 let found = matched.len() as u64;
                 if found < *min {
-                    return Resume::Done(Err(format!(
-                        "{found} items match the contains schema; at least {min} must"
-                    )));
+                    return Resume::Done(Err(ValidationRefusal::ContainsMinimum {
+                        found,
+                        minimum: *min,
+                    }));
                 }
                 if let Some(max) = max
                     && found > *max
                 {
-                    return Resume::Done(Err(format!(
-                        "{found} items match the contains schema; at most {max} may"
-                    )));
+                    return Resume::Done(Err(ValidationRefusal::ContainsMaximum {
+                        found,
+                        maximum: *max,
+                    }));
                 }
                 Resume::Done(self.annotate(if matched.len() == items.len() {
                     Value::Bool(true)
@@ -1371,9 +1382,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(name.as_str());
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "properties {failed:?} failed their schemas"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::Properties {
+                                failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                            }));
                         }
                     }
                 }
@@ -1392,7 +1403,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     self.annotate(Value::Array(std::mem::take(applied)))
                 } else {
-                    Err(format!("properties {failed:?} failed their schemas"))
+                    Err(ValidationRefusal::Properties {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
             Cursor::PatternProperties {
@@ -1411,9 +1424,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(name.as_str());
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "properties {failed:?} failed their pattern schemas"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::PatternProperties {
+                                failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                            }));
                         }
                     }
                     *pattern += 1;
@@ -1456,9 +1469,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     self.annotate(Value::Array(std::mem::take(applied)))
                 } else {
-                    Err(format!(
-                        "properties {failed:?} failed their pattern schemas"
-                    ))
+                    Err(ValidationRefusal::PatternProperties {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
             Cursor::AdditionalProperties {
@@ -1483,9 +1496,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(name.as_str());
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "additional properties {failed:?} are not allowed"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::AdditionalProperties {
+                                failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                            }));
                         }
                     }
                 }
@@ -1506,7 +1519,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     self.annotate(Value::Array(std::mem::take(applied)))
                 } else {
-                    Err(format!("additional properties {failed:?} are not allowed"))
+                    Err(ValidationRefusal::AdditionalProperties {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
             Cursor::PropertyNames {
@@ -1522,9 +1537,9 @@ impl<'s> Evaluator<'s> {
                     if !outcome.valid {
                         failed.push(name);
                         if !output {
-                            return Resume::Done(Err(format!(
-                                "property names {failed:?} are not valid"
-                            )));
+                            return Resume::Done(Err(ValidationRefusal::PropertyNames {
+                                failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                            }));
                         }
                     }
                 }
@@ -1541,7 +1556,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     Ok(None)
                 } else {
-                    Err(format!("property names {failed:?} are not valid"))
+                    Err(ValidationRefusal::PropertyNames {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
             Cursor::UnevaluatedItems {
@@ -1582,9 +1599,9 @@ impl<'s> Evaluator<'s> {
                     evaluated.fill(items.len());
                 }
                 if !failed.is_empty() {
-                    return Resume::Done(Err(format!(
-                        "unevaluated items {failed:?} are not allowed"
-                    )));
+                    return Resume::Done(Err(ValidationRefusal::UnevaluatedItems {
+                        failed: std::mem::take(failed),
+                    }));
                 }
                 Resume::Done(if *any {
                     self.annotate(Value::Bool(true))
@@ -1637,7 +1654,9 @@ impl<'s> Evaluator<'s> {
                 Resume::Done(if failed.is_empty() {
                     self.annotate(Value::Array(std::mem::take(applied)))
                 } else {
-                    Err(format!("unevaluated properties {failed:?} are not allowed"))
+                    Err(ValidationRefusal::UnevaluatedProperties {
+                        failed: failed.iter().map(|name| (*name).to_owned()).collect(),
+                    })
                 })
             }
         }
@@ -1658,11 +1677,9 @@ impl<'s> Evaluator<'s> {
             .iter()
             .any(|link| link.target == target && link.address == address)
         {
-            return Resume::Done(Err(format!(
-                "reference cycle: {} is re-entered at the same instance location without \
-                 consuming any of it",
-                self.schema.nodes[target].location
-            )));
+            return Resume::Done(Err(ValidationRefusal::ReferenceCycle {
+                target: self.schema.nodes[target].location.clone(),
+            }));
         }
         // The references being followed reach ever deeper values, so the
         // ones that reached this very value are the innermost run of them.
@@ -1672,10 +1689,9 @@ impl<'s> Evaluator<'s> {
         };
         if chain > MAX_REF_CHAIN {
             self.stop(EvaluationCause::ReferenceChain);
-            return Resume::Done(Err(format!(
-                "more than {MAX_REF_CHAIN} references are followed in a row at one \
-                 instance location"
-            )));
+            return Resume::Done(Err(ValidationRefusal::ReferenceChain {
+                maximum: MAX_REF_CHAIN,
+            }));
         }
         self.following.push(Link {
             target,
@@ -1689,7 +1705,10 @@ impl<'s> Evaluator<'s> {
     fn leaf(&mut self, kind: &Kind, instance: &Value) -> Verdict {
         match kind {
             Kind::Content(content) => match instance {
-                Value::String(text) => content.check(text).map(|()| None),
+                Value::String(text) => content
+                    .check(text)
+                    .map(|()| None)
+                    .map_err(ValidationRefusal::Content),
                 _ => Ok(None),
             },
             Kind::Type(types) => {
@@ -1697,100 +1716,129 @@ impl<'s> Evaluator<'s> {
                     Ok(None)
                 } else {
                     let names: Vec<&str> = types.iter().map(|wanted| wanted.name()).collect();
-                    Err(format!(
-                        "expected {}, found {}",
-                        names.join(" or "),
-                        type_name(instance)
-                    ))
+                    Err(ValidationRefusal::Type {
+                        expected: names,
+                        actual: type_name(instance),
+                    })
                 }
             }
             Kind::Enum(values) => {
                 if values.contains(instance) {
                     Ok(None)
                 } else {
-                    Err("the value is not one of the enumerated values".to_owned())
+                    Err(ValidationRefusal::Enum)
                 }
             }
             Kind::Const(value) => {
                 if *value == *instance {
                     Ok(None)
                 } else {
-                    Err(format!("the value must be {value}"))
+                    Err(ValidationRefusal::Const {
+                        value: value.clone(),
+                    })
                 }
             }
             Kind::MultipleOf(divisor, spelled) => number_check(instance, |value| {
-                value
-                    .is_multiple_of(divisor)
-                    .then_some(())
-                    .ok_or_else(|| format!("the number is not a multiple of {spelled}"))
+                value.is_multiple_of(divisor).then_some(()).ok_or_else(|| {
+                    ValidationRefusal::MultipleOf {
+                        divisor: spelled.clone(),
+                    }
+                })
             }),
             Kind::Maximum(bound, spelled) => number_check(instance, |value| {
                 (value <= *bound)
                     .then_some(())
-                    .ok_or_else(|| format!("the number exceeds the maximum {spelled}"))
+                    .ok_or_else(|| ValidationRefusal::Maximum {
+                        bound: spelled.clone(),
+                    })
             }),
             Kind::ExclusiveMaximum(bound, spelled) => number_check(instance, |value| {
-                (value < *bound).then_some(()).ok_or_else(|| {
-                    format!("the number is not below the exclusive maximum {spelled}")
-                })
+                (value < *bound)
+                    .then_some(())
+                    .ok_or_else(|| ValidationRefusal::ExclusiveMaximum {
+                        bound: spelled.clone(),
+                    })
             }),
             Kind::Minimum(bound, spelled) => number_check(instance, |value| {
                 (value >= *bound)
                     .then_some(())
-                    .ok_or_else(|| format!("the number is below the minimum {spelled}"))
+                    .ok_or_else(|| ValidationRefusal::Minimum {
+                        bound: spelled.clone(),
+                    })
             }),
             Kind::ExclusiveMinimum(bound, spelled) => number_check(instance, |value| {
-                (value > *bound).then_some(()).ok_or_else(|| {
-                    format!("the number is not above the exclusive minimum {spelled}")
-                })
+                (value > *bound)
+                    .then_some(())
+                    .ok_or_else(|| ValidationRefusal::ExclusiveMinimum {
+                        bound: spelled.clone(),
+                    })
             }),
             Kind::MaxLength(limit) => match instance {
                 Value::String(text) if text.chars().count() as u64 > *limit => {
-                    Err(format!("the string is longer than {limit} characters"))
+                    Err(ValidationRefusal::MaxLength {
+                        actual: text.chars().count(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
             Kind::MinLength(limit) => match instance {
                 Value::String(text) if (text.chars().count() as u64) < *limit => {
-                    Err(format!("the string is shorter than {limit} characters"))
+                    Err(ValidationRefusal::MinLength {
+                        actual: text.chars().count(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
             Kind::Pattern(pattern) => match instance {
-                Value::String(text) if !self.matches(&pattern.regex, text) => Err(format!(
-                    "the string does not match the pattern {:?}",
-                    pattern.source
-                )),
+                Value::String(text) if !self.matches(&pattern.regex, text) => {
+                    Err(ValidationRefusal::Pattern {
+                        pattern: pattern.source.clone(),
+                    })
+                }
                 _ => Ok(None),
             },
             Kind::MaxItems(limit) => match instance {
                 Value::Array(items) if items.len() as u64 > *limit => {
-                    Err(format!("the array has more than {limit} items"))
+                    Err(ValidationRefusal::MaxItems {
+                        actual: items.len(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
             Kind::MinItems(limit) => match instance {
                 Value::Array(items) if (items.len() as u64) < *limit => {
-                    Err(format!("the array has fewer than {limit} items"))
+                    Err(ValidationRefusal::MinItems {
+                        actual: items.len(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
             Kind::UniqueItems => match instance {
                 Value::Array(items) => match unique_items::first_duplicate(items) {
-                    Some((first, second)) => Err(format!("items {first} and {second} are equal")),
+                    Some((first, second)) => Err(ValidationRefusal::UniqueItems { first, second }),
                     None => Ok(None),
                 },
                 _ => Ok(None),
             },
             Kind::MaxProperties(limit) => match instance {
                 Value::Object(map) if map.len() as u64 > *limit => {
-                    Err(format!("the object has more than {limit} properties"))
+                    Err(ValidationRefusal::MaxProperties {
+                        actual: map.len(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
             Kind::MinProperties(limit) => match instance {
                 Value::Object(map) if (map.len() as u64) < *limit => {
-                    Err(format!("the object has fewer than {limit} properties"))
+                    Err(ValidationRefusal::MinProperties {
+                        actual: map.len(),
+                        limit: *limit,
+                    })
                 }
                 _ => Ok(None),
             },
@@ -1804,7 +1852,9 @@ impl<'s> Evaluator<'s> {
                     if missing.is_empty() {
                         Ok(None)
                     } else {
-                        Err(format!("missing required properties {missing:?}"))
+                        Err(ValidationRefusal::Required {
+                            missing: missing.into_iter().map(str::to_owned).collect(),
+                        })
                     }
                 }
                 _ => Ok(None),
@@ -1817,9 +1867,10 @@ impl<'s> Evaluator<'s> {
                                 .iter()
                                 .find(|name| !map.contains_key(name.as_str()))
                         {
-                            return Err(format!(
-                                "property {property:?} requires property {missing:?}"
-                            ));
+                            return Err(ValidationRefusal::DependentRequired {
+                                property: property.clone(),
+                                missing: missing.clone(),
+                            });
                         }
                     }
                     Ok(None)
@@ -1828,7 +1879,7 @@ impl<'s> Evaluator<'s> {
             },
             Kind::Format(name, check) => match (instance, check) {
                 (Value::String(text), Some(format)) if !self.format_matches(*format, text) => {
-                    Err(format!("the string is not a valid {name}"))
+                    Err(ValidationRefusal::Format { name: name.clone() })
                 }
                 _ => self.annotate(Value::String(name.clone())),
             },
@@ -1856,7 +1907,10 @@ impl<'s> Evaluator<'s> {
     }
 }
 
-fn number_check(instance: &Value, check: impl FnOnce(Decimal) -> Result<(), String>) -> Verdict {
+fn number_check(
+    instance: &Value,
+    check: impl FnOnce(Decimal) -> Result<(), ValidationRefusal>,
+) -> Verdict {
     match instance {
         Value::Number(number) => check(crate::number::exact(number)).map(|()| None),
         _ => Ok(None),
