@@ -26,6 +26,9 @@ use purrdf_testkit::harness::report_digest;
 use purrdf_xsd::math::FloatProductBackend;
 use std::sync::Arc;
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 // Certificates bind complete two-gauge area, actual selected-stratum
 // length/perimeter and the original matched-TM continuous-image laws.
 // Against the previous 0x3133ce37aba5ecb2 corpus of 65 records, the 65 shared
@@ -401,4 +404,90 @@ fn public_geo_capability_replay() {
     );
 }
 
-purrdf_testkit::harness_main!(public_geo_capability_replay);
+fn wide_coordinate_refusal_keeps_original_words_after_input_and_error_drop() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{Capture, Event};
+
+    // 2^512 + 1 exercises the heap coefficient rather than an inline scalar.
+    let numerator = purrdf_geo_kernel::Int::from_decimal_digits(
+        "13407807929942597099574024998205846127479365820592393377723561443721764030073546976801874298166903427690031858186486050853753882811946569946433649006084097",
+    )
+    .unwrap();
+    let longitude = Rat::new(numerator, purrdf_geo_kernel::Int::one()).unwrap();
+    let error = LonLat::new(longitude, Rat::zero()).unwrap_err();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes,
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    let fields = Capture::read(cloned.original());
+    assert_eq!(fields.code, "geo-coordinate-out-of-range");
+    assert!(matches!(
+        fields.field("axis"),
+        ErrorValue::Code("longitude")
+    ));
+    let ratio = fields.child("value").child("value").child("value");
+    assert_eq!(ratio.code, "xsd-rational");
+    assert!(matches!(
+        ratio.child("denominator").field("value"),
+        ErrorValue::Signed(1)
+    ));
+    let numerator = ratio.child("numerator").child("value");
+    assert_eq!(numerator.code, "xsd-binary-integer");
+    assert!(matches!(
+        numerator.field("negative"),
+        ErrorValue::Boolean(false)
+    ));
+    let words = numerator
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Unsigned(value)) => Some(*value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(words, [1, 0, 0, 0, 0, 0, 0, 0, 1]);
+}
+
+fn native_caller_refusal_keeps_full_width_fields_without_presentation() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+    let error = purrdf_geo_kernel::GeoError::native_source(CallerRefusal { limit: u128::MAX });
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes,
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    let fields = Capture::read(cloned.original())
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "caller-refused");
+    assert!(matches!(
+        fields.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+}
+
+purrdf_testkit::harness_main!(
+    public_geo_capability_replay,
+    wide_coordinate_refusal_keeps_original_words_after_input_and_error_drop,
+    native_caller_refusal_keeps_full_width_fields_without_presentation,
+);

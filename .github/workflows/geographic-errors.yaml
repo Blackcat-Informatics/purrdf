@@ -79,3 +79,43 @@ jobs:
             cargo test --locked -p purrdf-sparql-eval --lib "$prefix" || result=$?
           done
           exit "$result"
+      - name: Execute public replay and portable inspection controls natively
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: cargo test --locked -p purrdf-geo-kernel --test geo_determinism
+
+  wasm:
+    name: WASM geographic replay and error inspection
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-wasm
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+      - name: Set up the pinned WASM toolchain
+        uses: ./.github/actions/wasm-toolchain
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+          cargo -vV
+          wasm-bindgen --version
+          node --version
+      - name: Verify runner failure and host-seal controls
+        run: bash scripts/check-wasm-test-runner.sh
+      - name: Execute public replay and inspection on actual WASM
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: ${{ github.workspace }}/scripts/wasm-test-runner.sh
+        run: cargo test --locked --target wasm32-unknown-unknown -p purrdf-geo-kernel --test geo_determinism
