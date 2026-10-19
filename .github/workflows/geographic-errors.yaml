@@ -19,6 +19,7 @@ on:
       - crates/rdf-core/src/dataset_view.rs
       - crates/rdf-core/src/ir/term_walk.rs
       - crates/lex/src/json/read.rs
+      - crates/validate/src/geo/**
       - crates/xsd/src/**
 
 permissions:
@@ -74,7 +75,7 @@ jobs:
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
           result=0
-          for prefix in geo::error::tests:: geo::functions::standard_tests:: geo::relation::tests::; do
+          for prefix in geo::error::tests:: geo::functions::standard_tests:: geo::functions::tests:: geo::relation::tests::; do
             grep -Fq -- "$prefix" target/geographic-evaluator-test-inventory.txt
             cargo test --locked -p purrdf-sparql-eval --lib "$prefix" || result=$?
           done
@@ -82,6 +83,13 @@ jobs:
       - name: Execute public replay and portable inspection controls natively
         if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
         run: cargo test --locked -p purrdf-geo-kernel --test geo_determinism
+      - name: Execute geographic host refusal parameter controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          cargo test --locked -p purrdf-validate --lib -- --list > target/geographic-host-test-inventory.txt
+          case=geo::tests::scale_and_configuration_refusals_keep_machine_readable_original_parameters
+          grep -Fq -- "$case" target/geographic-host-test-inventory.txt
+          cargo test --locked -p purrdf-validate --lib "$case" -- --exact
 
   wasm:
     name: WASM geographic replay and error inspection

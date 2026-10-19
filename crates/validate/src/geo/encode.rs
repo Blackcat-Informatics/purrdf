@@ -803,12 +803,69 @@ pub(super) fn refusal(
                     fields = fields.with_memory_cell("roots", *roots, decode.storage.memory())?;
                     "ambiguous-transform"
                 }
-                GeoError::InvalidEllipsoid(reason) => {
-                    fields = fields.with_memory_cell("reason", *reason, decode.storage.memory())?;
+                GeoError::InvalidEllipsoid(cause) => {
+                    fields = fields
+                        .with_memory_cell(
+                            "reason",
+                            cause.requirement.message(),
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "semimajor",
+                            exact_rational(&cause.semimajor, decode)?,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "inverse_flattening",
+                            exact_rational(&cause.inverse_flattening, decode)?,
+                            decode.storage.memory(),
+                        )?;
                     "invalid-ellipsoid"
                 }
-                GeoError::InvalidExecutionPolicy(reason) => {
-                    fields = fields.with_memory_cell("reason", *reason, decode.storage.memory())?;
+                GeoError::InvalidExecutionPolicy(limits) => {
+                    let limits = Object::new()
+                        .with_memory_cell(
+                            "max_output_elements",
+                            limits.max_output_elements,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_work_items",
+                            limits.max_work_items,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_workspace_bytes",
+                            limits.max_workspace_bytes,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_iterations",
+                            limits.max_iterations,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_subdivision_levels",
+                            limits.max_subdivision_levels,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_precision_bits",
+                            limits.max_precision_bits,
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell(
+                            "max_scratch_destinations",
+                            limits.max_scratch_destinations,
+                            decode.storage.memory(),
+                        )?;
+                    fields = fields
+                        .with_memory_cell(
+                            "reason",
+                            error.detail().as_ref(),
+                            decode.storage.memory(),
+                        )?
+                        .with_memory_cell("limits", Value::from(limits), decode.storage.memory())?;
                     "invalid-policy"
                 }
                 GeoError::PrecisionExhausted { bits } => {

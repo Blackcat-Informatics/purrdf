@@ -1654,27 +1654,48 @@ fn scale_and_configuration_refusals_keep_machine_readable_original_parameters() 
         )
     });
     assert_eq!(record["target_metres"], "-2");
-    for (error, field, detail) in [
+    let error =
+        purrdf_geo_kernel::PreparedEllipsoid::new(Rat::from_i64(-2), Rat::from_i64(3)).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "invalid-ellipsoid");
+    assert_eq!(record["reason"], "semimajor axis must be positive");
+    assert_eq!(record["semimajor"], "-2");
+    assert_eq!(record["inverse_flattening"], "3");
+    let limits = purrdf_geo_kernel::ExecutionLimits {
+        max_precision_bits: 0,
+        max_work_items: u64::MAX,
+        ..purrdf_geo_kernel::ExecutionLimits::GEOMETRY
+    };
+    let error = purrdf_geo_kernel::ExecutionPolicy::new(limits).unwrap_err();
+    let record =
+        native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
+    assert_eq!(record["code"], "invalid-policy");
+    assert_eq!(record["reason"], "admission limits must be positive");
+    for (name, value) in [
+        ("max_output_elements", limits.max_output_elements),
+        ("max_work_items", limits.max_work_items),
+        ("max_workspace_bytes", limits.max_workspace_bytes),
+        ("max_iterations", u64::from(limits.max_iterations)),
         (
-            GeoError::InvalidEllipsoid("original axes must be positive"),
-            "reason",
-            "original axes must be positive",
+            "max_subdivision_levels",
+            u64::from(limits.max_subdivision_levels),
         ),
+        ("max_precision_bits", u64::from(limits.max_precision_bits)),
         (
-            GeoError::InvalidExecutionPolicy("precision must be positive"),
-            "reason",
-            "precision must be positive",
-        ),
-        (
-            GeoError::ArithmeticOverflow("complete output count"),
-            "operation",
-            "complete output count",
+            "max_scratch_destinations",
+            u64::from(limits.max_scratch_destinations),
         ),
     ] {
-        let record =
-            native_output(|decode| super::encode::refusal(&GeoCallError::Engine(error), decode));
-        assert_eq!(record[field], detail);
+        assert_eq!(record["limits"][name], Value::from(value));
     }
+    let record = native_output(|decode| {
+        super::encode::refusal(
+            &GeoCallError::Engine(GeoError::ArithmeticOverflow("complete output count")),
+            decode,
+        )
+    });
+    assert_eq!(record["operation"], "complete output count");
     let session = GeoSession::default();
     let record = response(
         &session,
