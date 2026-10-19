@@ -22,6 +22,15 @@ pub struct FixedInterval {
     precision_bits: u32,
 }
 
+impl purrdf_hash::error::StructuredError for FixedInterval {
+    purrdf_hash::error_visit! {
+        @record self { lower, upper, precision_bits } => "fixed-interval" {
+            "lower" => Record(&self.lower), "upper" => Record(&self.upper),
+            "precision_bits" => Unsigned(u128::from(self.precision_bits))
+        }
+    }
+}
+
 impl FixedInterval {
     /// Construct from exact scaled endpoint integers at the context's precision.
     ///

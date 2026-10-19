@@ -339,7 +339,7 @@ impl GeoRelation {
             if matches!(error.original(), GeoError::Cancelled) && meter.has_stopped() {
                 EvalError::WorkspaceStopped
             } else {
-                super::error::native_error(&error, workspace)
+                super::error::native_error(error, workspace)
             }
         })?;
         let bound = [args.get(SUBJECT), args.get(OBJECT)]
@@ -593,7 +593,7 @@ impl PfCursor for GeoCursor {
 ///
 /// # Errors
 ///
-/// [`GeoError::Config`] if `families` is empty. Registering nothing while
+/// [`GeoError::NoRelationFamilies`] if `families` is empty. Registering nothing while
 /// returning `Ok` looks like success, and the symptom arrives much later as a
 /// query whose `geo:sfWithin` was parsed as an ordinary triple pattern and
 /// matched nothing.
@@ -630,11 +630,7 @@ fn register_with(
     mut create: impl FnMut(SpatialRelation) -> GeoRelation,
 ) -> Result<(), GeoError> {
     if families.is_empty() {
-        return Err(GeoError::config(
-            "no relation families supplied to register; registering nothing and returning success \
-             would surface much later as a query whose geo: relation was parsed as an ordinary \
-             triple pattern and matched nothing",
-        ));
+        return Err(GeoError::NoRelationFamilies);
     }
     for relation in SpatialRelation::ALL {
         if !families.contains(&relation.family()) {
@@ -820,7 +816,7 @@ mod tests {
         };
         let refused = GeoIndex::from_dataset(&view(true), &vocab(), &config());
         assert!(
-            matches!(&refused, Err(error) if matches!(error.original(), GeoError::Config(message) if message.contains("does not name a term"))),
+            matches!(&refused, Err(error) if matches!(error.original(), GeoError::IndexBinding(cause) if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::ForeignTermId))),
             "{refused:?}"
         );
         let built = GeoIndex::from_dataset(&view(false), &vocab(), &config())
@@ -1369,7 +1365,8 @@ mod tests {
     fn an_empty_serialization_list_is_refused_and_a_one_element_list_is_not() {
         assert!(matches!(
             GeoIndexConfig::new(Vec::new(), GraphSelector::Any),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::NoSerializations))
         ));
         // The neighbouring VALID case.
         assert!(
@@ -1386,7 +1383,8 @@ mod tests {
             assert!(
                 matches!(
                     GeoIndexConfig::new(vec![bad.clone()], GraphSelector::Any),
-                    Err(GeoError::Config(_))
+                    Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                        if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::Property { position: 0, property } if property == &bad))
                 ),
                 "{bad:?} is not an IRI"
             );
@@ -1405,7 +1403,8 @@ mod tests {
         let repeated = vec![TermValue::iri(geo("asWKT")), TermValue::iri(geo("asWKT"))];
         assert!(matches!(
             GeoIndexConfig::new(repeated, GraphSelector::Any),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::RepeatedProperty { property } if property == &TermValue::iri(geo("asWKT"))))
         ));
         // The neighbouring VALID case.
         let distinct = vec![
@@ -1433,7 +1432,8 @@ mod tests {
                 vec![TermValue::iri(geo("asWKT"))],
                 GraphSelector::Named(TermValue::simple_literal("g1"))
             ),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexConfiguration(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexConfigError::Graph { name } if name == &TermValue::simple_literal("g1")))
         ));
 
         let in_graph = dataset_in(&four_branch_rows(), Some(GRAPH));
@@ -1574,19 +1574,19 @@ mod tests {
         )];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&foreign), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::CarrierInput(_))
         ));
 
         let not_a_literal = vec![row("g1", geo("asWKT"), node("g2"))];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&not_a_literal), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::IndexSerialization(_))
         ));
 
         let malformed = vec![row("g1", geo("asWKT"), wkt("POINT(1"))];
         assert!(matches!(
             GeoIndex::from_dataset(&*dataset_of(&malformed), &vocab(), &config()),
-            Err(GeoError::Literal(_))
+            Err(GeoError::WktSyntax(_))
         ));
 
         // The neighbouring VALID case.
@@ -1651,7 +1651,11 @@ mod tests {
         ]);
         let error = verify_binding(&index, &*other, &vocab(), &config())
             .expect_err("a different dataset must be caught");
-        assert!(matches!(error, GeoError::Config(_)), "got {error:?}");
+        assert!(
+            matches!(error.original(), GeoError::IndexBinding(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Source { expected, actual } if expected != actual)),
+            "got {error:?}"
+        );
         assert!(
             error.detail().contains("built over a different dataset"),
             "the refusal must say what it found: {error}"
@@ -1665,7 +1669,8 @@ mod tests {
                 .expect("a valid configuration");
         assert!(matches!(
             verify_binding(&index, &*source, &vocab(), &narrower),
-            Err(GeoError::Config(_))
+            Err(error) if matches!(error.original(), GeoError::IndexBinding(cause)
+                if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Configuration { expected, actual } if expected == index.config() && actual == &narrower))
         ));
     }
 
@@ -1676,9 +1681,17 @@ mod tests {
     fn registering_no_families_is_refused_and_registering_one_is_not() {
         let index = Arc::new(index_of(&four_branch_rows()));
         let mut empty = PropertyFunctionRegistry::new();
+        let refused = register(&mut empty, &vocab(), &index, &[]).unwrap_err();
+        assert!(matches!(refused, GeoError::NoRelationFamilies));
+        assert!(!refused.is_expression_error());
+        assert_eq!(
+            purrdf_testkit::error_capture::Capture::read(&refused).code,
+            "geo-no-relation-families"
+        );
         assert!(matches!(
-            register(&mut empty, &vocab(), &index, &[]),
-            Err(GeoError::Config(_))
+            EvalError::from(refused),
+            EvalError::RetainedNativeFailure(cause)
+                if cause.kind() == crate::NativeDiagnosticKind::Config
         ));
         assert!(empty.is_empty(), "and nothing was registered");
 
@@ -1944,7 +1957,8 @@ mod tests {
             let error = verify_binding(&index, &*other, &vocab(), &config())
                 .expect_err("a dataset differing below the integer must be caught");
             assert!(
-                matches!(error, GeoError::Config(_)),
+                matches!(error.original(), GeoError::IndexBinding(cause)
+                    if matches!(&**cause, purrdf_geo_kernel::IndexBindingError::Source { expected, actual } if expected != actual)),
                 "got {error:?} for {different}"
             );
         }

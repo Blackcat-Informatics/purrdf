@@ -99,6 +99,18 @@ pub enum Kind {
     Object,
 }
 
+impl purrdf_hash::error::StructuredError for Kind {
+    purrdf_hash::error_visit! {
+        Null => "json-kind-null" {},
+        True => "json-kind-true" {},
+        False => "json-kind-false" {},
+        Number => "json-kind-number" {},
+        String => "json-kind-string" {},
+        Array => "json-kind-array" {},
+        Object => "json-kind-object" {},
+    }
+}
+
 impl Kind {
     /// The kind's name: `null`, `true`, `false`, `number`, `string`, `array` or
     /// `object`.

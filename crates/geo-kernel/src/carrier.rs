@@ -88,13 +88,6 @@ pub(crate) fn boxed<T>(
     })
 }
 
-pub(crate) fn literal_error(
-    storage: Option<&CarrierStorage<'_>>,
-    message: core::fmt::Arguments<'_>,
-) -> GeoError {
-    text_error(storage, message, GeoError::Literal)
-}
-
 /// Render one stable typed text diagnostic under its original producer account.
 /// Fields must render without private allocations; numerical groups are prepared
 /// separately. The caller retains the account through error destruction.
@@ -277,9 +270,10 @@ fn parse_admitted(
 ///
 /// [`GeoError::Unsupported`] for `geo:gmlLiteral`, `geo:kmlLiteral` and
 /// `geo:dggsLiteral` — spec-defined datatypes whose codecs this crate does not
-/// have — naming the datatype. [`GeoError::Literal`] for any other datatype, for
-/// a non-literal term, and for a well-typed literal whose lexical form is
-/// malformed.
+/// have — naming the datatype. [`GeoError::CarrierInput`] retains any other
+/// datatype or non-literal term. [`GeoError::WktSyntax`] retains WKT grammar
+/// failures and [`GeoError::JsonSyntax`] retains JSON grammar failures.
+/// Structural and GeoJSON shape failures retain their literal-error channel.
 pub fn geometry_arg(vocab: &GeoVocab, value: &TermValue) -> Result<GeometryLiteral, GeoError> {
     geometry_arg_inner(vocab, value, None)
 }
@@ -315,20 +309,34 @@ pub fn geometry_argument_format(
     geometry_format(vocab, value, Some(storage))
 }
 
+/// Retain the original admitted input when its parsed owner is missing.
+/// Original datatype/type refusals keep priority over this producer invariant.
+#[must_use]
+pub fn missing_parsed_source_error(
+    vocab: &GeoVocab,
+    value: &TermValue,
+    storage: &CarrierStorage<'_>,
+) -> GeoError {
+    match geometry_format(vocab, value, Some(storage)) {
+        Err(original) => original,
+        Ok(_) => crate::CarrierInputError::capture(
+            value,
+            crate::CarrierInputReason::MissingParsedSource,
+            Some(storage),
+        ),
+    }
+}
+
 fn geometry_format(
     vocab: &GeoVocab,
     value: &TermValue,
     storage: Option<&CarrierStorage<'_>>,
 ) -> Result<CarrierFormat, GeoError> {
     let TermValue::Literal { datatype, .. } = value else {
-        return Err(literal_error(
+        return Err(crate::CarrierInputError::capture(
+            value,
+            crate::CarrierInputReason::ExpectedLiteral,
             storage,
-            format_args!(
-                "a geof: function takes a geometry literal and {} arrived; a geometry's datatype is \
-             what makes its lexical form a geometry rather than text, so purrdf-geo refuses \
-             rather than guessing a codec",
-                TermDescription(value)
-            ),
         ));
     };
     // `term_of` is a prefix strip plus a table scan over fixed strings, so this
@@ -337,24 +345,17 @@ fn geometry_format(
         Some(GeoTerm::WktLiteral) => Ok(CarrierFormat::Wkt),
         Some(GeoTerm::GeoJsonLiteral) => Ok(CarrierFormat::GeoJson),
         Some(term @ (GeoTerm::GmlLiteral | GeoTerm::KmlLiteral | GeoTerm::DggsLiteral)) => {
-            Err(text_error(
-                storage,
-                format_args!(
-                    "<{datatype}> is the geo:{} datatype, and purrdf-geo implements the WKT and \
-                 GeoJSON codecs only; it refuses rather than reading the lexical form as a \
-                 serialization it is not",
-                    term.local_name()
-                ),
-                GeoError::Unsupported,
-            ))
+            let datatype = with_storage(storage, |memory| memory.string(datatype))
+                .map_err(GeoError::Storage)?;
+            Err(GeoError::Unsupported(crate::UnsupportedRefusal::Datatype {
+                datatype,
+                term,
+            }))
         }
-        _ => Err(literal_error(
+        _ => Err(crate::CarrierInputError::capture(
+            value,
+            crate::CarrierInputReason::UnknownDatatype,
             storage,
-            format_args!(
-                "<{datatype}> is not a geometry datatype; a geof: function takes a geo:wktLiteral or \
-             a geo:geoJSONLiteral, and an xsd:string carrying the same characters is text rather \
-             than a geometry"
-            ),
         )),
     }
 }

@@ -174,7 +174,7 @@ pub use purrdf_core::GraphSelector;
 /// There is deliberately no [`Default`] implementation and there never will be
 /// one: a default would have to name the `geo:as*` serialization property IRIs,
 /// and PurRDF mints no vocabulary IRIs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GeoIndexConfig {
     /// The `geo:as*` serialization properties in play, sorted and known to be
     /// distinct IRIs.
@@ -183,7 +183,43 @@ pub struct GeoIndexConfig {
     graph: GraphSelector,
 }
 
+impl purrdf_hash::error::StructuredError for GeoIndexConfig {
+    purrdf_hash::error_visit! {
+        @record self { serializations, graph } => "geo-index-config" {
+            "serializations" => List(self.serializations.iter().map(|term| purrdf_hash::error::ErrorValue::Term(term))),
+            "graph" => Record(&self.graph)
+        }
+    }
+}
+
 impl GeoIndexConfig {
+    pub(crate) fn copy_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, GeoError> {
+        memory.try_scope(|memory| {
+            let copy = |term: &TermValue, memory: &mut purrdf_lex::allocation::Memory<'_, S>| {
+                let TermValue::Iri(iri) = term else {
+                    return Err(GeoError::InvalidNativeStorage(
+                        "index configuration contains a non-IRI",
+                    ));
+                };
+                memory
+                    .string(iri)
+                    .map(TermValue::Iri)
+                    .map_err(GeoError::Storage)
+            };
+            Ok(Self {
+                serializations: memory.try_map(&self.serializations, copy)?,
+                graph: match &self.graph {
+                    GraphSelector::Any => GraphSelector::Any,
+                    GraphSelector::Default => GraphSelector::Default,
+                    GraphSelector::Named(term) => GraphSelector::Named(copy(term, memory)?),
+                },
+            })
+        })
+    }
+
     /// A configuration over `serializations`, restricted to `graph`.
     ///
     /// `serializations` are the `geo:as*` property IRIs in play for this
@@ -193,49 +229,52 @@ impl GeoIndexConfig {
     ///
     /// # Errors
     ///
-    /// [`GeoError::Config`] if `serializations` is empty (PurRDF mints no
+    /// [`GeoError::IndexConfiguration`] if `serializations` is empty (PurRDF mints no
     /// vocabulary, so there is no default serialization property set to fall back
     /// on), if any entry is not an IRI (only an IRI can occupy the predicate
     /// position of an RDF statement, so anything else would index nothing while
     /// looking like it indexed something), if any entry is repeated (a repeat is
     /// a caller mistake, and silently deduplicating it hides the mistake), or if
     /// a [`GraphSelector::Named`] does not hold an IRI.
-    pub fn new(serializations: Vec<TermValue>, graph: GraphSelector) -> Result<Self, GeoError> {
+    pub fn new(mut serializations: Vec<TermValue>, graph: GraphSelector) -> Result<Self, GeoError> {
         if serializations.is_empty() {
-            return Err(GeoError::config(
-                "no serialization properties supplied; PurRDF mints no vocabulary, so there is no \
-                 default serialization property set to fall back on — name the geo:as* properties \
-                 your conformance class puts in play",
+            return Err(GeoError::resident_failure(
+                crate::IndexConfigError::NoSerializations,
+                GeoError::IndexConfiguration,
             ));
         }
-        for property in &serializations {
-            if !matches!(property, TermValue::Iri(_)) {
-                return Err(GeoError::config(format!(
-                    "serialization property {property:?} is not an IRI; only an IRI can occupy \
-                     the predicate position of an RDF statement"
-                )));
-            }
+        if let Some(position) = serializations
+            .iter()
+            .position(|property| !matches!(property, TermValue::Iri(_)))
+        {
+            let property = serializations.swap_remove(position);
+            return Err(GeoError::resident_failure(
+                crate::IndexConfigError::Property { position, property },
+                GeoError::IndexConfiguration,
+            ));
         }
         if let GraphSelector::Named(name) = &graph
             && !matches!(name, TermValue::Iri(_))
         {
-            return Err(GeoError::config(format!(
-                "named graph selector {name:?} is not an IRI"
-            )));
+            let GraphSelector::Named(name) = graph else {
+                unreachable!("the named graph selector was matched above");
+            };
+            return Err(GeoError::resident_failure(
+                crate::IndexConfigError::Graph { name },
+                GeoError::IndexConfiguration,
+            ));
         }
 
-        let mut serializations = serializations;
         serializations.sort();
-        for pair in serializations.windows(2) {
-            let [left, right] = pair else {
-                unreachable!("windows(2) yields pairs")
-            };
-            if left == right {
-                return Err(GeoError::config(format!(
-                    "serialization property {left:?} is listed more than once; a repeat is a \
-                     caller mistake, and silently deduplicating it would hide the mistake"
-                )));
-            }
+        if let Some(position) = serializations
+            .windows(2)
+            .position(|pair| pair[0] == pair[1])
+        {
+            let property = serializations.swap_remove(position);
+            return Err(GeoError::resident_failure(
+                crate::IndexConfigError::RepeatedProperty { property },
+                GeoError::IndexConfiguration,
+            ));
         }
 
         Ok(Self {
@@ -400,10 +439,11 @@ impl GeoIndex {
     ///   serialization property's object carries `geo:gmlLiteral`,
     ///   `geo:kmlLiteral` or `geo:dggsLiteral`. The caller put that property in
     ///   the conformance class, so skipping it silently would drop rows.
-    /// * [`GeoError::Literal`] if such an object is not a literal at all, or
-    ///   carries a datatype that is none of the five GeoSPARQL serializations, or
-    ///   is malformed for the datatype it does carry.
-    pub fn from_dataset<D: DatasetView>(
+    /// * [`GeoError::CarrierInput`] for a geometry argument with an unknown
+    ///   datatype. [`GeoError::WktSyntax`] for malformed WKT grammar.
+    ///   [`GeoError::IndexSerialization`] for a nonliteral serialization object;
+    ///   native reader and structural causes retain their declared carrier.
+    pub fn from_dataset<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
         dataset: &D,
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
@@ -419,7 +459,9 @@ impl GeoIndex {
     /// canonical ordering and fingerprint admission under the worker's policy.
     /// # Errors
     /// Adds operational work/storage/output refusal to [`Self::from_dataset`].
-    pub fn from_dataset_in_context<D: DatasetView>(
+    pub fn from_dataset_in_context<
+        D: DatasetView<ReadError: purrdf_hash::error::StructuredError>,
+    >(
         dataset: &D,
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
@@ -431,7 +473,7 @@ impl GeoIndex {
     /// Project the same exact dataset with bounded work/cancellation callbacks.
     /// # Errors
     /// Adds observer refusal to [`Self::from_dataset_in_context`].
-    pub fn from_dataset_metered<D: DatasetView>(
+    pub fn from_dataset_metered<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
         dataset: &D,
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
@@ -441,7 +483,7 @@ impl GeoIndex {
         Self::project_observed(dataset, vocab, config, context, Some(observer))
     }
 
-    fn project_observed<D: DatasetView>(
+    fn project_observed<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
         dataset: &D,
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
@@ -472,7 +514,7 @@ impl GeoIndex {
         }
     }
 
-    fn project_dataset<D: DatasetView>(
+    fn project_dataset<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
         dataset: &D,
         vocab: &GeoVocab,
         config: &GeoIndexConfig,
@@ -1161,18 +1203,16 @@ fn parse_serialization(
 ///
 /// # Errors
 ///
-/// [`GeoError::Config`] when the view hands back an id that is not its own — a
+/// [`GeoError::IndexBinding`] when the view hands back an id that is not its own — a
 /// literal whose datatype does not resolve to an IRI. The view is the host's
 /// wiring, so the refusal names it rather than indexing a term with an invented
 /// datatype.
 #[cfg(test)]
-fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, GeoError> {
-    dataset.term_value(id).map_err(|error| match error {
-        foreign @ purrdf_core::TermLookupError::ForeignId => {
-            GeoError::config(format!("the dataset view is inconsistent: {foreign}"))
-        }
-        purrdf_core::TermLookupError::Read(error) => GeoError::source_read(error.to_string()),
-    })
+fn resolve_value<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
+    dataset: &D,
+    id: D::Id,
+) -> Result<TermValue, GeoError> {
+    ProjectionWork::plain().resolve(dataset, id)
 }
 
 /// Turn the id-keyed accumulation into the sorted, deduplicated entry table.
@@ -1182,7 +1222,7 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, Ge
 /// orders would emit rows in different orders if the sort read ids. Subjects that
 /// resolve to the same value are coalesced, so the table is a strict total order
 /// and `GeoIndex::entry_of`'s binary search is exact.
-fn finish_entries<D: DatasetView>(
+fn finish_entries<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
     dataset: &D,
     mut by_subject: FastMap<D::Id, Vec<Keyed>>,
     work: &mut ProjectionWork<'_, '_>,
@@ -1326,7 +1366,7 @@ fn relation_position(relation: SpatialRelation) -> usize {
 /// iteration order — and each vector is sorted and deduplicated, because a
 /// duplicate asserted triple in the data is still one entailed triple and BGP
 /// matching over a set of triples yields one solution.
-fn collect_asserted<D: DatasetView>(
+fn collect_asserted<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
     dataset: &D,
     vocab: &GeoVocab,
     graph: GraphMatch<D::Id>,
@@ -1451,25 +1491,24 @@ fn fingerprint(
 ///
 /// # Errors
 ///
-/// * [`GeoError::Config`] if `config` is not the configuration `index` was built
+/// * [`GeoError::IndexBinding`] if `config` is not the configuration `index` was built
 ///   under. Projecting `dataset` under a different configuration would compare
 ///   two different questions, so the mismatch is reported rather than producing a
 ///   verdict that means nothing.
 /// * Whatever [`GeoIndex::from_dataset`] raises over `dataset` — which is itself
 ///   a wrong-dataset symptom when the index built cleanly.
-/// * [`GeoError::Config`] if the digests differ, naming both so a host can see
+/// * [`GeoError::IndexBinding`] if the digests differ, retaining both so a host can see
 ///   which pairing it made.
-pub fn verify_binding<D: DatasetView>(
+pub fn verify_binding<D: DatasetView<ReadError: purrdf_hash::error::StructuredError>>(
     index: &GeoIndex,
     dataset: &D,
     vocab: &GeoVocab,
     config: &GeoIndexConfig,
 ) -> Result<(), GeoError> {
     if config != index.config() {
-        return Err(GeoError::config(
-            "the configuration supplied to verify_binding is not the one this index was built \
-             under; the two would project different rows, so the comparison would answer a \
-             different question than the one asked",
+        return Err(crate::IndexBindingError::configuration(
+            index.config(),
+            config,
         ));
     }
     let rebuilt = GeoIndex::from_dataset(dataset, vocab, config)?;
@@ -1478,12 +1517,10 @@ pub fn verify_binding<D: DatasetView>(
     if expected == actual {
         return Ok(());
     }
-    Err(GeoError::config(format!(
-        "this GeoSPARQL index was built over a different dataset: its source digest is \
-         {expected:#018x} and the supplied dataset digests to {actual:#018x}. Rebuild the index \
-         from the dataset the query runs against, or pair the query with the dataset the index \
-         was built from — an index joined to the wrong dataset returns no rows and reports nothing"
-    )))
+    Err(GeoError::resident_failure(
+        crate::IndexBindingError::Source { expected, actual },
+        GeoError::IndexBinding,
+    ))
 }
 
 #[cfg(test)]

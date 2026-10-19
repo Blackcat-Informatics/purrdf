@@ -282,7 +282,11 @@ impl PreparedGeodesic {
         length: &Metres,
     ) -> Result<ArcIntervalView, GeoError> {
         if length.exact() < &Rat::zero() {
-            return Err(GeoError::domain("arc travel distance must be nonnegative"));
+            return Err(crate::MetricInputError::negative_travel(
+                length.exact(),
+                crate::TravelOperation::Arc,
+                &mut WorkProgress::integer(None),
+            ));
         }
         let angle = super::direct::normalize(azimuth, 0);
         let fields = ViewFields {
@@ -311,7 +315,11 @@ impl PreparedGeodesic {
     ) -> Result<ArcIntervalView, GeoError> {
         let mut admission = crate::numerical::ExactAdmission::new(context, progress);
         if length.exact().signum() < 0 {
-            return Err(GeoError::domain("arc travel distance must be nonnegative"));
+            return Err(crate::MetricInputError::negative_travel(
+                length.exact(),
+                crate::TravelOperation::Arc,
+                progress,
+            ));
         }
         let turn = Rat::from_i64(360);
         let angle = admission.expression(
@@ -392,13 +400,22 @@ impl PreparedGeodesic {
         let mut progress = WorkProgress::new(observer);
         let binding =
             crate::numerical::reference_identity(context, &mut progress, Some(&self.reference))?;
-        if arc.start().binding_id() != binding
-            || arc.end().binding_id() != binding
-            || arc.inverse().binding_id() != binding
+        let bindings = [
+            arc.start().binding_id(),
+            arc.end().binding_id(),
+            arc.inverse().binding_id(),
+        ];
+        if bindings[0] != binding
+            || bindings[1] != binding
+            || bindings[2] != binding
             || !crate::numerical::reference_matches(&self.reference, context, &mut progress)?
         {
-            return Err(GeoError::config(
-                "cached arc and numerical reference differ",
+            return Err(crate::BindingConfigError::cached_arc(
+                context.reference(),
+                &self.reference,
+                binding,
+                bindings,
+                &mut progress,
             ));
         }
         let start = arc.start().point();
@@ -562,7 +579,12 @@ impl ArcIntervalView {
                 context,
                 &mut progress,
             )? {
-                return Err(GeoError::config("arc and context references differ"));
+                return Err(crate::BindingConfigError::reference_mismatch(
+                    context.reference(),
+                    &self.prepared.reference,
+                    crate::ReferenceMismatchReason::ArcContext,
+                    &mut progress,
+                ));
             }
             Ok(self.clone())
         }
@@ -635,14 +657,26 @@ impl ArcIntervalView {
         progress.initial()?;
         progress.context_poll(context)?;
         if !crate::numerical::reference_matches(&self.prepared.reference, context, &mut progress)? {
-            return Err(GeoError::config("arc and context references differ"));
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                &self.prepared.reference,
+                crate::ReferenceMismatchReason::ArcContext,
+                &mut progress,
+            ));
         }
         let mut admission = crate::numerical::ExactAdmission::new(context, &mut progress);
-        if admission.compare(lower, &Rat::zero())?.is_lt()
-            || admission.compare(upper, &Rat::one())?.is_gt()
-            || admission.compare(lower, upper)?.is_gt()
+        if let Some(requirement) =
+            crate::metric::unit_parameter_refusal(lower, Some(upper), |a, b| {
+                admission.compare(a, b)
+            })?
         {
-            return Err(GeoError::domain("arc parameter interval must be in [0,1]"));
+            return Err(crate::MetricInputError::parameter(
+                lower,
+                Some(upper),
+                crate::UnitParameterOperation::ArcInterval,
+                requirement,
+                &mut progress,
+            ));
         }
         let policy = context.policy();
         let bits = policy
@@ -1477,6 +1511,120 @@ mod tests {
         assert!(value.lower().mul(exact.denominator().as_ref()) <= exact.numerator().mul(&scale));
         assert!(value.upper().mul(exact.denominator().as_ref()) >= exact.numerator().mul(&scale));
     }
+    #[test]
+    fn original_travel_and_parameter_refusals_keep_exact_operands() {
+        use crate::{
+            MetricInputError, TravelOperation, UnitParameterOperation, UnitParameterRequirement,
+        };
+        use purrdf_testkit::error_capture::Capture;
+
+        let prepared = PreparedGeodesic::new(GeographicReference::wgs84());
+        let start = point("0", "0");
+        let end = point("1", "0");
+        let azimuth = Rat::zero();
+        let mut context = MetricContext::wgs84().unwrap();
+        let negative = Metres::new(rat("-123456789012345678901234567890.0000000000000000001"));
+        let errors = [
+            (
+                prepared
+                    .direct(&start, &azimuth, &negative, &mut context)
+                    .unwrap_err(),
+                TravelOperation::Direct,
+            ),
+            (
+                prepared
+                    .prepare_azimuth_arc_view(&start, &azimuth, &negative)
+                    .unwrap_err(),
+                TravelOperation::Arc,
+            ),
+        ];
+        let original = negative.exact().clone();
+        drop(negative);
+        for (error, expected) in errors {
+            let GeoError::MetricInput(cause) = &error else {
+                panic!("native travel refusal")
+            };
+            assert!(
+                matches!(&**cause, MetricInputError::NegativeTravel { operation, distance }
+                if *operation == expected && **distance == original)
+            );
+            assert_eq!(
+                Capture::read(&error).child("cause").code,
+                "metric-negative-travel"
+            );
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let last = error.clone();
+            assert_eq!(window.close().allocations, 0);
+            drop(error);
+            assert!(last.is_domain_error());
+        }
+
+        let view = prepared
+            .prepare_azimuth_arc_view(&start, &azimuth, &Metres::new(Rat::zero()))
+            .unwrap();
+        for (lower, upper, requirement) in [
+            (
+                "-0.0000000000000000001",
+                "2",
+                UnitParameterRequirement::Lower,
+            ),
+            (
+                "0",
+                "1.0000000000000000001",
+                UnitParameterRequirement::Upper,
+            ),
+            ("0.75", "0.25", UnitParameterRequirement::Order),
+        ] {
+            let lower = rat(lower);
+            let upper = rat(upper);
+            let error = view
+                .parameter_enclosure(&lower, &upper, &mut context, None)
+                .unwrap_err();
+            let GeoError::MetricInput(cause) = &error else {
+                panic!("native interval refusal")
+            };
+            assert!(
+                matches!(&**cause, MetricInputError::Parameter { operation: UnitParameterOperation::ArcInterval, requirement: actual, lower: first, upper: Some(last) }
+                if *actual == requirement && **first == lower && **last == upper)
+            );
+        }
+        for (parameter, requirement) in [
+            (
+                rat("-0.0000000000000000001"),
+                UnitParameterRequirement::Lower,
+            ),
+            (
+                rat("1.0000000000000000001"),
+                UnitParameterRequirement::Upper,
+            ),
+        ] {
+            for (error, expected) in [
+                (
+                    prepared
+                        .shortest_arc_at(&start, &end, &parameter, &mut context)
+                        .unwrap_err(),
+                    UnitParameterOperation::ShortestArc,
+                ),
+                (
+                    crate::SourceLinearEdge::interpolate(&start, &end, &parameter).unwrap_err(),
+                    UnitParameterOperation::LinearEdge,
+                ),
+            ] {
+                let GeoError::MetricInput(cause) = &error else {
+                    panic!("native point parameter refusal")
+                };
+                assert!(
+                    matches!(&**cause, MetricInputError::Parameter { operation, requirement: actual, lower, upper: None }
+                    if *operation == expected && *actual == requirement && **lower == parameter)
+                );
+                assert_eq!(
+                    Capture::read(&error).child("cause").code,
+                    "metric-unit-parameter"
+                );
+            }
+        }
+    }
+
     #[test]
     fn admitted_meridian_frame_keeps_pole_convention_and_exact_nonmeridians() {
         for (start, azimuth, expected) in [

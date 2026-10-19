@@ -115,8 +115,8 @@ impl<'a, 'storage, 'account> Reader<'a, '_, '_, 'storage, 'account> {
             .and_then(|admission| admission.borrow().storage())
     }
 
-    fn error(&self, message: core::fmt::Arguments<'_>) -> GeoError {
-        crate::carrier::literal_error(self.storage(), message)
+    fn error(&self, reason: crate::GeoJsonShapeError<&str>) -> GeoError {
+        reason.capture(self.storage())
     }
 
     fn native<T>(
@@ -235,11 +235,12 @@ use std::ops::Range;
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] when the lexical form is not an RFC 7946 Geometry
-/// object: malformed JSON, a `Feature` or `FeatureCollection`, an unknown
+/// [`GeoError::JsonSyntax`] retains malformed JSON and its original reader cause.
+/// [`GeoError::GeoJsonShape`] retains RFC 7946 shape and coordinate refusals:
+/// a `Feature` or `FeatureCollection`, an unknown
 /// `type`, a missing/null/repeated `coordinates` or `geometries` member, a
 /// position that is not two or three numbers, positions of mixed length within
-/// one geometry, or a body the geometry model refuses structurally (a
+/// one geometry. [`GeoError::GeometryShape`] retains structural refusals (a
 /// one-position line, a ring shorter than four positions or one that does not
 /// close).
 pub fn parse(lexical: &str, crs: &Crs) -> Result<GeometryLiteral, GeoError> {
@@ -266,6 +267,14 @@ enum ReadFailure {
     Json(purrdf_lex::json::Error),
     Storage(StorageError),
     Operational(GeoError),
+}
+
+impl purrdf_hash::error::StructuredError for ReadFailure {
+    purrdf_hash::error_visit! {
+        Json(cause) => "geojson-read-json" { "cause" => Cause(cause) },
+        Storage(cause) => "geojson-read-storage" { "cause" => Cause(cause) },
+        Operational(cause) => "geojson-read-operational" { "cause" => Cause(cause) },
+    }
 }
 impl From<purrdf_lex::json::Error> for ReadFailure {
     fn from(error: purrdf_lex::json::Error) -> Self {
@@ -346,27 +355,15 @@ fn geometry_of_admitted(
         }
     };
     let dim = pending.dim.unwrap_or(CoordDim::Xy);
-    pending.into_geometry(dim, storage).map_err(|error| {
-        if !error.is_expression_error() {
-            return error;
-        }
-        let next = crate::carrier::literal_error(
-            storage,
-            format_args!(
-                "this geo:geoJSONLiteral is well-formed JSON but does not denote a geometry: {}",
-                error.detail()
-            ),
-        );
-        let released = match error {
-            GeoError::Literal(message) => crate::carrier::release_string(storage, message),
-            _ => Ok(()),
-        };
-        if matches!(next, GeoError::Storage(_)) {
-            next
-        } else {
-            released.map_or_else(GeoError::Storage, |()| next)
-        }
-    })
+    pending
+        .into_geometry(dim, storage)
+        .map_err(|error| match error {
+            GeoError::GeometryShape(mut cause) => {
+                cause.geojson_context = true;
+                GeoError::GeometryShape(cause)
+            }
+            original => original,
+        })
 }
 
 fn read_failure(
@@ -400,7 +397,7 @@ struct OpenObject<'a> {
 /// A `type` member: the name it holds, or the kind of value it is instead.
 enum TypeMember<'a> {
     Name(Cow<'a, str>),
-    Other(&'static str),
+    Other(Option<Kind>),
 }
 
 /// The first `coordinates` member of an object.
@@ -419,7 +416,7 @@ enum Members {
     /// `null`.
     Null,
     /// Not an array: the kind of value it is.
-    Other(&'static str),
+    Other(Option<Kind>),
     /// An array, whose elements are read as Geometry objects whatever the
     /// object's `type` turns out to be (only a `GeometryCollection` has
     /// members, and any other type refuses a `geometries` member): the
@@ -454,23 +451,17 @@ impl OpenObject<'_> {
         let type_name = match (self.types, self.kind) {
             (1, Some(TypeMember::Name(name))) => name,
             (1, Some(TypeMember::Other(kind))) => {
-                return shape(Err(reader.error(format_args!(
-                    "the `type` member of a GeoJSON Geometry object is a string, but this one is \
-                     {kind}"
-                ))));
+                return shape(Err(
+                    reader.error(crate::GeoJsonShapeError::TypeNotString { found: kind })
+                ));
             }
             (0, _) => {
-                return shape(Err(reader.error(format_args!(
-                    "a GeoJSON Geometry object has a `type` member naming its geometry type; this \
-                     object has none"
-                ))));
+                return shape(Err(reader.error(crate::GeoJsonShapeError::MissingType)));
             }
             (repeats, _) => {
-                return shape(Err(reader.error(format_args!(
-                    "this GeoJSON object has {repeats} `type` members, so it names no single \
-                     geometry type; RFC 8259 permits the repetition but resolving it by position \
-                     would be a silent choice"
-                ))));
+                return shape(Err(
+                    reader.error(crate::GeoJsonShapeError::RepeatedType { count: repeats })
+                ));
             }
         };
         // Keep decoded type text in its original account until both dispatch
@@ -478,20 +469,23 @@ impl OpenObject<'_> {
         let output = (|| {
             let type_name = &*type_name;
             match type_name {
-                "Feature" | "FeatureCollection" => shape(Err(reader.error(format_args!(
-                    "a geo:geoJSONLiteral is a GeoJSON Geometry object and `{type_name}` is not one of \
-                     them: GeoSPARQL 1.1 Requirement 25 admits only {GEOMETRY_TYPES}. Write the \
-                     geometry itself as the literal rather than the {type_name} that wraps it"
-                )))),
+                "Feature" | "FeatureCollection" => shape(Err(
+                    reader.error(crate::GeoJsonShapeError::Feature { type_name })
+                )),
                 "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon"
                 | "MultiPolygon" => {
                     if self.geometries > 0 {
                         return shape(Err(foreign_shape_member(
-                            storage, "geometries", type_name, "coordinates",
+                            storage,
+                            "geometries",
+                            type_name,
+                            "coordinates",
                         )));
                     }
                     let read = match (self.coordinates, self.coords) {
-                        (1, Some(Coordinates::Null)) => Err(null_member(storage, "coordinates", type_name)),
+                        (1, Some(Coordinates::Null)) => {
+                            Err(null_member(storage, "coordinates", type_name))
+                        }
                         (1, Some(Coordinates::Read(read))) => read,
                         (1, Some(Coordinates::Unread(span))) => {
                             let mut progress = reader.admission.map(crate::carrier::JsonProgress);
@@ -500,12 +494,18 @@ impl OpenObject<'_> {
                             } else {
                                 JsonReader::new(&text[span], json::LIMITS)
                             };
-                            let mut deferred = Reader { inner, admission: reader.admission };
+                            let mut deferred = Reader {
+                                inner,
+                                admission: reader.admission,
+                            };
                             let read = read_coordinates(&mut deferred, type_name);
                             let released = deferred.release();
                             match read {
                                 Err(error) => return Err(error),
-                                Ok(read) => { released?; read }
+                                Ok(read) => {
+                                    released?;
+                                    read
+                                }
                             }
                         }
                         (count, _) => Err(member_count(storage, "coordinates", type_name, count)),
@@ -521,36 +521,63 @@ impl OpenObject<'_> {
                 "GeometryCollection" => {
                     if self.coordinates > 0 {
                         return shape(Err(foreign_shape_member(
-                            storage, "coordinates", type_name, "geometries",
+                            storage,
+                            "coordinates",
+                            type_name,
+                            "geometries",
                         )));
                     }
                     match (self.geometries, self.members) {
-                        (1, Some(Members::Null)) => shape(Err(null_member(storage, "geometries", type_name))),
+                        (1, Some(Members::Null)) => {
+                            shape(Err(null_member(storage, "geometries", type_name)))
+                        }
                         (1, Some(Members::Other(kind))) => shape(Err(not_an_array(
-                            storage, "the `geometries` of a GeoJSON GeometryCollection", kind,
+                            storage,
+                            "the `geometries` of a GeoJSON GeometryCollection",
+                            kind,
                         ))),
-                        (1, Some(Members::Read { dims, refusal: Some(refusal) })) => {
+                        (
+                            1,
+                            Some(Members::Read {
+                                dims,
+                                refusal: Some(refusal),
+                            }),
+                        ) => {
                             crate::carrier::release(storage, dims)?;
                             shape(Err(refusal))
                         }
-                        (1, Some(Members::Read { dims, refusal: None })) => {
+                        (
+                            1,
+                            Some(Members::Read {
+                                dims,
+                                refusal: None,
+                            }),
+                        ) => {
                             let count = dims.len();
                             let unified = unified_dim(&dims, storage);
                             crate::carrier::release(storage, dims)?;
                             match unified {
                                 Ok(dim) => {
-                                    crate::carrier::push(storage, nodes, PendingNode::Collection(count))?;
+                                    crate::carrier::push(
+                                        storage,
+                                        nodes,
+                                        PendingNode::Collection(count),
+                                    )?;
                                     Ok(Ok(dim))
                                 }
                                 Err(error) => shape(Err(error)),
                             }
                         }
-                        (count, _) => shape(Err(member_count(storage, "geometries", type_name, count))),
+                        (count, _) => {
+                            shape(Err(member_count(storage, "geometries", type_name, count)))
+                        }
                     }
                 }
-                other => shape(Err(reader.error(format_args!(
-                    "`{other}` is not a GeoJSON geometry type; RFC 7946 defines {GEOMETRY_TYPES}"
-                )))),
+                other => {
+                    shape(Err(reader.error(crate::GeoJsonShapeError::UnknownType {
+                        type_name: other,
+                    })))
+                }
             }
         })();
         let released = reader.release_cow(type_name);
@@ -661,7 +688,7 @@ fn read_literal(reader: &mut Reader<'_, '_, '_, '_, '_>) -> Step<Pending> {
                     }
                     kind => {
                         reader.check_value()?;
-                        Members::Other(kind_name(kind))
+                        Members::Other(kind)
                     }
                 });
             }
@@ -685,10 +712,9 @@ fn open_object<'a>(
         return Ok(None);
     }
     reader.check_value()?;
-    shape::<Option<CoordDim>>(Err(reader.error(format_args!(
-        "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
-        kind_name(kind)
-    ))))
+    shape::<Option<CoordDim>>(Err(
+        reader.error(crate::GeoJsonShapeError::ExpectedObject { found: kind })
+    ))
     .map(Some)
 }
 
@@ -704,7 +730,7 @@ fn read_type_member<'a>(
         return Ok(TypeMember::Name(reader.decode(name)?));
     }
     reader.check_value()?;
-    Ok(TypeMember::Other(kind_name(kind)))
+    Ok(TypeMember::Other(kind))
 }
 
 /// A `coordinates` member's value, the cursor on it: read into its geometry's
@@ -735,7 +761,7 @@ fn has_coordinates(type_name: &str) -> bool {
 }
 
 /// The name of a value's kind, for diagnostics, from its first byte.
-const fn kind_name(kind: Option<Kind>) -> &'static str {
+pub(crate) const fn kind_name(kind: Option<Kind>) -> &'static str {
     match kind {
         Some(Kind::Null) => "null",
         Some(Kind::True | Kind::False) => "a boolean",
@@ -757,19 +783,16 @@ const fn kind_name(kind: Option<Kind>) -> &'static str {
 /// which is the neighbouring case the tests prove.
 fn foreign_shape_member(
     storage: Option<&crate::carrier::CarrierStorage<'_>>,
-    wrong: &str,
+    wrong: &'static str,
     type_name: &str,
-    right: &str,
+    right: &'static str,
 ) -> GeoError {
-    crate::carrier::literal_error(
-        storage,
-        format_args!(
-            "this GeoJSON {type_name} carries a `{wrong}` member, which RFC 7946 defines for the \
-         other family of geometry types; a {type_name} states its shape in `{right}`, and an \
-         object claiming both is a contradiction rather than a Geometry object with a foreign \
-         member"
-        ),
-    )
+    crate::GeoJsonShapeError::ForeignShapeMember {
+        member: wrong,
+        type_name,
+        expected: right,
+    }
+    .capture(storage)
 }
 
 /// A shape member (`coordinates`, or `geometries` for a collection) that is
@@ -777,16 +800,14 @@ fn foreign_shape_member(
 /// written `[]`.
 fn null_member(
     storage: Option<&crate::carrier::CarrierStorage<'_>>,
-    name: &str,
+    name: &'static str,
     type_name: &str,
 ) -> GeoError {
-    crate::carrier::literal_error(
-        storage,
-        format_args!(
-            "the `{name}` member of this GeoJSON {type_name} is null; RFC 7946 gives null no meaning \
-         there, and an empty geometry is written `\"{name}\":[]`"
-        ),
-    )
+    crate::GeoJsonShapeError::NullMember {
+        member: name,
+        type_name,
+    }
+    .capture(storage)
 }
 
 /// A shape member absent (`count` is `0`) or repeated: a geometry with no
@@ -794,50 +815,41 @@ fn null_member(
 /// different geometries.
 fn member_count(
     storage: Option<&crate::carrier::CarrierStorage<'_>>,
-    name: &str,
+    name: &'static str,
     type_name: &str,
     count: usize,
 ) -> GeoError {
-    if count == 0 {
-        return crate::carrier::literal_error(
-            storage,
-            format_args!(
-                "a GeoJSON {type_name} has a `{name}` member; this one has none, and RFC 7946 defines \
-             the geometry entirely by it"
-            ),
-        );
+    crate::GeoJsonShapeError::MemberCount {
+        member: name,
+        type_name,
+        count,
     }
-    crate::carrier::literal_error(
-        storage,
-        format_args!(
-            "this GeoJSON {type_name} has {count} `{name}` members, which denote different \
-         geometries; the literal is ambiguous and is refused rather than resolved by position"
-        ),
-    )
+    .capture(storage)
 }
 
 /// `what` is not an array, but a value of kind `kind`.
 fn not_an_array(
     storage: Option<&crate::carrier::CarrierStorage<'_>>,
-    what: &str,
-    kind: &str,
+    what: &'static str,
+    kind: Option<Kind>,
 ) -> GeoError {
-    crate::carrier::literal_error(
-        storage,
-        format_args!("{what} is a JSON array in RFC 7946, but this is {kind}"),
-    )
+    crate::GeoJsonShapeError::ExpectedArray {
+        production: what,
+        found: kind,
+    }
+    .capture(storage)
 }
 
 /// Open the array at the cursor; or, when the value is not one, check it and
 /// refuse it as `what`.
-fn open_array(reader: &mut Reader<'_, '_, '_, '_, '_>, what: &str) -> Step<()> {
+fn open_array(reader: &mut Reader<'_, '_, '_, '_, '_>, what: &'static str) -> Step<()> {
     let kind = reader.peek_kind();
     if kind == Some(Kind::Array) {
         reader.next_event()?;
         return Ok(Ok(()));
     }
     reader.check_value()?;
-    shape(Err(not_an_array(reader.storage(), what, kind_name(kind))))
+    shape(Err(not_an_array(reader.storage(), what, kind)))
 }
 
 /// Read the elements of the open array to its close, each with `element`,
@@ -930,9 +942,7 @@ fn read_coordinates(
         // Only the six coordinate types reach here.
         other => {
             reader.check_value()?;
-            Err(reader.error(format_args!(
-                "`{other}` is not a GeoJSON geometry type with coordinates"
-            )))
+            Err(reader.error(crate::GeoJsonShapeError::CoordinateType { type_name: other }))
         }
     };
     match body {
@@ -945,7 +955,7 @@ fn read_coordinates(
 /// elements `element` reads into `items`.
 fn nested<'a, T>(
     reader: &mut Reader<'a, '_, '_, '_, '_>,
-    what: &str,
+    what: &'static str,
     items: &mut Vec<T>,
     element: impl FnMut(&mut Reader<'a, '_, '_, '_, '_>) -> Step<T>,
 ) -> Step<()> {
@@ -978,7 +988,7 @@ fn point(
 /// them to drift.
 fn rings(
     reader: &mut Reader<'_, '_, '_, '_, '_>,
-    what: &str,
+    what: &'static str,
     dim: &mut Option<CoordDim>,
 ) -> Step<Rings> {
     let mut rings = Rings::new();
@@ -992,7 +1002,7 @@ fn rings(
 /// array.
 fn positions(
     reader: &mut Reader<'_, '_, '_, '_, '_>,
-    what: &str,
+    what: &'static str,
     dim: &mut Option<CoordDim>,
 ) -> Step<CoordSeq> {
     let mut coords = CoordSeq::new();
@@ -1023,9 +1033,9 @@ fn position_items(
     #[derive(Clone, Copy)]
     enum Ordinate<'t> {
         Number(&'t str),
-        Other(&'static str),
+        Other(Option<Kind>),
     }
-    let mut ordinates = [Ordinate::Other("null"); 3];
+    let mut ordinates = [Ordinate::Other(Some(Kind::Null)); 3];
     let mut count = 0_usize;
     let mut first = first;
     while mem::take(&mut first) || reader.next_item()? {
@@ -1038,7 +1048,7 @@ fn position_items(
                 Ordinate::Number(lexeme)
             } else {
                 reader.check_value()?;
-                Ordinate::Other(kind_name(kind))
+                Ordinate::Other(kind)
             };
         } else {
             reader.check_value()?;
@@ -1048,37 +1058,22 @@ fn position_items(
     let here = match count {
         2 => CoordDim::Xy,
         3 => CoordDim::Xyz,
-        few @ (0 | 1) => {
-            return shape(Err(reader.error(format_args!(
-                "a GeoJSON position is an array of two or three numbers (longitude, latitude and \
-                 an optional altitude); this one has {few}"
-            ))));
-        }
-        many => {
-            return shape(Err(reader.error(format_args!(
-                "a GeoJSON position has at most three numbers; RFC 7946 §3.1.1 says \
-                 \"Implementations SHOULD NOT extend positions beyond three elements\", so a \
-                 position of {many} elements is refused rather than silently truncated. The RFC \
-                 gives the extra elements no meaning and GeoJSON has no measure ordinate for them \
-                 to become, so ignoring them would discard a number without saying so; an \
-                 extension that used a fourth element would need its own datatype"
-            ))));
+        count => {
+            return shape(Err(
+                reader.error(crate::GeoJsonShapeError::PositionLength { count })
+            ));
         }
     };
     match *dim {
         None => *dim = Some(here),
         Some(fixed) if fixed == here => {}
         Some(fixed) => {
-            return shape(Err(reader.error(format_args!(
-                "this GeoJSON geometry mixes {}-element and {}-element positions; the geometry \
-                 model carries one coordinate dimension for a whole geometry, so a geometry whose \
-                 positions disagree about it has no dimension to report to \
-                 `geof:coordinateDimension`. RFC 7946 does not itself forbid the mixture — this \
-                 is purrdf-geo's model refusing rather than silently dropping or inventing an \
-                 altitude",
-                fixed.ordinates(),
-                here.ordinates()
-            ))));
+            return shape(Err(reader.error(
+                crate::GeoJsonShapeError::MixedDimensions {
+                    first: fixed,
+                    second: here,
+                },
+            )));
         }
     }
     if let Some(admission) = &reader.admission
@@ -1086,17 +1081,17 @@ fn position_items(
     {
         return Err(ReadFailure::Operational(error));
     }
-    let ordinate = |ordinate: Ordinate<'_>| match ordinate {
-        Ordinate::Number(lexeme) => read_ordinate(lexeme, reader.admission),
-        Ordinate::Other(kind) => Err(reader.error(format_args!(
-            "an ordinate of a GeoJSON position is a number, but this one is {kind}"
-        ))),
+    let ordinate = |index, ordinate: Ordinate<'_>| match ordinate {
+        Ordinate::Number(lexeme) => read_ordinate(lexeme, index, reader.admission),
+        Ordinate::Other(kind) => {
+            Err(reader.error(crate::GeoJsonShapeError::ExpectedNumber { index, found: kind }))
+        }
     };
     let coord = (|| {
-        let x = ordinate(ordinates[0])?;
-        let y = ordinate(ordinates[1])?;
+        let x = ordinate(1, ordinates[0])?;
+        let y = ordinate(2, ordinates[1])?;
         let z = if here.has_z() {
-            Some(ordinate(ordinates[2])?)
+            Some(ordinate(3, ordinates[2])?)
         } else {
             None
         };
@@ -1108,6 +1103,7 @@ fn position_items(
 /// One ordinate, decided exactly from the JSON number's own text.
 fn read_ordinate(
     lexeme: &str,
+    index: usize,
     admission: Option<&RefCell<crate::carrier::ParseAdmission<'_, '_, '_>>>,
 ) -> Result<Rat, GeoError> {
     let storage = admission.and_then(|admission| admission.borrow().storage());
@@ -1119,13 +1115,11 @@ fn read_ordinate(
         Rat::parse_decimal(lexeme)
     };
     value.ok_or_else(|| {
-        crate::carrier::literal_error(
-            storage,
-            format_args!(
-                "the ordinate `{lexeme}` is a valid JSON number but its exponent is past the exact \
-             decimal reader's cap, so it names no value this crate can hold"
-            ),
-        )
+        crate::GeoJsonShapeError::InvalidNumber {
+            index,
+            lexical: lexeme,
+        }
+        .capture(storage)
     })
 }
 
@@ -1190,7 +1184,7 @@ impl Pending {
                         memory.release_bytes(core::alloc::Layout::new::<GeometryBody>().size())
                     })
                     .map_err(GeoError::Storage)?;
-                    Geometry::new_admitted(dim, body, storage)?
+                    Geometry::new(dim, body)?
                 }
                 PendingNode::Collection(count) => {
                     let first = built
@@ -1201,7 +1195,7 @@ impl Pending {
                     crate::carrier::reserve(storage, &mut members, count)
                         .map_err(GeoError::Storage)?;
                     members.extend(built.drain(first..));
-                    Geometry::new_admitted(dim, GeometryBody::GeometryCollection(members), storage)?
+                    Geometry::new(dim, GeometryBody::GeometryCollection(members))?
                 }
             };
             crate::carrier::push(storage, &mut built, geometry).map_err(GeoError::Storage)?;
@@ -1214,7 +1208,7 @@ impl Pending {
 }
 
 /// The seven type names, for the message an unknown one produces.
-const GEOMETRY_TYPES: &str = "`Point`, `MultiPoint`, `LineString`, `MultiLineString`, `Polygon`, `MultiPolygon` or \
+pub(crate) const GEOMETRY_TYPES: &str = "`Point`, `MultiPoint`, `LineString`, `MultiLineString`, `Polygon`, `MultiPolygon` or \
      `GeometryCollection`";
 
 /// The one dimension every member of a collection shares, given the dimension each
@@ -1232,17 +1226,11 @@ fn unified_dim(
             None => unified = Some(member_dim),
             Some(fixed) if fixed == member_dim => {}
             Some(fixed) => {
-                return Err(crate::carrier::literal_error(
-                    storage,
-                    format_args!(
-                        "this GeoJSON GeometryCollection mixes {}-element and {}-element positions; \
-                     the geometry model carries one coordinate dimension for a whole geometry, so \
-                     a collection whose members disagree about it has no dimension to report to \
-                     `geof:coordinateDimension`",
-                        fixed.ordinates(),
-                        member_dim.ordinates()
-                    ),
-                ));
+                return Err(crate::GeoJsonShapeError::CollectionDimensions {
+                    first: fixed,
+                    second: member_dim,
+                }
+                .capture(storage));
             }
         }
     }
@@ -1260,7 +1248,7 @@ fn unified_dim(
 ///
 /// # Errors
 ///
-/// [`GeoError::Domain`] when the literal's coordinate reference system differs
+/// [`GeoError::GeoJsonWrite`] when the literal's coordinate reference system differs
 /// from `required_crs`, because RFC 7946 admits exactly one system (GeoSPARQL 1.1
 /// Requirement 26) and this crate reprojects nothing — relabelling the ordinates
 /// would state something about the world that is not true. Also everything
@@ -1270,19 +1258,22 @@ pub fn write(
     required_crs: &Crs,
     coordinate_scale: u32,
 ) -> Result<String, GeoError> {
-    check_reference(literal, required_crs)?;
-    write_bare(literal.geometry(), coordinate_scale)
+    let mut writer = Writer::plain();
+    check_reference(literal, required_crs, &mut writer)?;
+    write_with(literal.geometry(), coordinate_scale, &mut writer)
 }
 
-fn check_reference(literal: &GeometryLiteral, required_crs: &Crs) -> Result<(), GeoError> {
+fn check_reference(
+    literal: &GeometryLiteral,
+    required_crs: &Crs,
+    writer: &mut Writer<'_, '_>,
+) -> Result<(), GeoError> {
     if literal.crs() != required_crs {
-        return Err(GeoError::domain(format!(
-            "this geometry is expressed in <{}> but a geo:geoJSONLiteral is fixed to <{}>; RFC \
-             7946 admits exactly one coordinate reference system and purrdf-geo reprojects \
-             nothing, so it refuses rather than relabelling the ordinates",
-            literal.crs(),
-            required_crs
-        )));
+        return Err(crate::GeoJsonWriteError::Reference {
+            actual: literal.crs().as_str(),
+            required: required_crs.as_str(),
+        }
+        .refusal(writer));
     }
     Ok(())
 }
@@ -1332,9 +1323,9 @@ pub(crate) fn write_admitted(
     context: &mut crate::MetricContext,
     progress: &mut crate::context::WorkProgress<'_>,
 ) -> Result<String, GeoError> {
-    check_reference(literal, required_crs)?;
     let mut writer = Writer::admitted(context, progress);
-    let result = write_with(literal.geometry(), coordinate_scale, &mut writer);
+    let result = check_reference(literal, required_crs, &mut writer)
+        .and_then(|()| write_with(literal.geometry(), coordinate_scale, &mut writer));
     let cleanup = writer.finish(result.is_ok());
     match result {
         Ok(output) => cleanup.map(|()| output),
@@ -1355,7 +1346,7 @@ pub(crate) fn write_admitted(
 ///
 /// # Errors
 ///
-/// [`GeoError::Domain`] when the geometry cannot be written as GeoJSON at all:
+/// [`GeoError::GeoJsonWrite`] when the geometry cannot be written as GeoJSON at all:
 ///
 /// * its [`CoordDim`] has a measure ordinate. RFC 7946 §3.1.1 defines a position
 ///   as longitude, latitude and an optional altitude — there is no fourth slot —
@@ -1376,13 +1367,10 @@ fn write_with(
     writer: &mut Writer<'_, '_>,
 ) -> Result<String, GeoError> {
     if geometry.dim().has_m() {
-        return Err(GeoError::domain(format!(
-            "this geometry is {} and GeoJSON has no measure ordinate: RFC 7946 §3.1.1 defines a \
-             position as longitude, latitude and an optional altitude, so writing it would drop \
-             the measure. purrdf-geo refuses rather than silently discarding an ordinate; write \
-             it as a geo:wktLiteral instead",
-            geometry.dim().name()
-        )));
+        return Err(crate::GeoJsonWriteError::Measure {
+            dimension: geometry.dim(),
+        }
+        .refusal(writer));
     }
     let mut out = String::new();
     writer.tree(&mut out, geometry, |out, member, writer| {
@@ -1407,14 +1395,8 @@ fn write_with(
     Ok(out)
 }
 
-fn empty_multipoint_error() -> GeoError {
-    GeoError::domain(
-        "this MULTIPOINT holds an empty member point and GeoJSON has no syntax \
-         for one: RFC 7946 has no empty position, and writing the member as `[]` \
-         or omitting it would change how many members the geometry has. \
-         purrdf-geo refuses rather than dropping a member; a MULTIPOINT with no \
-         members at all writes as `[]` and is unaffected",
-    )
+fn empty_multipoint_error(index: usize, count: usize, writer: &mut Writer<'_, '_>) -> GeoError {
+    crate::GeoJsonWriteError::EmptyMember { index, count }.refusal(writer)
 }
 
 fn write_coordinates(
@@ -1429,13 +1411,13 @@ fn write_coordinates(
             None => writer.text(out, "[]"),
         },
         GeometryBody::MultiPoint(points) => {
+            let mut index = 0;
             writer.sequence(out, points, "[", "]", |out, point, writer| {
-                write_position(
-                    out,
-                    point.as_ref().ok_or_else(empty_multipoint_error)?,
-                    scale,
-                    writer,
-                )
+                let point = point
+                    .as_ref()
+                    .ok_or_else(|| empty_multipoint_error(index, points.len(), writer))?;
+                index += 1;
+                write_position(out, point, scale, writer)
             })
         }
         GeometryBody::LineString(points) => write_positions(out, points, scale, writer),
@@ -1531,9 +1513,13 @@ fn body_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError> {
         ),
         GeometryBody::MultiPoint(points) => {
             let mut items = Vec::with_capacity(points.len());
-            for point in points {
+            for (index, point) in points.iter().enumerate() {
                 let Some(coord) = point.as_ref() else {
-                    return Err(empty_multipoint_error());
+                    return Err(empty_multipoint_error(
+                        index,
+                        points.len(),
+                        &mut Writer::plain(),
+                    ));
                 };
                 items.push(position_value(coord, scale));
             }
@@ -1638,7 +1624,7 @@ mod tests {
 
     fn refusal(text: &str) -> String {
         match read(text) {
-            Err(error) => error.detail().to_owned(),
+            Err(error) => error.detail().into_owned(),
             Ok(value) => panic!("{text} must be refused, but parsed as {value:?}"),
         }
     }
@@ -1649,6 +1635,190 @@ mod tests {
 
     fn rat(text: &str) -> Rat {
         Rat::parse_decimal(text).expect("an exact decimal")
+    }
+
+    #[test]
+    fn native_shape_operands_survive_the_original_literal() {
+        use crate::GeoJsonShapeError as Shape;
+        use purrdf_lex::json::Kind;
+        use purrdf_testkit::error_capture::Capture;
+
+        let cases = [
+            (
+                "true",
+                Shape::ExpectedObject {
+                    found: Some(Kind::True),
+                },
+                "geojson-expected-object",
+            ),
+            (
+                "false",
+                Shape::ExpectedObject {
+                    found: Some(Kind::False),
+                },
+                "geojson-expected-object",
+            ),
+            (
+                r#"{"type":false}"#,
+                Shape::TypeNotString {
+                    found: Some(Kind::False),
+                },
+                "geojson-type-not-string",
+            ),
+            ("{}", Shape::MissingType, "geojson-missing-type"),
+            (
+                r#"{"type":"Point","type":"Polygon"}"#,
+                Shape::RepeatedType { count: 2 },
+                "geojson-repeated-type",
+            ),
+            (
+                r#"{"type":"Feature"}"#,
+                Shape::Feature {
+                    type_name: "Feature".to_owned(),
+                },
+                "geojson-feature-wrapper",
+            ),
+            (
+                r#"{"type":"é未定義"}"#,
+                Shape::UnknownType {
+                    type_name: "é未定義".to_owned(),
+                },
+                "geojson-unknown-type",
+            ),
+            (
+                r#"{"type":"Point","geometries":[]}"#,
+                Shape::ForeignShapeMember {
+                    member: "geometries",
+                    type_name: "Point".to_owned(),
+                    expected: "coordinates",
+                },
+                "geojson-foreign-shape-member",
+            ),
+            (
+                r#"{"type":"Point","coordinates":null}"#,
+                Shape::NullMember {
+                    member: "coordinates",
+                    type_name: "Point".to_owned(),
+                },
+                "geojson-null-member",
+            ),
+            (
+                r#"{"type":"Point"}"#,
+                Shape::MemberCount {
+                    member: "coordinates",
+                    type_name: "Point".to_owned(),
+                    count: 0,
+                },
+                "geojson-member-count",
+            ),
+            (
+                r#"{"type":"Point","coordinates":[],"coordinates":[]}"#,
+                Shape::MemberCount {
+                    member: "coordinates",
+                    type_name: "Point".to_owned(),
+                    count: 2,
+                },
+                "geojson-member-count",
+            ),
+            (
+                r#"{"type":"Point","coordinates":true}"#,
+                Shape::ExpectedArray {
+                    production: "the `coordinates` of a GeoJSON Point",
+                    found: Some(Kind::True),
+                },
+                "geojson-expected-array",
+            ),
+            (
+                r#"{"type":"Point","coordinates":[1]}"#,
+                Shape::PositionLength { count: 1 },
+                "geojson-position-length",
+            ),
+            (
+                r#"{"type":"MultiPoint","coordinates":[[1,2],[3,4,5]]}"#,
+                Shape::MixedDimensions {
+                    first: CoordDim::Xy,
+                    second: CoordDim::Xyz,
+                },
+                "geojson-mixed-dimensions",
+            ),
+            (
+                r#"{"type":"Point","coordinates":[1,false]}"#,
+                Shape::ExpectedNumber {
+                    index: 2,
+                    found: Some(Kind::False),
+                },
+                "geojson-expected-number",
+            ),
+            (
+                r#"{"type":"GeometryCollection","geometries":[{"type":"Point","coordinates":[1,2]},{"type":"Point","coordinates":[3,4,5]}]}"#,
+                Shape::CollectionDimensions {
+                    first: CoordDim::Xy,
+                    second: CoordDim::Xyz,
+                },
+                "geojson-collection-dimensions",
+            ),
+        ];
+        for (text, expected, code) in cases {
+            let input = text.to_owned();
+            let error = read(&input).unwrap_err();
+            drop(input);
+            let clone = error.clone();
+            drop(error);
+            let GeoError::GeoJsonShape(cause) = &clone else {
+                panic!("original GeoJSON shape cause: {clone:?}")
+            };
+            assert_eq!(&**cause, &expected);
+            assert_eq!(Capture::read(&clone).child("cause").code, code);
+            assert_eq!(
+                std::error::Error::source(&clone)
+                    .unwrap()
+                    .downcast_ref::<Shape>(),
+                Some(&expected)
+            );
+            assert!(clone.is_expression_error());
+        }
+    }
+
+    #[test]
+    fn materialization_attaches_context_to_the_original_geometry_reason() {
+        use crate::{GeometryShapeError, GeometryShapeReason};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let input = r#"{"type":"Polygon","coordinates":[[[0,0],[1,0],[0,0]]]}"#.to_owned();
+        let error = read(&input).unwrap_err();
+        drop(input);
+        let GeoError::GeometryShape(cause) = &error else {
+            panic!("native structural cause")
+        };
+        assert_eq!(
+            *cause,
+            GeometryShapeError {
+                reason: GeometryShapeReason::ShortRing(3),
+                geojson_context: true
+            }
+        );
+        let fields = Capture::read(&error).child("cause");
+        assert!(matches!(
+            fields.field("geojson_context"),
+            ErrorValue::Boolean(true)
+        ));
+        assert!(matches!(
+            fields.child("reason").field("count"),
+            ErrorValue::Unsigned(3)
+        ));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .source()
+                .unwrap()
+                .downcast_ref::<GeometryShapeReason>(),
+            Some(&GeometryShapeReason::ShortRing(3))
+        );
+        assert_eq!(
+            error.detail(),
+            "this geo:geoJSONLiteral is well-formed JSON but does not denote a geometry: a polygon ring needs at least four positions (three corners and the repeat that closes it); this one has 3"
+        );
     }
 
     // ---- Requirement 27: the empty literal --------------------------------
@@ -2093,6 +2263,28 @@ mod tests {
     }
 
     #[test]
+    fn original_json_syntax_cause_outranks_an_earlier_coordinate_shape_refusal() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let input = r#"{"type":"Point","coordinates":[true,2],"extra":]}"#.to_owned();
+        let position = input.rfind(']').unwrap();
+        let error = read(&input).unwrap_err();
+        drop(input);
+        let cloned = error.clone();
+        drop(error);
+        let fields = Capture::read(&cloned).child("cause");
+        assert!(matches!(fields.field("found"), ErrorValue::Character(']')));
+        let json = fields.child("cause");
+        assert_eq!(json.code, "json-document");
+        assert!(
+            matches!(json.field("offset"), ErrorValue::ByteCount(value) if value == position as u128)
+        );
+        assert_eq!(json.child("kind").code, "json-expected");
+        assert!(cloned.is_expression_error());
+    }
+
+    #[test]
     fn every_refusal_is_a_literal_error_never_a_panic_or_a_default() {
         for text in [
             "not json",
@@ -2105,8 +2297,11 @@ mod tests {
             r#""a string""#,
         ] {
             assert!(
-                matches!(read(text), Err(GeoError::Literal(_))),
-                "{text} must be a Literal refusal"
+                matches!(
+                    read(text),
+                    Err(GeoError::GeoJsonShape(_) | GeoError::JsonSyntax(_))
+                ),
+                "{text} must be a literal-class refusal"
             );
         }
     }
@@ -2333,7 +2528,7 @@ mod tests {
             let error = write_bare(&empty, SCALE)
                 .expect_err("GeoJSON cannot express a measure, even on an empty geometry");
             assert!(
-                matches!(error, GeoError::Domain(_)),
+                matches!(error.original(), GeoError::GeoJsonWrite(cause) if matches!(&**cause, crate::GeoJsonWriteError::Measure { dimension } if *dimension == dim)),
                 "the refusal is a domain error: {error:?}"
             );
             assert!(
@@ -2381,7 +2576,7 @@ mod tests {
         let error = write_bare(&with_empty_member, SCALE)
             .expect_err("GeoJSON has no empty position to write the member as");
         assert!(
-            matches!(error, GeoError::Domain(_)),
+            matches!(error.original(), GeoError::GeoJsonWrite(cause) if matches!(&**cause, crate::GeoJsonWriteError::EmptyMember { index: 1, count: 2 })),
             "the refusal is a domain error: {error:?}"
         );
 
@@ -2416,7 +2611,7 @@ mod tests {
         let error = write(&literal, &other, SCALE)
             .expect_err("RFC 7946 admits exactly one coordinate reference system");
         assert!(
-            matches!(error, GeoError::Domain(_)),
+            matches!(error.original(), GeoError::GeoJsonWrite(cause) if matches!(&**cause, crate::GeoJsonWriteError::Reference { .. })),
             "a foreign system is a domain error: {error:?}"
         );
         assert!(
@@ -2429,6 +2624,20 @@ mod tests {
             write(&literal, &crs(), SCALE).expect("the systems agree"),
             r#"{"type":"Point","coordinates":[1,2]}"#,
             "the matching system writes"
+        );
+        let actual = literal.crs().as_str().to_owned();
+        let required = other.as_str().to_owned();
+        drop(literal);
+        drop(other);
+        let last = error.clone();
+        drop(error);
+        let fields = purrdf_testkit::error_capture::Capture::read(last.original()).child("cause");
+        assert_eq!(fields.code, "geojson-write-reference");
+        assert!(
+            matches!(fields.field("actual"), purrdf_hash::error::ErrorValue::Iri(value) if value == actual)
+        );
+        assert!(
+            matches!(fields.field("required"), purrdf_hash::error::ErrorValue::Iri(value) if value == required)
         );
     }
 
@@ -3089,8 +3298,10 @@ mod nesting_tests {
             let mut text = String::new();
             literal(&mut rng, &tree, &mut text);
             assert_eq!(
-                geometry_of(&text),
-                reference_geometry_of(&text),
+                geometry_of(&text)
+                    .map_err(|error| (error.is_expression_error(), error.detail().into_owned())),
+                reference_geometry_of(&text)
+                    .map_err(|error| (error.is_expression_error(), error.detail().into_owned())),
                 "round {round}: the two readers disagree on {text}"
             );
         }

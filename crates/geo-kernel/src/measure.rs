@@ -576,6 +576,14 @@ pub enum Ordinate {
     Z,
 }
 
+impl purrdf_hash::error::StructuredError for Ordinate {
+    purrdf_hash::error_visit! {
+        X => "ordinate-x" {},
+        Y => "ordinate-y" {},
+        Z => "ordinate-z" {},
+    }
+}
+
 /// An exact reported extent. Its scalar retains the native original arena;
 /// empty input is distinguished from a populated geometry with no elevation.
 #[derive(Clone, Debug)]

@@ -498,6 +498,14 @@ pub enum GraphSelector {
     Named(TermValue),
 }
 
+impl purrdf_hash::error::StructuredError for GraphSelector {
+    purrdf_hash::error_visit! {
+        Any => "graph-selector-any" {},
+        Default => "graph-selector-default" {},
+        Named(term) => "graph-selector-named" { "name" => Term(term) },
+    }
+}
+
 impl GraphSelector {
     /// Resolve this selector against `dataset`, without minting.
     ///
@@ -1661,6 +1669,13 @@ pub enum DrainCheckpoint {
     After,
 }
 
+impl purrdf_hash::error::StructuredError for DrainCheckpoint {
+    purrdf_hash::error_visit! {
+        Before => "drain-before" {},
+        After => "drain-after" {},
+    }
+}
+
 /// What [`checkpointed_drain`] returns when a checkpoint observed an operational
 /// failure: which checkpoint, and the view's own typed root cause and evidence at
 /// that boundary.
@@ -1672,6 +1687,16 @@ pub struct DrainFailure<Error, Evidence> {
     pub error: Error,
     /// The view's own evidence at the failure boundary.
     pub evidence: Evidence,
+}
+
+impl<Error: purrdf_hash::error::StructuredError, Evidence: purrdf_hash::error::StructuredError>
+    purrdf_hash::error::StructuredError for DrainFailure<Error, Evidence>
+{
+    purrdf_hash::error_visit! {
+        @record self { checkpoint, error, evidence } => "view-drain-failure" {
+            "checkpoint" => Record(&self.checkpoint), "error" => Cause(&self.error), "evidence" => Record(&self.evidence)
+        }
+    }
 }
 
 /// Sample twice; neither sample Ready ⇒ nothing partial is published.

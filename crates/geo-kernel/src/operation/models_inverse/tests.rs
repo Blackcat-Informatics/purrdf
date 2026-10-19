@@ -66,7 +66,7 @@ fn exact_affine_inverse_preserves_decimal_domain_boundaries() {
     assert_eq!(restored.point(), &source);
     assert!(matches!(
         inverse.apply(&point("-100", "-100"), &mut context),
-        Err(GeoError::Domain(_))
+        Err(error) if error.is_domain_error()
     ));
 }
 #[test]
@@ -91,7 +91,7 @@ fn polynomial_fold_returns_every_root_as_ambiguity() {
     ));
     assert!(matches!(
         inverse.apply(&point("-1", "0"), &mut context),
-        Err(GeoError::Domain(_))
+        Err(error) if error.is_domain_error()
     ));
 }
 #[test]
@@ -128,11 +128,11 @@ fn closed_grid_boundary_survives_neighbor_hole_and_inverts() {
     assert_eq!(restored.point(), &source);
     assert!(matches!(
         forward.apply(&point("1.2", "0.7"), &mut context),
-        Err(GeoError::Domain(_))
+        Err(error) if error.is_domain_error()
     ));
     assert!(matches!(
         inverse.apply(&point("3.2", "-0.3"), &mut context),
-        Err(GeoError::Domain(_))
+        Err(error) if error.is_domain_error()
     ));
 }
 

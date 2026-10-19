@@ -134,30 +134,57 @@ fn relate_inner(
     let (source_work, source_storage) = relation_source_admission(a, b)?;
     if let Some(receipts) = receipts {
         for (source, receipt) in [a, b].into_iter().zip(receipts) {
-            if *receipt != source.source_receipt() {
-                return Err(GeoError::config(
-                    "geographic relation receipt names a different source",
+            let expected = source.source_receipt();
+            if *receipt != expected {
+                return Err(GeoError::retained_failure(
+                    crate::SourcePreparationError::Receipt {
+                        consumer: crate::PreparationReceiptConsumer::GeographicRelation,
+                        expected,
+                        actual: *receipt,
+                    },
+                    GeoError::SourcePreparation,
+                    observer,
                 ));
             }
             receipt.validate_context(context)?;
         }
-        if context.retained_workspace_bytes() < source_storage
-            || context.preparation_work_items() < source_work
-        {
-            return Err(GeoError::config(
-                "geographic relation requires both complete source admissions",
+        let actual_workspace = context.retained_workspace_bytes();
+        let actual_work = context.preparation_work_items();
+        let reason = if actual_workspace < source_storage {
+            Some(crate::PreparationBaselineReason::Workspace)
+        } else if actual_work < source_work {
+            Some(crate::PreparationBaselineReason::Work)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(GeoError::retained_failure(
+                crate::SourcePreparationError::RelationAdmission {
+                    first: *receipts[0],
+                    second: *receipts[1],
+                    reason,
+                    required_work: source_work,
+                    required_workspace: source_storage,
+                    actual_work,
+                    actual_workspace,
+                },
+                GeoError::SourcePreparation,
+                observer,
             ));
         }
     }
     context.begin(1)?;
     let mut progress = WorkProgress::new(observer);
     progress.context_poll(context)?;
-    if !crate::numerical::reference_matches(a.reference(), context, &mut progress)?
-        || !crate::numerical::reference_matches(b.reference(), context, &mut progress)?
-    {
-        return Err(GeoError::config(
-            "geographic topology requires one actual prepared reference",
-        ));
+    for reference in [a.reference(), b.reference()] {
+        if !crate::numerical::reference_matches(reference, context, &mut progress)? {
+            return Err(crate::BindingConfigError::reference_mismatch(
+                context.reference(),
+                reference,
+                crate::ReferenceMismatchReason::GeographicTopology,
+                &mut progress,
+            ));
+        }
     }
     let initial = if receipts.is_some() {
         0_u64

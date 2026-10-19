@@ -57,7 +57,7 @@ pub(crate) const LIMITS: Limits = Limits::with_depth(usize::MAX);
 ///
 /// # Errors
 ///
-/// [`GeoError::Literal`] naming the byte offset, what was expected there and what
+/// [`GeoError::JsonSyntax`] retaining the byte offset, what was expected there and what
 /// was found, for any departure from RFC 8259: a malformed number (a leading `+`,
 /// a leading zero, a bare `.`, `NaN`, `Infinity`), an unterminated string, array
 /// or object, a trailing comma, an unescaped control character in a string, an
@@ -66,7 +66,7 @@ pub fn parse(text: &str) -> Result<JsonValue, GeoError> {
     json::read_with(text, LIMITS).map_err(|error| refusal(text, error))
 }
 
-/// A refusal of `text` by the JSON reader, as a [`GeoError::Literal`] naming
+/// A refusal of `text` by the JSON reader, as a [`GeoError::JsonSyntax`] retaining
 /// the byte offset, what was expected there and what was found.
 pub(crate) fn refusal(text: &str, error: json::Error) -> GeoError {
     refusal_with_storage(text, error, None)
@@ -85,14 +85,23 @@ pub(crate) fn refusal_with_storage(
         }
         _ => {}
     }
-    let found = Found(
-        text.get(error.offset()..)
-            .and_then(|rest| rest.chars().next()),
-    );
-    crate::carrier::literal_error(storage, format_args!("{error}, found {found}"))
+    let found = text
+        .get(error.offset()..)
+        .and_then(|rest| rest.chars().next());
+    crate::carrier::with_storage(storage, |memory| {
+        memory.try_scope(|memory| {
+            memory
+                .boxed(crate::JsonSyntaxError {
+                    cause: error,
+                    found,
+                })
+                .map(GeoError::JsonSyntax)
+        })
+    })
+    .unwrap_or_else(GeoError::Storage)
 }
 
-struct Found(Option<char>);
+pub(crate) struct Found(pub(crate) Option<char>);
 impl core::fmt::Display for Found {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.0 {
@@ -138,10 +147,101 @@ mod tests {
 
     fn refusal(text: &str) -> String {
         match parse(text) {
-            Err(GeoError::Literal(message)) => message,
-            Err(other) => panic!("expected a Literal refusal for {text:?}, got {other:?}"),
+            Err(GeoError::JsonSyntax(cause)) => cause.to_string(),
+            Err(other) => panic!("expected a native JSON refusal for {text:?}, got {other:?}"),
             Ok(value) => panic!("expected a refusal for {text:?}, parsed {value:?}"),
         }
+    }
+
+    #[test]
+    fn native_json_causes_and_source_characters_survive_input_destruction() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        for text in ["[1,]", "[1", "é", r#""\uD800""#] {
+            let input = text.to_owned();
+            let original = purrdf_lex::json::read_with(&input, super::LIMITS).unwrap_err();
+            let found = input
+                .get(original.offset()..)
+                .and_then(|rest| rest.chars().next());
+            let error = parse(&input).unwrap_err();
+            drop(input);
+            let clone = error.clone();
+            drop(error);
+            let GeoError::JsonSyntax(cause) = &clone else {
+                panic!("original JSON reader cause")
+            };
+            assert_eq!(cause.cause, original);
+            assert_eq!(cause.found, found);
+            let fields = Capture::read(&clone).child("cause");
+            assert_eq!(fields.code, "geo-json-syntax");
+            assert!(
+                matches!(fields.child("cause").field("offset"), ErrorValue::ByteCount(value) if value == original.offset() as u128)
+            );
+            match found {
+                Some(original) => assert!(
+                    matches!(fields.field("found"), ErrorValue::Character(value) if value == original)
+                ),
+                None => assert!(matches!(fields.field("found"), ErrorValue::Absent)),
+            }
+            assert!(clone.is_expression_error());
+            assert_eq!(
+                std::error::Error::source(&clone)
+                    .unwrap()
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<purrdf_lex::json::Error>(),
+                Some(&original)
+            );
+        }
+    }
+
+    #[test]
+    fn native_json_refusal_preserves_wide_limits_and_physical_failure_priority() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_lex::allocation::StorageError;
+        use purrdf_lex::json::{Error, ErrorKind};
+        use purrdf_testkit::error_capture::Capture;
+
+        let error = super::refusal(
+            "",
+            Error::new(ErrorKind::Values { limit: u64::MAX }, usize::MAX),
+        );
+        let fields = Capture::read(&error).child("cause").child("cause");
+        assert!(
+            matches!(fields.field("offset"), ErrorValue::ByteCount(value) if value == usize::MAX as u128)
+        );
+        assert!(
+            matches!(fields.child("kind").field("limit"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        let error = super::refusal(
+            "",
+            Error::new(ErrorKind::Storage(StorageError::AdmissionFailed), 0),
+        );
+        assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+        let error = super::refusal(
+            "",
+            Error::new(
+                ErrorKind::Escape(purrdf_lex::json_escape::JsonEscapeErrorKind::Storage(
+                    StorageError::SizeOverflow,
+                )),
+                0,
+            ),
+        );
+        assert_eq!(error, GeoError::Storage(StorageError::SizeOverflow));
+
+        let mut resident = purrdf_lex::allocation::Resident;
+        let storage = crate::carrier::CarrierStorage::resume(&mut resident, usize::MAX);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = super::refusal_with_storage(
+            "",
+            Error::new(ErrorKind::Storage(StorageError::AdmissionFailed), 0),
+            Some(&storage),
+        );
+        let allocations = window.close();
+        assert_eq!(error, GeoError::Storage(StorageError::AdmissionFailed));
+        assert_eq!(storage.admitted_bytes(), usize::MAX);
+        assert_eq!(allocations.allocations, 0);
     }
 
     #[test]

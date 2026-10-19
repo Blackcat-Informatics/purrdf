@@ -52,7 +52,7 @@ pub(super) fn contact_list<const N: usize>(
 
 /// Exact source endpoint contact or certified unrounded parameter-root evidence.
 /// Enclosures are proof receipts; they are never substituted for curve inputs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CurveIntersection {
     /// Exact equality of an original source position under one complete
     /// operation mapping. The target point remains an unrounded symbolic image;
@@ -147,6 +147,26 @@ pub enum CurveIntersection {
         /// Exact source coordinate at the second shared endpoint.
         end: LonLat,
     },
+}
+
+impl purrdf_hash::error::StructuredError for CurveIntersection {
+    purrdf_hash::error_visit! {
+        SymbolicSourceContact { left, right } => "curve-contact-symbolic-source" { "left" => Record(left), "right" => Record(right) },
+        SymbolicEndpoint { left, right } => "curve-contact-symbolic-endpoint" { "left" => Record(left), "right" => Record(right) },
+        Exact { left, right, point } => "curve-contact-exact" { "left" => Record(left), "right" => Record(right), "point" => Record(point) },
+        Endpoint { left, right, point } => "curve-contact-endpoint" { "left" => Record(left), "right" => Record(right), "point" => Record(point) },
+        Isolated { left, right, longitude_radians, latitude_radians } => "curve-contact-isolated" {
+            "left" => Record(left), "right" => Record(right), "longitude_radians" => Record(longitude_radians), "latitude_radians" => Record(latitude_radians)
+        },
+        Coincident { reversed } => "curve-contact-coincident" { "reversed" => Boolean(*reversed) },
+        BranchOverlap { left, right } => "curve-contact-branch-overlap" { "left" => Record(left), "right" => Record(right) },
+        GeodesicOverlap { left, right, start, end } => "curve-contact-geodesic-overlap" {
+            "left" => List(left.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "right" => List(right.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))), "start" => Record(start), "end" => Record(end)
+        },
+        ConstantContact { left, right, point } => "curve-contact-constant" { "left" => Record(left), "right" => Record(right), "point" => Record(point) },
+        Overlap { left, right, start, end } => "curve-contact-overlap" { "left" => Record(left), "right" => Record(right), "start" => Record(start), "end" => Record(end) },
+    }
 }
 
 crate::context::retained::native_detached_enum!(CurveIntersection {
@@ -849,14 +869,34 @@ fn linear_parameters(
         &left,
         admission,
     )?
-    .ok_or_else(|| GeoError::domain("proved source-linear contact parameter"))?;
+    .ok_or_else(|| {
+        admission.failure(|progress| {
+            crate::GeometryDomainError::contact_parameter(
+                [a.start().point(), a.end().point(), &left],
+                crate::SourceContactReason::Written,
+                false,
+                crate::SourceContactCoordinates::Geographic,
+                progress,
+            )
+        })
+    })?;
     let right_parameter = SourceLinearEdge::parameter_on_admitted(
         b.start().point(),
         b.end().point(),
         &right,
         admission,
     )?
-    .ok_or_else(|| GeoError::domain("proved source-linear contact parameter"))?;
+    .ok_or_else(|| {
+        admission.failure(|progress| {
+            crate::GeometryDomainError::contact_parameter(
+                [b.start().point(), b.end().point(), &right],
+                crate::SourceContactReason::Written,
+                true,
+                crate::SourceContactCoordinates::Geographic,
+                progress,
+            )
+        })
+    })?;
     Ok((left_parameter, right_parameter, left))
 }
 
@@ -1013,12 +1053,28 @@ fn endpoint_contacts_with(
                 let first =
                     SourceLinearEdge::parameter_on_coord_admitted(a0, a1, &point, &mut admission)?
                         .ok_or_else(|| {
-                            GeoError::domain("proved reflected source contact parameter")
+                            admission.failure(|progress| {
+                                crate::GeometryDomainError::contact_parameter(
+                                    [a0, a1, &point],
+                                    crate::SourceContactReason::Reflected,
+                                    false,
+                                    crate::SourceContactCoordinates::Planar,
+                                    progress,
+                                )
+                            })
                         })?;
                 let second =
                     SourceLinearEdge::parameter_on_coord_admitted(b0, b1, &point, &mut admission)?
                         .ok_or_else(|| {
-                            GeoError::domain("proved reflected source contact parameter")
+                            admission.failure(|progress| {
+                                crate::GeometryDomainError::contact_parameter(
+                                    [b0, b1, &point],
+                                    crate::SourceContactReason::Reflected,
+                                    true,
+                                    crate::SourceContactCoordinates::Planar,
+                                    progress,
+                                )
+                            })
                         })?;
                 let endpoint = |value: &Rat| value.is_zero() || value == &Rat::one();
                 // Endpoint pairs are recorded once below, as symbolic endpoints.
@@ -1122,12 +1178,28 @@ fn endpoint_contacts_with(
                 let first =
                     SourceLinearEdge::parameter_on_coord_admitted(a0, a1, &point, &mut admission)?
                         .ok_or_else(|| {
-                            GeoError::domain("proved original source contact parameter")
+                            admission.failure(|progress| {
+                                crate::GeometryDomainError::contact_parameter(
+                                    [a0, a1, &point],
+                                    crate::SourceContactReason::Original,
+                                    false,
+                                    crate::SourceContactCoordinates::Planar,
+                                    progress,
+                                )
+                            })
                         })?;
                 let second =
                     SourceLinearEdge::parameter_on_coord_admitted(b0, b1, &point, &mut admission)?
                         .ok_or_else(|| {
-                            GeoError::domain("proved original source contact parameter")
+                            admission.failure(|progress| {
+                                crate::GeometryDomainError::contact_parameter(
+                                    [b0, b1, &point],
+                                    crate::SourceContactReason::Original,
+                                    true,
+                                    crate::SourceContactCoordinates::Planar,
+                                    progress,
+                                )
+                            })
                         })?;
                 let height = |start: &Coord,
                               end: &Coord,
@@ -1375,14 +1447,14 @@ fn selected_branch_overlap(
         right.length().exact()
     };
     let mut endpoint = |length: &Rat| {
-        admission.rational(
+        admission.expression_observed(
             purrdf_xsd::integer::ExactOperation::RationalDivide,
             &[minimum, length],
             1,
-            || {
-                minimum
-                    .div(length)
-                    .ok_or_else(|| GeoError::domain("positive selected branch length"))
+            |values, progress| {
+                values.divide(minimum, length)?.ok_or_else(|| {
+                    crate::MetricInputError::branch_length(minimum, length, progress)
+                })
             },
         )
     };
@@ -1536,7 +1608,13 @@ impl ChartLine {
         if matches!(edge, PreparedEdge::Transformed(_)) {
             return Ok(Self::Transformed {
                 curve: image
-                    .ok_or_else(|| GeoError::domain("admitted original image owner"))?
+                    .ok_or_else(|| {
+                        crate::GeometryDomainError::edge_requirement(
+                            edge,
+                            crate::PreparedEdgeRequirement::ImageOwner,
+                            progress,
+                        )
+                    })?
                     .clone(),
                 subdivisions: context.policy().limits().max_subdivision_levels,
             });
@@ -1583,7 +1661,15 @@ impl ChartLine {
                 .map(Self::Linear);
         }
         let line = view
-            .ok_or_else(|| GeoError::domain("expected selected geodesic edge"))?
+            .ok_or_else(|| {
+                crate::GeometryDomainError::edge_requirement(
+                    edge,
+                    crate::PreparedEdgeRequirement::Geodesic {
+                        consumer: crate::GeodesicEdgeConsumer::SelectedArc,
+                    },
+                    progress,
+                )
+            })?
             .prepare_in(math, progress)
             .map_err(|error| geo_math_error(&error, context.policy()))?;
         crate::PreparedValue::new_in_math(line, math, progress, retained, context.policy())
@@ -2543,6 +2629,64 @@ fn materialize_contacts(
 mod tests {
     use super::*;
     use crate::{GeographicReference, PreparedCoordinate, ShortestGeodesicArc};
+
+    #[test]
+    fn proved_contact_refusal_retains_actual_side_endpoints_and_contact_point() {
+        for (left_end, right_side) in [((1, 0), false), ((10, 10), true)] {
+            let PreparedEdge::SourceLinear(a) = linear((0, 0), left_end) else {
+                unreachable!("source fixture")
+            };
+            let PreparedEdge::SourceLinear(b) = linear((0, 1), (10, 1)) else {
+                unreachable!("source fixture")
+            };
+            let point = Coord::xy(Rat::from_i64(5), Rat::from_i64(5));
+            let mut context = MetricContext::wgs84().unwrap();
+            let mut progress = WorkProgress::integer(None);
+            let error = linear_parameters(
+                &point,
+                0,
+                &a,
+                &b,
+                &mut ExactAdmission::new(&mut context, &mut progress),
+            )
+            .unwrap_err();
+            let GeoError::GeometryDomain(cause) = error.original() else {
+                panic!("native proved contact")
+            };
+            let crate::GeometryDomainError::SourceContactParameter {
+                reason,
+                right,
+                coordinates,
+            } = &**cause
+            else {
+                panic!("original contact parameter")
+            };
+            assert_eq!(
+                (*reason, *right),
+                (crate::SourceContactReason::Written, right_side)
+            );
+            let crate::SourceContactCoordinates::Geographic(coordinates) = coordinates else {
+                panic!("original geographic positions")
+            };
+            let edge = if right_side { &b } else { &a };
+            assert_eq!(
+                (&coordinates[0], &coordinates[1]),
+                (edge.start().point(), edge.end().point())
+            );
+            assert_eq!(
+                &coordinates[2],
+                &LonLat::new(Rat::from_i64(5), Rat::from_i64(5)).unwrap()
+            );
+            assert_eq!(error.detail(), "proved source-linear contact parameter");
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(error.original())
+                    .child("cause")
+                    .child("coordinates")
+                    .code,
+                "source-contact-geographic"
+            );
+        }
+    }
 
     pub(super) fn coordinate(lon: i64, lat: i64) -> PreparedCoordinate {
         PreparedCoordinate::new(

@@ -43,13 +43,21 @@ impl OrientedRing {
         curve: PreparedCurve,
         certificate: &crate::operation::AreaCellCertificate,
         reversed: bool,
+        progress: &mut WorkProgress<'_>,
     ) -> Result<Self, GeoError> {
         if !certificate.physical_chart()
             || reversed != (certificate.orientation() < 0)
             || curve.edges().is_empty()
         {
-            return Err(GeoError::config(
-                "operation cell Jordan certificate mismatch",
+            return Err(GeoError::retained_failure_with_progress(
+                crate::SourcePreparationError::JordanCertificate {
+                    physical_chart: certificate.physical_chart(),
+                    orientation: certificate.orientation(),
+                    reversed,
+                    edge_count: curve.edges().len(),
+                },
+                GeoError::SourcePreparation,
+                progress,
             ));
         }
         Ok(Self { curve })
@@ -143,7 +151,11 @@ pub(crate) fn validate_ring(
     check_curve_binding(curve, context, progress)?;
     let edges = curve.edges();
     if edges.is_empty() {
-        return Err(GeoError::domain("empty oriented ring"));
+        return Err(GeoError::retained_failure_with_progress(
+            crate::GeometryDomainError::EmptyOrientedRing { edges: edges.len() },
+            GeoError::GeometryDomain,
+            progress,
+        ));
     }
     for (index, edge) in edges.iter().enumerate() {
         context.charge_work(1)?;
@@ -182,7 +194,13 @@ pub(crate) fn validate_ring(
                     || (line.start().point().is_pole()
                         && line.end().point().same_location(line.start().point()))
                 {
-                    return Err(GeoError::domain("constant edge in oriented ring"));
+                    return Err(crate::GeometryDomainError::constant_ring_edge(
+                        [line.start(), line.end()],
+                        edge.kind(),
+                        index,
+                        edges.len(),
+                        progress,
+                    ));
                 }
                 // Original coordinates vary affinely, with longitude span at
                 // most one turn. Identified endpoints are the only possible
@@ -190,7 +208,13 @@ pub(crate) fn validate_ring(
             }
             PreparedEdge::ShortestGeodesic(arc) => {
                 if arc.start().point().same_location(arc.end().point()) {
-                    return Err(GeoError::domain("constant edge in oriented ring"));
+                    return Err(crate::GeometryDomainError::constant_ring_edge(
+                        [arc.start(), arc.end()],
+                        edge.kind(),
+                        index,
+                        edges.len(),
+                        progress,
+                    ));
                 }
                 // A unique shortest positive path cannot self-intersect: its
                 // loop could otherwise be removed to obtain a shorter path.
@@ -222,13 +246,23 @@ pub(crate) fn validate_ring(
                 | CurveIntersection::SymbolicEndpoint { left, right }
                 | CurveIntersection::SymbolicSourceContact { left, right }) = contact
                 else {
-                    return Err(GeoError::domain("non-Jordan oriented ring contact"));
+                    return Err(crate::GeometryDomainError::ring_contact(
+                        contact,
+                        [i, j, edges.len()],
+                        true,
+                        progress,
+                    ));
                 };
                 let adjacent = j == i + 1 && *left == Rat::one() && *right == Rat::zero();
                 let closure =
                     i == 0 && j == edges.len() - 1 && *left == Rat::zero() && *right == Rat::one();
                 if !adjacent && !closure {
-                    return Err(GeoError::domain("self contact in oriented ring"));
+                    return Err(crate::GeometryDomainError::ring_contact(
+                        contact,
+                        [i, j, edges.len()],
+                        false,
+                        progress,
+                    ));
                 }
             }
         }
@@ -625,10 +659,18 @@ impl FluxIntegrator<'_, '_> {
             if total.lower() > &Int::zero() {
                 return Ok(Set::Exterior);
             }
-            let panel = self
-                .panels
-                .pop()
-                .ok_or(MathError::Domain("empty oriented integral"))?;
+            let Some(panel) = self.panels.pop() else {
+                let error = crate::GeometryDomainError::empty_oriented_integral(
+                    self.query,
+                    parameter,
+                    &total,
+                    self.lines.len(),
+                    self.iterations,
+                    self.max_depth,
+                    self.progress,
+                );
+                return Err(self.progress.math_failure(error));
+            };
             if panel.depth >= self.max_depth {
                 return Err(MathError::PrecisionExhausted);
             }
@@ -917,7 +959,7 @@ fn certify_simple_line(
                         continue 'partition;
                     }
                     let domain = [panels[i].parameter.clone(), panels[j].parameter.clone()];
-                    if !arcs::search_contacts(
+                    let contacts = arcs::search_contacts(
                         line,
                         line,
                         &domain,
@@ -925,10 +967,14 @@ fn certify_simple_line(
                         context.policy(),
                         math,
                         progress,
-                    )?
-                    .is_empty()
-                    {
-                        return Err(GeoError::domain("self contact on an oriented edge"));
+                    )?;
+                    if let Some(contact) = contacts.first() {
+                        return Err(crate::GeometryDomainError::edge_self_contact(
+                            contact,
+                            &domain,
+                            [i, j, panels.len()],
+                            progress,
+                        ));
                     }
                 }
             }
@@ -1331,6 +1377,92 @@ mod tests {
             assert_eq!(
                 lune.locate_left(&point(177, pole), &mut context).unwrap(),
                 Set::Boundary
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_constant_ring_refusals_keep_original_edge_positions_and_coordinates() {
+        let mut context = MetricContext::wgs84().unwrap();
+        let error = OrientedRing::new(PreparedCurve::new(Vec::new()), &mut context).unwrap_err();
+        assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+            if matches!(&**cause, crate::GeometryDomainError::EmptyOrientedRing { edges: 0 })));
+        assert_eq!(error.detail(), "empty oriented ring");
+        for vertices in [[(1, 2), (1, 2)], [(0, 90), (50, 90)]] {
+            let original = vertices.map(|(x, y)| coordinate(x, y));
+            let error = OrientedRing::new(linear_ring(&vertices), &mut context).unwrap_err();
+            let GeoError::GeometryDomain(cause) = error.original() else {
+                panic!("native ring edge")
+            };
+            let crate::GeometryDomainError::ConstantRingEdge {
+                index,
+                edge_count,
+                kind,
+                endpoints,
+            } = &**cause
+            else {
+                panic!("original constant edge")
+            };
+            assert_eq!(
+                (*index, *edge_count, *kind),
+                (0, 1, crate::PreparedEdgeKind::SourceLinear)
+            );
+            assert_eq!(&**endpoints, &original);
+            assert_eq!(error.detail(), "constant edge in oriented ring");
+            let capture =
+                purrdf_testkit::error_capture::Capture::read(error.original()).child("cause");
+            let endpoints = capture.records("endpoints");
+            assert_eq!(endpoints.len(), 2);
+            assert_eq!(endpoints[0].code, "prepared-coordinate");
+            assert_eq!(endpoints[0].child("point").code, "longitude-latitude");
+            assert_eq!(endpoints[0].child("source").code, "coordinate");
+        }
+    }
+
+    #[test]
+    fn non_jordan_refusals_keep_the_original_contact_witness_and_edge_order() {
+        for (vertices, first_edge, second_edge, edge_count, non_jordan) in [
+            (
+                vec![(-20, -20), (20, 20), (-20, 20), (20, -20), (-20, -20)],
+                0,
+                2,
+                4,
+                false,
+            ),
+            (vec![(0, 0), (10, 0), (0, 0)], 0, 1, 2, true),
+        ] {
+            let mut context = MetricContext::wgs84().unwrap();
+            let error = OrientedRing::new(linear_ring(&vertices), &mut context).unwrap_err();
+            let GeoError::GeometryDomain(cause) = error.original() else {
+                panic!("native Jordan contact")
+            };
+            let crate::GeometryDomainError::RingContact {
+                non_jordan: original,
+                first_edge: first,
+                second_edge: second,
+                edge_count: count,
+                contact,
+            } = &**cause
+            else {
+                panic!("original contact witness")
+            };
+            assert_eq!(
+                (*original, *first, *second, *count),
+                (non_jordan, first_edge, second_edge, edge_count)
+            );
+            let capture =
+                purrdf_testkit::error_capture::Capture::read(error.original()).child("cause");
+            assert_eq!(
+                capture.child("contact").code,
+                purrdf_testkit::error_capture::Capture::read(&**contact).code
+            );
+            assert_eq!(
+                error.detail(),
+                if non_jordan {
+                    "non-Jordan oriented ring contact"
+                } else {
+                    "self contact in oriented ring"
+                }
             );
         }
     }

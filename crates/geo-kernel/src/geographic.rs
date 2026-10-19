@@ -35,6 +35,14 @@ pub struct LonLat {
     latitude: Rat,
 }
 
+impl purrdf_hash::error::StructuredError for LonLat {
+    purrdf_hash::error_visit! {
+        @record self { longitude, latitude } => "longitude-latitude" {
+            "longitude" => Record(&self.longitude), "latitude" => Record(&self.latitude)
+        }
+    }
+}
+
 impl LonLat {
     pub(crate) const fn from_validated(longitude: Rat, latitude: Rat) -> Self {
         Self {

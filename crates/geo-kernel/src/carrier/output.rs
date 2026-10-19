@@ -173,8 +173,19 @@ impl MaterializationStorage {
                 "adopted output context allowance",
             ))?;
         if complete > context.current_workspace_bytes() {
-            return Err(GeoError::config(
-                "materialized output transfer exceeds its live context reservation",
+            return Err(GeoError::retained_failure(
+                crate::ContextConfigError::OutputTransfer {
+                    bytes,
+                    previous_total: self.total,
+                    previous_output: self.output,
+                    proposed_total: total,
+                    proposed_output: output,
+                    retained_workspace: context.retained_workspace_bytes(),
+                    current_workspace: context.current_workspace_bytes(),
+                    required_workspace: complete,
+                },
+                GeoError::ContextConfiguration,
+                None,
             ));
         }
         self.total = total;
@@ -495,6 +506,29 @@ mod tests {
         context.admit_workspace(expected + 100).unwrap();
         let mut progress = WorkProgress::integer(None);
         let before = context.current_workspace_bytes();
+        let previous_total = storage.total;
+        let previous_output = storage.output;
+        let incoming = before + 1;
+        let error = storage
+            .adopt_admitted_output(incoming, &context)
+            .unwrap_err();
+        assert!(
+            matches!(error.original(), GeoError::ContextConfiguration(cause)
+            if **cause == crate::ContextConfigError::OutputTransfer {
+                bytes: incoming, previous_total, previous_output,
+                proposed_total: previous_total + incoming, proposed_output: previous_output + incoming,
+                retained_workspace: context.retained_workspace_bytes(), current_workspace: before,
+                required_workspace: context.retained_workspace_bytes() + previous_total + incoming,
+            })
+        );
+        assert_eq!(
+            (
+                storage.total,
+                storage.output,
+                context.current_workspace_bytes()
+            ),
+            (previous_total, previous_output, before)
+        );
         assert!(matches!(
             storage.adopt_geometry_output(
                 &geometry,

@@ -47,6 +47,17 @@ impl<'a, 'observer> CarrierWriter<'a, 'observer> {
         self
     }
 
+    /// Use the writer's existing native owner for an original failure payload.
+    pub(crate) fn with_progress<T>(
+        &mut self,
+        body: impl FnOnce(&mut crate::context::WorkProgress<'_>) -> T,
+    ) -> T {
+        match self.admission.as_mut() {
+            Some((_, progress)) => body(progress),
+            None => body(&mut crate::context::WorkProgress::integer(None)),
+        }
+    }
+
     fn capacity(&mut self, out: &mut String, additional: usize) -> Result<(), GeoError> {
         use purrdf_lex::allocation::{Memory, Resident, StorageError};
         let needed = out
@@ -126,19 +137,11 @@ impl<'a, 'observer> CarrierWriter<'a, 'observer> {
                 value.finite_decimal_scale()
             };
             let Some(needed) = needed else {
-                let message = "an exact decimal carrier cannot represent a nonterminating rational";
-                let detail = match self.admission.as_mut() {
-                    Some((_, progress)) => progress
-                        .with_storage(0, |memory| memory.string(message))
-                        .map_err(GeoError::Storage)?,
-                    None => {
-                        let mut resident = purrdf_lex::allocation::Resident;
-                        purrdf_lex::allocation::Memory::new(&mut resident)
-                            .string(message)
-                            .map_err(GeoError::Storage)?
-                    }
-                };
-                return Err(GeoError::Unsupported(detail));
+                let original =
+                    self.with_progress(|progress| GeoError::diagnostic_number(value, progress))?;
+                return Err(GeoError::Unsupported(
+                    crate::UnsupportedRefusal::NonTerminatingDecimal(original),
+                ));
             };
             u32::try_from(needed)
                 .map_err(|_| GeoError::ArithmeticOverflow("exact carrier decimal scale"))?
@@ -358,6 +361,41 @@ mod tests {
         ExecutionLimits, ExecutionPolicy, GeoError, GeometryLiteral, MetricContext,
         MetricWorkObserver,
     };
+
+    #[test]
+    fn exact_decimal_refusal_retains_the_original_nonterminating_rational() {
+        use purrdf_testkit::error_capture::Capture;
+
+        let input = crate::Rat::new(crate::Int::one(), crate::Int::from_i64(3)).unwrap();
+        let mut output = String::new();
+        let error = super::CarrierWriter::plain()
+            .preserving_exact()
+            .ordinate(&mut output, &input, 15)
+            .unwrap_err();
+        drop(input);
+        assert_eq!(output, "");
+        let cloned = error.clone();
+        drop(error);
+        let fields = Capture::read(&cloned).child("cause");
+        assert_eq!(fields.code, "geo-nonterminating-decimal");
+        let GeoError::Unsupported(crate::UnsupportedRefusal::NonTerminatingDecimal(value)) = cloned
+        else {
+            panic!("the exact carrier must retain the original numerical refusal");
+        };
+        assert_eq!(
+            *value,
+            crate::Rat::new(crate::Int::one(), crate::Int::from_i64(3)).unwrap()
+        );
+        super::CarrierWriter::plain()
+            .preserving_exact()
+            .ordinate(
+                &mut output,
+                &crate::Rat::new(crate::Int::one(), crate::Int::from_i64(4)).unwrap(),
+                15,
+            )
+            .unwrap();
+        assert_eq!(output, "0.25");
+    }
 
     #[derive(Default)]
     struct Receipt {

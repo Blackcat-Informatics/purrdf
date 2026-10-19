@@ -7,6 +7,38 @@ use purrdf_iri::vocab::ogc;
 use std::sync::Arc;
 
 #[test]
+fn empty_native_polygon_refusal_retains_original_interior_selection() {
+    use crate::GeometryDomainError;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let reference = GeographicReference::wgs84();
+    for (interior, closed_support) in [
+        (Some(OrientedInterior::Left), false),
+        (Some(OrientedInterior::Right), true),
+        (None, true),
+    ] {
+        let error =
+            PreparedPolygon::from_native_support(Vec::new(), interior, closed_support, &reference)
+                .unwrap_err();
+        assert!(matches!(&error, GeoError::GeometryDomain(cause)
+            if **cause == GeometryDomainError::EmptyOrientedPolygon { oriented: interior, closed_support }));
+        let fields = Capture::read(&error).child("cause");
+        assert_eq!(fields.code, "geometry-empty-oriented-polygon");
+        assert!(
+            matches!(fields.field("closed_support"), ErrorValue::Boolean(value) if value == closed_support)
+        );
+        assert_eq!(error.detail(), "empty native oriented polygon");
+        assert!(error.is_domain_error());
+    }
+    let error =
+        PreparedPolygon::from_oriented_rings(Vec::new(), OrientedInterior::Right, &reference)
+            .unwrap_err();
+    assert!(matches!(&error, GeoError::GeometryDomain(cause)
+        if **cause == GeometryDomainError::EmptyOrientedPolygon { oriented: Some(OrientedInterior::Right), closed_support: false }));
+}
+
+#[test]
 fn carrier_content_identity_normalizes_exact_values_and_excludes_admission() {
     let a =
         literal("GEOMETRYCOLLECTION ZM (POINT ZM (1.0 2.00 3 4),LINESTRING ZM (0 0 1 2,1 2 3 4))");
@@ -472,7 +504,10 @@ fn certified_rank_lost_areal_support_retains_closed_contacts_and_whole_complemen
     assert!(polygon.closed_support());
     assert!(polygon.chart().is_none());
     assert!(polygon.oriented_interior().is_none());
-    assert!(!crate::atlas::polygon_base_membership(&polygon, &[true]).unwrap());
+    assert!(
+        !crate::atlas::polygon_base_membership(&polygon, &[true], &mut WorkProgress::integer(None))
+            .unwrap()
+    );
     let inside = LonLat::new(Rat::one(), Rat::zero()).unwrap();
     let outside = LonLat::new(Rat::one(), Rat::one()).unwrap();
     let mut context = MetricContext::wgs84().unwrap();

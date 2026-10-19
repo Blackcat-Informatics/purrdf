@@ -41,6 +41,14 @@ pub enum ZoneFamily {
     Utm,
 }
 
+impl purrdf_hash::error::StructuredError for ZoneFamily {
+    purrdf_hash::error_visit! {
+        GaussKruger3 => "transverse-zone-gauss-kruger-3" {},
+        GaussKruger6 => "transverse-zone-gauss-kruger-6" {},
+        Utm => "transverse-zone-utm" {},
+    }
+}
+
 /// Explicit hemisphere declaration for a transverse Mercator profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hemisphere {
@@ -48,6 +56,13 @@ pub enum Hemisphere {
     North,
     /// Nonpositive geographic latitude.
     South,
+}
+
+impl purrdf_hash::error::StructuredError for Hemisphere {
+    purrdf_hash::error_visit! {
+        North => "transverse-hemisphere-north" {},
+        South => "transverse-hemisphere-south" {},
+    }
 }
 
 /// Complete metre/degree declarations for one native transverse Mercator zone.
@@ -71,6 +86,17 @@ pub struct TransverseMercator {
     pub hemisphere: Hemisphere,
     /// Add `zone*1,000,000` to the easting when true.
     pub zone_prefix: bool,
+}
+
+impl purrdf_hash::error::StructuredError for TransverseMercator {
+    purrdf_hash::error_visit! {
+        @record self { ellipsoid, family, zone, central_meridian, scale, false_easting, false_northing, hemisphere, zone_prefix } => "transverse-mercator" {
+            "ellipsoid" => Record(&self.ellipsoid), "family" => Record(&self.family), "zone" => Unsigned(u128::from(self.zone)),
+            "central_meridian" => Record(&self.central_meridian), "scale" => Record(&self.scale),
+            "false_easting" => Record(&self.false_easting), "false_northing" => Record(&self.false_northing),
+            "hemisphere" => Record(&self.hemisphere), "zone_prefix" => Boolean(self.zone_prefix)
+        }
+    }
 }
 
 crate::context::retained::native_detached_fields!(TransverseMercator {
@@ -107,25 +133,42 @@ impl TransverseMercator {
         &self,
         point: &OperationPoint,
         math: &mut CoordinateMath,
-    ) -> Result<ProjectionDifferential, MathError> {
-        self.validate()
-            .and_then(|()| self.validate_point(point))
-            .map_err(|_| MathError::Domain("invalid declared projection or source point"))?;
-        let coordinates = [
-            fixed_from_rat(&point.x, math)?,
-            fixed_from_rat(&point.y, math)?,
-        ];
-        let (image, jacobian) = self.evaluate_differential(
-            point,
-            &coordinates,
-            true,
-            math,
-            &mut WorkProgress::new(None),
-        )?;
-        Ok(ProjectionDifferential {
-            image: [image[0].clone(), image[1].clone()],
-            jacobian,
-        })
+    ) -> Result<ProjectionDifferential, GeoError> {
+        let mut validation = WorkProgress::integer(None);
+        if let Err(error) = self
+            .validate()
+            .and_then(|()| self.validate_point(point, &mut validation))
+        {
+            // Keep this public entry's original human context while retaining
+            // the actual native validation cause. Resource faults stay fatal.
+            return Err(
+                if error.is_expression_error()
+                    || matches!(error.original(), GeoError::TransverseInput(_))
+                {
+                    GeoError::from_native_cause_metered(GeoError::DifferentialInput, error, None)
+                } else {
+                    error
+                },
+            );
+        }
+        let result = (|| {
+            let coordinates = [
+                fixed_from_rat(&point.x, math)?,
+                fixed_from_rat(&point.y, math)?,
+            ];
+            let (image, jacobian) = self.evaluate_differential(
+                point,
+                &coordinates,
+                true,
+                math,
+                &mut WorkProgress::new(None),
+            )?;
+            Ok(ProjectionDifferential {
+                image: [image[0].clone(), image[1].clone()],
+                jacobian,
+            })
+        })();
+        result.map_err(GeoError::NativeMath)
     }
     pub(super) fn validate(&self) -> Result<(), GeoError> {
         self.validate_with(
@@ -144,9 +187,12 @@ impl TransverseMercator {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(progress.retained_message(
-                "transverse Mercator scale must be positive",
-                GeoError::Config,
+            return Err(crate::TransverseInputError::capture(
+                self,
+                None,
+                None,
+                crate::TransverseInputReason::Scale,
+                progress,
             ));
         }
         let maximum = Rat::new(crate::Int::one(), crate::Int::from_i64(100))
@@ -156,9 +202,12 @@ impl TransverseMercator {
             .map_err(GeoError::NumericalScratch)?
             .is_gt()
         {
-            return Err(progress.retained_message(
-                "native transverse Mercator Taylor certificate requires squared eccentricity <=0.01",
-                GeoError::Config,
+            return Err(crate::TransverseInputError::capture(
+                self,
+                None,
+                Some(&maximum),
+                crate::TransverseInputReason::Eccentricity,
+                progress,
             ));
         }
         let central = match self.family {
@@ -166,9 +215,12 @@ impl TransverseMercator {
             ZoneFamily::GaussKruger6 => Rat::from_i64(6 * i64::from(self.zone) - 3),
             ZoneFamily::Utm => {
                 if !(1..=60).contains(&self.zone) || self.zone_prefix {
-                    return Err(progress.retained_message(
-                        "UTM requires zone 1..=60 and no zone prefix",
-                        GeoError::Config,
+                    return Err(crate::TransverseInputError::capture(
+                        self,
+                        None,
+                        None,
+                        crate::TransverseInputReason::UtmZone,
+                        progress,
                     ));
                 }
                 Rat::from_i64(6 * i64::from(self.zone) - 183)
@@ -187,26 +239,43 @@ impl TransverseMercator {
                 .map_err(GeoError::NumericalScratch)?
                 .is_gt()
         {
-            return Err(progress.retained_message(
-                "declared transverse Mercator zone and meridian disagree",
-                GeoError::Config,
+            return Err(crate::TransverseInputError::capture(
+                self,
+                None,
+                Some(&central),
+                crate::TransverseInputReason::Meridian,
+                progress,
             ));
         }
         Ok(())
     }
-    pub(super) fn validate_point(&self, point: &OperationPoint) -> Result<(), GeoError> {
+    pub(super) fn validate_point(
+        &self,
+        point: &OperationPoint,
+        progress: &mut WorkProgress<'_>,
+    ) -> Result<(), GeoError> {
         crate::LonLat::new(point.x.clone(), point.y.clone())?;
         if (self.hemisphere == Hemisphere::North && point.y < Rat::zero())
             || (self.hemisphere == Hemisphere::South && point.y > Rat::zero())
         {
-            return Err(GeoError::domain(
-                "point contradicts the explicitly declared projection hemisphere",
+            return Err(crate::TransverseInputError::capture(
+                self,
+                Some(point),
+                None,
+                crate::TransverseInputReason::Hemisphere,
+                progress,
             ));
         }
         if self.family == ZoneFamily::Utm
             && (point.y < Rat::from_i64(-80) || point.y > Rat::from_i64(84))
         {
-            return Err(GeoError::domain("point is outside the UTM latitude domain"));
+            return Err(crate::TransverseInputError::capture(
+                self,
+                Some(point),
+                None,
+                crate::TransverseInputReason::Latitude,
+                progress,
+            ));
         }
         let half_width = if self.family == ZoneFamily::GaussKruger3 {
             Rat::parse_decimal("1.5").expect("frozen decimal")
@@ -216,8 +285,12 @@ impl TransverseMercator {
         if point.y.abs() != Rat::from_i64(90)
             && point.x.sub(&self.central_meridian).abs() > half_width
         {
-            return Err(GeoError::domain(
-                "point is outside the explicitly declared transverse Mercator zone",
+            return Err(crate::TransverseInputError::capture(
+                self,
+                Some(point),
+                Some(&half_width),
+                crate::TransverseInputReason::Zone,
+                progress,
             ));
         }
         Ok(())
@@ -683,9 +756,8 @@ mod tests {
     use super::*;
     use purrdf_xsd::math::MathLimits;
 
-    #[test]
-    fn central_meridian_jacobian_matches_independent_normal_metric_factors() {
-        let parameters = TransverseMercator {
+    fn projection() -> TransverseMercator {
+        TransverseMercator {
             ellipsoid: PreparedEllipsoid::cgcs2000(),
             family: ZoneFamily::GaussKruger6,
             zone: 20,
@@ -695,7 +767,161 @@ mod tests {
             false_northing: Rat::zero(),
             hemisphere: Hemisphere::North,
             zone_prefix: false,
+        }
+    }
+
+    #[test]
+    fn native_projection_refusals_keep_declarations_points_and_first_requirement() {
+        use crate::TransverseInputReason;
+        use purrdf_testkit::error_capture::Capture;
+
+        let parameters = projection();
+        let source = OperationPoint {
+            x: Rat::from_i64(117),
+            y: Rat::zero(),
+            z: Some(Rat::parse_decimal("123456789012345678901234567890.125").unwrap()),
+            epoch: Some(Rat::parse_decimal("2026.1234567890123456789").unwrap()),
         };
+        let distorted = PreparedEllipsoid::new(Rat::from_i64(6_378_137), Rat::from_i64(2)).unwrap();
+        for (original, point, reason, comparison) in [
+            (
+                TransverseMercator {
+                    scale: Rat::from_i64(-1),
+                    zone: 0,
+                    ..parameters.clone()
+                },
+                source.clone(),
+                TransverseInputReason::Scale,
+                None,
+            ),
+            (
+                TransverseMercator {
+                    ellipsoid: distorted,
+                    ..parameters.clone()
+                },
+                source.clone(),
+                TransverseInputReason::Eccentricity,
+                Some(Rat::parse_decimal("0.01").unwrap()),
+            ),
+            (
+                TransverseMercator {
+                    family: ZoneFamily::Utm,
+                    zone: 61,
+                    zone_prefix: true,
+                    ..parameters.clone()
+                },
+                source.clone(),
+                TransverseInputReason::UtmZone,
+                None,
+            ),
+            (
+                TransverseMercator {
+                    central_meridian: Rat::from_i64(118),
+                    ..parameters.clone()
+                },
+                source.clone(),
+                TransverseInputReason::Meridian,
+                Some(Rat::from_i64(117)),
+            ),
+            (
+                parameters.clone(),
+                OperationPoint {
+                    x: Rat::from_i64(121),
+                    y: Rat::from_i64(-1),
+                    ..source.clone()
+                },
+                TransverseInputReason::Hemisphere,
+                None,
+            ),
+            (
+                TransverseMercator {
+                    family: ZoneFamily::Utm,
+                    zone: 50,
+                    ..parameters.clone()
+                },
+                OperationPoint {
+                    y: Rat::from_i64(85),
+                    ..source.clone()
+                },
+                TransverseInputReason::Latitude,
+                None,
+            ),
+            (
+                parameters.clone(),
+                OperationPoint {
+                    x: Rat::from_i64(121),
+                    ..source.clone()
+                },
+                TransverseInputReason::Zone,
+                Some(Rat::from_i64(3)),
+            ),
+        ] {
+            let mut math = CoordinateMath::new(MathLimits::DEFAULT).unwrap();
+            let error = original
+                .differential_enclosure(&point, &mut math)
+                .unwrap_err();
+            assert_eq!(math.work_used(), 0);
+            let original_error = std::error::Error::source(&error)
+                .unwrap()
+                .source()
+                .unwrap()
+                .source()
+                .unwrap()
+                .downcast_ref::<GeoError>()
+                .unwrap();
+            let GeoError::TransverseInput(cause) = original_error else {
+                panic!("original projection refusal")
+            };
+            assert_eq!(cause.reason, reason);
+            assert_eq!(cause.projection, original);
+            assert_eq!(cause.comparison.as_deref(), comparison.as_ref());
+            let domain = matches!(
+                reason,
+                TransverseInputReason::Hemisphere
+                    | TransverseInputReason::Latitude
+                    | TransverseInputReason::Zone
+            );
+            assert_eq!(cause.point.as_ref(), domain.then_some(&point));
+            assert_eq!(cause.is_domain_error(), domain);
+            assert!(error.is_domain_error());
+            assert!(error.is_expression_error());
+            assert_eq!(
+                error.to_string(),
+                "numerical domain: invalid declared projection or source point"
+            );
+            assert_eq!(
+                Capture::read(original_error)
+                    .child("cause")
+                    .child("projection")
+                    .code,
+                "transverse-mercator"
+            );
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let last = error.clone();
+            assert_eq!(window.close().allocations, 0);
+            drop(error);
+            drop(original);
+            drop(point);
+            assert_eq!(Capture::read(&last).code, "geo-differential-input");
+        }
+        let mut math = CoordinateMath::new(MathLimits::DEFAULT).unwrap();
+        math.set_cancellation(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            true,
+        )));
+        let cancelled = parameters
+            .differential_enclosure(&source, &mut math)
+            .unwrap_err();
+        assert_eq!(cancelled, GeoError::NativeMath(MathError::Cancelled));
+        assert!(!cancelled.is_expression_error());
+        assert_eq!(
+            Capture::read(&cancelled).child("cause").code,
+            "math-cancelled"
+        );
+    }
+
+    #[test]
+    fn central_meridian_jacobian_matches_independent_normal_metric_factors() {
+        let parameters = projection();
         for latitude in [0, 35, 80] {
             let source = OperationPoint {
                 x: Rat::from_i64(117),

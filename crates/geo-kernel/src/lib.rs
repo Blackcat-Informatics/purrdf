@@ -52,12 +52,45 @@ pub use context::{
 };
 pub use de9im::{Dim, IntersectionMatrix, Pattern, Set, Slot};
 pub use ellipsoidal::{GeometryMetricEstimate, GeometryMetricLaw};
-pub use error::{GeoError, RetainedGeoError};
+pub use error::ContextConfigError;
+pub use error::DistanceSupportStage;
+pub use error::EdgeQuotientOperation;
+pub use error::GeoIndexAdmissionReason;
+pub use error::GeodesicEdgeConsumer;
+pub use error::ImageTargetReason;
+pub use error::MembershipInput;
+pub use error::OutputReceiptReason;
+pub use error::PolynomialInputError;
+pub use error::PreparationPhase;
+pub use error::PreparedEdgeRequirement;
+pub use error::ReferenceMismatchReason;
+pub use error::WrittenTangentReason;
+pub use error::{AffineInputError, HelmertInputReason, OperationValidationContext};
+pub use error::{ArgumentInputError, ArgumentInputReason};
+pub use error::{
+    BindingConfigError, CarrierInputError, CarrierInputReason, CrsError, EllipsoidInputError,
+    EllipsoidRequirement, GeoError, GeoFailureCause, GeoJsonShapeError, GeoJsonWriteError,
+    GeometryDomainError, ImageEndpointReason, IndexBindingError, IndexConfigError,
+    IndexSerializationError, JsonSyntaxError, MatrixInputError, PatternInputError,
+    ReferenceRegistrationReason, RetainedGeoCause, RetainedGeoError, UnitFactorReason,
+    UnsupportedRefusal, VocabularyError, VocabularyNamespace, WktError, WktOrdinateContext,
+    WktReason,
+};
+pub use error::{DistanceEnclosureReason, MetricInputError};
+pub use error::{GcjInputReason, MercatorRequirement, ProjectionInputError};
+pub use error::{GridConfigurationReason, GridDomainSide, ModelInputError};
+pub use error::{MetricUnitError, MetricUnitReason};
+pub use error::{PreparationBaselineReason, PreparationReceiptConsumer, SourcePreparationError};
+pub use error::{SourceContactCoordinates, SourceContactReason};
+pub use error::{TransverseInputError, TransverseInputReason};
+pub use error::{TravelOperation, UnitParameterOperation, UnitParameterRequirement};
 pub use exact::{Int, Rat};
+pub use geodesic::NativeEntryOperation;
 pub use geodesic::{PreparedGeodesic, PreparedGeodesicCache};
 pub use geographic::LonLat;
 pub use geom::{
-    Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral, Rings,
+    Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral,
+    GeometryShapeError, GeometryShapeReason, Rings,
 };
 pub use json::JsonValue;
 pub use metric::{Metres, MetricEstimate, MetricProofReceipt, SquareMetres, XsdDoubleMetres};
@@ -67,8 +100,8 @@ pub use operation::{
 };
 pub use prepared::{
     AzimuthLengthArc, OrientedInterior, PreparedCoordinate, PreparedCurve, PreparedEdge,
-    PreparedGeometry, PreparedPolygon, PreparedRegion, RegionInterior, ShortestGeodesicArc,
-    SourceLinearEdge,
+    PreparedEdgeKind, PreparedGeometry, PreparedPolygon, PreparedRegion, PreparedRegionKind,
+    RegionInterior, ShortestGeodesicArc, SourceLinearEdge,
 };
 pub use profile::{
     AxisOrder, ExecutionLimits, ExecutionPolicy, ExecutionPolicyId, GeoBindingId,

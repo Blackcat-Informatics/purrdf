@@ -26,6 +26,9 @@ use purrdf_testkit::harness::report_digest;
 use purrdf_xsd::math::FloatProductBackend;
 use std::sync::Arc;
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 // Certificates bind complete two-gauge area, actual selected-stratum
 // length/perimeter and the original matched-TM continuous-image laws.
 // Against the previous 0x3133ce37aba5ecb2 corpus of 65 records, the 65 shared
@@ -401,4 +404,204 @@ fn public_geo_capability_replay() {
     );
 }
 
-purrdf_testkit::harness_main!(public_geo_capability_replay);
+fn wide_coordinate_refusal_keeps_original_words_after_input_and_error_drop() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{Capture, Event};
+
+    // 2^512 + 1 exercises the heap coefficient rather than an inline scalar.
+    let numerator = purrdf_geo_kernel::Int::from_decimal_digits(
+        "13407807929942597099574024998205846127479365820592393377723561443721764030073546976801874298166903427690031858186486050853753882811946569946433649006084097",
+    )
+    .unwrap();
+    let longitude = Rat::new(numerator, purrdf_geo_kernel::Int::one()).unwrap();
+    let error = LonLat::new(longitude, Rat::zero()).unwrap_err();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes,
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    let fields = Capture::read(cloned.original());
+    assert_eq!(fields.code, "geo-coordinate-out-of-range");
+    assert!(matches!(
+        fields.field("axis"),
+        ErrorValue::Code("longitude")
+    ));
+    let ratio = fields.child("value").child("value").child("value");
+    assert_eq!(ratio.code, "xsd-rational");
+    assert!(matches!(
+        ratio.child("denominator").field("value"),
+        ErrorValue::Signed(1)
+    ));
+    let numerator = ratio.child("numerator").child("value");
+    assert_eq!(numerator.code, "xsd-binary-integer");
+    assert!(matches!(
+        numerator.field("negative"),
+        ErrorValue::Boolean(false)
+    ));
+    let words = numerator
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Value(None, ErrorValue::Unsigned(value)) => Some(*value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(words, [1, 0, 0, 0, 0, 0, 0, 0, 1]);
+}
+
+fn native_caller_refusal_keeps_full_width_fields_without_presentation() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+    let error = purrdf_geo_kernel::GeoError::native_source(CallerRefusal { limit: u128::MAX });
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes,
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    let fields = Capture::read(cloned.original())
+        .child("cause")
+        .child("cause")
+        .child("cause");
+    assert_eq!(fields.code, "caller-refused");
+    assert!(matches!(
+        fields.field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+}
+
+fn scalar_argument_refusal_keeps_original_term_and_native_parser() {
+    use purrdf_core::TermValue;
+    use purrdf_geo_kernel::{ArgumentInputError, ArgumentInputReason};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    let input = TermValue::typed_literal("9223372036854775808", purrdf_xsd::datatype::XSD_INTEGER);
+    let cause = "9223372036854775808".parse::<i64>().unwrap_err();
+    let error =
+        ArgumentInputError::capture(&input, ArgumentInputReason::IntegerLexical(cause), None);
+    drop(input);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let cloned = error.clone();
+    let measured = window.close();
+    assert_eq!(
+        (
+            measured.allocations,
+            measured.requested_bytes,
+            measured.retained_bytes,
+            measured.peak_working_bytes
+        ),
+        (0, 0, 0, 0)
+    );
+    drop(error);
+    assert!(cloned.is_expression_error());
+    let record = Capture::read(cloned.original()).child("cause");
+    assert_eq!(record.code, "geo-argument-input");
+    let original = record.child("value");
+    assert_eq!(original.code, "rdf-term-literal");
+    assert!(matches!(
+        original.field("lexical_form"),
+        ErrorValue::Text("9223372036854775808")
+    ));
+    assert!(
+        matches!(original.field("datatype"), ErrorValue::Iri(value) if value == purrdf_xsd::datatype::XSD_INTEGER)
+    );
+    let reason = record.child("reason");
+    assert_eq!(reason.code, "argument-input-integer-lexical");
+    let cause = reason.child("cause");
+    assert_eq!(cause.code, "std-integer-parse");
+    let kind = cause.child("kind");
+    assert!(matches!(
+        kind.field("name"),
+        ErrorValue::Code("positive-overflow")
+    ));
+}
+
+fn preparation_work_refusal_keeps_original_counters_and_budget() {
+    use purrdf_geo_kernel::{PreparationBudget, PreparationPhase};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    for (phase, code) in [
+        (PreparationPhase::BufferRadius, "preparation-buffer-radius"),
+        (
+            PreparationPhase::OriginalValidation,
+            "preparation-original-validation",
+        ),
+    ] {
+        let policy = ExecutionPolicy::unbounded();
+        let context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        let actual_work = context.work_items();
+        let complete_peak = context.workspace_peak();
+        let mut budget = PreparationBudget::new(policy);
+        budget.retain(u64::MAX, 23).unwrap();
+        let error = budget
+            .retain_context_phase(&context, 41, phase, None)
+            .unwrap_err();
+        assert_eq!(budget.work_items(), u64::MAX);
+        assert_eq!(budget.workspace_bytes(), 23);
+        assert_eq!(budget.workspace_peak(), 23);
+        drop(context);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let cloned = error.clone();
+        let measured = window.close();
+        assert_eq!(
+            (
+                measured.allocations,
+                measured.requested_bytes,
+                measured.retained_bytes,
+                measured.peak_working_bytes
+            ),
+            (0, 0, 0, 0)
+        );
+        drop(error);
+        let record = Capture::read(cloned.original()).child("cause");
+        assert_eq!(record.code, "context-preparation-work");
+        assert_eq!(record.child("phase").code, code);
+        assert!(
+            matches!(record.field("baseline_work"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(record.field("actual_work"), ErrorValue::Unsigned(value) if value == u128::from(actual_work))
+        );
+        assert!(matches!(
+            record.field("retained_workspace"),
+            ErrorValue::ByteCount(41)
+        ));
+        assert!(
+            matches!(record.field("complete_peak"), ErrorValue::ByteCount(value) if value == u128::from(complete_peak))
+        );
+
+        let context = MetricContext::new(GeographicReference::wgs84(), policy).unwrap();
+        let mut budget = PreparationBudget::new(policy);
+        budget
+            .retain_context_phase(&context, 0, phase, None)
+            .unwrap();
+        assert_eq!(budget.work_items(), context.work_items());
+        assert_eq!(budget.workspace_bytes(), 0);
+        assert_eq!(budget.workspace_peak(), context.workspace_peak());
+    }
+}
+
+purrdf_testkit::harness_main!(
+    public_geo_capability_replay,
+    wide_coordinate_refusal_keeps_original_words_after_input_and_error_drop,
+    native_caller_refusal_keeps_full_width_fields_without_presentation,
+    preparation_work_refusal_keeps_original_counters_and_budget,
+    scalar_argument_refusal_keeps_original_term_and_native_parser,
+);

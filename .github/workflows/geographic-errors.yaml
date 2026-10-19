@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Geographic error focused tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - .github/workflows/geographic-errors.yaml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/geo-kernel/**
+      - crates/geo/**
+      - crates/sparql-eval/src/geo/**
+      - crates/sparql-eval/src/error.rs
+      - crates/sparql-eval/src/user_fn.rs
+      - crates/rdf-core/src/dataset_view.rs
+      - crates/rdf-core/src/ir/term_walk.rs
+      - crates/lex/src/json/read.rs
+      - crates/validate/src/geo/**
+      - crates/xsd/src/**
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 8
+  RUST_TEST_THREADS: 4
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Native geographic producers and retained causes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-native
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        id: rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+          cargo -vV
+      - name: Execute native kernel producer and admission controls
+        run: |
+          mkdir -p target
+          cargo test --locked -p purrdf-geo-kernel --lib -- --list > target/geographic-kernel-test-inventory.txt
+          result=0
+          for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests:: cells::cover::tests::reversed_box_ metric::input::tests::radius_refusals_ operation::tests::matching_transverse_scalar_preserves_exact_ties_and_domain operation::transverse::tests::native_projection_refusals_; do
+            grep -Fq -- "$prefix" target/geographic-kernel-test-inventory.txt
+            cargo test --locked -p purrdf-geo-kernel --lib "$prefix" || result=$?
+          done
+          exit "$result"
+      - name: Execute admitted core term-copy controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          cargo test --locked -p purrdf-core --lib -- --list > target/geographic-core-test-inventory.txt
+          prefix=ir::term_walk::tests::admitted_clone_
+          grep -Fq -- "$prefix" target/geographic-core-test-inventory.txt
+          cargo test --locked -p purrdf-core --lib "$prefix"
+      - name: Execute native evaluator transport and caller controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
+          result=0
+          for prefix in geo::error::tests:: geo::functions::standard_tests:: geo::functions::tests:: geo::relation::tests::; do
+            grep -Fq -- "$prefix" target/geographic-evaluator-test-inventory.txt
+            cargo test --locked -p purrdf-sparql-eval --lib "$prefix" || result=$?
+          done
+          exit "$result"
+      - name: Execute public replay and portable inspection controls natively
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: cargo test --locked -p purrdf-geo-kernel --test geo_determinism
+      - name: Execute geographic host refusal parameter controls
+        if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+        run: |
+          cargo test --locked -p purrdf-validate --lib -- --list > target/geographic-host-test-inventory.txt
+          result=0
+          for case in geo::tests::scale_and_configuration_refusals_keep_machine_readable_original_parameters geo::tests::native_math_and_vocabulary_refusals_preserve_host_classes_and_fields; do
+            grep -Fq -- "$case" target/geographic-host-test-inventory.txt
+            cargo test --locked -p purrdf-validate --lib "$case" -- --exact || result=$?
+          done
+          exit "$result"
+
+  wasm:
+    name: WASM geographic replay and error inspection
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-wasm
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+      - name: Set up the pinned WASM toolchain
+        uses: ./.github/actions/wasm-toolchain
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+          cargo -vV
+          wasm-bindgen --version
+          node --version
+      - name: Verify runner failure and host-seal controls
+        run: bash scripts/check-wasm-test-runner.sh
+      - name: Execute public replay and inspection on actual WASM
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: ${{ github.workspace }}/scripts/wasm-test-runner.sh
+        run: cargo test --locked --target wasm32-unknown-unknown -p purrdf-geo-kernel --test geo_determinism

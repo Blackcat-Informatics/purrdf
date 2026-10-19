@@ -28,7 +28,7 @@ pub struct PointIndexPoint {
 }
 
 /// Checked point-index construction and complete-result admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PointIndexLimits {
     /// Maximum complete input/result point count.
     pub max_points: u64,
@@ -36,6 +36,15 @@ pub struct PointIndexLimits {
     pub max_work_items: u64,
     /// Greatest simultaneously retained scratch/index/result workspace bytes.
     pub max_workspace_bytes: u64,
+}
+impl purrdf_hash::error::StructuredError for PointIndexLimits {
+    purrdf_hash::error_visit! {
+        @record self { max_points, max_work_items, max_workspace_bytes } => "geo-point-index-limits" {
+            "max_points" => Unsigned(u128::from(self.max_points)),
+            "max_work_items" => Unsigned(u128::from(self.max_work_items)),
+            "max_workspace_bytes" => ByteCount(u128::from(self.max_workspace_bytes))
+        }
+    }
 }
 impl PointIndexLimits {
     /// Ordinary point-index admission.
@@ -682,9 +691,7 @@ impl PointCellIndex {
 }
 fn validate_limits(limits: PointIndexLimits) -> Result<(), GeoError> {
     if limits.max_points == 0 || limits.max_work_items == 0 || limits.max_workspace_bytes == 0 {
-        return Err(GeoError::InvalidExecutionPolicy(
-            "point-index limits must be positive",
-        ));
+        return Err(GeoError::InvalidPointIndexPolicy(limits));
     }
     Ok(())
 }

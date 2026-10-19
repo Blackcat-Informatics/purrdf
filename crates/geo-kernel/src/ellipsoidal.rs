@@ -226,7 +226,15 @@ pub fn geodesic_area_integral(
     };
     let view = progress
         .absorb_child_result(context, &child, view)?
-        .ok_or_else(|| GeoError::domain("selected geodesic area requires a geodesic edge"))?;
+        .ok_or_else(|| {
+            crate::GeometryDomainError::edge_requirement(
+                edge,
+                crate::PreparedEdgeRequirement::Geodesic {
+                    consumer: crate::GeodesicEdgeConsumer::AreaIntegral,
+                },
+                &mut progress,
+            )
+        })?;
     let reference = context.reference().clone();
     let iterations = context.policy().limits().max_iterations;
     let result = complete_metric(
@@ -1399,6 +1407,47 @@ fn evaluate_jet<'scope>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn area_edge_refusal_keeps_original_law_binding_and_complete_source_coordinates() {
+        let points = [
+            crate::Coord::new(
+                Rat::zero(),
+                Rat::zero(),
+                Some(Rat::from_int(Int::one().shl(4096))),
+                Some(Rat::from_i64(-17)),
+            ),
+            crate::Coord::xy(Rat::one(), Rat::one()),
+        ];
+        let reference = crate::GeographicReference::wgs84();
+        let curve = PreparedCurve::from_source(&points, &reference).unwrap();
+        let mut context = MetricContext::wgs84().unwrap();
+        let error = geodesic_area_integral(&curve.edges()[0], &mut context).unwrap_err();
+        let GeoError::GeometryDomain(cause) = error.original() else {
+            panic!("native area-edge refusal")
+        };
+        assert!(
+            matches!(&**cause, crate::GeometryDomainError::EdgeRequirement {
+            requirement: crate::PreparedEdgeRequirement::Geodesic { consumer: crate::GeodesicEdgeConsumer::AreaIntegral },
+            kind: crate::PreparedEdgeKind::SourceLinear, binding, source,
+        } if *binding == reference.id() && source == &points)
+        );
+        assert_eq!(
+            error.detail(),
+            "selected geodesic area requires a geodesic edge"
+        );
+        drop(context);
+        drop(curve);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let last = error.clone();
+        assert_eq!(window.close().allocations, 0);
+        drop(error);
+        let source = purrdf_testkit::error_capture::Capture::read(last.original())
+            .child("cause")
+            .records("source");
+        assert_eq!(source.len(), 2);
+        assert_eq!(source[0].child("z").code, "geometric-rational");
+    }
 
     #[test]
     fn completed_wide_scalar_keeps_detached_ownership_and_refusal_receipts() {

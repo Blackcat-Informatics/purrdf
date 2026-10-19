@@ -99,7 +99,7 @@ fn caller_restriction_proves_uniqueness_and_outside_always_refuses() {
     assert!(inverse.apply(target.point(), &mut context).is_ok());
     assert!(matches!(
         inverse.apply(&point("120", "40"), &mut context),
-        Err(GeoError::Domain(_))
+        Err(error) if error.is_domain_error()
     ));
     assert!(operation.apply(&point("120", "40"), &mut context).is_err());
 }

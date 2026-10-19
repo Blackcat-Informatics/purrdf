@@ -534,7 +534,7 @@ pub(crate) fn materialize_with_output(
                     }
                     output.push(rings);
                 }
-                Geometry::new_with_memory(CoordDim::Xy, GeometryBody::MultiPolygon(output), memory)
+                Geometry::new(CoordDim::Xy, GeometryBody::MultiPolygon(output))
             },
             |_, _| Ok(()),
         )?;

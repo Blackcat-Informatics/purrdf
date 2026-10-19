@@ -698,15 +698,6 @@ impl<'a> WorkProgress<'a> {
         }
     }
 
-    /// Copy one original diagnostic field through the native retained factory.
-    pub(crate) fn retained_message(
-        &mut self,
-        message: &str,
-        error: fn(String) -> GeoError,
-    ) -> GeoError {
-        self.retained_error(|memory| memory.string(message).map(error))
-    }
-
     pub(crate) fn allocation(
         &mut self,
     ) -> Option<(&mut dyn purrdf_lex::allocation::Admission, usize)> {
@@ -1099,7 +1090,7 @@ impl<'a> WorkProgress<'a> {
         self.error.clone()
     }
 
-    /// Move the first original callback cause through a numerical error seam.
+    /// Move the first original native cause through a numerical error seam.
     /// The outer phase takes this typed owner instead of rendering or copying it.
     pub(crate) fn math_failure(&mut self, error: GeoError) -> MathError {
         if self.error.is_none() {
@@ -1504,8 +1495,21 @@ impl MetricContext {
         storage: u64,
     ) -> Result<Self, GeoError> {
         if work > self.preparation_work_items || storage > self.retained_workspace_bytes {
-            return Err(GeoError::config(
-                "child source receipt exceeds its parent preparation",
+            return Err(GeoError::retained_failure(
+                crate::SourcePreparationError::ChildBaseline {
+                    absorbing: false,
+                    reason: if work > self.preparation_work_items {
+                        crate::PreparationBaselineReason::Work
+                    } else {
+                        crate::PreparationBaselineReason::Workspace
+                    },
+                    requested_work: work,
+                    requested_workspace: storage,
+                    available_work: self.preparation_work_items,
+                    available_workspace: self.retained_workspace_bytes,
+                },
+                GeoError::SourcePreparation,
+                None,
             ));
         }
         let retained = self
@@ -1556,8 +1560,21 @@ impl MetricContext {
         if original_work > child.preparation_work_items()
             || original_storage > child.retained_workspace_bytes()
         {
-            return Err(GeoError::config(
-                "absorbed child receipt exceeds its original baseline",
+            return Err(GeoError::retained_failure(
+                crate::SourcePreparationError::ChildBaseline {
+                    absorbing: true,
+                    reason: if original_work > child.preparation_work_items() {
+                        crate::PreparationBaselineReason::Work
+                    } else {
+                        crate::PreparationBaselineReason::Workspace
+                    },
+                    requested_work: original_work,
+                    requested_workspace: original_storage,
+                    available_work: child.preparation_work_items(),
+                    available_workspace: child.retained_workspace_bytes(),
+                },
+                GeoError::SourcePreparation,
+                None,
             ));
         }
         let work = child
@@ -1722,12 +1739,26 @@ impl MetricContext {
         scratch: LimbScratch,
     ) -> Result<(), GeoError> {
         self.checkpoint()?;
-        if self.integer_scratch.is_some() {
-            return Err(GeoError::config("integer scratch already installed"));
+        if let Some(existing) = &self.integer_scratch {
+            return Err(GeoError::retained_failure(
+                crate::ContextConfigError::ScratchInstalled {
+                    existing_destinations: existing.destination_capacity(),
+                    existing_limbs: existing.limb_capacity(),
+                    incoming_destinations: scratch.destination_capacity(),
+                    incoming_limbs: scratch.limb_capacity(),
+                },
+                GeoError::ContextConfiguration,
+                None,
+            ));
         }
         if scratch.destination_capacity() > self.policy.limits().max_scratch_destinations as usize {
-            return Err(GeoError::config(
-                "borrowed scratch exceeds admitted destination count",
+            return Err(GeoError::retained_failure(
+                crate::ContextConfigError::BorrowedDestinations {
+                    requested: scratch.destination_capacity(),
+                    limit: self.policy.limits().max_scratch_destinations,
+                },
+                GeoError::ContextConfiguration,
+                None,
             ));
         }
         self.integer_scratch = Some(scratch);
@@ -1894,9 +1925,20 @@ impl MetricContext {
     ) -> Result<(), GeoError> {
         self.checkpoint()?;
         if buffers > self.policy.limits().max_scratch_destinations as usize {
-            return Err(GeoError::config(
-                "scratch destination request exceeds admitted execution policy",
-            ));
+            let cause = crate::ContextConfigError::RequestedDestinations {
+                requested: buffers,
+                limit: self.policy.limits().max_scratch_destinations,
+                source_bits,
+                precision_bits,
+            };
+            return Err(match progress {
+                Some(progress) => GeoError::retained_failure_with_progress(
+                    cause,
+                    GeoError::ContextConfiguration,
+                    progress,
+                ),
+                None => GeoError::retained_failure(cause, GeoError::ContextConfiguration, None),
+            });
         }
         let limbs = scratch_limb_capacity(source_bits, precision_bits)?.max(
             self.integer_scratch
@@ -2000,7 +2042,11 @@ impl MetricContext {
     /// Refuses a backend unavailable on the executing target.
     pub fn set_binary64_backend(&mut self, backend: FloatProductBackend) -> Result<(), GeoError> {
         if !backend.is_available() {
-            return Err(GeoError::config("unavailable binary64 product backend"));
+            return Err(GeoError::retained_failure(
+                crate::ContextConfigError::UnavailableBackend { backend },
+                GeoError::ContextConfiguration,
+                None,
+            ));
         }
         self.binary64_backend = backend;
         Ok(())
@@ -2271,8 +2317,19 @@ impl MetricContext {
             .and_then(|value| value.checked_add(self.materialized_receipt_storage_bytes))
             .ok_or(GeoError::ArithmeticOverflow("owned numerical workspace"))?;
         if bytes < owned {
-            return Err(GeoError::config(
-                "retained workspace cannot erase live owned numerical storage",
+            return Err(GeoError::retained_failure(
+                crate::ContextConfigError::OwnedWorkspace {
+                    requested: bytes,
+                    arena: arena_bytes,
+                    coefficients: self.geodesic_coefficients_owned_bytes,
+                    zero_bound: self.zero_conversion_bound_owned_bytes,
+                    taylor: self.taylor_scratch_owned_bytes,
+                    output: self.materialized_output_bytes,
+                    receipts: self.materialized_receipt_storage_bytes,
+                    required: owned,
+                },
+                GeoError::ContextConfiguration,
+                None,
             ));
         }
         Ok(())
@@ -2604,6 +2661,109 @@ mod integer_observer_tests;
 mod tests {
     use super::{MetricContext, MetricWorkObserver};
     use crate::{ExecutionLimits, ExecutionPolicy, GeoError, GeographicReference};
+
+    #[test]
+    fn context_configuration_refusals_keep_original_capacities_and_baselines() {
+        use crate::{ContextConfigError, PreparationBaselineReason, SourcePreparationError};
+        use purrdf_hash::{Backend as _, error::ErrorValue};
+        use purrdf_testkit::error_capture::Capture;
+        use purrdf_xsd::math::FloatProductBackend;
+
+        let mut context = MetricContext::wgs84().unwrap();
+        let limit = context.policy().limits().max_scratch_destinations;
+        let error = context
+            .prepare_integer_scratch_observed(u64::MAX, usize::MAX, 8192, None)
+            .unwrap_err();
+        assert!(matches!(&error, GeoError::ContextConfiguration(cause)
+            if **cause == ContextConfigError::RequestedDestinations { requested: usize::MAX, limit, source_bits: u64::MAX, precision_bits: 8192 }));
+        let fields = Capture::read(&error).child("cause");
+        assert!(
+            matches!(fields.field("source_bits"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(context.integer_scratch().is_none());
+
+        context.prepare_integer_scratch().unwrap();
+        let scratch = context.integer_scratch().unwrap().clone();
+        let destinations = scratch.destination_capacity();
+        let limbs = scratch.limb_capacity();
+        let mut restricted = MetricContext::new(
+            GeographicReference::wgs84(),
+            ExecutionPolicy::new(ExecutionLimits {
+                max_scratch_destinations: 1,
+                ..ExecutionLimits::GEOMETRY
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let error = restricted
+            .set_borrowed_integer_scratch(scratch.clone())
+            .unwrap_err();
+        assert!(matches!(&error, GeoError::ContextConfiguration(cause)
+            if **cause == ContextConfigError::BorrowedDestinations { requested: destinations, limit: 1 }));
+        assert!(restricted.integer_scratch().is_none());
+        let error = context.set_borrowed_integer_scratch(scratch).unwrap_err();
+        assert!(matches!(&error, GeoError::ContextConfiguration(cause)
+            if **cause == ContextConfigError::ScratchInstalled { existing_destinations: destinations, existing_limbs: limbs, incoming_destinations: destinations, incoming_limbs: limbs }));
+        let retained = context.retained_workspace_bytes();
+        let error = context.set_retained_workspace(0).unwrap_err();
+        assert!(matches!(&error, GeoError::ContextConfiguration(cause)
+            if matches!(&**cause, ContextConfigError::OwnedWorkspace { requested: 0, arena, required, .. }
+                if *arena > 0 && *required == retained)));
+        assert_eq!(context.retained_workspace_bytes(), retained);
+
+        for backend in [
+            FloatProductBackend::Portable,
+            FloatProductBackend::Sse2,
+            FloatProductBackend::Avx2,
+            FloatProductBackend::Avx512,
+            FloatProductBackend::Neon,
+            FloatProductBackend::Simd128,
+        ] {
+            if !backend.is_available() {
+                let original = context.binary64_backend();
+                let error = context.set_binary64_backend(backend).unwrap_err();
+                assert!(matches!(&error, GeoError::ContextConfiguration(cause)
+                    if **cause == ContextConfigError::UnavailableBackend { backend }));
+                assert_eq!(context.binary64_backend(), original);
+            }
+        }
+
+        let child = MetricContext::wgs84().unwrap();
+        for (work, storage, reason) in [
+            (u64::MAX, u64::MAX, PreparationBaselineReason::Work),
+            (0, u64::MAX, PreparationBaselineReason::Workspace),
+        ] {
+            for (error, absorbing, available_work, available_workspace) in [
+                (
+                    context
+                        .remaining_child_with_baseline(work, storage)
+                        .unwrap_err(),
+                    false,
+                    context.preparation_work_items(),
+                    context.retained_workspace_bytes(),
+                ),
+                (
+                    context
+                        .absorb_child_with_baseline(&child, work, storage)
+                        .unwrap_err(),
+                    true,
+                    child.preparation_work_items(),
+                    child.retained_workspace_bytes(),
+                ),
+            ] {
+                assert!(matches!(&error, GeoError::SourcePreparation(cause)
+                    if **cause == SourcePreparationError::ChildBaseline { absorbing, reason, requested_work: work, requested_workspace: storage, available_work, available_workspace }));
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let last = error.clone();
+                assert_eq!(window.close().allocations, 0);
+                drop(error);
+                assert_eq!(
+                    Capture::read(&last).child("cause").code,
+                    "source-preparation-child-baseline"
+                );
+            }
+        }
+    }
 
     #[test]
     fn relaxed_scratch_ceilings_admit_only_the_attempted_working_set() {

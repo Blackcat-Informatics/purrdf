@@ -455,10 +455,16 @@ fn interpolated_point(
 ) -> Result<(LonLat, Rat), GeoError> {
     let mut progress = WorkProgress::new(Some(observer));
     let mut admission = ExactAdmission::new(context, &mut progress);
-    if admission.compare(parameter, &Rat::zero())?.is_lt()
-        || admission.compare(parameter, &Rat::one())?.is_gt()
+    if let Some(requirement) =
+        crate::metric::unit_parameter_refusal(parameter, None, |a, b| admission.compare(a, b))?
     {
-        return Err(GeoError::domain("edge parameter outside [0,1]"));
+        return Err(crate::MetricInputError::parameter(
+            parameter,
+            None,
+            crate::UnitParameterOperation::LinearEdge,
+            requirement,
+            &mut progress,
+        ));
     }
     let longitude = crate::SourceLinearEdge::interpolate_ordinate_admitted(
         start.longitude(),
@@ -797,8 +803,11 @@ fn minimize(
     if matches!(a_region, PreparedRegion::Empty) && aa.is_empty()
         || matches!(b_region, PreparedRegion::Empty) && bb.is_empty()
     {
-        return Err(GeoError::domain(
-            "distance requires two nonempty geometries",
+        return Err(crate::GeometryDomainError::distance_support(
+            crate::DistanceSupportStage::OriginalEmpty,
+            [a_region, b_region],
+            [aa.len(), bb.len()],
+            progress,
         ));
     }
     if matches!(a_region, PreparedRegion::Whole) || matches!(b_region, PreparedRegion::Whole) {
@@ -810,8 +819,11 @@ fn minimize(
     if aa.is_empty() || bb.is_empty() {
         // No physical boundary and no component witnessed by the other input:
         // this region is empty. Whole chart regions were recognized by membership.
-        return Err(GeoError::domain(
-            "distance requires two nonempty geometries",
+        return Err(crate::GeometryDomainError::distance_support(
+            crate::DistanceSupportStage::NoBoundary,
+            [a_region, b_region],
+            [aa.len(), bb.len()],
+            progress,
         ));
     }
     let mut lengths = |primitives: &[Primitive<'_>]| -> Result<RetainedBuilder<Rat>, GeoError> {
@@ -932,8 +944,11 @@ fn minimize(
         if goal.physical() {
             return Ok(MinimumAnswer::Physical(false));
         }
-        return Err(GeoError::domain(
-            "distance requires two nonempty geometries",
+        return Err(crate::GeometryDomainError::distance_support(
+            crate::DistanceSupportStage::NoCandidate,
+            [a_region, b_region],
+            [aa.len(), bb.len()],
+            progress,
         ));
     }
     let epsilon = decimal("0.000003");
@@ -1687,6 +1702,29 @@ fn decimal(value: &str) -> Rat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_distance_refusal_keeps_both_native_supports_and_threshold_priority() {
+        let empty = geometry("POINT EMPTY");
+        let point = geometry("POINT(1 2)");
+        let mut context = MetricContext::wgs84().unwrap();
+        for (a, b, counts) in [(&empty, &point, [0, 1]), (&point, &empty, [1, 0])] {
+            let error = distance(a, b, &mut context).unwrap_err();
+            assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+                if matches!(&**cause, crate::GeometryDomainError::DistanceSupport { stage: crate::DistanceSupportStage::OriginalEmpty, regions, primitives }
+                    if *regions == [crate::PreparedRegionKind::Empty; 2] && *primitives == counts)));
+            assert_eq!(error.detail(), "distance requires two nonempty geometries");
+            assert!(error.is_expression_error());
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(error.original())
+                    .child("cause")
+                    .child("stage")
+                    .code,
+                "distance-support-original-empty"
+            );
+            assert!(!within_physical(a, b, &Metres::new(Rat::from_i64(-1)), &mut context).unwrap());
+        }
+    }
 
     #[test]
     fn symbolic_point_inventory_keeps_dimension_zero_and_original_physical_thresholds() {

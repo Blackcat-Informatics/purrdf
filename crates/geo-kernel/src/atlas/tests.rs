@@ -7,6 +7,113 @@ use crate::{
 };
 use purrdf_iri::vocab::ogc;
 
+#[test]
+fn written_boundary_refusals_keep_chart_position_and_actual_tangent_inputs() {
+    let source = region("POLYGON((0 0,1 0,1 1,0 0))");
+    let PreparedRegion::Polygons(polygons) = &source else {
+        panic!("written polygon")
+    };
+    let from = Coord::new(
+        Rat::from_i64(7),
+        Rat::from_i64(8),
+        Some(Rat::from_i64(9)),
+        Some(Rat::from_i64(10)),
+    );
+    let to = from.clone();
+    for (point, reason) in [
+        (
+            Coord::xy(Rat::zero(), Rat::from_i64(90)),
+            crate::WrittenTangentReason::PhysicalPole,
+        ),
+        (
+            Coord::xy(Rat::zero(), Rat::zero()),
+            crate::WrittenTangentReason::Zero,
+        ),
+    ] {
+        let mut context = MetricContext::wgs84().unwrap();
+        let error = written_boundary_locations_in(
+            &point,
+            &from,
+            &to,
+            polygons,
+            false,
+            &mut context,
+            &mut WorkProgress::integer(None),
+        )
+        .unwrap_err();
+        let GeoError::GeometryDomain(cause) = error.original() else {
+            panic!("native chart tangent")
+        };
+        let crate::GeometryDomainError::WrittenTangent {
+            reason: original,
+            points,
+            difference,
+        } = &**cause
+        else {
+            panic!("original tangent inputs")
+        };
+        assert_eq!(*original, reason);
+        assert_eq!(&**points, &[point, from.clone(), to.clone()]);
+        match reason {
+            crate::WrittenTangentReason::PhysicalPole => {
+                assert!(difference.is_none());
+                assert_eq!(error.detail(), "a physical pole has no open chart tangent");
+            }
+            crate::WrittenTangentReason::Zero => {
+                let difference = difference.as_ref().unwrap();
+                assert!(difference.iter().all(|value| value.is_zero()));
+                assert_eq!(error.detail(), "zero written noded tangent");
+            }
+        }
+        let capture = purrdf_testkit::error_capture::Capture::read(error.original()).child("cause");
+        assert_eq!(capture.records("points").len(), 3);
+    }
+    let reference = GeographicReference::wgs84();
+    let curve = PreparedCurve::from_source(&[from.clone(), to.clone()], &reference).unwrap();
+    let support = PreparedPolygon::from_selected_support(vec![curve], &reference).unwrap();
+    let polygons = [polygons[0].clone(), support];
+    let mut context = MetricContext::wgs84().unwrap();
+    let error = written_boundary_locations_in(
+        &from,
+        &from,
+        &to,
+        &polygons,
+        false,
+        &mut context,
+        &mut WorkProgress::integer(None),
+    )
+    .unwrap_err();
+    assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+        if matches!(&**cause, crate::GeometryDomainError::MissingWrittenChart { index: 1, polygon_count: 2, ring_count: 1, binding, closed_support: true, .. }
+            if *binding == reference.id())));
+    assert_eq!(
+        error.detail(),
+        "written boundary sides require source charts"
+    );
+}
+
+#[test]
+fn membership_refusals_preserve_compared_counts_and_original_class_order() {
+    let source = region("POLYGON((0 0,1 0,1 1,0 0))");
+    let PreparedRegion::Polygons(polygons) = &source else {
+        panic!("written polygon")
+    };
+    let classes = [true, false, true];
+    let mut progress = WorkProgress::integer(None);
+    let error = polygon_base_membership(&polygons[0], &classes, &mut progress).unwrap_err();
+    assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+        if matches!(&**cause, crate::GeometryDomainError::Membership { input: crate::MembershipInput::PolygonRings, expected: 1, actual } if actual == &classes)));
+    assert_eq!(error.detail(), "polygon membership ring count mismatch");
+    for (source, complementary) in [(source.clone(), false), (source.complement(), true)] {
+        let error = region_membership(&source, &classes, &mut progress).unwrap_err();
+        assert!(matches!(error.original(), GeoError::GeometryDomain(cause)
+            if matches!(&**cause, crate::GeometryDomainError::Membership { input: crate::MembershipInput::RegionPolygons { complementary: original }, expected: 1, actual }
+                if *original == complementary && actual == &classes)));
+        assert_eq!(error.detail(), "region membership polygon count mismatch");
+        assert!(region_membership(&source, &[true], &mut progress).is_ok());
+    }
+}
+
 fn region(text: &str) -> PreparedRegion {
     let literal = crate::wkt::parse(text, &Crs::new(ogc::CRS84).expect("IRI")).expect("carrier");
     PreparedGeometry::from_literal(&literal, &GeoProfile::standard())

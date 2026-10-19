@@ -23,6 +23,14 @@ pub enum Rounding {
     Up,
 }
 
+impl purrdf_hash::error::StructuredError for Rounding {
+    purrdf_hash::error_visit! {
+        NearestEven => "rounding-nearest-even" {},
+        Down => "rounding-down" {},
+        Up => "rounding-up" {},
+    }
+}
+
 /// Canonical coprime numerator and positive denominator for `n / 2^bits`.
 /// Binary factors are removed exactly; no general GCD or division is needed.
 #[must_use]

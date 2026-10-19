@@ -26,7 +26,8 @@ pub(super) fn evaluate(
 ) -> Result<Option<DirectionalImage>, MathError> {
     match model {
         OperationModel::Helmert(parameters) => {
-            let (image, matrix) = parameters.evaluate_with_matrix(point, coordinates, math)?;
+            let (image, matrix) =
+                parameters.evaluate_with_matrix(point, coordinates, math, progress)?;
             with_matrix(image, &matrix, derivative, math).map(Some)
         }
         OperationModel::GeographicToGeocentric { ellipsoid } => {
