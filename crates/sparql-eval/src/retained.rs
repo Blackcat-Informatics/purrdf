@@ -511,11 +511,30 @@ impl RetainedDiagnostic {
     ) -> Result<Self, EvalError> {
         let prepared = PreparedDiagnosticCause::new(cause, cause_frame)?;
         let mut report_frame = crate::workspace::LexicalFrame::new(prepared.frame.workspace());
-        let diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+        let rendered = purrdf_core::RdfDiagnostic::try_error_with_memory(
             code(&prepared.value),
             &prepared.value,
             &mut purrdf_lex::allocation::Memory::new(&mut report_frame),
-        )
+        );
+        let diagnostic = match rendered {
+            Err(purrdf_lex::allocation::StorageError::FormattingFailed)
+                if !prepared.frame.workspace().is_bounded() =>
+            {
+                // The failed renderer has dropped its temporary strings. Refund
+                // their frame before publishing an explicit presentation refusal;
+                // the prepared original cause and its grant remain untouched.
+                report_frame = crate::workspace::LexicalFrame::new(prepared.frame.workspace());
+                let refusal = EvalError::UnstableNativeDiagnostic;
+                purrdf_core::RdfDiagnostic::try_error_with_memory(
+                    crate::engine::eval_diagnostic_code(&refusal, "native-sparql-query-eval"),
+                    &refusal,
+                    &mut purrdf_lex::allocation::Memory::new(&mut report_frame),
+                )
+            }
+            // Bounded rendering and actual sink/admission failures retain their
+            // original operational refusal; none becomes a resident report.
+            result => result,
+        }
         .map_err(|error| report_frame.storage_error(error, "query diagnostic text"))?;
         let cause = prepared.publish()?;
         let admitted = report_frame.admitted_bytes();
@@ -632,6 +651,76 @@ mod query_cause_tests {
     use purrdf_hash::error::ErrorValue;
     use purrdf_testkit::error_capture::Capture;
     use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    struct RefusingFormatter;
+
+    impl core::fmt::Display for RefusingFormatter {
+        fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            Err(core::fmt::Error)
+        }
+    }
+
+    impl std::error::Error for RefusingFormatter {}
+
+    impl purrdf_hash::error::StructuredError for RefusingFormatter {
+        fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+            visitor.variant("bounded-formatter-refusal-control");
+        }
+    }
+
+    #[test]
+    fn refusing_formatter_keeps_original_grant_and_bounded_refusal() {
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let error = crate::RetainedNativeFailure::error(
+            crate::NativeDiagnosticKind::Function,
+            RefusingFormatter,
+            &capability,
+        );
+        let report = crate::EvaluationFailure::Evaluation(error).into_diagnostic();
+        assert_eq!(
+            report.code,
+            EvalError::UnstableNativeDiagnostic
+                .diagnostic_code()
+                .unwrap()
+        );
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        let copy = report.clone();
+        drop(report);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        assert_eq!(
+            Capture::read(&copy)
+                .child("attachments")
+                .child("native_cause")
+                .child("cause")
+                .child("cause")
+                .code,
+            "bounded-formatter-refusal-control"
+        );
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = crate::RetainedNativeFailure::error(
+            crate::NativeDiagnosticKind::Function,
+            RefusingFormatter,
+            &capability,
+        );
+        assert!(matches!(
+            RetainedDiagnostic::from_evaluation(error, &capability),
+            Err(EvalError::UnstableNativeDiagnostic)
+        ));
+        assert_eq!(window.close().retained_bytes, 0);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
 
     #[test]
     fn query_cause_survives_resident_copy_after_report_and_query_are_dropped() {
