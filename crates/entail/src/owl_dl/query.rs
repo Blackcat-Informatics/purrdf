@@ -370,9 +370,10 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     inject_tasks(&mut b, &kb, &q_index, &named_cid, &tasks, &mut fresh)
         .map_err(EntailError::with_read_error)?;
 
-    let dataset = b
-        .freeze()
-        .map_err(|e| EntailError::Build(format!("freeze augmented dataset: {e}")))?;
+    let dataset = b.freeze().map_err(|cause| EntailError::Dataset {
+        phase: crate::DatasetFailurePhase::AugmentedFreeze,
+        cause,
+    })?;
     Ok((dataset, ReasoningReport::of_dl_run(&boundaries)))
 }
 

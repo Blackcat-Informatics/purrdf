@@ -343,6 +343,22 @@ impl Materialization<'_> {
 /// The typed refusal of an object-property hierarchy before reasoning starts.
 pub use owl_dl::roles::RoleHierarchyError;
 
+/// The dataset-producing operation that retained an original RDF diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatasetFailurePhase {
+    /// Building a derived dataset through the shared RDF boundary.
+    Build,
+    /// Freezing the query-directed augmented dataset.
+    AugmentedFreeze,
+}
+
+impl purrdf_hash::error::StructuredError for DatasetFailurePhase {
+    purrdf_hash::error_visit! {
+        Build => "entailment-dataset-build" {},
+        AugmentedFreeze => "entailment-augmented-freeze" {},
+    }
+}
+
 /// Why a closure could not be produced.
 ///
 /// [`purrdf_hash::error::StructuredError`] exposes the original variant, fields
@@ -359,6 +375,13 @@ pub enum EntailError<E = std::convert::Infallible> {
     Storage(purrdf_lex::allocation::StorageError),
     /// Building the derived dataset failed.
     Build(String),
+    /// An original RDF build diagnostic, with its native payload and reporting metadata.
+    Dataset {
+        /// The operation that refused to publish a dataset.
+        phase: DatasetFailurePhase,
+        /// The original diagnostic, retained without rendering or copying.
+        cause: purrdf_core::RdfDiagnostic,
+    },
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
     /// class-expression graph or an unrecognized RIF construct).
     Parse(String),
@@ -565,6 +588,9 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
     purrdf_hash::error_visit! {
         Storage(cause) => "entailment-storage" { "cause" => Cause(cause) },
         Build(message) => "entailment-build" { "message" => Message(message) },
+        Dataset { phase, cause } => "entailment-dataset" {
+            "phase" => Record(phase), "cause" => Cause(cause),
+        },
         Parse(message) => "entailment-parse" { "message" => Message(message) },
         RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
         ProofsNotRecorded => "entailment-proofs-not-recorded" {},
@@ -617,6 +643,7 @@ impl EntailError {
         match self {
             Self::Storage(cause) => EntailError::Storage(cause),
             Self::Build(reason) => EntailError::Build(reason),
+            Self::Dataset { phase, cause } => EntailError::Dataset { phase, cause },
             Self::Parse(reason) => EntailError::Parse(reason),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
@@ -645,9 +672,10 @@ purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocatio
 
 impl<E> From<purrdf_core::RdfDiagnostic> for EntailError<E> {
     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
-        error
-            .storage_error()
-            .map_or_else(|| Self::Build(error.to_string()), Self::Storage)
+        Self::Dataset {
+            phase: DatasetFailurePhase::Build,
+            cause: error,
+        }
     }
 }
 
@@ -665,6 +693,16 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
         match self {
             Self::Storage(error) => write!(f, "entailment storage error: {error}"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
+            Self::Dataset { phase, cause } => match phase {
+                DatasetFailurePhase::Build => match cause.storage_error() {
+                    Some(storage) => write!(f, "entailment storage error: {storage}"),
+                    None => write!(f, "entailment build error: {cause}"),
+                },
+                DatasetFailurePhase::AugmentedFreeze => write!(
+                    f,
+                    "entailment build error: freeze augmented dataset: {cause}"
+                ),
+            },
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
             Self::ProofsNotRecorded => write!(
@@ -800,6 +838,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(inner) => Some(inner),
+            Self::Dataset { cause, .. } => Some(cause),
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),

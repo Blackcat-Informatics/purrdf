@@ -306,6 +306,90 @@ fn empty_collection_admission_checks_nil_structure() {
     }
 }
 
+fn dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::{RdfDiagnostic, RdfLocation};
+    use purrdf_entail::DatasetFailurePhase;
+    use purrdf_hash::error::{ErrorValue, NativeError};
+    use purrdf_lex::allocation::{Memory, Resident, SharedOwned};
+    use purrdf_testkit::error_capture::{CallerRefusal, Capture};
+
+    for phase in [
+        DatasetFailurePhase::Build,
+        DatasetFailurePhase::AugmentedFreeze,
+    ] {
+        // This control uses unrestricted resident allocation; its grant is unit.
+        let cause = SharedOwned::try_from_admitted(
+            Box::new(CallerRefusal { limit: u128::MAX }) as Box<dyn NativeError>,
+            (),
+        )
+        .unwrap();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let diagnostic = RdfDiagnostic::error("original-code", "original-message")
+            .with_detail("original-detail")
+            .with_location(RdfLocation {
+                path: Some("original-input.ttl".into()),
+                line: Some(u64::MAX),
+                ..RdfLocation::default()
+            })
+            .with_native_cause(cause, &mut memory)
+            .unwrap();
+        let original_code = diagnostic.code.as_ptr();
+        let expected = match phase {
+            DatasetFailurePhase::Build => format!("entailment build error: {diagnostic}"),
+            DatasetFailurePhase::AugmentedFreeze => {
+                format!("entailment build error: freeze augmented dataset: {diagnostic}")
+            }
+        };
+        let buffer = Vec::with_capacity(4);
+        let window = CurrentThreadWindow::open();
+        let error: EntailError = match phase {
+            DatasetFailurePhase::Build => diagnostic.into(),
+            DatasetFailurePhase::AugmentedFreeze => EntailError::Dataset {
+                phase,
+                cause: diagnostic,
+            },
+        };
+        let error = error.with_read_error::<CallerRefusal>();
+        let fields = Capture::read_with_buffer(&error, buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, "entailment-dataset");
+        let original = fields.child("cause");
+        assert!(matches!(original.field("code"), ErrorValue::Code(value)
+            if value == "original-code" && value.as_ptr() == original_code));
+        assert!(matches!(
+            original.field("message"),
+            ErrorValue::Text("original-message")
+        ));
+        assert!(matches!(
+            original.field("detail"),
+            ErrorValue::Text("original-detail")
+        ));
+        assert!(
+            matches!(original.child("location").field("line"), ErrorValue::Unsigned(value)
+            if value == u128::from(u64::MAX))
+        );
+        assert!(matches!(
+            original
+                .child("attachments")
+                .child("native_cause")
+                .field("limit"),
+            ErrorValue::Unsigned(u128::MAX)
+        ));
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<RdfDiagnostic>()
+            .unwrap();
+        let native: &(dyn std::error::Error + 'static) = native.native_cause().unwrap();
+        assert_eq!(
+            native.downcast_ref::<CallerRefusal>().unwrap().limit,
+            u128::MAX
+        );
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
 #[derive(Default)]
 struct Ontology {
     builder: RdfDatasetBuilder,
@@ -1131,6 +1215,7 @@ fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
 }
 
 purrdf_testkit::harness_main!(
+    dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering,
     actual_collection_refusals_keep_original_terms_and_the_ordered_prefix,
     empty_collection_admission_checks_nil_structure,
     import_conflict_inspection_keeps_original_versions_and_default_graph,

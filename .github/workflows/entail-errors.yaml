@@ -55,6 +55,7 @@ jobs:
           grep -Fq import_conflict_inspection_keeps_original_versions_and_default_graph target/role-error-test-inventory.txt
           grep -Fq actual_collection_refusals_keep_original_terms_and_the_ordered_prefix target/role-error-test-inventory.txt
           grep -Fq empty_collection_admission_checks_nil_structure target/role-error-test-inventory.txt
+          grep -Fq dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering target/role-error-test-inventory.txt
           cargo test --locked -p purrdf-entail --test regular_role_chains
       - name: Execute native collection indexing and existing structural refusal controls
         run: |
@@ -106,5 +107,6 @@ jobs:
             import_conflict_inspection_keeps_original_versions_and_default_graph \
             actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
             empty_collection_admission_checks_nil_structure \
+            dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
             non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
             class_expression_role_refusals_retain_original_source_terms
