@@ -22,11 +22,23 @@ use purrdf_xsd::temporal::DateTime;
 /// once per query so all `NOW()` calls in one query agree (SPARQL 1.1 §17.4.5.1).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn wall_clock_now() -> DateTime {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-    purrdf_xsd::datetime_from_unix_seconds(secs)
+    purrdf_xsd::datetime_from_unix_seconds(unix_seconds(std::time::SystemTime::now()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unix_seconds(time: std::time::SystemTime) -> i64 {
+    use std::time::UNIX_EPOCH;
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+        Err(before_epoch) => {
+            let duration = before_epoch.duration();
+            // Whole seconds are rounded down on both sides of the epoch. A
+            // negative fractional second belongs to the preceding whole second.
+            let seconds =
+                -i128::from(duration.as_secs()) - i128::from(duration.subsec_nanos() != 0);
+            i64::try_from(seconds).unwrap_or(i64::MIN)
+        }
+    }
 }
 
 /// A fresh 64-bit entropy seed from the OS CSPRNG.
@@ -39,10 +51,15 @@ pub(crate) fn entropy_seed() -> u64 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn wall_clock_now() -> DateTime {
-    // The host Date.now() is milliseconds since the Unix epoch.
-    #[allow(clippy::cast_possible_truncation)]
-    let secs = (crate::wasm_host::date_now() / 1000.0) as i64;
-    purrdf_xsd::datetime_from_unix_seconds(secs)
+    purrdf_xsd::datetime_from_unix_seconds(unix_seconds_from_millis(crate::wasm_host::date_now()))
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+// Floor establishes whole seconds; the cast preserves the existing saturating
+// i64 range law for the host's floating-point millisecond representation.
+#[allow(clippy::cast_possible_truncation)]
+fn unix_seconds_from_millis(milliseconds: f64) -> i64 {
+    (milliseconds / 1000.0).floor() as i64
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -51,4 +68,55 @@ pub(crate) fn entropy_seed() -> u64 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let draw = || (crate::wasm_host::math_random() * f64::from(u32::MAX)) as u64;
     (draw() << 32) | draw()
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_clock_preserves_instants_before_the_epoch() {
+        use std::time::{Duration, UNIX_EPOCH};
+        for (duration, expected) in [
+            (Duration::from_nanos(1), -1),
+            (Duration::from_millis(999), -1),
+            (Duration::from_secs(1), -1),
+            (Duration::new(1, 1), -2),
+        ] {
+            assert_eq!(super::unix_seconds(UNIX_EPOCH - duration), expected);
+        }
+        assert_eq!(super::unix_seconds(UNIX_EPOCH), 0);
+        assert_eq!(
+            super::unix_seconds(UNIX_EPOCH + Duration::from_millis(999)),
+            0
+        );
+        assert_eq!(super::unix_seconds(UNIX_EPOCH + Duration::from_secs(1)), 1);
+        assert_eq!(
+            purrdf_xsd::datetime_from_unix_seconds(super::unix_seconds(
+                UNIX_EPOCH - Duration::from_nanos(1)
+            ))
+            .canonical_lexical(),
+            "1969-12-31T23:59:59Z"
+        );
+    }
+
+    #[test]
+    fn host_milliseconds_round_down_at_the_epoch_boundary() {
+        for (milliseconds, expected) in [
+            (-1500.0, -2),
+            (-1000.0, -1),
+            (-1.0, -1),
+            (0.0, 0),
+            (1.0, 0),
+            (999.0, 0),
+            (1000.0, 1),
+            (1500.0, 1),
+        ] {
+            assert_eq!(super::unix_seconds_from_millis(milliseconds), expected);
+        }
+        assert_eq!(
+            purrdf_xsd::datetime_from_unix_seconds(super::unix_seconds_from_millis(-1500.0))
+                .canonical_lexical(),
+            "1969-12-31T23:59:58Z"
+        );
+    }
 }
