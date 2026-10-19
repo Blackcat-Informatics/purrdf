@@ -146,6 +146,10 @@ test = true
 # Complete native semantic expectations on the shared harness.
 # Actual WASM behaviors are selected separately in `make wasm-test`.
 [[test]]
+name = "rule_coordinates"
+harness = false
+
+[[test]]
 name = "product_wasm"
 harness = false
 

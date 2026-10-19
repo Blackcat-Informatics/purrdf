@@ -30,6 +30,65 @@ fn measured<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
 }
 
 #[test]
+fn admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs() {
+    use purrdf_lex::allocation::{Memory, Resident, SharedOwned};
+    let lexical = format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096));
+    let XsdValue::DateTime(original) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime value")
+    };
+    let expected = original.canonical_lexical();
+    let mut account = Resident;
+    let mut memory = Memory::new(&mut account);
+    let mut prepared = original.detached_with_memory(&mut memory).unwrap();
+    let admitted = memory.admitted_bytes();
+    let (owner, _) = SharedOwned::retain_current(
+        &mut account,
+        Resident,
+        admitted,
+        std::alloc::Layout::new::<()>(),
+    )
+    .unwrap();
+    prepared.publish_detached(&owner).unwrap();
+    drop(owner);
+    drop(original);
+    let (copied, allocation) = measured(|| prepared.clone());
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.retained_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+    assert_eq!(prepared.canonical_lexical(), expected);
+    drop(prepared);
+    assert_eq!(copied.canonical_lexical(), expected);
+}
+
+#[test]
+fn admitted_datetime_refusal_precedes_any_copy_allocation() {
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+    struct Refuse;
+    impl Admission for Refuse {
+        fn resize(&mut self, _: usize) -> Result<(), StorageError> {
+            Err(StorageError::AdmissionFailed)
+        }
+    }
+    let lexical = format!("2024-02-29T12:34:56.{}Z", "7".repeat(4096));
+    let XsdValue::DateTime(original) = purrdf_xsd::parse(&lexical, XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("dateTime value")
+    };
+    let expected = original.canonical_lexical();
+    let mut account = Refuse;
+    let mut memory = Memory::new(&mut account);
+    let (result, allocation) = measured(|| original.detached_with_memory(&mut memory));
+    assert!(matches!(result, Err(StorageError::AdmissionFailed)));
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.retained_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+    assert_eq!(original.canonical_lexical(), expected);
+}
+
+#[test]
 fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
     use purrdf_lex::allocation::{Admission, Memory, StorageError};
     use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};

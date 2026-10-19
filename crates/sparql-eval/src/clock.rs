@@ -4,7 +4,8 @@
 //! Per-query non-deterministic inputs, read from the host platform: the wall clock
 //! `NOW()` returns and the entropy seed for `RAND()`/`UUID()`/`STRUUID()`. The read is
 //! written per target (a wasm build has no `SystemTime`/OS entropy syscall) but every
-//! target returns the correct live value — there is no caller-visible knob.
+//! target returns the correct live default. Query options can select these
+//! inputs explicitly before their corresponding host reads are sampled.
 //!
 //! These are two of the crate's three host-platform reads. The third is the governor
 //! path's deadline clock, which is confined to

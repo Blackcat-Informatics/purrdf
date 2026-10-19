@@ -1355,8 +1355,8 @@ struct JobAmbient {
 }
 
 // The ledger's swapped entries are exactly the statics these two contexts move: the five
-// of `purrdf_stack::Context` and the ten of the SHACL `AmbientContext`.
-const _: () = assert!(crate::interleaving::swapped_count() == 5 + 10);
+// of `purrdf_stack::Context` and the eleven of the SHACL `AmbientContext`.
+const _: () = assert!(crate::interleaving::swapped_count() == 5 + 11);
 
 impl JobAmbient {
     /// The state a job starts its run with: `floor` (its region's base) as the stack

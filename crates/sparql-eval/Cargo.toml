@@ -329,6 +329,10 @@ name = "query_completion"
 harness = false
 
 [[test]]
+name = "query_coordinates"
+harness = false
+
+[[test]]
 # Original evaluator causes inspected without human rendering, native and WASM.
 name = "structured_errors"
 harness = false

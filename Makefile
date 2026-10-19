@@ -969,6 +969,16 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				primitive_identity_is_disjoint_and_unordered \
 				ranges_use_collapsed_character_lengths_and_primitive_identity \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_governance -- --exact \
+				admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs \
+				admitted_datetime_refusal_precedes_any_copy_allocation \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_coordinates -- --exact \
+				supplied_inputs_repeat_complete_results_without_host_reads \
+				supplied_large_fraction_and_timezone_survive_repeated_now \
+				prepared_executions_select_fresh_inputs_without_changing_the_plan \
+				bounded_coordinate_owners_price_real_allocations_and_release_after_last_output \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
 				borrowed_value_equality_matches_the_query_operator_on_this_target \
 				any_uri_casts_keep_their_primitive_domain_on_this_target \
@@ -1013,6 +1023,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test srl_language -- --exact \
 				triple_carrier_runs_the_public_rl_program_without_quad_storage \
 				triple_rl_keeps_statement_roles_and_scoped_blank_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test rule_coordinates -- --exact \
+				shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes \
+				parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test physical_shapes -- --exact \
 				graph_free_corpus_keys_ranking_and_query graph_free_rdf12_partitions_and_named_refusal \
