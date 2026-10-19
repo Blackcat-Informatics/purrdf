@@ -56,13 +56,13 @@ jobs:
           mkdir -p target
           cargo test --locked -p purrdf-geo-kernel --lib -- --list > target/geographic-kernel-test-inventory.txt
           for prefix in context::retained::tests:: operation::source_admission_tests:: wkt::tests::; do
-            rg --fixed-strings --quiet "$prefix" target/geographic-kernel-test-inventory.txt
+            grep -Fq -- "$prefix" target/geographic-kernel-test-inventory.txt
             cargo test --locked -p purrdf-geo-kernel --lib "$prefix"
           done
       - name: Execute native evaluator transport and caller controls
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib -- --list > target/geographic-evaluator-test-inventory.txt
           for prefix in geo::error::tests:: geo::functions::standard_tests::; do
-            rg --fixed-strings --quiet "$prefix" target/geographic-evaluator-test-inventory.txt
+            grep -Fq -- "$prefix" target/geographic-evaluator-test-inventory.txt
             cargo test --locked -p purrdf-sparql-eval --lib "$prefix"
           done
