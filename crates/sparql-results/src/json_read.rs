@@ -50,7 +50,7 @@ use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 use purrdf_lex::json::{self, Event, Kind, Limits, Reader, Value};
 
-use crate::error::Error;
+use crate::error::{Error, ReadReason, ReadRefusal, ReadShape, ReadToken};
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 use purrdf_core::datatype::XSD_STRING;
@@ -120,7 +120,7 @@ pub struct BoundedParsedSolutions {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed JSON, a non-object document, an `ASK`
+/// Returns [`Error::Json`] on malformed JSON, or [`Error::Format`] on a non-object document, an `ASK`
 /// (`boolean`) document (use [`from_json_boolean`]), or a binding object whose
 /// `type`/`value` shape is invalid.
 pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
@@ -138,7 +138,7 @@ pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 /// The original result shape refusal or physical producer failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadError {
-    /// JSON syntax or SPARQL result shape, preserving its original message.
+    /// JSON syntax or SPARQL result shape, preserving its original native cause.
     Lexical(Error),
     /// Original admission, layout or allocator refusal.
     Storage(StorageError),
@@ -152,7 +152,14 @@ impl std::fmt::Display for ReadError {
         }
     }
 }
-impl std::error::Error for ReadError {}
+impl purrdf_hash::error::StructuredError for ReadError {
+    purrdf_hash::error_visit! {
+        Lexical(cause) => "sparql-results-read-lexical" { "cause" => Cause(cause) },
+        Storage(cause) => "sparql-results-read-storage" { "cause" => Cause(cause) },
+    }
+}
+
+purrdf_lex::error_source!(ReadError { Lexical, Storage });
 
 /// Decode the original SELECT producer under caller-owned physical admission.
 /// The caller keeps this original grant with the returned payload or refusal.
@@ -165,6 +172,7 @@ pub fn from_json_with_memory<S: Admission + ?Sized>(
     max_cells: Option<u64>,
     memory: &mut Memory<'_, S>,
 ) -> Result<BoundedParsedSolutions, ReadError> {
+    let initial_bytes = memory.admitted_bytes();
     let result = (|| {
         if let Some(max_cells) = max_cells {
             return bounded_document(bytes, max_cells, memory);
@@ -178,6 +186,23 @@ pub fn from_json_with_memory<S: Admission + ?Sized>(
             truncated: false,
         })
     })();
+    // On grammar/storage failure no parser-owned output survives this scope.
+    // All local strings, frames and rows have already been destroyed. JSON's
+    // native grammar error and StorageError are inline, so refund the remaining
+    // transient charge while preserving the caller's pre-existing ownership.
+    if matches!(&result, Err(Error::Json(_) | Error::Storage(_))) {
+        let transient = memory
+            .admitted_bytes()
+            .checked_sub(initial_bytes)
+            .ok_or(ReadError::Storage(StorageError::SizeOverflow))?;
+        let refund = memory.release_bytes(transient).map_err(ReadError::Storage);
+        if let Err(Error::Storage(error)) = &result {
+            // Match Memory::release_vec_after: a refusal to shrink keeps the
+            // original grant alive and never replaces the first physical fault.
+            return Err(ReadError::Storage(*error));
+        }
+        refund?;
+    }
     result.map_err(|error| match error {
         Error::Storage(error) => ReadError::Storage(error),
         error => ReadError::Lexical(error),
@@ -217,7 +242,15 @@ fn bounded_document<S: Admission + ?Sized>(
         let width = u64::try_from(variables.len()).unwrap_or(u64::MAX);
         Some(usize::try_from(max_cells / width).unwrap_or(usize::MAX))
     };
-    let (rows, truncated) = scan_bindings(bytes, &variables, row_limit, memory)?;
+    let (rows, truncated) = match scan_bindings(bytes, &variables, row_limit, memory) {
+        Ok(rows) => rows,
+        Err(error) => {
+            release_items(variables, memory, |text, memory| {
+                memory.release_string(text).map_err(Error::Storage)
+            })?;
+            return Err(error);
+        }
+    };
     Ok(BoundedParsedSolutions {
         solutions: ParsedSolutions { variables, rows },
         truncated,
@@ -233,7 +266,7 @@ fn scan_variables<S: Admission + ?Sized>(
     let mut reader =
         Reader::from_slice(bytes, LIMITS).map_err(|error| syntax_with_memory(error, memory))?;
     let result = (|| {
-        open_object(&mut reader, "top level is not an object", memory)?;
+        open_object(&mut reader, ReadShape::TopObject, memory)?;
         let mut variables = None;
         while let Some(key) = next_key(&mut reader, memory)? {
             if key == "head" && variables.is_none() {
@@ -247,7 +280,7 @@ fn scan_variables<S: Admission + ?Sized>(
         reader
             .finish_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        variables.ok_or_else(|| fmt_with_memory("missing `head` object", memory))
+        variables.ok_or_else(|| fmt_with_memory(ReadShape::Head, memory))
     })();
     reader.release_with_memory(memory).map_err(Error::Storage)?;
     result
@@ -263,9 +296,9 @@ fn scan_bindings<S: Admission + ?Sized>(
 ) -> BoundedRowsResult {
     let mut reader =
         Reader::from_slice(bytes, LIMITS).map_err(|error| syntax_with_memory(error, memory))?;
+    let mut found = None;
     let result = (|| {
-        open_object(&mut reader, "top level is not an object", memory)?;
-        let mut result = None;
+        open_object(&mut reader, ReadShape::TopObject, memory)?;
         let mut saw_boolean = false;
         while let Some(key) = next_key(&mut reader, memory)? {
             match key {
@@ -275,8 +308,8 @@ fn scan_bindings<S: Admission + ?Sized>(
                         .skip_value_with_memory(memory)
                         .map_err(|error| syntax_with_memory(error, memory))?;
                 }
-                "results" if result.is_none() => {
-                    result = Some(bounded_results(&mut reader, variables, row_limit, memory)?);
+                "results" if found.is_none() => {
+                    found = Some(bounded_results(&mut reader, variables, row_limit, memory)?);
                 }
                 _ => {
                     reader
@@ -289,13 +322,15 @@ fn scan_bindings<S: Admission + ?Sized>(
             .finish_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
         if saw_boolean {
-            return Err(fmt_with_memory(
-                "expected SELECT results, got an ASK (boolean) document",
-                memory,
-            ));
+            return Err(fmt_with_memory(ReadShape::Select, memory));
         }
-        result.ok_or_else(|| fmt_with_memory("missing `results` object", memory))
+        found
+            .take()
+            .ok_or_else(|| fmt_with_memory(ReadShape::Results, memory))
     })();
+    if let Some((rows, _)) = found {
+        release_items(rows, memory, release_row)?;
+    }
     reader.release_with_memory(memory).map_err(Error::Storage)?;
     result
 }
@@ -314,16 +349,19 @@ fn scan_bindings<S: Admission + ?Sized>(
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed JSON or a document without a boolean
+/// Returns [`Error::Json`] on malformed JSON, or [`Error::Format`] on a document without a boolean
 /// `boolean` field.
 pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
     let doc = read_document(bytes)?;
-    let obj = doc
-        .as_object()
-        .ok_or_else(|| fmt("top level is not an object"))?;
+    let obj = doc.as_object().ok_or_else(|| {
+        ReadRefusal::shape(crate::SparqlResultsFormat::Json, ReadShape::TopObject)
+    })?;
     match obj.get("boolean") {
         Some(Value::Bool(b)) => Ok(*b),
-        _ => Err(fmt("missing boolean `boolean` field")),
+        _ => Err(ReadRefusal::shape(
+            crate::SparqlResultsFormat::Json,
+            ReadShape::Boolean,
+        )),
     }
 }
 
@@ -357,7 +395,7 @@ pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed JSON, a non-object document, or a
+/// Returns [`Error::Json`] on malformed JSON, or [`Error::Format`] on a non-object document or a
 /// member recording `namespace.iri()` whose shape does not match the
 /// writer's (`queryForm`/`queryHash`/`engine`/`solutions[].sources[]`, all
 /// strings).
@@ -366,9 +404,9 @@ pub fn provenance_from_json(
     namespace: &ProvenanceNamespace,
 ) -> Result<ResultProvenance, Error> {
     let doc = read_document(bytes)?;
-    let obj = doc
-        .as_object()
-        .ok_or_else(|| fmt("top level is not an object"))?;
+    let obj = doc.as_object().ok_or_else(|| {
+        ReadRefusal::shape(crate::SparqlResultsFormat::Json, ReadShape::TopObject)
+    })?;
     let iri = namespace.iri();
     let Some(member_obj) = obj.iter().find_map(|(_, value)| {
         let candidate = value.as_object()?;
@@ -389,16 +427,22 @@ pub fn provenance_from_json(
         Some(Value::Array(items)) => items
             .iter()
             .map(|item| {
-                let item_obj = item
-                    .as_object()
-                    .ok_or_else(|| fmt("provenance solution is not an object"))?;
+                let item_obj = item.as_object().ok_or_else(|| {
+                    ReadRefusal::shape(
+                        crate::SparqlResultsFormat::Json,
+                        ReadShape::ProvenanceSolution,
+                    )
+                })?;
                 let sources = match item_obj.get("sources") {
                     Some(Value::Array(values)) => values
                         .iter()
                         .map(|v| {
-                            v.as_str()
-                                .map(str::to_owned)
-                                .ok_or_else(|| fmt("provenance source is not a string"))
+                            v.as_str().map(str::to_owned).ok_or_else(|| {
+                                ReadRefusal::shape(
+                                    crate::SparqlResultsFormat::Json,
+                                    ReadShape::ProvenanceSource,
+                                )
+                            })
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                     _ => Vec::new(),
@@ -432,7 +476,7 @@ fn select_document<S: Admission + ?Sized>(
         reader
             .finish_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        return Ok(Err(fmt_with_memory("top level is not an object", memory)));
+        return Ok(Err(fmt_with_memory(ReadShape::TopObject, memory)));
     }
     reader
         .next_event_with_memory(memory)
@@ -441,58 +485,86 @@ fn select_document<S: Admission + ?Sized>(
     let mut boolean = false;
     let mut head: Option<Shaped<Vec<String>>> = None;
     let mut results: Option<Shaped<Bindings>> = None;
-    while let Some(key) = next_key(reader, memory)? {
-        match key {
-            "boolean" => {
-                boolean = true;
-                reader
-                    .check_value_with_memory(memory)
-                    .map_err(|error| syntax_with_memory(error, memory))?;
+    let result = (|| {
+        while let Some(key) = next_key(reader, memory)? {
+            match key {
+                "boolean" => {
+                    boolean = true;
+                    reader
+                        .check_value_with_memory(memory)
+                        .map_err(|error| syntax_with_memory(error, memory))?;
+                }
+                "head" if head.is_none() => head = Some(read_head(reader, memory)?),
+                "results" if results.is_none() => {
+                    // Rows are worth decoding only for a document that can still
+                    // be a `SELECT` whose variables are known.
+                    let variables = match &head {
+                        Some(Ok(variables)) if !boolean => Some(variables.as_slice()),
+                        _ => None,
+                    };
+                    results = Some(read_results(reader, variables, &mut scratch, memory)?);
+                }
+                _ => {
+                    reader
+                        .check_value_with_memory(memory)
+                        .map_err(|error| syntax_with_memory(error, memory))?;
+                }
             }
-            "head" if head.is_none() => head = Some(read_head(reader, memory)?),
-            "results" if results.is_none() => {
-                // Rows are worth decoding only for a document that can still
-                // be a `SELECT` whose variables are known.
-                let variables = match &head {
-                    Some(Ok(variables)) if !boolean => Some(variables.as_slice()),
-                    _ => None,
+        }
+        reader
+            .finish_with_memory(memory)
+            .map_err(|error| syntax_with_memory(error, memory))?;
+        if boolean {
+            return Ok(Err(fmt_with_memory(ReadShape::Select, memory)));
+        }
+        let variables = match head.as_ref() {
+            Some(Ok(variables)) => variables,
+            Some(Err(_)) => {
+                let Some(Err(refusal)) = head.take() else {
+                    unreachable!("the refused head exists");
                 };
-                results = Some(read_results(reader, variables, &mut scratch, memory)?);
+                return Ok(Err(refusal));
             }
-            _ => {
-                reader
-                    .check_value_with_memory(memory)
-                    .map_err(|error| syntax_with_memory(error, memory))?;
+            None => return Ok(Err(fmt_with_memory(ReadShape::Head, memory))),
+        };
+        let rows = match results.take() {
+            None => return Ok(Err(fmt_with_memory(ReadShape::Results, memory))),
+            Some(Err(refusal)) => return Ok(Err(refusal)),
+            Some(Ok(Bindings::Decoded(rows))) => rows,
+            Some(Ok(Bindings::Unread(span))) => {
+                let mut rows = Reader::new(&reader.text()[span], LIMITS);
+                let result = binding_rows(&mut rows, variables, &mut scratch, memory);
+                rows.release_with_memory(memory).map_err(Error::Storage)?;
+                result?
             }
+        };
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(error) => return Ok(Err(error)),
+        };
+        let variables = head
+            .take()
+            .expect("the projected head exists")
+            .expect("the projected head was checked above");
+        Ok(Ok(ParsedSolutions { variables, rows }))
+    })();
+    if let Some(head) = head {
+        match head {
+            Ok(variables) => release_items(variables, memory, |text, memory| {
+                memory.release_string(text).map_err(Error::Storage)
+            })?,
+            Err(error) => release_error(error, memory)?,
         }
     }
-    reader
-        .finish_with_memory(memory)
-        .map_err(|error| syntax_with_memory(error, memory))?;
-    if boolean {
-        return Ok(Err(fmt_with_memory(
-            "expected SELECT results, got an ASK (boolean) document",
-            memory,
-        )));
-    }
-    let variables = match head {
-        Some(Ok(variables)) => variables,
-        Some(Err(refusal)) => return Ok(Err(refusal)),
-        None => return Ok(Err(fmt_with_memory("missing `head` object", memory))),
-    };
-    let rows = match results {
-        None => return Ok(Err(fmt_with_memory("missing `results` object", memory))),
-        Some(Err(refusal)) => return Ok(Err(refusal)),
-        Some(Ok(Bindings::Decoded(rows))) => rows,
-        Some(Ok(Bindings::Unread(span))) => {
-            let mut rows = Reader::new(&reader.text()[span], LIMITS);
-            let result = binding_rows(&mut rows, &variables, &mut scratch, memory);
-            rows.release_with_memory(memory).map_err(Error::Storage)?;
-            result?
+    if let Some(results) = results {
+        match results {
+            Ok(Bindings::Unread(_)) => {}
+            Ok(Bindings::Decoded(Ok(rows))) => release_items(rows, memory, release_row)?,
+            Ok(Bindings::Decoded(Err(error))) | Err(error) => release_error(error, memory)?,
         }
-    };
+    }
     release_scratch(scratch, memory)?;
-    Ok(rows.map(|rows| ParsedSolutions { variables, rows }))
+    result
 }
 
 /// The `results.bindings` array as [`select_document`] found it.
@@ -512,7 +584,7 @@ fn read_head<S: Admission + ?Sized>(
         reader
             .check_value_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        return Ok(Err(fmt_with_memory("missing `head` object", memory)));
+        return Ok(Err(fmt_with_memory(ReadShape::Head, memory)));
     }
     reader
         .next_event_with_memory(memory)
@@ -520,11 +592,7 @@ fn read_head<S: Admission + ?Sized>(
     let mut variables: Option<Shaped<Vec<String>>> = None;
     while let Some(key) = next_key(reader, memory)? {
         if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
-            variables = Some(string_items(
-                reader,
-                "`head.vars` entry is not a string",
-                memory,
-            )?);
+            variables = Some(string_items(reader, ReadShape::Variable, memory)?);
         } else {
             if key == "vars" && variables.is_none() {
                 // A results doc with no `vars` array is degenerate but valid
@@ -542,7 +610,7 @@ fn read_head<S: Admission + ?Sized>(
 /// A string-only array: its strings, or `item_error` at its first other item.
 fn string_items<S: Admission + ?Sized>(
     reader: &mut Reader<'_>,
-    item_error: &str,
+    item_error: ReadShape,
     memory: &mut Memory<'_, S>,
 ) -> Step<Vec<String>> {
     reader
@@ -570,7 +638,13 @@ fn string_items<S: Admission + ?Sized>(
             }
             (found, _) => {
                 if found.is_ok() {
-                    *found = Err(fmt_with_memory(item_error, memory));
+                    let previous =
+                        std::mem::replace(found, Err(fmt_with_memory(item_error, memory)));
+                    if let Ok(strings) = previous {
+                        release_items(strings, memory, |text, memory| {
+                            memory.release_string(text).map_err(Error::Storage)
+                        })?;
+                    }
                 }
                 reader
                     .check_value_with_memory(memory)
@@ -593,7 +667,7 @@ fn read_results<'a, S: Admission + ?Sized>(
         reader
             .check_value_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        return Ok(Err(fmt_with_memory("missing `results` object", memory)));
+        return Ok(Err(fmt_with_memory(ReadShape::Results, memory)));
     }
     reader
         .next_event_with_memory(memory)
@@ -610,7 +684,7 @@ fn read_results<'a, S: Admission + ?Sized>(
             reader
                 .check_value_with_memory(memory)
                 .map_err(|error| syntax_with_memory(error, memory))?;
-            Err(fmt_with_memory("missing `results.bindings` array", memory))
+            Err(fmt_with_memory(ReadShape::Bindings, memory))
         } else if let Some(variables) = variables {
             Ok(Bindings::Decoded(binding_rows(
                 reader, variables, scratch, memory,
@@ -623,10 +697,7 @@ fn read_results<'a, S: Admission + ?Sized>(
             ))
         });
     }
-    Ok(
-        bindings
-            .unwrap_or_else(|| Err(fmt_with_memory("missing `results.bindings` array", memory))),
-    )
+    Ok(bindings.unwrap_or_else(|| Err(fmt_with_memory(ReadShape::Bindings, memory))))
 }
 
 /// A `bindings` array, the cursor on its `[`: every row, or the first row's
@@ -641,26 +712,35 @@ fn binding_rows<'a, S: Admission + ?Sized>(
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
     let mut rows = Vec::new();
-    while reader
-        .next_item()
-        .map_err(|error| syntax_with_memory(error, memory))?
-    {
-        match binding_row(reader, variables, scratch, memory)? {
-            Ok(row) => memory.push(&mut rows, row).map_err(Error::Storage)?,
-            Err(refusal) => {
-                while reader
-                    .next_item()
-                    .map_err(|error| syntax_with_memory(error, memory))?
-                {
-                    reader
-                        .check_value_with_memory(memory)
-                        .map_err(|error| syntax_with_memory(error, memory))?;
+    let mut refusal = None;
+    let result = (|| {
+        while reader
+            .next_item()
+            .map_err(|error| syntax_with_memory(error, memory))?
+        {
+            match binding_row(reader, variables, scratch, memory)? {
+                Ok(row) => memory.push(&mut rows, row).map_err(Error::Storage)?,
+                Err(error) => {
+                    refusal = Some(error);
+                    while reader
+                        .next_item()
+                        .map_err(|error| syntax_with_memory(error, memory))?
+                    {
+                        reader
+                            .check_value_with_memory(memory)
+                            .map_err(|error| syntax_with_memory(error, memory))?;
+                    }
+                    return Ok(Err(refusal.take().expect("the row was refused")));
                 }
-                return Ok(Err(refusal));
             }
         }
+        Ok(Ok(std::mem::take(&mut rows)))
+    })();
+    release_items(rows, memory, release_row)?;
+    if let Some(error) = refusal {
+        release_error(error, memory)?;
     }
-    Ok(Ok(rows))
+    result
 }
 
 /// Buffers one row decode reuses from the last: the open binding objects and
@@ -687,10 +767,7 @@ fn binding_row<'a, S: Admission + ?Sized>(
         reader
             .check_value_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        return Ok(Err(fmt_with_memory(
-            "`results.bindings` entry is not an object",
-            memory,
-        )));
+        return Ok(Err(fmt_with_memory(ReadShape::BindingEntry, memory)));
     }
     reader
         .next_event_with_memory(memory)
@@ -707,64 +784,74 @@ fn binding_row<'a, S: Admission + ?Sized>(
     scratch.bound.resize(variables.len(), false);
     // The refusal of the earliest variable whose cell has one.
     let mut refusal: Option<(usize, Error)> = None;
-    while let Some(raw) = reader
-        .next_key_with_memory(memory)
-        .map_err(|error| syntax_with_memory(error, memory))?
-    {
-        let key = raw
-            .decode_with_memory(memory)
-            .map_err(|error| syntax_with_memory(error, memory))?;
-        let index = variables
-            .iter()
-            .position(|variable| variable == key.as_ref());
-        release_text(key, memory)?;
-        let Some(index) = index else {
-            reader
-                .check_value_with_memory(memory)
+    let result = (|| {
+        while let Some(raw) = reader
+            .next_key_with_memory(memory)
+            .map_err(|error| syntax_with_memory(error, memory))?
+        {
+            let key = raw
+                .decode_with_memory(memory)
                 .map_err(|error| syntax_with_memory(error, memory))?;
-            continue;
-        };
-        if scratch.bound[index] {
-            reader
-                .check_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
-            continue;
-        }
-        let start = reader.offset();
-        let cell = binding(reader, &mut scratch.open, memory)?;
-        let end = reader.offset();
-        // Move the original cell to its first column. Repeated head names use
-        // the same binding producer over the source span, admitting each actual
-        // copy before birth rather than cloning an unpriced term tree.
-        for column in index..variables.len() {
-            if variables[column] == variables[index] {
-                scratch.bound[column] = true;
-                if column != index && cell.is_ok() {
-                    let mut duplicate = Reader::new(&reader.text()[start..end], LIMITS);
-                    let decoded = binding(&mut duplicate, &mut scratch.open, memory);
-                    duplicate
-                        .release_with_memory(memory)
-                        .map_err(Error::Storage)?;
-                    row[column] = Some(decoded??);
+            let index = variables
+                .iter()
+                .position(|variable| variable == key.as_ref());
+            release_text(key, memory)?;
+            let Some(index) = index else {
+                reader
+                    .check_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+                continue;
+            };
+            if scratch.bound[index] {
+                reader
+                    .check_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+                continue;
+            }
+            let start = reader.offset();
+            let cell = binding(reader, &mut scratch.open, memory)?;
+            let end = reader.offset();
+            // Move the original cell to its first column. Repeated head names use
+            // the same binding producer over the source span, admitting each actual
+            // copy before birth rather than cloning an unpriced term tree.
+            for column in index..variables.len() {
+                if variables[column] == variables[index] {
+                    scratch.bound[column] = true;
+                    if column != index && cell.is_ok() {
+                        let mut duplicate = Reader::new(&reader.text()[start..end], LIMITS);
+                        let decoded = binding(&mut duplicate, &mut scratch.open, memory);
+                        duplicate
+                            .release_with_memory(memory)
+                            .map_err(Error::Storage)?;
+                        row[column] = Some(decoded??);
+                    }
                 }
             }
-        }
-        match cell {
-            Err(error)
-                if refusal
-                    .as_ref()
-                    .is_none_or(|(earliest, _)| index < *earliest) =>
-            {
-                refusal = Some((index, error));
+            match cell {
+                Err(error)
+                    if refusal
+                        .as_ref()
+                        .is_none_or(|(earliest, _)| index < *earliest) =>
+                {
+                    if let Some((_, previous)) = refusal.take() {
+                        release_error(previous, memory)?;
+                    }
+                    refusal = Some((index, error));
+                }
+                Ok(term) => row[index] = Some(term),
+                Err(error) => release_error(error, memory)?,
             }
-            Ok(term) => row[index] = Some(term),
-            Err(error) => release_error(error, memory)?,
         }
+        Ok(match refusal.take() {
+            Some((_, error)) => Err(error),
+            None => Ok(std::mem::take(&mut row)),
+        })
+    })();
+    release_row(row, memory)?;
+    if let Some((_, error)) = refusal {
+        release_error(error, memory)?;
     }
-    Ok(match refusal {
-        Some((_, error)) => Err(error),
-        None => Ok(row),
-    })
+    result
 }
 
 /// A binding object or a triple term's `value` object, open and being read.
@@ -845,23 +932,30 @@ impl TripleParts {
     /// `predicate` and `object` in that order meets first; the predicate is
     /// held to be an IRI once its object has been decoded.
     fn finish<S: Admission + ?Sized>(&mut self, memory: &mut Memory<'_, S>) -> Shaped<TermValue> {
-        let s = self
-            .subject
-            .take()
-            .ok_or_else(|| fmt_with_memory("triple has no subject", memory))??;
-        let p = self
-            .predicate
-            .take()
-            .ok_or_else(|| fmt_with_memory("triple has no predicate", memory))??;
-        let o = self
-            .object
-            .take()
-            .ok_or_else(|| fmt_with_memory("triple has no object", memory))??;
+        // Leave successful components in their original slots until all three
+        // are present. The caller releases those slots after a shape refusal.
+        for (component, shape) in [
+            (Component::Subject, ReadShape::Subject),
+            (Component::Predicate, ReadShape::Predicate),
+            (Component::Object, ReadShape::Object),
+        ] {
+            let slot = self.slot(component);
+            match slot.as_ref() {
+                None => return Err(fmt_with_memory(shape, memory)),
+                Some(Err(_)) => return slot.take().expect("the refused component exists"),
+                Some(Ok(_)) => {}
+            }
+        }
+        let s = self.subject.take().expect("the subject exists")?;
+        let p = self.predicate.take().expect("the predicate exists")?;
+        let o = self.object.take().expect("the object exists")?;
         if !matches!(p, TermValue::Iri(_)) {
-            return Err(fmt_with_memory(
-                "triple-term predicate is not an IRI",
-                memory,
-            ));
+            release_term(s, memory)?;
+            release_term(o, memory)?;
+            return Err(Error::Format(ReadRefusal {
+                format: crate::SparqlResultsFormat::Json,
+                reason: ReadReason::Predicate(p),
+            }));
         }
         Ok(TermValue::Triple {
             s: TermBox::try_new(s, memory).map_err(Error::Storage)?,
@@ -875,7 +969,7 @@ impl BindingFields<'_> {
     /// The term the binding object denotes, or its refusal.
     fn finish<S: Admission + ?Sized>(&mut self, memory: &mut Memory<'_, S>) -> Shaped<TermValue> {
         let Some(kind) = Member::text(self.kind.take()) else {
-            return Err(fmt_with_memory("binding has no string `type`", memory));
+            return Err(fmt_with_memory(ReadShape::BindingType, memory));
         };
         let result = (|| match kind.as_ref() {
             "uri" => Ok(TermValue::Iri(binding_text(self.value.take(), memory)?)),
@@ -887,29 +981,43 @@ impl BindingFields<'_> {
                 let lexical_form = binding_text(self.value.take(), memory)?;
                 let language = Member::text(self.language.take());
                 if let Some(lang) = language.as_deref()
-                    && let Err(error) = purrdf_iri::langtag::parse_with(
-                        lang,
-                        purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
-                    )
+                    && let Some(error) = crate::error::language_tag_refusal(lang)
                 {
-                    return Err(fmt_with_memory(
-                        &format_args!(
-                            "invalid language tag `{lang}` ({}: {})",
-                            error.diagnostic_code(),
-                            error.message()
-                        ),
+                    let language = owned_text(
+                        language.expect("the refused language member exists"),
                         memory,
-                    ));
+                    )?;
+                    memory
+                        .release_string(lexical_form)
+                        .map_err(Error::Storage)?;
+                    return Err(Error::LanguageTag {
+                        format: "SPARQL-JSON",
+                        language,
+                        cause: error,
+                    });
                 }
                 let direction_token = Member::text(self.its_dir.take().or_else(|| self.dir.take()));
                 let direction = match direction_token.as_deref() {
                     Some(token) => {
-                        Some(RdfTextDirection::from_str_token(token).ok_or_else(|| {
-                            fmt_with_memory(
-                                &format_args!("unknown base direction `{token}`"),
+                        let Some(direction) = RdfTextDirection::from_str_token(token) else {
+                            let error = ReadRefusal::token(
+                                crate::SparqlResultsFormat::Json,
+                                ReadToken::Direction,
+                                token,
                                 memory,
-                            )
-                        })?)
+                            );
+                            memory
+                                .release_string(lexical_form)
+                                .map_err(Error::Storage)?;
+                            if let Some(language) = language {
+                                release_text(language, memory)?;
+                            }
+                            if let Some(token) = direction_token {
+                                release_text(token, memory)?;
+                            }
+                            return Err(error);
+                        };
+                        Some(direction)
                     }
                     None => None,
                 };
@@ -939,18 +1047,21 @@ impl BindingFields<'_> {
                         .map_err(Error::Storage)?;
                     term
                 }
-                _ => Err(fmt_with_memory(
-                    "triple binding has no object `value`",
-                    memory,
-                )),
+                value => {
+                    if let Some(value) = value {
+                        release_binding_value(value, memory)?;
+                    }
+                    Err(fmt_with_memory(ReadShape::TripleValue, memory))
+                }
             },
-            other => Err(fmt_with_memory(
-                &format_args!("unknown binding type `{other}`"),
+            other => Err(ReadRefusal::token(
+                crate::SparqlResultsFormat::Json,
+                ReadToken::BindingType,
+                other,
                 memory,
             )),
         })();
         release_text(kind, memory)?;
-        release_fields(self, memory)?;
         result
     }
 }
@@ -999,7 +1110,7 @@ fn binding<'a, S: Admission + ?Sized>(
         reader
             .check_value_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        return Ok(Err(fmt_with_memory("binding is not an object", memory)));
+        return Ok(Err(fmt_with_memory(ReadShape::BindingObject, memory)));
     }
     reader
         .next_event_with_memory(memory)
@@ -1016,6 +1127,7 @@ fn binding<'a, S: Admission + ?Sized>(
             match open.pop().expect("an object is open") {
                 Open::Binding(mut fields) => {
                     let term = fields.finish(memory);
+                    release_fields(&mut fields, memory)?;
                     drop(fields);
                     memory
                         .release_bytes(size_of::<BindingFields<'_>>())
@@ -1118,7 +1230,7 @@ fn binding<'a, S: Admission + ?Sized>(
                         .check_value_with_memory(memory)
                         .map_err(|error| syntax_with_memory(error, memory))?;
                     *parts.slot(component) =
-                        Some(Err(fmt_with_memory("binding is not an object", memory)));
+                        Some(Err(fmt_with_memory(ReadShape::BindingObject, memory)));
                 }
             }
         }
@@ -1173,7 +1285,7 @@ fn binding_text<S: Admission + ?Sized>(
             if let Some(value) = value {
                 release_binding_value(value, memory)?;
             }
-            Err(fmt_with_memory("binding has no string `value`", memory))
+            Err(fmt_with_memory(ReadShape::BindingValue, memory))
         }
     }
 }
@@ -1183,56 +1295,59 @@ fn release_error<S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
     match error {
-        Error::MalformedTerm(text)
-        | Error::Format(text)
-        | Error::InvalidNamespace(text)
-        | Error::Internal(text)
-        | Error::Write { message: text, .. } => memory.release_string(text).map_err(Error::Storage),
-        Error::Storage(_) => Ok(()),
+        Error::Format(ReadRefusal { format: _, reason }) => match reason {
+            ReadReason::Shape(_) => Ok(()),
+            ReadReason::Token { token, .. } => memory.release_string(token).map_err(Error::Storage),
+            ReadReason::Predicate(term) => release_term(term, memory),
+        },
+        Error::LanguageTag { language, .. } => {
+            memory.release_string(language).map_err(Error::Storage)
+        }
+        // A write failure belongs to its original destination owner. The JSON
+        // reader creates no destination payload under this parsing account.
+        Error::Storage(_)
+        | Error::Write { .. }
+        | Error::Json(_)
+        | Error::XmlCharacter(_)
+        | Error::XmlSyntax { .. }
+        | Error::Utf8 { .. }
+        | Error::InvalidNamespace(_)
+        | Error::MalformedTerm(_)
+        | Error::UnsupportedResult { .. }
+        | Error::TsvHeader { .. } => Ok(()),
     }
+}
+
+/// Release an original parser vector and each independently admitted payload.
+fn release_items<T, S: Admission + ?Sized>(
+    mut items: Vec<T>,
+    memory: &mut Memory<'_, S>,
+    mut release: impl FnMut(T, &mut Memory<'_, S>) -> Result<(), Error>,
+) -> Result<(), Error> {
+    // Keep the original allocation for Memory::release_vec to destroy and refund.
+    // IntoIter would consume it before that capacity-accounting boundary.
+    #[allow(clippy::iter_with_drain)]
+    for item in items.drain(..).rev() {
+        release(item, memory)?;
+    }
+    memory.release_vec(items).map_err(Error::Storage)
+}
+
+fn release_row<S: Admission + ?Sized>(
+    row: BindingRow,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    release_items(row, memory, |term, memory| match term {
+        Some(term) => release_term(term, memory),
+        None => Ok(()),
+    })
 }
 
 fn release_term<S: Admission + ?Sized>(
     term: TermValue,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
-    // Destruction accounting only: every payload was originally born under
-    // this grant. Use the original native visitor before dropping its owner.
-    let mut bytes = 0usize;
-    let flow = term
-        .visit_terms_with_memory(
-            |term, _| {
-                let own = match term {
-                    TermValue::Iri(text) | TermValue::Blank { label: text, .. } => {
-                        Some(text.capacity())
-                    }
-                    TermValue::Literal {
-                        lexical_form,
-                        datatype,
-                        language,
-                        ..
-                    } => lexical_form
-                        .capacity()
-                        .checked_add(datatype.capacity())
-                        .and_then(|n| n.checked_add(language.as_ref().map_or(0, String::capacity))),
-                    TermValue::Triple { .. } => size_of::<TermValue>().checked_mul(3),
-                };
-                match own.and_then(|own| bytes.checked_add(own)) {
-                    Some(total) => {
-                        bytes = total;
-                        Ok(std::ops::ControlFlow::Continue(()))
-                    }
-                    None => Ok(std::ops::ControlFlow::Break(StorageError::SizeOverflow)),
-                }
-            },
-            memory,
-        )
-        .map_err(Error::Storage)?;
-    if let std::ops::ControlFlow::Break(error) = flow {
-        return Err(Error::Storage(error));
-    }
-    drop(term);
-    memory.release_bytes(bytes).map_err(Error::Storage)
+    term.release_with_memory(memory).map_err(Error::Storage)
 }
 
 fn release_parts<S: Admission + ?Sized>(
@@ -1316,31 +1431,21 @@ fn release_scratch<S: Admission + ?Sized>(
     memory.release_vec(scratch.bound).map_err(Error::Storage)
 }
 
-/// Build original format prose through admitted native storage.
-fn fmt_with_memory<S: Admission + ?Sized>(
-    msg: &(impl std::fmt::Display + ?Sized),
-    memory: &mut Memory<'_, S>,
-) -> Error {
-    match memory.format(&format_args!("SPARQL-JSON: {msg}")) {
-        Ok(text) => Error::Format(text),
-        Err(error) => Error::Storage(error),
-    }
-}
-
-fn fmt(msg: &str) -> Error {
-    fmt_with_memory(msg, &mut Memory::new(&mut Resident))
+/// Report a native shape; it has no heap payload to admit or render.
+fn fmt_with_memory<S: Admission + ?Sized>(shape: ReadShape, _memory: &mut Memory<'_, S>) -> Error {
+    ReadRefusal::shape(crate::SparqlResultsFormat::Json, shape)
 }
 
 fn syntax_with_memory<S: Admission + ?Sized>(
     error: json::Error,
-    memory: &mut Memory<'_, S>,
+    _memory: &mut Memory<'_, S>,
 ) -> Error {
     match error.kind() {
         json::ErrorKind::Storage(storage)
         | json::ErrorKind::Escape(purrdf_lex::json_escape::JsonEscapeErrorKind::Storage(storage)) => {
             Error::Storage(storage)
         }
-        _ => fmt_with_memory(&error, memory),
+        _ => Error::Json(error),
     }
 }
 
@@ -1362,7 +1467,7 @@ fn read_document(bytes: &[u8]) -> Result<Value, Error> {
 /// Read the next value, requiring it to open an object; `message` otherwise.
 fn open_object<S: Admission + ?Sized>(
     reader: &mut Reader<'_>,
-    message: &str,
+    message: ReadShape,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
     match reader
@@ -1377,7 +1482,7 @@ fn open_object<S: Admission + ?Sized>(
 /// Read the next value, requiring it to open an array; `message` otherwise.
 fn open_array<S: Admission + ?Sized>(
     reader: &mut Reader<'_>,
-    message: &str,
+    message: ReadShape,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
     match reader
@@ -1429,15 +1534,11 @@ fn head_variables<S: Admission + ?Sized>(
     reader: &mut Reader<'_>,
     memory: &mut Memory<'_, S>,
 ) -> Result<Vec<String>, Error> {
-    open_object(reader, "missing `head` object", memory)?;
+    open_object(reader, ReadShape::Head, memory)?;
     let mut variables = None;
     while let Some(key) = next_key(reader, memory)? {
         if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
-            variables = Some(string_array(
-                reader,
-                "`head.vars` entry is not a string",
-                memory,
-            )?);
+            variables = Some(string_array(reader, ReadShape::Variable, memory)?);
         } else {
             reader
                 .skip_value_with_memory(memory)
@@ -1450,30 +1551,36 @@ fn head_variables<S: Admission + ?Sized>(
 /// Read a string-only JSON array.
 fn string_array<S: Admission + ?Sized>(
     reader: &mut Reader<'_>,
-    item_error: &str,
+    item_error: ReadShape,
     memory: &mut Memory<'_, S>,
 ) -> Result<Vec<String>, Error> {
-    open_array(reader, "expected array", memory)?;
+    open_array(reader, ReadShape::Array, memory)?;
     let mut items = Vec::new();
-    while reader
-        .next_item()
-        .map_err(|error| syntax_with_memory(error, memory))?
-    {
-        match reader
-            .next_event_with_memory(memory)
+    let result = (|| {
+        while reader
+            .next_item()
             .map_err(|error| syntax_with_memory(error, memory))?
         {
-            Event::String(item) => {
-                let decoded = item
-                    .decode_with_memory(memory)
-                    .map_err(|error| syntax_with_memory(error, memory))?;
-                let text = owned_text(decoded, memory)?;
-                memory.push(&mut items, text).map_err(Error::Storage)?;
+            match reader
+                .next_event_with_memory(memory)
+                .map_err(|error| syntax_with_memory(error, memory))?
+            {
+                Event::String(item) => {
+                    let decoded = item
+                        .decode_with_memory(memory)
+                        .map_err(|error| syntax_with_memory(error, memory))?;
+                    let text = owned_text(decoded, memory)?;
+                    memory.push(&mut items, text).map_err(Error::Storage)?;
+                }
+                _ => return Err(fmt_with_memory(item_error, memory)),
             }
-            _ => return Err(fmt_with_memory(item_error, memory)),
         }
-    }
-    Ok(items)
+        Ok(std::mem::take(&mut items))
+    })();
+    release_items(items, memory, |text, memory| {
+        memory.release_string(text).map_err(Error::Storage)
+    })?;
+    result
 }
 
 /// Read the first `bindings` array in a `results` object through a bounded sink.
@@ -1483,7 +1590,7 @@ fn bounded_results<S: Admission + ?Sized>(
     row_limit: Option<usize>,
     memory: &mut Memory<'_, S>,
 ) -> BoundedRowsResult {
-    open_object(reader, "missing `results` object", memory)?;
+    open_object(reader, ReadShape::Results, memory)?;
     let mut result = None;
     while let Some(key) = next_key(reader, memory)? {
         if key == "bindings" && result.is_none() {
@@ -1494,7 +1601,7 @@ fn bounded_results<S: Admission + ?Sized>(
                 .map_err(|error| syntax_with_memory(error, memory))?;
         }
     }
-    result.ok_or_else(|| fmt_with_memory("missing `results.bindings` array", memory))
+    result.ok_or_else(|| fmt_with_memory(ReadShape::Bindings, memory))
 }
 
 /// Decode the prefix of a bindings array that fits `row_limit`, then syntax-scan the
@@ -1505,26 +1612,30 @@ fn bounded_binding_array<S: Admission + ?Sized>(
     row_limit: Option<usize>,
     memory: &mut Memory<'_, S>,
 ) -> BoundedRowsResult {
-    open_array(reader, "missing `results.bindings` array", memory)?;
+    open_array(reader, ReadShape::Bindings, memory)?;
     let mut rows = Vec::new();
     let mut truncated = false;
     let mut scratch = RowScratch::default();
-    while reader
-        .next_item()
-        .map_err(|error| syntax_with_memory(error, memory))?
-    {
-        if row_limit.is_none_or(|limit| rows.len() < limit) {
-            let row = binding_row(reader, variables, &mut scratch, memory)??;
-            memory.push(&mut rows, row).map_err(Error::Storage)?;
-        } else {
-            truncated = true;
-            reader
-                .skip_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
+    let result = (|| {
+        while reader
+            .next_item()
+            .map_err(|error| syntax_with_memory(error, memory))?
+        {
+            if row_limit.is_none_or(|limit| rows.len() < limit) {
+                let row = binding_row(reader, variables, &mut scratch, memory)??;
+                memory.push(&mut rows, row).map_err(Error::Storage)?;
+            } else {
+                truncated = true;
+                reader
+                    .skip_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+            }
         }
-    }
+        Ok((std::mem::take(&mut rows), truncated))
+    })();
+    release_items(rows, memory, release_row)?;
     release_scratch(scratch, memory)?;
-    Ok((rows, truncated))
+    result
 }
 
 #[cfg(test)]
@@ -1567,8 +1678,8 @@ mod tests {
             string.extend_from_slice(b"b\"");
             let error = literal_value(&string).expect_err("a raw control is refused");
             assert!(
-                matches!(&error, Error::Format(message)
-                    if message.contains("a control character in a string must be escaped")),
+                matches!(&error, Error::Json(cause)
+                    if cause.kind() == json::ErrorKind::RawControl),
                 "{raw:#04X}: {error:?}"
             );
             assert!(
@@ -2028,8 +2139,8 @@ mod tests {
         let result = from_json(&bytes);
         assert!(result.is_err(), "expected Err for invalid UTF-8, got Ok");
         assert!(
-            matches!(result.unwrap_err(), Error::Format(_)),
-            "error must be Error::Format"
+            matches!(result.unwrap_err(), Error::Json(_)),
+            "error must retain the native JSON refusal"
         );
     }
 
@@ -2066,9 +2177,20 @@ mod tests {
         for tag in REFUSED_TAGS {
             let error = from_json(&srj_with_lang(tag))
                 .expect_err("a tag the grammar refuses must not decode");
-            let Error::Format(message) = &error else {
-                panic!("expected Error::Format for {tag:?}, got {error:?}");
+            let Error::LanguageTag {
+                language, cause, ..
+            } = &error
+            else {
+                panic!("expected native language refusal for {tag:?}, got {error:?}");
             };
+            let fields = purrdf_testkit::error_capture::Capture::read(&error);
+            assert!(
+                matches!(fields.field("language"), purrdf_hash::error::ErrorValue::Text(value) if value == *tag)
+            );
+            assert_eq!(fields.child("cause").code, cause.diagnostic_code());
+            assert_eq!(language, tag);
+            let presentation = error.to_string();
+            let message = presentation.strip_prefix("result format error: ").unwrap();
             assert!(
                 message.starts_with("SPARQL-JSON: invalid language tag "),
                 "the refusal must name the format and the tag: {message}"
@@ -2126,8 +2248,8 @@ mod tests {
             .into_bytes()
     }
 
-    fn format_error(message: &str) -> Error {
-        Error::Format(format!("SPARQL-JSON: {message}"))
+    fn format_error(message: &str) -> String {
+        format!("result format error: SPARQL-JSON: {message}")
     }
 
     #[test]
@@ -2144,10 +2266,16 @@ mod tests {
         })
         .expect("spawn a small-stack thread");
         let not_an_object = format_error("binding is not an object");
-        assert_eq!(full, Err(not_an_object.clone()));
-        assert_eq!(bounded, Err(not_an_object));
         assert_eq!(
-            truncated,
+            full.map_err(|error| error.to_string()),
+            Err(not_an_object.clone())
+        );
+        assert_eq!(
+            bounded.map_err(|error| error.to_string()),
+            Err(not_an_object)
+        );
+        assert_eq!(
+            truncated.map_err(|error| error.to_string()),
             Err(format_error(&format!(
                 "JSON byte {}: expected a JSON value",
                 r#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":"#.len() + DEEP
@@ -2261,17 +2389,17 @@ mod tests {
         // decoded before the predicate is checked, so the object's error is reported.
         let both = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"literal","value":"p"},"object":{"type":"nonsense"}}}"#;
         assert_eq!(
-            from_json(&select_with_binding(both)),
+            from_json(&select_with_binding(both)).map_err(|error| error.to_string()),
             Err(format_error("unknown binding type `nonsense`"))
         );
         let predicate_only = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"literal","value":"p"},"object":{"type":"uri","value":"http://example.org/o"}}}"#;
         assert_eq!(
-            from_json(&select_with_binding(predicate_only)),
+            from_json(&select_with_binding(predicate_only)).map_err(|error| error.to_string()),
             Err(format_error("triple-term predicate is not an IRI"))
         );
         let no_object = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"uri","value":"http://example.org/p"}}}"#;
         assert_eq!(
-            from_json(&select_with_binding(no_object)),
+            from_json(&select_with_binding(no_object)).map_err(|error| error.to_string()),
             Err(format_error("triple has no object"))
         );
     }
@@ -2301,15 +2429,16 @@ mod tests {
                 "JSON byte 13: trailing data after the top-level value",
             ),
         ] {
-            assert_eq!(
-                from_json(doc.as_bytes()),
-                Err(format_error(message)),
-                "tree parser on {doc}"
-            );
-            assert_eq!(
-                from_json_bounded(doc.as_bytes(), u64::MAX),
-                Err(format_error(message)),
-                "skipping parser on {doc}"
+            let full = from_json(doc.as_bytes()).unwrap_err();
+            let bounded = from_json_bounded(doc.as_bytes(), u64::MAX).unwrap_err();
+            assert_eq!(full, bounded, "syntax priority on {doc}");
+            assert_eq!(full.to_string(), format_error(message));
+            let Error::Json(cause) = full else {
+                panic!("syntax refusal must retain its native fields");
+            };
+            let fields = purrdf_testkit::error_capture::Capture::read(&cause);
+            assert!(
+                matches!(fields.field("offset"), purrdf_hash::error::ErrorValue::ByteCount(value) if value == cause.offset() as u128)
             );
         }
     }
@@ -2422,5 +2551,76 @@ mod tests {
         assert_eq!(native, from_json_bounded(bytes, 1).unwrap());
         assert!(native.truncated);
         assert_eq!(native.solutions.rows.len(), 1);
+    }
+
+    #[test]
+    fn superseded_native_refusals_release_original_tokens_and_terms() {
+        // The parser must finish syntax validation after a semantic refusal.
+        // A later syntax error supersedes it and releases every native payload.
+        for cell in [
+            r#"{"type":"unrecognized-original","value":"x"}"#,
+            r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"literal","value":"original-predicate"},"object":{"type":"uri","value":"http://example.org/o"}}}"#,
+            r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"uri","value":"http://example.org/p"}}}"#,
+        ] {
+            let input = format!(
+                r#"{{"head":{{"vars":["x"]}},"results":{{"bindings":[{{"x":{cell}}}]}},"tail":]}}"#
+            );
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let error = from_json_with_memory(input.as_bytes(), None, &mut memory).unwrap_err();
+            assert!(matches!(error, ReadError::Lexical(Error::Json(_))));
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn semantic_refusals_keep_only_their_original_payload_charge() {
+        for (cell, retained) in [
+            (
+                r#"{"type":"unrecognized-original","value":"x"}"#,
+                "unrecognized-original".len(),
+            ),
+            (
+                r#"{"type":"literal","value":"original lexical form","xml:lang":"en us"}"#,
+                "en us".len(),
+            ),
+            (
+                r#"{"type":"literal","value":"original lexical form","xml:lang":"en","its:dir":"backwards"}"#,
+                "backwards".len(),
+            ),
+            (
+                r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"bnode","value":"p"},"object":{"type":"uri","value":"http://example.org/o"}}}"#,
+                1,
+            ),
+            (
+                r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"uri","value":"http://example.org/p"}}}"#,
+                0,
+            ),
+            (r#"{"value":"original value without a type"}"#, 0),
+        ] {
+            for ceiling in [None, Some(u64::MAX)] {
+                let mut resident = Resident;
+                let mut memory = Memory::new(&mut resident);
+                let original = memory.string("caller-owned-before-parsing").unwrap();
+                let original_bytes = memory.admitted_bytes();
+                // A successful prefix row must be discarded when the next
+                // row fails, under both original parser policies.
+                let input = format!(
+                    r#"{{"head":{{"vars":["x"]}},"results":{{"bindings":[{{"x":{{"type":"uri","value":"http://example.org/first"}}}},{{"x":{cell}}}]}}}}"#
+                );
+                let error =
+                    from_json_with_memory(input.as_bytes(), ceiling, &mut memory).unwrap_err();
+                drop(input);
+                assert_eq!(memory.admitted_bytes(), original_bytes + retained);
+                let ReadError::Lexical(error) = error else {
+                    panic!("the original semantic refusal must survive");
+                };
+                drop(purrdf_testkit::error_capture::Capture::read(&error));
+                release_error(error, &mut memory).unwrap();
+                assert_eq!(memory.admitted_bytes(), original_bytes);
+                memory.release_string(original).unwrap();
+                assert_eq!(memory.admitted_bytes(), 0);
+            }
+        }
     }
 }

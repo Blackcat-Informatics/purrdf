@@ -799,6 +799,13 @@ impl std::fmt::Display for NonIriPredicate {
 
 impl std::error::Error for NonIriPredicate {}
 
+impl purrdf_hash::error::StructuredError for NonIriPredicate {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        let Self = self;
+        visitor.variant("rdf-non-iri-predicate");
+    }
+}
+
 /// The owned form of a value that is not a triple term.
 fn owned_leaf(value: TermValue) -> RdfTerm {
     match value {

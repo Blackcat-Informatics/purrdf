@@ -26,9 +26,12 @@ use purrdf_core::{RdfTerm, TermValue, emit_term};
 /// predicate that is not an IRI — that is malformed RDF, so it is rejected rather
 /// than laundered into a fabricated IRI string.
 pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Error> {
-    value
-        .to_rdf_term()
-        .map_err(|_| Error::MalformedTerm("triple-term predicate is not an IRI".to_string()))
+    value.to_rdf_term().map_err(|cause| {
+        Error::MalformedTerm(crate::MalformedResult::Predicate {
+            term: value.clone(),
+            cause,
+        })
+    })
 }
 
 /// The N-Triples / TSV token for a result cell: the kernel `emit_term` over the
@@ -174,6 +177,18 @@ mod tests {
             matches!(err, Error::MalformedTerm(_)),
             "expected MalformedTerm: {err:?}"
         );
+        drop(v);
+        let retained = err.clone();
+        drop(err);
+        let fields = purrdf_testkit::error_capture::Capture::read(&retained);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "results-predicate");
+        let term = cause.child("term");
+        let predicate = term.child("predicate");
+        assert!(matches!(
+            predicate.field("lexical_form"),
+            purrdf_hash::error::ErrorValue::Text("not-a-predicate")
+        ));
     }
 
     #[test]
@@ -233,9 +248,10 @@ mod term_walk_tests {
             return term_value_to_rdf_term(value);
         };
         let TermValue::Iri(predicate) = p.as_ref() else {
-            return Err(Error::MalformedTerm(
-                "triple-term predicate is not an IRI".to_string(),
-            ));
+            return Err(Error::MalformedTerm(crate::MalformedResult::Predicate {
+                term: value.clone(),
+                cause: purrdf_core::NonIriPredicate,
+            }));
         };
         let subject = reference(s)?;
         let object = reference(o)?;
@@ -262,8 +278,20 @@ mod term_walk_tests {
                 purrdf_core::term_fixture::TermShape::Any,
             );
             let found = term_value_to_rdf_term(&value);
-            assert_eq!(found, reference(&value), "seed {seed}");
             refused += usize::from(found.is_err());
+            match (found, reference(&value)) {
+                (Ok(actual), Ok(expected)) => assert_eq!(actual, expected, "seed {seed}"),
+                (Err(actual), Err(expected)) => {
+                    let actual = purrdf_testkit::error_capture::Capture::read(&actual);
+                    let expected = purrdf_testkit::error_capture::Capture::read(&expected);
+                    assert_eq!(
+                        actual.child("cause").code,
+                        expected.child("cause").code,
+                        "seed {seed}"
+                    );
+                }
+                other => panic!("bridge/reference disagreement at seed {seed}: {other:?}"),
+            }
         }
         assert!(refused > 0, "some generated term has a non-IRI predicate");
     }

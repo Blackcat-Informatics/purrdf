@@ -25,9 +25,11 @@ use purrdf_core::terminals;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 use purrdf_lex::xml::{Document, Node, XML_NAMESPACE};
 
-use crate::error::Error;
+use crate::SparqlResultsFormat;
+use crate::error::{Error, ReadReason, ReadRefusal, ReadShape, ReadToken};
 use crate::json_read::ParsedSolutions;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
+use purrdf_lex::allocation::{Memory, Resident};
 
 use purrdf_core::datatype::XSD_STRING;
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
@@ -45,30 +47,37 @@ const SRX_NS: &str = "http://www.w3.org/2005/sparql-results#";
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed XML, a non-`<sparql>` root, an `ASK`
+/// Returns [`Error::XmlSyntax`] or [`Error::Utf8`] on malformed XML, and
+/// [`Error::Format`] on a non-`<sparql>` root, an `ASK`
 /// (`<boolean>`) document (use [`from_xml_boolean`]), or a malformed binding.
 pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
     let document = parse(bytes)?;
     let root = sparql_root(&document)?;
     if child(root, "boolean").is_some() {
-        return Err(fmt(
-            "expected SELECT results, got an ASK (boolean) document",
+        return Err(ReadRefusal::shape(
+            SparqlResultsFormat::Xml,
+            ReadShape::Select,
         ));
     }
     let variables = read_head_vars(root);
-    let results = child(root, "results").ok_or_else(|| fmt("missing <results>"))?;
+    let results = child(root, "results")
+        .ok_or_else(|| ReadRefusal::shape(SparqlResultsFormat::Xml, ReadShape::Results))?;
 
     let mut rows = Vec::new();
     for result in children_named(results, "result") {
         let mut row = vec![None; variables.len()];
         for binding in children_named(result, "binding") {
-            let name = binding
-                .attribute("name")
-                .ok_or_else(|| fmt("<binding> without name"))?;
-            let idx = variables
-                .iter()
-                .position(|v| v == name)
-                .ok_or_else(|| fmt("<binding> names an undeclared variable"))?;
+            let name = binding.attribute("name").ok_or_else(|| {
+                ReadRefusal::shape(SparqlResultsFormat::Xml, ReadShape::BindingName)
+            })?;
+            let idx = variables.iter().position(|v| v == name).ok_or_else(|| {
+                ReadRefusal::token(
+                    SparqlResultsFormat::Xml,
+                    ReadToken::Variable,
+                    name,
+                    &mut Memory::new(&mut Resident),
+                )
+            })?;
             // A `<binding>` with no child term element means the variable is
             // unbound in this solution — an older convention (conformant
             // SPARQL-XML simply omits the `<binding>`).  Treat it as absent.
@@ -109,18 +118,24 @@ pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed XML, a document without a
+/// Returns [`Error::XmlSyntax`] or [`Error::Utf8`] on malformed XML, and
+/// [`Error::Format`] on a document without a
 /// `<boolean>` element, or a `<boolean>` whose text is not `true` or `false`
 /// once XML `S` is stripped from both ends.
 pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
     let document = parse(bytes)?;
-    let boolean =
-        child(sparql_root(&document)?, "boolean").ok_or_else(|| fmt("missing <boolean>"))?;
+    let boolean = child(sparql_root(&document)?, "boolean")
+        .ok_or_else(|| ReadRefusal::shape(SparqlResultsFormat::Xml, ReadShape::Boolean))?;
     let text = text(boolean);
     match terminals::trim_ws(&text) {
         "true" => Ok(true),
         "false" => Ok(false),
-        other => Err(fmt(&format!("invalid <boolean> value `{other}`"))),
+        other => Err(ReadRefusal::token(
+            SparqlResultsFormat::Xml,
+            ReadToken::Boolean,
+            other,
+            &mut Memory::new(&mut Resident),
+        )),
     }
 }
 
@@ -148,7 +163,8 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed XML or a non-`<sparql>` root.
+/// Returns [`Error::XmlSyntax`] or [`Error::Utf8`] on malformed XML, or
+/// [`Error::Format`] on a non-`<sparql>` root.
 pub fn provenance_from_xml(
     bytes: &[u8],
     namespace: &ProvenanceNamespace,
@@ -176,10 +192,17 @@ pub fn provenance_from_xml(
 
 /// Read `bytes` as an XML document (a document type declaration refused).
 fn parse(bytes: &[u8]) -> Result<Document<'_>, Error> {
-    let text = core::str::from_utf8(bytes).map_err(|_| fmt("non-UTF-8 document"))?;
-    Document::parse(text).map_err(|error| {
-        let (line, column) = error.line_column(text);
-        fmt(&format!("{error} (line {line}, column {column})"))
+    let text = core::str::from_utf8(bytes).map_err(|cause| Error::Utf8 {
+        length: bytes.len(),
+        cause,
+    })?;
+    Document::parse(text).map_err(|cause| {
+        let (line, column) = cause.line_column(text);
+        Error::XmlSyntax {
+            cause,
+            line,
+            column,
+        }
     })
 }
 
@@ -187,7 +210,10 @@ fn parse(bytes: &[u8]) -> Result<Document<'_>, Error> {
 fn sparql_root<'d, 'a>(document: &'d Document<'a>) -> Result<Node<'d, 'a>, Error> {
     let root = document.root_element();
     if !is_srx(root, "sparql") {
-        return Err(fmt("root element is not <sparql>"));
+        return Err(ReadRefusal::shape(
+            SparqlResultsFormat::Xml,
+            ReadShape::SparqlRoot,
+        ));
     }
     Ok(root)
 }
@@ -281,7 +307,10 @@ fn decode_term(elem: Node<'_, '_>) -> Result<TermValue, Error> {
             let [s, p, o] = <[TermValue; 3]>::try_from(innermost.decoded)
                 .unwrap_or_else(|_| unreachable!("a triple is assembled from three components"));
             if !matches!(p, TermValue::Iri(_)) {
-                return Err(fmt("triple-term predicate is not an IRI"));
+                return Err(Error::Format(ReadRefusal {
+                    format: SparqlResultsFormat::Xml,
+                    reason: ReadReason::Predicate(p),
+                }));
             }
             term = TermValue::Triple {
                 s: TermBox::new(s),
@@ -296,7 +325,12 @@ fn decode_term(elem: Node<'_, '_>) -> Result<TermValue, Error> {
 fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
     let name = elem.tag_name();
     if !matches!(name.namespace(), None | Some(SRX_NS)) {
-        return Err(fmt(&format!("unexpected term element <{}>", name.name())));
+        return Err(ReadRefusal::token(
+            SparqlResultsFormat::Xml,
+            ReadToken::Element,
+            name.name(),
+            &mut Memory::new(&mut Resident),
+        ));
     }
     Ok(Some(match name.name() {
         "uri" => TermValue::Iri(text(elem)),
@@ -310,11 +344,15 @@ fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
             // grammar as every other parsed tag in the workspace — see
             // [`crate::error::language_tag_refusal`] for why a results reader
             // is on that list.
-            if let Some(detail) = language
+            if let Some(cause) = language
                 .as_deref()
                 .and_then(crate::error::language_tag_refusal)
             {
-                return Err(fmt(&detail));
+                return Err(Error::LanguageTag {
+                    format: "SPARQL-XML",
+                    language: language.expect("the refused language attribute exists"),
+                    cause,
+                });
             }
             // `its:dir` — resolved by NAMESPACE URI (`ITS_NS`) plus local name
             // `dir`, not by the literal QName spelling — is the spelling the
@@ -338,10 +376,14 @@ fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
                         .map(purrdf_lex::xml::Attribute::value)
                 });
             let direction = match dir_str {
-                Some(token) => Some(
-                    RdfTextDirection::from_str_token(token)
-                        .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
-                ),
+                Some(token) => Some(RdfTextDirection::from_str_token(token).ok_or_else(|| {
+                    ReadRefusal::token(
+                        SparqlResultsFormat::Xml,
+                        ReadToken::Direction,
+                        token,
+                        &mut Memory::new(&mut Resident),
+                    )
+                })?),
                 None => None,
             };
             let datatype = match elem.attribute("datatype") {
@@ -357,26 +399,62 @@ fn decode_leaf(elem: Node<'_, '_>) -> Result<Option<TermValue>, Error> {
             }
         }
         "triple" => return Ok(None),
-        other => return Err(fmt(&format!("unexpected term element <{other}>"))),
+        other => {
+            return Err(ReadRefusal::token(
+                SparqlResultsFormat::Xml,
+                ReadToken::Element,
+                other,
+                &mut Memory::new(&mut Resident),
+            ));
+        }
     }))
 }
 
 /// Read the single child term element of a `<triple>` component wrapper.
 fn component<'d, 'a>(triple: Node<'d, 'a>, role: &'static str) -> Result<Node<'d, 'a>, Error> {
-    let wrapper = child(triple, role).ok_or_else(|| fmt(&format!("<triple> missing <{role}>")))?;
-    wrapper
-        .element_children()
-        .next()
-        .ok_or_else(|| fmt(&format!("<{role}> has no term")))
-}
-
-/// Build a `Format` error.
-fn fmt(msg: &str) -> Error {
-    Error::Format(format!("SPARQL-XML: {msg}"))
+    let wrapper = child(triple, role).ok_or_else(|| {
+        ReadRefusal::shape(SparqlResultsFormat::Xml, ReadShape::Component { role })
+    })?;
+    wrapper.element_children().next().ok_or_else(|| {
+        ReadRefusal::shape(SparqlResultsFormat::Xml, ReadShape::ComponentTerm { role })
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_xml_parse_refusals_keep_source_coordinates_and_utf8_fields() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let input = String::from("<sparql>");
+        let error = from_xml(input.as_bytes()).unwrap_err();
+        let original = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<purrdf_lex::xml::XmlError>()
+            .unwrap();
+        let (line, column) = original.line_column(&input);
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "sparql-results-xml-syntax");
+        assert!(
+            matches!(fields.field("line"), ErrorValue::Unsigned(value) if value == line as u128)
+        );
+        assert!(
+            matches!(fields.field("column"), ErrorValue::Unsigned(value) if value == column as u128)
+        );
+        assert_eq!(fields.child("cause").code, Capture::read(original).code);
+        let retained = error.clone();
+        drop(error);
+        drop(input);
+        assert_eq!(Capture::read(&retained).code, "sparql-results-xml-syntax");
+
+        let error = from_xml(&[0xff]).unwrap_err();
+        let fields = Capture::read(&error);
+        assert!(matches!(fields.field("length"), ErrorValue::ByteCount(1)));
+        assert!(matches!(
+            fields.child("cause").field("valid_up_to"),
+            ErrorValue::ByteCount(0)
+        ));
+    }
     use super::*;
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
@@ -398,10 +476,11 @@ mod tests {
                     from_xml_boolean(document.as_bytes()).map(|_| ()),
                     provenance_from_xml(document.as_bytes(), &namespace).map(|_| ()),
                 ] {
-                    let Error::Format(message) = refused.expect_err("nesting exceeds XML budget")
+                    let Error::XmlSyntax { cause, .. } = refused.expect_err("nesting exceeds XML budget")
                     else {
-                        panic!("expected typed format refusal");
+                        panic!("expected native XML budget refusal");
                     };
+                    let message = cause.to_string();
                     assert!(message.contains("element nesting exceeds the limit of 128"), "{message}");
                 }
                 let select = b"<sparql><head><variable name=\"x\"/></head><results><result><binding name=\"x\"><literal>ok</literal></binding></result></results></sparql>";
@@ -453,10 +532,11 @@ mod tests {
             "&#x-41;",
             "&#-65;",
         ] {
-            assert!(
-                matches!(literal_text(&srx_literal(text)), Err(Error::Format(_))),
-                "{text}"
-            );
+            let error = literal_text(&srx_literal(text)).expect_err("unlawful character reference");
+            let Error::XmlSyntax { cause, .. } = error else {
+                panic!("a character reference must retain the native XML refusal: {text}");
+            };
+            assert_eq!(cause.kind(), &purrdf_lex::xml::XmlErrorKind::InvalidCharRef);
         }
     }
 
@@ -501,10 +581,11 @@ mod tests {
         ] {
             let mut document = doctype.as_bytes().to_vec();
             document.extend_from_slice(&plain);
-            assert!(
-                matches!(from_xml(&document), Err(Error::Format(_))),
-                "{doctype}"
-            );
+            let error = from_xml(&document).expect_err("a results document refuses a DOCTYPE");
+            let Error::XmlSyntax { cause, .. } = error else {
+                panic!("a DOCTYPE must retain the native XML refusal: {doctype}");
+            };
+            assert_eq!(cause.kind(), &purrdf_lex::xml::XmlErrorKind::Doctype);
         }
     }
 
@@ -911,13 +992,31 @@ mod tests {
             "\u{b}true",      // VERTICAL TAB — Unicode whitespace, not XML `S`
             " \u{a0} false ", // mixed with the real thing
         ] {
-            assert!(
-                matches!(
-                    from_xml_boolean(doc(padded).as_bytes()),
-                    Err(Error::Format(_))
-                ),
-                "{padded:?} is not an xsd:boolean lexical form and must be refused"
-            );
+            let error = from_xml_boolean(doc(padded).as_bytes())
+                .expect_err("padding outside XML S is not a Boolean lexical form");
+            if let Some(character) = padded.chars().find(|c| matches!(c, '\u{c}' | '\u{b}')) {
+                let Error::XmlSyntax { cause, .. } = error else {
+                    panic!("an illegal XML scalar must retain its native refusal: {padded:?}");
+                };
+                assert_eq!(
+                    cause.kind(),
+                    &purrdf_lex::xml::XmlErrorKind::IllegalChar(character)
+                );
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        Error::Format(ReadRefusal {
+                            reason: ReadReason::Token {
+                                kind: ReadToken::Boolean,
+                                ..
+                            },
+                            ..
+                        })
+                    ),
+                    "{padded:?}"
+                );
+            }
         }
         // The VALID neighbours: every run of the four still reads, in both
         // polarities, including the multi-line form a pretty-printer emits.
@@ -1034,9 +1133,20 @@ mod tests {
         for tag in REFUSED_TAGS {
             let error = from_xml(&srx_with_lang(tag))
                 .expect_err("a tag the grammar refuses must not decode");
-            let Error::Format(message) = &error else {
-                panic!("expected Error::Format for {tag:?}, got {error:?}");
+            let Error::LanguageTag {
+                language, cause, ..
+            } = &error
+            else {
+                panic!("expected native language refusal for {tag:?}, got {error:?}");
             };
+            let fields = purrdf_testkit::error_capture::Capture::read(&error);
+            assert!(
+                matches!(fields.field("language"), purrdf_hash::error::ErrorValue::Text(value) if value == *tag)
+            );
+            assert_eq!(fields.child("cause").code, cause.diagnostic_code());
+            assert_eq!(language, tag);
+            let presentation = error.to_string();
+            let message = presentation.strip_prefix("result format error: ").unwrap();
             assert!(
                 message.starts_with("SPARQL-XML: invalid language tag "),
                 "the refusal must name the format and the tag: {message}"
@@ -1083,7 +1193,9 @@ mod term_walk_tests {
 
     use purrdf_lex::xml::{Document, Node};
 
-    use super::{Error, component, decode_leaf, decode_term, fmt};
+    use super::{
+        Error, ReadReason, ReadRefusal, SparqlResultsFormat, component, decode_leaf, decode_term,
+    };
 
     fn reference(elem: Node<'_, '_>) -> Result<TermValue, Error> {
         if let Some(term) = decode_leaf(elem)? {
@@ -1093,7 +1205,10 @@ mod term_walk_tests {
         let p = reference(component(elem, "predicate")?)?;
         let o = reference(component(elem, "object")?)?;
         if !matches!(p, TermValue::Iri(_)) {
-            return Err(fmt("triple-term predicate is not an IRI"));
+            return Err(Error::Format(ReadRefusal {
+                format: SparqlResultsFormat::Xml,
+                reason: ReadReason::Predicate(p),
+            }));
         }
         Ok(TermValue::Triple {
             s: TermBox::new(s),
