@@ -91,7 +91,7 @@ from purrdf.compat.rdflib import Graph
 For a literal, zero-change `import rdflib`, there is an opt-in extra:
 
 ```sh
-pip install purrdf[rdflib]
+pip install "purrdf[rdflib]"
 ```
 
 This pulls in the separate `purrdf-rdflib` distribution, whose top-level
