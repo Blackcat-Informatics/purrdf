@@ -147,6 +147,12 @@ const MAX_PREALLOCATED_ROWS: usize = 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TopK(usize);
 
+impl purrdf_hash::error::StructuredError for TopK {
+    purrdf_hash::error_visit! {
+        @tuple self (rows) => "retrieval-top-k" { "rows" => Unsigned(*rows as u128) }
+    }
+}
+
 impl TopK {
     /// A bound of `rows` fused rows.
     #[must_use]

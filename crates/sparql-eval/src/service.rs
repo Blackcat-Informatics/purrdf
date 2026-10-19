@@ -130,6 +130,14 @@ impl fmt::Display for ServiceCapability {
     }
 }
 
+impl purrdf_hash::error::StructuredError for ServiceCapability {
+    purrdf_hash::error_visit! {
+        Query => "service-capability-query" {},
+        Network => "service-capability-network" {},
+        Credentials => "service-capability-credentials" {},
+    }
+}
+
 /// The set of [`ServiceCapability`] grants held by one [`ServiceProfile`].
 ///
 /// There is intentionally no `ALL`: see this module's documentation.
@@ -324,6 +332,17 @@ impl ServiceDenial {
         &self.detail
     }
 }
+
+impl purrdf_hash::error::StructuredError for ServiceDenial {
+    purrdf_hash::error_visit! {
+        @record self { endpoint, withheld, detail } => "service-denial" {
+            "endpoint" => Iri(&self.endpoint), "withheld" => Record(&self.withheld),
+            "detail" => Message(&self.detail),
+        }
+    }
+}
+
+impl std::error::Error for ServiceDenial {}
 
 impl fmt::Display for ServiceDenial {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

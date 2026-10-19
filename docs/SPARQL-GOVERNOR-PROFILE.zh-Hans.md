@@ -3,9 +3,9 @@
 
 # `purrdf-sparql-governors` — SPARQL 执行 governor profile
 
-[English（当前 profile）](SPARQL-GOVERNOR-PROFILE.md) | 简体中文（profile v18）
+[English](SPARQL-GOVERNOR-PROFILE.md) | 简体中文（profile v22）
 
-**Profile 标识符：** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile 版本：** 18
+**Profile 标识符：** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile 版本：** 22
 &nbsp;·&nbsp; **编辑：** Patrick Audley，Blackcat Informatics® Inc.
 
 本文中的各个值都可以从库中读取，而不只是出现在文档里：`purrdf_sparql_eval::GOVERNOR_PROFILE_ID`、`GOVERNOR_PROFILE_VERSION`、`GOVERNOR_PROFILE_DIGEST`、`GOVERNOR_CORPUS_DIGEST`、`CHARGE_SCHEDULE`、`STOP_POLL_FUEL`。使用方因此可以断言，自己链接的构建实现的正是所固定的 profile，而不必仅凭文档判断。
@@ -134,6 +134,8 @@
 
 可以逐代数节点读取 fuel 去向：`explain_query` 在 `METERED` 下运行，返回 `QueryExplanation`。其账本按节点和计费点分解同一个 fuel 总量，并列出成本规划器对每个基本图模式的估计。
 
+解释还报告 `statement-indexes`：该视图实际提供的具体化目标、三元组分量和注解值访问族。`range` 表示该视图实现索引探测；`scan-default` 表示它保留按图剪枝的默认扫描路径。这表示访问能力是否可用，并不声称未绑定的探测选择了某个键范围。包装视图报告自己实际转发的访问能力，而不从隐藏的内部数据集继承能力声明。
+
 两个 `aggregate-*` 点对聚合补上了同类计费。聚合是第三种由外部——此处是数据，而非计划——决定每组工作量的生产方。内置聚合与注册的自定义聚合都把一组行折叠成一个答案；如果没有专门的计费点，这个折叠就只按通用节点计费，进入时一个 `algebra-node-entry`，每组输出一个 `committed-output-row`。这样，`GROUP_CONCAT` 把一百万行折叠成一组与把十行折叠成一组的计费就相同。
 
 * `aggregate-invocation` 对每个 `(group, aggregate expression)` 对计费一次，位置是求值器中唯一决定使用内置状态机还是注册自定义累加器的分派点。因此两种聚合按同样规则计费；同一 `GROUP BY` 上的 `SELECT` 若指定多个聚合表达式，则每组每个表达式各计一次，与各组行数无关。
@@ -245,7 +247,7 @@ governor 状态**仅属于一次操作**。每次执行都应创建一个：消�
 | 常量 | 值／读取方式 |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `18` |
+| `GOVERNOR_PROFILE_VERSION` | `22` |
 | `GOVERNOR_PROFILE_DIGEST` | 由内容导出，见下文 |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -254,7 +256,7 @@ governor 状态**仅属于一次操作**。每次执行都应创建一个：消�
 摘要是逐行编码原像的 SHA-256，以小写十六进制表示：先是 profile 标识符，再是版本，然后按表格顺序为 `CHARGE_SCHEDULE` 的每一项写入一行 `label\tcost`，每行均以 `\n` 结尾。标签不能包含制表符和换行，因此一项不会有多种编码，不同规则也不会得到同一编码。使用方仅凭本文即可重新计算：
 
 ```sh
-{ printf 'purrdf-sparql-governors\n18\n'
+{ printf 'purrdf-sparql-governors\n22\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -263,7 +265,7 @@ governor 状态**仅属于一次操作**。每次执行都应创建一个：消�
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# 37dc8ab3f6505ede9167817441a9162852fd2453bfdaa29b967d213f065d9674
+# a1c8cc382893eba81e02ef816982aa52be2612bb1e1295d6a719bf0e1abef44b
 ```
 
 SHA-256 通过 `sha2` crate 计算，它是没有熵源的纯软件实现，因此推导过程可用于 `wasm32-unknown-unknown`，并在所有目标上复现。
@@ -295,7 +297,7 @@ SHA-256 通过 `sha2` crate 计算，它是没有熵源的纯软件实现，因�
 ### 11.1 语料库摘要及其固定方式
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 6f856ca8ab7274b85908ac329bff7d8b806ac9e18f91f479ddb002bd07090a2f
+GOVERNOR_CORPUS_DIGEST = d8dba125e92664037fdc00ef736906cb04bdfd4345bbfb4c0e6958c50204c4ac
 ```
 
 这是语料库冻结清单的 SHA-256，而清单又覆盖每个负载字节。以清单定义摘要，而不另造遍历规则，使使用方只需一条命令即可复现，无须运行本 crate 的代码；只有作者自己算得出的摘要，不是别人能够独立核验的摘要：
@@ -340,6 +342,10 @@ sha256sum scripts/conformance-frozen/vectors-sparql-governors.sha256
 | **16** | 追加 `native-function-work`。原生扩展内核通过同一调用方的 governor 对物理存储作准入、为已文档化的内部工作块计费，并在块之间轮询。此前十七个标签保持原顺序与单位成本。不调用这些原生函数的查询保持原有规则。应针对所选内核和 profile 重新测量上限。 |
 | **17** | 规则不变。默认精确分支除法对可终止商保留完整标度，否则舍入到小数点后十八位，采用半数取偶。其数值塔工作和 AVG 的最终除法，即使对以前走有界数值路径的操作数，也可能移动 fuel 与临时内存截断点。应按新默认行为重新测量数值上限。 |
 | **18** | 规则不变。仅精确的数值与精确时间秒数通过经准入的求值器算术、比较、时区调整与呈现路径。这些操作现在为任意精度工作和保留临时内存计费，取代原有界或零成本路径。应重新测量数值与时间查询的 fuel 和临时内存上限，包括答案未变的查询。 |
+| **19** | 规则不变。原生结构化具体化节点探测在输出 BGP 候选项之前，先按已绑定的三元组分量缩小范围，消除无关候选项的计费。注解的谓词／对象范围减少访问的物理行，同时保留相同的输出候选项。陈述行数估计参与连接规划。应针对陈述查询重新测量 fuel、临时内存和中间结果的截断点；完整 RDF 答案保留其多重集重数。 |
+| **20** | 规则不变。绑定到快照的谓词／类计数、各位置的不同值域和结构化陈述统计，指导动态规划与贪心连接排序。按时间顺序组织的存储区分保守的物理界限与精确的有效计数。顺序变化会移动候选项、中间结果和临时内存的计费；即使完整答案不变，也应针对有代表性的查询重新测量上限。 |
+| **21** | 规则不变。算子、函数或聚合计算出的十进制数，呈现时带小数点和小数位（如 `4.0`）；`SECONDS` 返回词法形式的秒字段，并保留前导零（`05.5`、`00`）。更长的文本会移动临时内存计费和固定成本；即使数值不变，也应重新测量临时内存上限。 |
+| **22** | 规则不变。`SECONDS` 按原样复制参数词法形式中的秒字段（`05.500`），而不呈现解析后的值，因此计入该字段的字节，不再计十进制呈现工作。一元加号按原样返回操作数项，不为该一元操作或呈现计费。计算出的十进制数若取整数值且超出内联表示，其呈现计费包含 `.0`，比以前多两个字节。即使答案不变，也应重新测量 fuel 和临时内存上限。 |
 
 版本 **15** 保持计费规则不变。携带证据的 `EXISTS`／`NOT EXISTS` 求值原始主体，保留每个备选见证，以及归一化时可能丢失声明的代数节点。它不进入普通定义路径中合成的首次见证 `Slice`；节点进入与输出计费描述实际执行的主体。在两个固定的空属性函数用例中，答案、提供方调用、临时内存和输出计费不变，而 fuel 从 11 降为 10，因为不再进入一个合成节点。仅仅安装了但未使用的关系注册表，不会选择这条执行路径。应重新测量携带证据查询的 fuel 上限和停止截断点。
 
@@ -347,7 +353,7 @@ sha256sum scripts/conformance-frozen/vectors-sparql-governors.sha256
 
 版本递增不能直接当作无需迁移的升级。下面清单的每项，都涉及一个固定数字可能悄悄失去原有含义的情况：
 
-1. **重新读取 `GOVERNOR_PROFILE_VERSION`**，确认它现在为 `18`，即本节描述、下列步骤针对的版本；然后**重新读取 `GOVERNOR_PROFILE_DIGEST`**，确认它匹配预期采用的计费规则。如果摘要变化而版本未变，这个构建的声明就是不实的，必须拒绝，不能自行调和。
+1. **重新读取 `GOVERNOR_PROFILE_VERSION`**，确认它现在为 `22`，即本节描述、下列步骤针对的版本；然后**重新读取 `GOVERNOR_PROFILE_DIGEST`**，确认它匹配预期采用的计费规则。如果摘要变化而版本未变，这个构建的声明就是不实的，必须拒绝，不能自行调和。
 2. 针对自己的代表性查询，在 `QueryGovernors::METERED` 下**重新测量每个 fuel 上限**。旧版本设定的上限针对的工作，当前构建可能不再执行（v3、v11）、现在才执行（v4、v5、v6、v7、v8、v13），或改用不同顺序执行（v9、v11）。**也要重新测量中间单元格上限**：v11 携带传入列，并预测带传入绑定的执行及关系局部连接域。**也要重新测量临时内存上限**：v10 独立计算保留量，并立即检查具体身份分配；v13 对每次任意精度操作的工作字节作准入。不要按比例缩放旧数字。
 3. **重新检查设在边界处或接近边界的上限。** 上限包含边界，因此过去恰好等于实测成本的上限可以完成；版本递增后可能差一个单位。
 4. **重新读取 `GOVERNOR_CORPUS_DIGEST`**，并针对链接的构建重新执行语料库。没有语料证据的 profile 版本只是声明，不是执行记录。
@@ -362,7 +368,7 @@ sha256sum scripts/conformance-frozen/vectors-sparql-governors.sha256
 | 字段 | 来源 |
 |---|---|
 | profile 标识符 | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile 版本 | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `18` |
+| profile 版本 | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `22` |
 | profile 摘要 | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST`（§10） |
 | 停止轮询间隔 | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | 语料库摘要 | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST`（§11.1） |

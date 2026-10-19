@@ -487,6 +487,24 @@ pub enum AdmissionError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for AdmissionError {
+    purrdf_hash::error_visit! {
+        MissingMandatoryProducer { producer } => "retrieval-admission-missing-producer" { "producer" => Iri(producer.as_str()) },
+        InsufficientBindings { producer, required, provided } => "retrieval-admission-insufficient-bindings" { "producer" => Iri(producer.as_str()), "required" => Unsigned(*required as u128), "provided" => Unsigned(*provided as u128) },
+        HollowBinding { producer, request_term } => "retrieval-admission-hollow-binding" { "producer" => Iri(producer.as_str()), "request_term" => Unsigned(u128::from(*request_term)) },
+        ZeroDepth { stratum } => "retrieval-admission-zero-depth" { "stratum" => Iri(stratum.as_str()) },
+        DepthWithoutProbe { stratum, depth, ceiling } => "retrieval-admission-depth-without-probe" { "stratum" => Iri(stratum.as_str()), "depth" => Unsigned(u128::from(*depth)), "ceiling" => Unsigned(u128::from(*ceiling)) },
+        DepthBoundViolation { stratum, declared, requested, mode } => "retrieval-admission-depth-bound-violation" { "stratum" => Iri(stratum.as_str()), "declared" => Unsigned(u128::from(*declared)), "requested" => Unsigned(u128::from(*requested)), "mode" => Record(mode) },
+        StaleStatistics { plan_revision, current_revision } => "retrieval-admission-stale-statistics" { "plan_revision" => Text(plan_revision), "current_revision" => Text(current_revision) },
+        RegistryMismatch { expected_instance, got_instance } => "retrieval-admission-registry-mismatch" { "expected_instance" => Record(expected_instance), "got_instance" => Record(got_instance) },
+        RegistryFingerprintMismatch { expected, got } => "retrieval-admission-fingerprint-mismatch" { "expected" => Text(expected), "got" => Text(got) },
+        InvalidPlanVersion { version } => "retrieval-admission-invalid-plan-version" { "version" => Unsigned(u128::from(*version)) },
+        UnsatisfiablePlacement { producer, rule, detail, invocation, declared } => "retrieval-admission-unsatisfiable-placement" { "producer" => Iri(producer.as_str()), "rule" => Code(rule), "detail" => Text(detail), "invocation" => Value(invocation.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Code)), "declared" => List(declared.iter().map(|value| purrdf_hash::error::ErrorValue::Code(value))) },
+        MalformedPlan { reason } => "retrieval-admission-malformed-plan" { "reason" => Text(reason) },
+        UnsupportedCandidateScope { producer } => "retrieval-admission-unsupported-candidate-scope" { "producer" => Iri(producer) },
+    }
+}
+
 impl fmt::Display for AdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -913,6 +931,15 @@ pub enum BoundMode {
     /// itself ([`StratumUnit::new`](crate::StratumUnit::new)), which records a count
     /// and no mode.
     Undeclared,
+}
+
+impl purrdf_hash::error::StructuredError for BoundMode {
+    purrdf_hash::error_visit! {
+        Invoked { mode } => "bound-mode-invoked" { "mode" => Record(mode) },
+        Subsuming { declared, invoked } => "bound-mode-subsuming" { "declared" => Record(declared), "invoked" => Record(invoked) },
+        Uninvoked { declared } => "bound-mode-uninvoked" { "declared" => Record(declared) },
+        Undeclared => "bound-mode-undeclared" {},
+    }
 }
 
 impl fmt::Display for BoundMode {

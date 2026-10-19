@@ -1059,6 +1059,18 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits \
 				attestations_preserve_original_generation_and_caller_message_owners \
 				evaluator_conversion_retains_the_original_parser_cause_after_input_disposal \
+				retrieval_actual_iri_failures_keep_original_nested_cause \
+				retrieval_protocol_lists_preserve_order_and_full_width_counts \
+				retrieval_request_views_keep_ieee_bits_and_optional_native_values \
+				retrieval_native_failures_preserve_panicking_caller_cause \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test structured_errors -- --exact \
+				erased_function_causes_keep_original_fields_and_identity_without_rendering \
+				parsed_errors_and_optional_classifications_keep_their_native_shapes \
+				service_categories_preserve_external_messages_and_governor_quantities \
+				xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts \
+				admitted_diagnostics_borrow_original_text_and_clone_the_same_owner \
+				actual_service_builder_preserves_original_failure_under_its_admission \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-jsonschema --test api -- --exact \
 				native_output_keeps_cardinality_after_schema_and_input_destruction \

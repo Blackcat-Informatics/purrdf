@@ -82,6 +82,14 @@ impl UnsupportedKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for UnsupportedKind {
+    purrdf_hash::error_visit! {
+        QuotedTripleTermVariable => "sparql-unsupported-quoted-triple-term-variable" {},
+        CustomFunction => "sparql-unsupported-custom-function" {},
+        HeldInUnconfigured => "sparql-unsupported-heldin-unconfigured" {},
+    }
+}
+
 /// Existing request/error meanings with immutable, admission-carrying text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NativeDiagnosticKind {
@@ -105,6 +113,21 @@ pub enum NativeDiagnosticKind {
     CompositeBound,
     /// Caller declarations intercept an immutable standard scalar function.
     StandardFunctionConflict,
+}
+
+impl purrdf_hash::error::StructuredError for NativeDiagnosticKind {
+    purrdf_hash::error_visit! {
+        Function => "sparql-native-function" {},
+        FunctionOperational => "sparql-native-function-operational" {},
+        Data => "sparql-native-data" {},
+        SourceRead => "sparql-native-source-read" {},
+        Config => "sparql-native-config" {},
+        Internal => "sparql-native-internal" {},
+        Unsupported(kind) => "sparql-native-unsupported" { "kind" => Record(kind) },
+        UnclassifiedUnsupported => "sparql-native-unclassified-unsupported" {},
+        CompositeBound => "sparql-native-composite-bound" {},
+        StandardFunctionConflict => "sparql-native-standard-function-conflict" {},
+    }
 }
 
 #[derive(Debug)]
@@ -275,6 +298,14 @@ impl core::fmt::Display for NativeDiagnostic {
     }
 }
 impl std::error::Error for NativeDiagnostic {}
+
+impl purrdf_hash::error::StructuredError for NativeDiagnostic {
+    purrdf_hash::error_visit! {
+        @record self { kind, payload } => "sparql-native-diagnostic" {
+            "kind" => Record(&self.kind), "text" => Text(self.message()),
+        }
+    }
+}
 
 /// An error raised while evaluating a SPARQL query.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -607,6 +638,54 @@ pub enum EvalError {
         /// The construct the budget stopped at.
         construct: &'static str,
     },
+}
+
+impl purrdf_hash::error::StructuredError for EvalError {
+    purrdf_hash::error_visit! {
+        NativeDiagnostic(error) => "sparql-eval-native-diagnostic" { "cause" => Cause(error) },
+        RetainedDiagnostic(error) => "sparql-eval-retained-diagnostic" { "cause" => Cause(error) },
+        RetainedServiceFailure(error) => "sparql-eval-retained-service" { "cause" => Cause(error) },
+        UnstableNativeDiagnostic => "sparql-eval-unstable-diagnostic" {},
+        Parse(error) => "sparql-eval-parse" { "cause" => Cause(error) },
+        SourceRead(message) => "sparql-eval-source-read" { "message" => Text(message) },
+        WorkspaceStopped => "sparql-eval-workspace-stopped" {},
+        XPathRegex(error) => "sparql-eval-xpath" { "cause" => Cause(error) },
+        ExchangeIdExhausted => "sparql-eval-exchange-id-exhausted" {},
+        WorkspaceUnpriced(construct) => "sparql-eval-workspace-unpriced" { "construct" => Text(construct) },
+        WorkspaceBoundOverflow => "sparql-eval-workspace-bound-overflow" {},
+        Capacity(error) => "sparql-eval-capacity" { "cause" => Cause(error) },
+        AllocationFailed { construct } => "sparql-eval-allocation-failed" { "construct" => Text(construct) },
+        Unsupported { what, kind } => "sparql-eval-unsupported" {
+            "what" => Text(what), "kind" => Value(kind.as_ref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+        },
+        Dataset(error) => "sparql-eval-dataset" { "cause" => Cause(error) },
+        Internal(message) => "sparql-eval-internal" { "message" => Text(message) },
+        Remote(message) => "sparql-eval-remote" { "message" => Text(message) },
+        ServiceUnconfigured(message) => "sparql-eval-service-unconfigured" { "message" => Text(message) },
+        ServiceDenied(error) => "sparql-eval-service-denied" { "cause" => Cause(error) },
+        ServiceHostDenied { endpoint, message } => "sparql-eval-service-host-denied" {
+            "endpoint" => Iri(endpoint), "message" => Message(message),
+        },
+        ServiceHostFault { endpoint, message } => "sparql-eval-service-host-fault" {
+            "endpoint" => Iri(endpoint), "message" => Message(message),
+        },
+        Data(message) => "sparql-eval-data" { "message" => Text(message) },
+        Function(message) => "sparql-eval-function" { "message" => Message(message) },
+        FunctionAdmission(error) => "sparql-eval-function-admission" { "cause" => Cause(error) },
+        FunctionOperational(message) => "sparql-eval-function-operational" { "message" => Message(message) },
+        ExistsScopeCollision { variable, intro } => "sparql-eval-exists-scope-collision" {
+            "variable" => Text(variable.as_str()), "intro" => Code(intro),
+        },
+        Config(message) => "sparql-eval-config" { "message" => Text(message) },
+        CompositeBound(message) => "sparql-eval-composite-bound" { "message" => Text(message) },
+        RelationIncomplete { iri, reason } => "sparql-eval-relation-incomplete" {
+            "iri" => Iri(iri.as_str()), "reason" => Message(reason.as_str()),
+        },
+        FloatEnvironment(error) => "sparql-eval-float-environment" { "cause" => Cause(error) },
+        StackExhausted { construct } => "sparql-eval-stack-exhausted" { "construct" => Text(construct) },
+        HostStackExhausted { construct } => "sparql-eval-host-stack-exhausted" { "construct" => Text(construct) },
+    }
 }
 
 purrdf_lex::constructors! {
@@ -1045,7 +1124,14 @@ impl core::fmt::Display for EvalError {
 impl std::error::Error for EvalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::NativeDiagnostic(error) => Some(error),
+            Self::RetainedDiagnostic(error) => Some(error),
+            Self::RetainedServiceFailure(error) => Some(error),
             Self::Parse(error) => Some(error),
+            Self::Dataset(error) => Some(error),
+            Self::Capacity(error) => Some(error),
+            Self::ServiceDenied(error) => Some(error),
+            Self::FloatEnvironment(error) => Some(error),
             Self::XPathRegex(error) => Some(error),
             Self::FunctionAdmission(error) => Some(error.cause()),
             _ => None,

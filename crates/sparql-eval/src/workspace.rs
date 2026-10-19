@@ -1232,6 +1232,14 @@ pub struct AdmittedVecIntoIter<T> {
     values: std::vec::IntoIter<T>,
     _allocation: Option<WorkspaceAllocation>,
 }
+impl<T> AdmittedVecIntoIter<T> {
+    /// Borrow the unconsumed elements without advancing the iterator or its grant.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        self.values.as_slice()
+    }
+}
+
 impl<T> Iterator for AdmittedVecIntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {

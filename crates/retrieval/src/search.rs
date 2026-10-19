@@ -402,6 +402,15 @@ pub enum SearchError {
     FusionError(FusionError),
 }
 
+impl purrdf_hash::error::StructuredError for SearchError {
+    purrdf_hash::error_visit! {
+        PlanError(cause) => "retrieval-search-plan" { "cause" => Cause(cause) },
+        AdmissionError(cause) => "retrieval-search-admission" { "cause" => Cause(cause) },
+        ExecutionError(cause) => "retrieval-search-execution" { "cause" => Cause(cause) },
+        FusionError(cause) => "retrieval-search-fusion" { "cause" => Cause(cause) },
+    }
+}
+
 impl std::fmt::Display for SearchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

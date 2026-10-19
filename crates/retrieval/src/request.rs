@@ -64,6 +64,14 @@ pub enum Metric {
     Euclidean,
 }
 
+impl purrdf_hash::error::StructuredError for Metric {
+    purrdf_hash::error_visit! {
+        Cosine => "retrieval-metric-cosine" {},
+        Dot => "retrieval-metric-dot" {},
+        Euclidean => "retrieval-metric-euclidean" {},
+    }
+}
+
 /// One term of a retrieval request.
 ///
 /// The enum is closed: a request term is one of these shapes, and a producer
@@ -228,6 +236,36 @@ pub enum RequestTerm {
         /// The seed term.
         entity: Term,
     },
+}
+
+impl purrdf_hash::error::StructuredError for RequestTerm {
+    purrdf_hash::error_visit! {
+        Lexical { text, language, predicate } => "retrieval-request-lexical" {
+            "text" => Text(text),
+            "language" => Value(language.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "predicate" => Value(predicate.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |iri| purrdf_hash::error::ErrorValue::Iri(iri.as_str())))
+        },
+        Vector { embedding, metric, index_hint } => "retrieval-request-vector" {
+            "embedding" => List(embedding.iter().map(|value| purrdf_hash::error::ErrorValue::Float32Bits(value.to_bits()))),
+            "metric" => Record(metric),
+            "index_hint" => Value(index_hint.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text))
+        },
+        Spatial { geometry, predicate, max_distance } => "retrieval-request-spatial" {
+            "geometry" => Text(geometry), "predicate" => Iri(predicate.as_str()),
+            "max_distance" => Value(max_distance.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value)))
+        },
+        Temporal { predicate, lower, upper } => "retrieval-request-temporal" {
+            "predicate" => Iri(predicate.as_str()),
+            "lower" => Value(lower.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "upper" => Value(upper.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text))
+        },
+        NumericRange { predicate, lower, upper } => "retrieval-request-numeric-range" {
+            "predicate" => Iri(predicate.as_str()),
+            "lower" => Value(lower.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "upper" => Value(upper.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value)))
+        },
+        EntitySeed { entity } => "retrieval-request-entity-seed" { "entity" => Term(entity) },
+    }
 }
 
 impl PartialEq for RequestTerm {

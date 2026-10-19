@@ -266,6 +266,54 @@ pub struct UnservedTerm {
     pub reason: UnservedReason,
 }
 
+impl purrdf_hash::error::StructuredError for UnservedTerm {
+    purrdf_hash::error_visit! {
+        @record self { request_term, reason } => "retrieval-unserved-term" {
+            "request_term" => Unsigned(u128::from(self.request_term)),
+            "reason" => Record(&self.reason)
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for UnservedReason {
+    purrdf_hash::error_visit! {
+        NoProducerAccepts => "retrieval-no-producer-accepts" {},
+        EveryAcceptingProducerRejected => "retrieval-every-accepting-producer-rejected" {},
+        AcceptedWithoutPlacement => "retrieval-accepted-without-placement" {},
+        Unbound => "retrieval-unbound" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProducerBinding {
+    purrdf_hash::error_visit! {
+        @record self { producer, stratum, request_terms } => "retrieval-producer-binding" {
+            "producer" => Text(&self.producer),
+            "stratum" => Iri(self.stratum.as_str()),
+            "request_terms" => List(self.request_terms.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(*value))))
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProducerDecision {
+    purrdf_hash::error_visit! {
+        Selected { producer, stratum } => "retrieval-producer-selected" {
+            "producer" => Text(producer), "stratum" => Iri(stratum.as_str())
+        },
+        Rejected { producer, reason } => "retrieval-producer-rejected" {
+            "producer" => Text(producer), "reason" => Record(reason)
+        },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RejectionReason {
+    purrdf_hash::error_visit! {
+        NotRanked => "retrieval-rejection-not-ranked" {},
+        NoAcceptedTerm => "retrieval-rejection-no-accepted-term" {},
+        DepthExceeded => "retrieval-rejection-depth-exceeded" {},
+        UnsatisfiedConstraint => "retrieval-rejection-unsatisfied-constraint" {},
+    }
+}
+
 /// Everything one stratum's planned depth was derived from.
 ///
 /// # Why a plan records this
