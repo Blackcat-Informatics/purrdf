@@ -154,10 +154,14 @@ mod schema;
 mod unique_items;
 mod validate;
 
+pub use content::{Base64Refusal, ContentRefusal};
 pub use dialect::Dialect;
-pub use error::{EvaluationCause, EvaluationError, SchemaError};
+pub use error::{
+    EvaluationCause, EvaluationError, IdentifierRefusal, KeywordRefusal, KeywordRequirement,
+    SchemaError, UriRefusal,
+};
 pub use meta_set::Metaschemas;
-pub use output::{Output, OutputFormat, OutputUnit};
+pub use output::{Output, OutputFormat, OutputUnit, ValidationRefusal};
 pub use registry::{DRAFT_2020_12, Registry};
 pub use schema::Schema;
 pub use validate::MAX_REF_CHAIN;

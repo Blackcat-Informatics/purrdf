@@ -1059,6 +1059,13 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits \
 				attestations_preserve_original_generation_and_caller_message_owners \
 				evaluator_conversion_retains_the_original_parser_cause_after_input_disposal \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-jsonschema --test api -- --exact \
+				native_output_keeps_cardinality_after_schema_and_input_destruction \
+				content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal \
+				public_schema_producers_retain_original_uri_and_pattern_causes \
+				a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not \
+				matcher_exhaustion_is_an_error_not_an_invalid_verdict \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

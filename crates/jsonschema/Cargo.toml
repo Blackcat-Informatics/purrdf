@@ -73,6 +73,11 @@ harness = false
 # The official JSON-Schema-Test-Suite, one libtest case per suite test: one
 # target per draft, so each is its own conformance row.
 [[test]]
+name = "api"
+path = "tests/api.rs"
+harness = false
+
+[[test]]
 name = "suite"
 path = "tests/suite.rs"
 harness = false

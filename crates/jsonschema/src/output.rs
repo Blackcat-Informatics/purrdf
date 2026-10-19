@@ -21,8 +21,12 @@
 //! result they explain.
 
 use std::fmt;
+use std::sync::Arc;
 
 use purrdf_lex::json::{Object, Value};
+
+mod refusal;
+pub use refusal::ValidationRefusal;
 
 /// Which output format [`Output::to_json`] writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,11 +58,33 @@ pub struct OutputUnit {
     pub instance_location: String,
     /// Why the keyword failed; `None` for a passing unit or one whose failure
     /// is explained entirely by its children.
-    pub error: Option<String>,
+    /// The original immutable reason is shared across report clones and
+    /// meta-schema transport; successful nodes carry only an empty pointer.
+    pub error: Option<Arc<ValidationRefusal>>,
     /// The annotation the keyword produced, if it passed and produces one.
     pub annotation: Option<Value>,
     /// The units of the keywords or subschemas beneath this one.
     pub children: Vec<Self>,
+}
+
+impl purrdf_hash::error::StructuredError for OutputUnit {
+    purrdf_hash::error_visit! {
+        @record self { valid, keyword_location, absolute_keyword_location, instance_location, error, annotation, children } => "schema-output-unit" {
+            "valid" => Boolean(self.valid),
+            "keyword_location" => Text(&self.keyword_location),
+            "absolute_keyword_location" => Iri(&self.absolute_keyword_location),
+            "instance_location" => Text(&self.instance_location),
+            "error" => Value(match &self.error { Some(error) => purrdf_hash::error::ErrorValue::Cause(&**error), None => purrdf_hash::error::ErrorValue::Absent }),
+            "annotation" => Value(match &self.annotation { Some(value) => purrdf_hash::error::ErrorValue::Record(value), None => purrdf_hash::error::ErrorValue::Absent }),
+            "children" => List(self.children.iter().map(|child| purrdf_hash::error::ErrorValue::Record(child)))
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Output {
+    purrdf_hash::error_visit! {
+        @record self { root } => "schema-output" { "root" => Record(&self.root) }
+    }
 }
 
 impl Drop for OutputUnit {
@@ -277,7 +303,7 @@ fn header(unit: &OutputUnit) -> Object {
 fn leaf(unit: &OutputUnit) -> Value {
     let mut object = header(unit);
     if let Some(error) = &unit.error {
-        object.insert("error".to_owned(), Value::String(error.clone()));
+        object.insert("error".to_owned(), Value::String(error.to_string()));
     }
     if let Some(annotation) = &unit.annotation {
         object.insert("annotation".to_owned(), annotation.clone());
@@ -331,7 +357,7 @@ fn condense(unit: &OutputUnit, valid: bool, mut children: Vec<Value>) -> Option<
     }
     let mut object = header(unit);
     if let Some(error) = unit.error.as_ref().filter(|_| !valid) {
-        object.insert("error".to_owned(), Value::String(error.clone()));
+        object.insert("error".to_owned(), Value::String(error.to_string()));
     }
     if let Some(annotation) = unit.annotation.as_ref().filter(|_| valid) {
         object.insert("annotation".to_owned(), annotation.clone());

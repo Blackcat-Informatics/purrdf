@@ -4,6 +4,58 @@
 use super::*;
 
 #[test]
+fn native_pattern_refusals_keep_original_operands_without_rendering() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    let pattern = String::from("a{9,2}");
+    let error = parse(&pattern).unwrap_err();
+    drop(pattern);
+    let fields = Capture::read(&error);
+    let reason = fields.child("reason");
+    assert_eq!(reason.code, "ecma-quantifier-order");
+    assert!(matches!(reason.field("minimum"), ErrorValue::Unsigned(9)));
+    assert!(matches!(reason.field("maximum"), ErrorValue::Unsigned(2)));
+    assert!(std::error::Error::source(&error).is_some());
+
+    let pattern = String::from(r"\p{Unlisted_Original_Property}");
+    let error = parse(&pattern).unwrap_err();
+    drop(pattern);
+    let reason = Capture::read(&error).child("reason");
+    assert_eq!(reason.code, "ecma-unknown-property");
+    assert!(matches!(
+        reason.field("body"),
+        ErrorValue::Text("Unlisted_Original_Property")
+    ));
+
+    let error = parse("a{4294967296}").unwrap_err();
+    let reason = Capture::read(&error).child("reason");
+    assert_eq!(reason.code, "ecma-decimal-limit");
+    assert!(matches!(
+        reason.field("value"),
+        ErrorValue::Unsigned(429_496_729)
+    ));
+    assert!(matches!(reason.field("digit"), ErrorValue::Unsigned(6)));
+    assert!(
+        matches!(reason.field("maximum"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+    );
+
+    let pattern = compile("(?=a)a").unwrap();
+    let mut limits = MatchLimits {
+        steps: 0,
+        states: 7,
+    };
+    let error = pattern.is_match("a", &mut limits).unwrap_err();
+    let reason = Capture::read(&error).child("reason");
+    assert_eq!(reason.code, "ecma-matcher-limit");
+    assert!(matches!(reason.field("steps"), ErrorValue::Unsigned(0)));
+    assert!(matches!(
+        reason.field("maximum_states"),
+        ErrorValue::Unsigned(7)
+    ));
+}
+
+#[test]
 fn deeply_nested_groups_fail_as_a_resource_error() {
     let at_limit = format!(
         "{}x{}",
