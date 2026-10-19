@@ -50,7 +50,7 @@ const FN_IRI: &str = "http://example.org/ns#isFlagged";
 /// identifiable rather than merely a count.
 const GENERATION: &str = "flag-index@7";
 
-fn relations() -> (PropertyFunctionRegistry, Arc<AtomicU64>) {
+fn relations() -> (PropertyFunctionRegistry<'static>, Arc<AtomicU64>) {
     let opens = Arc::new(AtomicU64::new(0));
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -371,7 +371,7 @@ fn an_expression_body_that_invokes_no_relation_attests_nothing() {
 /// its own environment — but the same counter, because the assertion is that the
 /// nested run really invoked the relation, and a counter the nested run does not
 /// share would leave that unobservable.
-fn relations_only(opens: Arc<AtomicU64>) -> PropertyFunctionRegistry {
+fn relations_only(opens: Arc<AtomicU64>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL.to_owned(),

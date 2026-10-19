@@ -129,7 +129,7 @@ fn exists_results(
     ds: &Arc<RdfDataset>,
     outer: &GraphPattern,
     inner: &GraphPattern,
-    registry: Option<&crate::property_fn::PropertyFunctionRegistry>,
+    registry: Option<&crate::property_fn::PropertyFunctionRegistry<'_>>,
 ) -> Vec<Result<bool, EvalError>> {
     let mut ctx = EvalCtx::new(ds);
     if let Some(registry) = registry {
@@ -181,7 +181,7 @@ fn forced_results_with_registry(
     outer: &GraphPattern,
     inner: &GraphPattern,
     strategy: ForcedExistsStrategy,
-    registry: &crate::property_fn::PropertyFunctionRegistry,
+    registry: &crate::property_fn::PropertyFunctionRegistry<'_>,
 ) -> Vec<Result<bool, EvalError>> {
     let _guard = force_exists_strategy_for_test(strategy);
     exists_results(ds, outer, inner, Some(registry))
@@ -193,7 +193,7 @@ fn natural_results_with_registry(
     ds: &Arc<RdfDataset>,
     outer: &GraphPattern,
     inner: &GraphPattern,
-    registry: &crate::property_fn::PropertyFunctionRegistry,
+    registry: &crate::property_fn::PropertyFunctionRegistry<'_>,
 ) -> Vec<Result<bool, EvalError>> {
     exists_results(ds, outer, inner, Some(registry))
 }
@@ -1565,11 +1565,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &crate::property_fn::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn crate::property_fn::PfCursor>, EvalError> {
+        ) -> Result<Box<dyn crate::property_fn::PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             let rows = match args.get(0) {
                 Some(purrdf_core::TermValue::Iri(subject)) if subject == &format!("{EX}cA") => {
                     vec![vec![

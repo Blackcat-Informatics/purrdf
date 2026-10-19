@@ -176,7 +176,7 @@ impl GraphDerivedRelations {
         engine: &NativeSparqlEngine,
         dataset: &RdfDataset,
         geo: &purrdf_validate::geo::GeoProfile,
-    ) -> PyResult<(PreparedExecution, ExtensionEnv)> {
+    ) -> PyResult<(PreparedExecution, ExtensionEnv<'static>)> {
         let registry = build_relations(self.specs.clone(), dataset)?;
         let aggregates =
             purrdf_validate::query::statistical_aggregates(self.aggregate_namespace.as_deref());
@@ -245,7 +245,7 @@ pub(crate) struct PyPreparedQuery {
     /// [`GraphDerivedRelations::readmit`](GraphDerivedRelations::readmit), at the top
     /// of the run that needs them — so the pairing above is what is maintained across
     /// the rebuild, rather than something only the prepare-time pair enjoyed.
-    env: ExtensionEnv,
+    env: ExtensionEnv<'static>,
     /// The relation sources to re-derive from the RUN's dataset, when at least one of
     /// them reads the store's own graph — `None` otherwise, which is the common case.
     ///
@@ -478,7 +478,7 @@ pub(super) fn prepare(
     query: &str,
     parameters: &[String],
     parser_options: ParserOptions,
-    property_functions: Option<&PropertyFunctionRegistry>,
+    property_functions: Option<&PropertyFunctionRegistry<'static>>,
     aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
     xpath_regex: Option<crate::xpath_regex::Selection>,

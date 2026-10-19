@@ -151,11 +151,14 @@ impl PropertyFunction for Table {
         2
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let input = args.get(0);
         let key = input.map(key_of);
         self.invocations

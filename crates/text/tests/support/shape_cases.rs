@@ -256,7 +256,7 @@ pub(crate) fn graph_free_rdf12_partitions_and_named_refusal() {
 pub(crate) struct Fixture {
     pub(crate) dataset: Arc<RdfDataset>,
     pub(crate) index: Arc<TextIndex>,
-    pub(crate) env: ExtensionEnv,
+    pub(crate) env: ExtensionEnv<'static>,
 }
 impl Fixture {
     /// `graph` is deliberately hidden by the occurrence relation's row schema.
@@ -2103,7 +2103,7 @@ struct EvidenceAnswer {
 fn evidence_answer(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
     disabled: bool,
 ) -> EvidenceAnswer {
@@ -2163,7 +2163,7 @@ fn evidence_answer(
 fn equal_evidence(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
 ) -> EvidenceAnswer {
     let literal = evidence_answer(dataset, query, options, claims, true);

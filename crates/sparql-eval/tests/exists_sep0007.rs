@@ -370,7 +370,7 @@ fn request(query: &str) -> SparqlRequest<'_> {
 fn run_with_registry(
     ds: &Arc<RdfDataset>,
     query_body: &str,
-    registry: &ExtensionEnv,
+    registry: &ExtensionEnv<'static>,
 ) -> SparqlResult {
     let text = format!("{PFX}{query_body}");
     NativeSparqlEngine::new()
@@ -1045,7 +1045,7 @@ fn exists_graph_iri_name_with_correlated_body() {
 /// `crate::exists_admission_gate`'s `probe_would_diverge_on_property_function`
 /// documents as the reason a bare call is unconditionally inadmissible in the
 /// first place.
-fn pf_registry() -> ExtensionEnv {
+fn pf_registry() -> ExtensionEnv<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         iri("pf"),

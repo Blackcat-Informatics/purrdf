@@ -65,11 +65,14 @@ impl PropertyFunction for FixtureRelation {
         0
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Err(EvalError::function("the fixture is never invoked"))
     }
 }
@@ -108,7 +111,7 @@ fn ranked_declaration() -> RankedDeclaration {
 
 /// One registry holding the same relation under the same IRI, wired up either
 /// with `declaration` or plainly.
-fn registry_declaring(declaration: Option<RankedDeclaration>) -> PropertyFunctionRegistry {
+fn registry_declaring(declaration: Option<RankedDeclaration>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let relation = Arc::new(FixtureRelation::new());
     match declaration {

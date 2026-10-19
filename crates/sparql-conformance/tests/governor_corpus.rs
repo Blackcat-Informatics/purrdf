@@ -728,11 +728,14 @@ impl PropertyFunction for ScriptedRelation {
         self.spec.emits
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.invocations.fetch_add(1, Ordering::Relaxed);
         let subject = args.get(0).cloned().ok_or_else(|| {
             EvalError::function(format!("<{RELATION_IRI}> needs a bound subject"))

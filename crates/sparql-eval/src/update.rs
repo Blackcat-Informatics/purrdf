@@ -187,7 +187,7 @@ pub(crate) struct UpdateEvalConfig<'e> {
     /// triple-pattern context exactly like a query's, so it takes the identical
     /// [`QueryOptions`] a query takes — [`QueryOptions::EMPTY`] is "configure nothing",
     /// what every UPDATE ran under before this seam existed.
-    pub(crate) options: QueryOptions<'e>,
+    pub(crate) options: QueryOptions<'e, 'e>,
 }
 
 /// Poll the request's stop signal, converting a fired signal into a trip.
@@ -874,7 +874,7 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
     snap: &D,
     active_dataset: &ActiveDataset<D::Id>,
     governors: Option<&Arc<GovernorState>>,
-    relations: &crate::property_fn::PropertyFunctionRegistry,
+    relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
 ) -> Result<(), UpdateAbort> {
     let Some(state) = governors else {
         return Ok(());

@@ -1397,7 +1397,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'static>, EvalError> {
         check_arity_owned(args, self.arity(), "text search", &workspace)?;
         let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
             format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
@@ -1747,21 +1747,27 @@ impl<P: CorpusProfile> PropertyFunction for TextSearchRelation<P> {
     /// branch of its own anywhere. `select` iterates the index's partitions and an
     /// empty index has none, so nothing is ranked and no corpus statistic is
     /// computed.
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.open_owned(args, ceiling, WorkspaceCapability::default())
             .and_then(WorkspaceCursor::into_resident)
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.open_owned(args, ceiling, workspace)
     }
 }
@@ -2098,7 +2104,7 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'static>, EvalError> {
         check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
         let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| {
             NativeDiagnostic::error(
@@ -2258,21 +2264,27 @@ impl<P: CorpusProfile> PropertyFunction for TermOccurrenceRelation<P> {
     /// therefore filters on every bound position and spends the licence only on
     /// rows it emits, and the prefix it produces is the prefix of the unbounded
     /// answer whatever is bound.
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.open_owned(args, ceiling, WorkspaceCapability::default())
             .and_then(WorkspaceCursor::into_resident)
     }
 
-    fn open_admitted(
+    fn open_admitted<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
         workspace: WorkspaceCapability,
-    ) -> Result<WorkspaceCursor, EvalError> {
+    ) -> Result<WorkspaceCursor<'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         self.open_owned(args, ceiling, workspace)
     }
 }

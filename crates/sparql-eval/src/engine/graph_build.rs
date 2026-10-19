@@ -96,7 +96,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
         let staged = self.stage_construct(
@@ -136,7 +136,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
@@ -171,7 +171,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         destination: &mut RdfDatasetBuilder,
     ) -> FallibleGraphBuildResult<D::Error, D::Evidence>
@@ -296,7 +296,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
@@ -344,7 +344,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d>,
+        options: QueryOptions<'d, 'd>,
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
@@ -410,7 +410,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'_>,
+        options: QueryOptions<'_, '_>,
         state: Option<&Arc<GovernorState>>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<(), GraphBuildError> {

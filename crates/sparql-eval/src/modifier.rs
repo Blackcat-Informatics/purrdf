@@ -5678,20 +5678,26 @@ mod tests {
             fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
                 self.0.rows_per_invocation(mode)
             }
-            fn open(
+            fn open<'cursor>(
                 &self,
                 args: &PfArgs<'_>,
                 ceiling: Option<u64>,
-            ) -> Result<Box<dyn PfCursor>, EvalError> {
+            ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+            where
+                Self: 'cursor,
+            {
                 self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
                     .and_then(crate::WorkspaceCursor::into_resident)
             }
-            fn open_admitted(
+            fn open_admitted<'cursor>(
                 &self,
                 _args: &PfArgs<'_>,
                 ceiling: Option<u64>,
                 workspace: crate::WorkspaceCapability,
-            ) -> Result<crate::WorkspaceCursor, EvalError> {
+            ) -> Result<crate::WorkspaceCursor<'cursor>, EvalError>
+            where
+                Self: 'cursor,
+            {
                 let mut rows = AdmittedVec::new(&workspace);
                 let count = ceiling.map_or(usize::MAX, |limit| {
                     usize::try_from(limit).unwrap_or(usize::MAX)

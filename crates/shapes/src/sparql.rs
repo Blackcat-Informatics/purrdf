@@ -818,7 +818,7 @@ thread_local! {
     /// per focus chunk, so every rayon worker sees the same registry without shared
     /// mutation, and the evaluator's own parallel workers receive it through `EvalCtx`
     /// rather than by reading this thread-local.
-    static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry>>> = const { RefCell::new(None) };
+    static CURRENT_PROPERTY_FUNCTIONS: RefCell<Option<Arc<PropertyFunctionRegistry<'static>>>> = const { RefCell::new(None) };
 
     /// The custom-aggregate registry in scope for the current validation, set by
     /// [`enter_aggregate_scope`]. [`run_query_view`] snapshots it into the query
@@ -1059,7 +1059,7 @@ pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -
 pub struct AmbientContext {
     functions: Option<Arc<BoundFunctionRegistry>>,
     parser_options: Option<Arc<ParserOptions>>,
-    property_functions: Option<Arc<PropertyFunctionRegistry>>,
+    property_functions: Option<Arc<PropertyFunctionRegistry<'static>>>,
     aggregates: Option<Arc<AggregateRegistry>>,
     governors: Option<Arc<GovernorState>>,
     sources: Option<Arc<QuerySources>>,
@@ -1304,7 +1304,7 @@ struct AmbientScopes {
     /// against `env` already — see [`bind_in_current_env`].
     functions: Option<Arc<BoundFunctionRegistry>>,
     /// The extension environment this query's text is interpreted relative to.
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
     /// The operation budget in force, if a validation installed one.
     governors: Option<Arc<GovernorState>>,
     /// The `SERVICE` and `LOAD` sources in force, if an execution scope installed them.
@@ -1372,7 +1372,7 @@ impl AmbientScopes {
         dataset: &'a D,
         declared_prebound: &'a [&'a str],
         bnode_mint_prefix: Option<&'a str>,
-    ) -> Result<QueryOptions<'a>, crate::error::ShapesError> {
+    ) -> Result<QueryOptions<'a, 'a>, crate::error::ShapesError> {
         let functions = self.functions();
         // The graph THIS query is reading, handed to any expression-bodied
         // function it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a
@@ -1484,7 +1484,7 @@ impl AmbientScopes {
 /// alive than the one this holds today.
 struct PlanConfiguration {
     /// The extension environment in scope when the plan was admitted.
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
 }
 
 impl PlanConfiguration {
@@ -2119,7 +2119,7 @@ impl Drop for FunctionScope {
 /// # Errors
 ///
 /// A message if a registered relation's or aggregate's declaration methods panic.
-pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
+pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let options = current_parser_options();
@@ -2173,10 +2173,10 @@ pub fn current_env() -> Result<Arc<ExtensionEnv>, String> {
 /// cost on the exact path the plan cache's reusable key buffer exists to keep
 /// allocation-free.
 struct CachedEnv {
-    relations: Option<Arc<PropertyFunctionRegistry>>,
+    relations: Option<Arc<PropertyFunctionRegistry<'static>>>,
     aggregates: Option<Arc<AggregateRegistry>>,
     options: Option<Arc<ParserOptions>>,
-    env: Arc<ExtensionEnv>,
+    env: Arc<ExtensionEnv<'static>>,
 }
 
 impl CachedEnv {
@@ -2189,10 +2189,10 @@ impl CachedEnv {
     /// identity unusable in general.
     fn matching(
         &self,
-        relations: Option<&Arc<PropertyFunctionRegistry>>,
+        relations: Option<&Arc<PropertyFunctionRegistry<'static>>>,
         aggregates: Option<&Arc<AggregateRegistry>>,
         options: Option<&Arc<ParserOptions>>,
-    ) -> Option<Arc<ExtensionEnv>> {
+    ) -> Option<Arc<ExtensionEnv<'static>>> {
         fn same<T>(left: Option<&Arc<T>>, right: Option<&Arc<T>>) -> bool {
             match (left, right) {
                 (None, None) => true,
@@ -2277,7 +2277,7 @@ pub fn enter_function_scope(registry: Arc<BoundFunctionRegistry>) -> FunctionSco
 #[must_use]
 #[derive(Debug)]
 pub struct PropertyFunctionScope {
-    previous: Option<Arc<PropertyFunctionRegistry>>,
+    previous: Option<Arc<PropertyFunctionRegistry<'static>>>,
     /// A thread-local restoration guard must be dropped on the thread where it
     /// was created; this marker makes that invariant compile-time enforced.
     _not_send: PhantomData<Rc<()>>,
@@ -2293,7 +2293,7 @@ impl Drop for PropertyFunctionScope {
 /// Install `registry` as the current property-function table, returning a guard that
 /// restores the previous table when dropped.
 pub fn enter_property_function_scope(
-    registry: Arc<PropertyFunctionRegistry>,
+    registry: Arc<PropertyFunctionRegistry<'static>>,
 ) -> PropertyFunctionScope {
     let previous = CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow_mut().replace(registry));
     PropertyFunctionScope {
@@ -2309,7 +2309,7 @@ pub fn enter_property_function_scope(
 /// [`enter_property_function_scope`], because a thread-local is not visible from the
 /// threads a worker pool forks — the same reason [`current_governors`] exists.
 #[must_use]
-pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry>> {
+pub fn current_property_functions() -> Option<Arc<PropertyFunctionRegistry<'static>>> {
     CURRENT_PROPERTY_FUNCTIONS.with(|slot| slot.borrow().clone())
 }
 
@@ -3482,11 +3482,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             let banned = matches!(
                 args.get(0),
                 Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "banned"
@@ -3737,11 +3740,14 @@ mod tests {
             1
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &purrdf_sparql_eval::PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+        ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(FixedRowCursor {
                 rows: vec![self.row.clone()].into_iter(),
             }))
@@ -3753,7 +3759,7 @@ mod tests {
     /// environment across two runs must hold one `Arc` and clone it, not call this
     /// twice — that distinction is exactly what `still_current`'s `Arc::ptr_eq`
     /// tests.
-    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry> {
+    fn still_current_registry(flagged: &str) -> Arc<PropertyFunctionRegistry<'static>> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(
             STILL_CURRENT_REL.to_owned(),
@@ -3776,7 +3782,7 @@ mod tests {
     /// test — the production call sites in `components.rs` and `rules.rs` differ
     /// from this only in which parameters they declare.
     fn still_current_ask(
-        registry: Arc<PropertyFunctionRegistry>,
+        registry: Arc<PropertyFunctionRegistry<'static>>,
         focus: &str,
     ) -> Result<bool, crate::error::ShapesError> {
         let _scope = enter_property_function_scope(registry);

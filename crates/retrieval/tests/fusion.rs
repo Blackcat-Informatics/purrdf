@@ -8725,9 +8725,9 @@ impl Statistics for SilentStatistics {
 /// otherwise fixed. The registry is taken by value so its instance id -- cloned
 /// from one empty registry by every caller -- is carried into the result.
 fn registry_declaring_fidelity(
-    mut base: PropertyFunctionRegistry,
+    mut base: PropertyFunctionRegistry<'static>,
     fidelity: RankFidelity,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     base.register_ranked(
         "http://example.org/pf/ranked",
         Arc::new(MemoryRelation::new(1, 1, Vec::new()).expect("an empty table is uniform")),
@@ -8753,7 +8753,7 @@ fn registry_declaring_fidelity(
 }
 
 /// The identity `compile` publishes for a bundle built against `registry`.
-fn compiled_plan_id(registry: &PropertyFunctionRegistry) -> PlanId {
+fn compiled_plan_id(registry: &PropertyFunctionRegistry<'static>) -> PlanId {
     let statistics = SilentStatistics::new();
     let request = RetrievalRequest::bounded(
         vec![RequestTerm::Lexical {

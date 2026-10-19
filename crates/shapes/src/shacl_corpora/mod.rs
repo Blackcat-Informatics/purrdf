@@ -916,11 +916,14 @@ impl purrdf_sparql_eval::PropertyFunction for CorpusRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &purrdf_sparql_eval::PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor>, purrdf_sparql_eval::EvalError> {
+    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+    where
+        Self: 'cursor,
+    {
         self.opens.fetch_add(1, Ordering::Relaxed);
         let rows = vec![vec![
             purrdf_core::TermValue::iri("http://example.org/ns#flagged"),
@@ -938,7 +941,7 @@ impl purrdf_sparql_eval::PropertyFunction for CorpusRelation {
 /// validating the same cases under different environments — which they were, before a
 /// case existed that could tell.
 pub fn corpus_relations() -> (
-    Arc<purrdf_sparql_eval::PropertyFunctionRegistry>,
+    Arc<purrdf_sparql_eval::PropertyFunctionRegistry<'static>>,
     Arc<AtomicU64>,
 ) {
     let opens = Arc::new(AtomicU64::new(0));

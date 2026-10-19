@@ -108,11 +108,14 @@ impl PropertyFunction for Expand {
         2
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let input = args.get(0);
         let recorded = input.map_or_else(
             || format!("{}:-", args.mode().code()),
@@ -253,7 +256,7 @@ fn run_relation_with(
 /// Run `body` as `SELECT ?q ?out WHERE { body }` over `data` in `env`, whose relation
 /// records into `invocations`.
 fn run_in(
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
     data: &RdfDataset,
     invocations: &Mutex<Vec<String>>,
     body: &str,
@@ -1030,11 +1033,14 @@ impl PropertyFunction for Pairs {
         4
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let key = args.get(0).map(key_of);
         self.invocations
             .lock()
@@ -1711,7 +1717,7 @@ impl CustomAggregate for FirstLiteral {
 }
 
 /// The environment `relation`, registered at `iri`, runs in beside [`FirstLiteral`].
-fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv {
+fn aggregating_env(iri: &str, relation: Arc<dyn PropertyFunction>) -> ExtensionEnv<'static> {
     let mut aggregates = AggregateRegistry::default();
     aggregates.register(FIRST_LITERAL, Arc::new(FirstLiteral));
     let mut relations = PropertyFunctionRegistry::new();

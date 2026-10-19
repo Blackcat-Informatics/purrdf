@@ -783,7 +783,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// failure regardless of whether the empty table was ever explicitly attached.
     /// Borrowed for the dataset lifetime like [`Self::user_functions`], so carrying
     /// it is a `Copy` pointer, never a clone.
-    pub(crate) property_functions: &'d crate::property_fn::PropertyFunctionRegistry,
+    pub(crate) property_functions: &'d crate::property_fn::PropertyFunctionRegistry<'d>,
     pub(crate) shapes: &'d crate::shapes::ShapeRegistry,
     pub(crate) shape_state: crate::shapes::runtime::ShapeState<D::Id>,
     pub(crate) bucketed_group: Option<usize>,
@@ -1327,7 +1327,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         // this one instance is the correct, not merely convenient, choice).
         static EMPTY_FUNCTIONS: crate::user_fn::BoundFunctionRegistry =
             crate::user_fn::BoundFunctionRegistry::EMPTY;
-        static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry =
+        static EMPTY_RELATIONS: crate::property_fn::PropertyFunctionRegistry<'static> =
             crate::property_fn::PropertyFunctionRegistry::EMPTY;
         static EMPTY_SHAPES: crate::shapes::ShapeRegistry = crate::shapes::ShapeRegistry::EMPTY;
         static EMPTY_AGGREGATES: crate::agg_fn::AggregateRegistry =
@@ -3153,7 +3153,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     #[must_use]
     pub fn with_property_functions(
         mut self,
-        registry: &'d crate::property_fn::PropertyFunctionRegistry,
+        registry: &'d crate::property_fn::PropertyFunctionRegistry<'d>,
     ) -> Self {
         self.property_functions = registry;
         self

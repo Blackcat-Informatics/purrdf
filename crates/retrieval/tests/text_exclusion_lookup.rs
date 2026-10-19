@@ -366,11 +366,14 @@ impl PropertyFunction for Recorder {
         self.inner.rows_per_invocation(mode)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let bound = args.get(TextSearchRelation::DOC).is_some();
         let (counter, served) = if bound {
             (&self.candidate_bound, &self.served_bound)
@@ -488,7 +491,7 @@ fn fixture_profile() -> FusionProfile {
 fn registry(
     dataset: &RdfDataset,
     basis: ExclusionBasis,
-) -> (PropertyFunctionRegistry, [Arc<Recorder>; 2]) {
+) -> (PropertyFunctionRegistry<'static>, [Arc<Recorder>; 2]) {
     registry_rebuilding(dataset, basis, None)
 }
 
@@ -499,7 +502,7 @@ fn registry_rebuilding(
     dataset: &RdfDataset,
     basis: ExclusionBasis,
     rebuilt: Option<Side>,
-) -> (PropertyFunctionRegistry, [Arc<Recorder>; 2]) {
+) -> (PropertyFunctionRegistry<'static>, [Arc<Recorder>; 2]) {
     let mut registry = PropertyFunctionRegistry::new();
     let recorders = SIDES.map(|side| {
         let lookups = (rebuilt == Some(side)).then(|| rebuilt_index(dataset, side));

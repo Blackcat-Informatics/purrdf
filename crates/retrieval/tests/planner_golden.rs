@@ -77,7 +77,7 @@ fn relation_of_arity(rows: u64, object: usize) -> Arc<dyn PropertyFunction> {
 /// ones it matches. Two terms of the same shape could not both be received — a
 /// placement is declared per shape, so the second would contend for the first's
 /// position — so a multi-term producer is a multi-shape one.
-fn pair_registry() -> PropertyFunctionRegistry {
+fn pair_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/pair"),
@@ -119,7 +119,7 @@ fn pair_registry() -> PropertyFunctionRegistry {
 /// The mixed registry: one catch-all (`Any`) producer, one
 /// literal-only producer, one IRI-only producer, one quoted-triple producer
 /// that no request term can reach, and one unranked producer.
-fn mixed_registry() -> PropertyFunctionRegistry {
+fn mixed_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
         kind: TermKind::Literal,
@@ -184,7 +184,7 @@ fn mixed_registry() -> PropertyFunctionRegistry {
 /// are distinct too (25, 30, 100, 50). A test that mis-maps one stratum's record
 /// onto another therefore fails on the number rather than passing on a
 /// coincidence.
-fn transcript_registry() -> PropertyFunctionRegistry {
+fn transcript_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
         kind: TermKind::Literal,
@@ -312,11 +312,14 @@ impl PropertyFunction for MockProducer {
         self.rows
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // Planning never opens a cursor; the mock still satisfies the trait.
         Ok(Box::new(EmptyCursor))
     }
@@ -720,7 +723,7 @@ fn language_and_predicate_constraints_are_enforced() {
 
 /// A registry that accepts a lexical `en`/`body` term and nothing else, so a
 /// vector term in the same request reaches no declaration at all.
-fn literal_only_registry() -> PropertyFunctionRegistry {
+fn literal_only_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/literal"),
@@ -744,7 +747,7 @@ fn literal_only_registry() -> PropertyFunctionRegistry {
 /// SPARQL constant form, so the catch-all cannot be invoked for this request and
 /// is rejected at placement — leaving the vector term accepted by something and
 /// served by nothing.
-fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
+fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = literal_only_registry();
     registry.register_ranked(
         ex("pf/any"),
@@ -2591,7 +2594,10 @@ const PREFIX_STRATUM: &str = "stratum/prefix";
 /// **receives** the term — a producer matched by `TermKind::Any` declares no
 /// placement and so is handed nothing, which would leave the selectivity leg of
 /// the derivation out of the fixture entirely.
-fn prefix_registry(declared: u64, duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
+fn prefix_registry(
+    declared: u64,
+    duplicates: DuplicatePolicy,
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/prefix"),

@@ -9,14 +9,18 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 174 named cases in 29 integration targets,
-with 184 executions across 34 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 219 named cases in 32 integration targets,
+with 229 executions across 37 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape and graph-free
 carrier and governed-request EXPLAIN acceptance targets. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
 32-bit target; the scoped text cases retain original candidate rows and scores.
+The query-local producer cases exercise borrowed snapshot retirement, in-pull
+work and cancellation stops, original source-failure precedence, physical
+cell-admission refusal and retained complete/partial rows. Borrowed native text
+registrations reproduce their owned ranked and positional neighbors exactly.
 The twenty-one real-producer cases exercise both shipped text and kNN strata,
 pre-depth membership, unknown receipts, generation identity, native admission
 refusal, independent candidate depths, original fusion evidence, retained fused
@@ -108,6 +112,10 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of a seeded transcript of every tower operation over operands from one digit to hundreds. |
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_oracle_vectors_replay_on_this_target` | Replays the 7,164 oracle-generated `xsd:integer`/`xsd:decimal` operator, division, comparison, conversion and canonical-form records through the `XsdValue` operators, byte for byte. |
 | `purrdf-xsd` / `any_uri` | scalar | `lexical_mapping_preserves_everything_except_xml_whitespace`, `primitive_identity_is_disjoint_and_unordered`, `ranges_use_collapsed_character_lengths_and_primitive_identity` | Preserves URI whitespace mapping, primitive-domain identity and ordering refusal, and collapsed-character length constraints. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_decimal_group_parse_replays_on_this_target` | Parses and independently re-renders decimal inputs across the balanced-reader crossover and at 40,000 digits on the actual wasm target. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_binary_products_match_the_schoolbook_oracle` | Replays large, asymmetric and signed binary products against the independent schoolbook kernel and a frozen transcript on the actual wasm target. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `large_binary_division_replays_exact_shift_equations` | Reconstructs large exact shifted quotient/remainder equations on the 32-bit lowering. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `wide_gap_gcd_replays_on_this_target` | Preserves the exact common factor when the operands start hundreds of limbs apart. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target` | Reproduces hand-checked query answers past `i128`, under two division policies, and the F&O code of an absorbed error. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `borrowed_value_equality_matches_the_query_operator_on_this_target` | Compares original borrowed RDF values against actual query equality, preserving numeric, scope, language/direction, triple/composite and expression-error distinctions. |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `any_uri_casts_keep_their_primitive_domain_on_this_target` | Preserves native URI whitespace collapse and string/self casts while refusing casts into unrelated primitive domains through the governed query entry point. |
@@ -126,12 +134,17 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Reproduces the frozen native transcript of message and RDF bytes across all three serializers; reconstructs repeated, nested, multipart and malformed originals through the production RDF parser and byte-cover decoder. |
 | `purrdf-sparql-eval` / `evidence_ingress` | scalar | All twenty exact cases registered in the original target | Preserves polarity, closure, unknown status, scope, ledger cells and accepted ordering through actual operators and query forms; native empty, late-emitted and unclosed whole-search declarations retain their original owners and admitted COUNT bounds through EXISTS and ASK functions without an external evidence source. Thirty-six actual empty-producer combinations cover complete/open/incomplete search, explicit source scope, positive EXISTS, NOT EXISTS and nested MINUS: only closed complete absence decides the predicate; unresolved membership remains enumerable. Producer refusal prevents partial publication. |
 | `purrdf-core` / `triple_carrier` | scalar | All six exact cases selected in `make wasm-test` | Pins 12/8/12-byte row layouts, all bound patterns and lazy side indexes, lexical/statement/canonical identity, named-role refusal and shared first-cause/fresh-read behavior. |
+| `purrdf-gts` / `mmr_preimages` | scalar | `streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids` | Replays the frozen inclusion proof and root and compares variable-length frame commitments at CBOR width boundaries against the independent tree encoder. |
+| `purrdf-gts` / `structured_errors` | scalar | All 31 exact cases selected in `make wasm-test` | Exercises the actual native reader, writer, framing, proof, policy, compaction, dictionary and transport refusals through one generic borrowed visitor. Preserves original I/O owners and sources, nested records, full-width counts, JSON/CBOR values, exact floating-point bits, empty/absent fields and typed cryptographic/codec causes without rendering them. |
+| `purrdf-deflate` / `deflate_conformance` | scalar | `bad_crc_refused_in_first_and_second_member`, `decompressed_limit_refuses_bomb` | Checks original CRC counts and decompression limits through the actual streaming I/O bridge and its borrowed native cause. |
 | `purrdf-sparql-eval` / `statement_indexes` | scalar + SIMD | `native_and_compact_statement_queries_keep_answers_and_candidate_work`, `named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause` | Compares native and compact statement-query answers and candidate work, and checks named-graph refusal before lazy index allocation with the original cause retained. |
 | `purrdf-datalog` / `rules_runtime` | scalar | The five selected `triple_` cases | Exercises actual predicate-only keys, original wide host IDs, compiler/chase/proof, immutable Base through retraction and NoOutput semantics. |
 | `purrdf-sparql-eval` / `host_identity` | scalar | The three selected `triple_` cases | Checks typed named-graph refusal before nested/empty shortcuts and actual default-query bags, unbound cells, paths and graph output. |
 | `purrdf-shapes` / `srl_language` | scalar | `triple_carrier_runs_the_public_rl_program_without_quad_storage`, `triple_rl_keeps_statement_roles_and_scoped_blank_identity` | Runs the public compact SRL entry, pins quad-model parity and compact result tables, and preserves scoped blank and statement roles. |
 | `purrdf-text` / `physical_shapes` | scalar | All twenty-one exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |
 | `purrdf-retrieval` / `real_producers` | scalar | All twenty-one exact cases registered in the original target | Exercises the shipped text and kNN strata, scoped ranks, retained fused acceptance without another producer call, and typed terminal suffix-settlement refusal with original owner release. |
+| `purrdf-sparql-eval` / `query_completion` | scalar | The six `borrowed_*` cases selected in the Makefile | Checks original snapshot identity, cursor survival after registry-handle release, work/cancellation inside cursor pulls, operational precedence, bounded cell birth, and complete/partial row ownership after scope teardown. |
+| `purrdf-text` / `search_property_function` | scalar | `borrowed_native_ranked_and_positional_producers_keep_their_rows` | Replays borrowed native ranked and positional registration against exact owned-registration answers. |
 | `purrdf-text` / `wasm_determinism` | scalar | `scoped_text_bound_candidates_retain_unknown_membership`, `scoped_text_depth_preserves_original_unknown_rows_and_scores`, `scoped_text_preserves_original_constraint_failure` | Retains original scoped candidate membership, unknown rows, scores and constraint failures through production text retrieval. |
 
 The hash benchmark targets remain native benchmarks. No benchmark smoke target

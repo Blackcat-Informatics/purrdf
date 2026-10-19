@@ -34,6 +34,107 @@ use purrdf_text::{Fixed, RankingField, RankingProfile, TextIndex, TextSearchRela
 /// The caller-supplied predicate this host calls ranked retrieval by.
 const SEARCH: &str = "http://example.org/pf#search";
 
+/// Query-local registration forwards the actual native producer and its cursor.
+struct BorrowedText<'query>(&'query dyn purrdf_sparql_eval::PropertyFunction);
+impl purrdf_sparql_eval::PropertyFunction for BorrowedText<'_> {
+    fn volatility(&self) -> purrdf_sparql_eval::Volatility {
+        self.0.volatility()
+    }
+    fn arity(&self) -> purrdf_sparql_eval::PfArity {
+        self.0.arity()
+    }
+    fn modes(&self) -> &[purrdf_sparql_eval::BindingPattern] {
+        self.0.modes()
+    }
+    fn rows_per_invocation(&self, mode: purrdf_sparql_eval::BindingPattern) -> u64 {
+        self.0.rows_per_invocation(mode)
+    }
+    fn open<'cursor>(
+        &self,
+        args: &purrdf_sparql_eval::PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn purrdf_sparql_eval::PfCursor + 'cursor>, purrdf_sparql_eval::EvalError>
+    where
+        Self: 'cursor,
+    {
+        self.0.open(args, ceiling)
+    }
+    fn open_admitted<'cursor>(
+        &self,
+        args: &purrdf_sparql_eval::PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_sparql_eval::WorkspaceCursor<'cursor>, purrdf_sparql_eval::EvalError>
+    where
+        Self: 'cursor,
+    {
+        self.0.open_admitted(args, ceiling, workspace)
+    }
+}
+
+fn borrowed_native_ranked_and_positional_producers_keep_their_rows() {
+    let (dataset, index) = ranked();
+    let engine = NativeSparqlEngine::new();
+    let mut owned = PropertyFunctionRegistry::new();
+    owned.register(SEARCH, Arc::new(TextSearchRelation::new(index.clone())));
+    owned.register(
+        "http://example.org/pf#positions",
+        Arc::new(purrdf_text::TermOccurrenceRelation::new(index.clone())),
+    );
+    let outputs = {
+        let search = TextSearchRelation::new(index.clone());
+        let positions = purrdf_text::TermOccurrenceRelation::new(index);
+        let declaration = search
+            .ranked_declaration(
+                purrdf_core::parse_iri("http://example.org/stratum/text").unwrap(),
+                None,
+                purrdf_sparql_eval::RankFidelity::EXACT,
+                purrdf_sparql_eval::CandidateDomains::Unrestricted,
+            )
+            .unwrap();
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(SEARCH, Arc::new(BorrowedText(&search)), declaration);
+        registry.register(
+            "http://example.org/pf#positions",
+            Arc::new(BorrowedText(&positions)),
+        );
+        let environment = ExtensionEnv::over_relations(registry).unwrap();
+        [
+            "SELECT ?doc ?score ?rank WHERE { ?doc <http://example.org/pf#search> (\"quick brown\" ?score ?rank ?lang ?matched) }",
+            "SELECT ?doc ?position WHERE { ?doc <http://example.org/pf#positions> (\"quick\" ?lang ?position) }",
+        ].map(|query| {
+            let expected = answer(&dataset, &owned, query);
+            let purrdf_sparql_eval::GovernedOutcome::Complete { result, relations, .. } = engine.query_governed(
+                &dataset,
+                SparqlRequest { query, base_iri: None, substitutions: &[] },
+                QueryOptions::EMPTY.with_env(&environment),
+                &QueryGovernors::METERED,
+            ).unwrap() else {
+                panic!("native frozen producer completes");
+            };
+            let iri = if query.contains("pf#search") { SEARCH } else { "http://example.org/pf#positions" };
+            assert!(relations.witness.get(iri).is_some());
+            (result, expected)
+        })
+    };
+    drop(engine);
+    drop(owned);
+    drop(dataset);
+    for (output, expected) in outputs {
+        assert_ne!(expected, [] as [Vec<String>; 0]);
+        let (_, rows) = output.solutions().unwrap();
+        let actual: Vec<Vec<_>> = rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| sparql::render(cell.as_ref()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
 /// The one predicate whose literals the fixture indexes.
 const NOTE: &str = "http://example.org/note";
 
@@ -77,7 +178,7 @@ fn dataset_of(rows: &[(&str, &str, &str, Option<&str>)]) -> Arc<RdfDataset> {
 /// A registry with `relation` registered under `iri` — the whole of what a host
 /// has to do, since the engine derives parse-time recognition from the registry
 /// itself.
-fn registry_of(iri: &str, index: Arc<TextIndex>) -> PropertyFunctionRegistry {
+fn registry_of(iri: &str, index: Arc<TextIndex>) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(iri.to_owned(), Arc::new(TextSearchRelation::new(index)));
     registry
@@ -158,7 +259,7 @@ fn ranked() -> (Arc<RdfDataset>, Arc<TextIndex>) {
 /// suite green.
 fn answer_with_options(
     dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     options: ParserOptions,
     query: &str,
 ) -> Vec<Vec<String>> {
@@ -187,7 +288,7 @@ fn answer_with_options(
 /// configured with `options`.
 fn refusal(
     dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     options: ParserOptions,
     query: &str,
 ) -> String {
@@ -230,7 +331,6 @@ fn nothing_declared() -> ParserOptions {
 
 /// The whole row, through query text: subject, exact `xsd:decimal` score, rank,
 /// language and match count.
-#[test]
 fn ranked_rows_for_a_needle() {
     let (dataset, index) = golden();
     let registry = registry_of(SEARCH, index);
@@ -286,7 +386,6 @@ fn ranked_rows_for_a_needle() {
 /// predicate present **only** in the asserted layer. That answer must be empty.
 /// Without it this test would pass for a relation that matched everything, or
 /// for an index that had silently found the text somewhere else.
-#[test]
 fn annotation_text_is_searchable_through_sparql() {
     const BODY: &str = "http://example.org/body";
     const NEEDLE: &str = "quick brown";
@@ -347,7 +446,6 @@ fn annotation_text_is_searchable_through_sparql() {
 /// Ranks are per-partition, so filtering to one language cannot renumber a
 /// surviving row: a document reports the same `?rank` with `?lang` bound and
 /// free.
-#[test]
 fn a_bound_language_filters_without_changing_rank() {
     let dataset = dataset_of(&[
         ("e1", NOTE, "quick quick brown fox", Some("en")),
@@ -399,7 +497,6 @@ fn a_bound_language_filters_without_changing_rank() {
 
 /// Binding position 0 to a document asks about that document, and gets its one
 /// row.
-#[test]
 fn a_bound_doc_returns_its_single_row() {
     let (dataset, index) = golden();
     let rows = answer(
@@ -425,7 +522,6 @@ fn a_bound_doc_returns_its_single_row() {
 /// `VALUES` at `?rank` drives the relation's semantic pushdown: the ranker is
 /// asked for those positions rather than for everything, and the answer is the
 /// rows that hold them.
-#[test]
 fn values_rank_selects_those_ranks() {
     let (dataset, index) = ranked();
     let rows = answer(
@@ -449,7 +545,6 @@ fn values_rank_selects_those_ranks() {
 /// `?matched` is how conjunctive retrieval is expressed: the relation is
 /// disjunctive by construction — a document holding any needle term scores — and
 /// a `FILTER` over the match count is what narrows it.
-#[test]
 fn matched_expresses_conjunctive_retrieval() {
     let (dataset, index) = ranked();
     let registry = registry_of(SEARCH, index);
@@ -501,7 +596,6 @@ fn matched_expresses_conjunctive_retrieval() {
 /// equal — `tests/scoring.rs` pins such a pair — and a sort on a value that ties
 /// leaves their relative order to the sort, while `?rank` is distinct within a
 /// partition by construction.
-#[test]
 fn order_by_rank_is_the_reproducing_idiom() {
     let (dataset, index) = ranked();
     let registry = registry_of(SEARCH, index);
@@ -532,7 +626,6 @@ fn order_by_rank_is_the_reproducing_idiom() {
 /// Position 0 is an ordinary term, so it joins back to the graph by basic graph
 /// pattern — which is the whole reason retrieval is worth exposing as a relation
 /// rather than as a separate query language.
-#[test]
 fn a_document_subject_joins_back_by_bgp() {
     let dataset = dataset_of(&[
         ("d1", NOTE, "quick quick brown fox", None),
@@ -571,7 +664,6 @@ fn a_document_subject_joins_back_by_bgp() {
 /// absent from the parser options — cannot be constructed at all, because
 /// `NativeSparqlEngine::prepare_for` derives the parser's exact-IRI set from the
 /// registry's own keys, so a registered relation is recognized by construction.
-#[test]
 fn an_iri_declared_but_unregistered_is_a_hard_error() {
     let (dataset, _) = golden();
     let empty = PropertyFunctionRegistry::new();
@@ -603,7 +695,6 @@ fn an_iri_declared_but_unregistered_is_a_hard_error() {
 /// registry already makes its own keys recognized: so that spelling an
 /// unregistered IRI in that namespace is a hard error rather than a silent data
 /// triple that matches nothing.
-#[test]
 fn a_namespace_declared_with_an_unregistered_iri_is_a_hard_error() {
     const UNREGISTERED: &str = "http://example.org/pf#lookup";
     let (dataset, index) = golden();
@@ -680,7 +771,6 @@ fn a_namespace_declared_with_an_unregistered_iri_is_a_hard_error() {
 /// The object is an RDF collection, so the pattern reads the graph for a list
 /// the graph does not hold and answers with nothing — observably different from
 /// the two rows the same text produces when the relation is registered.
-#[test]
 fn an_iri_in_neither_is_an_ordinary_triple_pattern() {
     let (dataset, index) = golden();
     let query = format!(
@@ -706,7 +796,6 @@ fn an_iri_in_neither_is_an_ordinary_triple_pattern() {
 /// A free needle has no feasible evaluation order: the relation retrieves
 /// documents for a needle and cannot enumerate needles, so its only declared
 /// mode demands position 1.
-#[test]
 fn a_free_needle_has_no_feasible_evaluation_order() {
     let (dataset, index) = golden();
     let registry = registry_of(SEARCH, index);
@@ -733,7 +822,6 @@ fn a_free_needle_has_no_feasible_evaluation_order() {
 
 /// A call site of the wrong width is refused at prepare time, naming both the
 /// declaration and what was written.
-#[test]
 fn an_arity_mismatch_at_the_call_site_is_an_error() {
     let (dataset, index) = golden();
     let registry = registry_of(SEARCH, index);
@@ -780,7 +868,7 @@ fn generation_query() -> String {
 /// exactly the seam the rest of this file insists on driving.
 fn attested_generations(
     dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'_>,
     query: &str,
 ) -> BTreeSet<IndexGeneration> {
     let engine = NativeSparqlEngine::new();
@@ -876,7 +964,6 @@ fn uneven_rows() -> Vec<(
 /// document did NOT move it, an answer from a stale index would be reported as
 /// the same evidence as an answer from the current one, which is the silent
 /// failure the attestation exists to prevent.
-#[test]
 fn two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it() {
     let rows = uneven_rows();
     let dataset = dataset_of(&rows);
@@ -937,7 +1024,6 @@ fn two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it() 
 /// different number. Declaring the source digest would attest "same generation"
 /// across two states that answer differently; the index's own fingerprint does
 /// not, and this pins that.
-#[test]
 fn the_same_rows_under_a_different_ranking_law_attest_a_different_generation() {
     let rows = uneven_rows();
     let dataset = dataset_of(&rows);
@@ -1005,7 +1091,6 @@ fn the_same_rows_under_a_different_ranking_law_attest_a_different_generation() {
 /// producer also gives: the empty corpus answers with nothing while attesting a
 /// generation, and the SAME configuration over a corpus with text in it answers
 /// with the golden rows under a DIFFERENT generation.
-#[test]
 fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
     let empty = dataset_of(&[]);
     let config = config_over(&[NOTE]);
@@ -1087,3 +1172,23 @@ fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
          the empty corpus from an answer over the landed one"
     );
 }
+
+purrdf_testkit::harness_main!(
+    borrowed_native_ranked_and_positional_producers_keep_their_rows,
+    ranked_rows_for_a_needle,
+    annotation_text_is_searchable_through_sparql,
+    a_bound_language_filters_without_changing_rank,
+    a_bound_doc_returns_its_single_row,
+    values_rank_selects_those_ranks,
+    matched_expresses_conjunctive_retrieval,
+    order_by_rank_is_the_reproducing_idiom,
+    a_document_subject_joins_back_by_bgp,
+    an_iri_declared_but_unregistered_is_a_hard_error,
+    a_namespace_declared_with_an_unregistered_iri_is_a_hard_error,
+    an_iri_in_neither_is_an_ordinary_triple_pattern,
+    a_free_needle_has_no_feasible_evaluation_order,
+    an_arity_mismatch_at_the_call_site_is_an_error,
+    two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it,
+    the_same_rows_under_a_different_ranking_law_attest_a_different_generation,
+    an_empty_index_answers_with_no_rows_and_attests_its_own_generation,
+);

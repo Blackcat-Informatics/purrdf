@@ -1044,6 +1044,15 @@ impl Decimal {
             self.limb_len(),
             rhs.limb_len(),
         )?)?;
+        // Preserve the exact-attempt admission boundary before deciding whether
+        // machine arithmetic can avoid the general integer scratch.
+        match self.div_exact_small(rhs) {
+            Some(SmallQuotient::Exact(quotient)) => return Ok(quotient),
+            Some(SmallQuotient::NonTerminating) => {
+                return Err(ExactError::NonTerminating.into());
+            }
+            None => {}
+        }
         self.div_exact_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
     }
 
@@ -1116,9 +1125,18 @@ impl Decimal {
             DivisionPolicy::Scale { scale, rounding } => {
                 self.div_rounded_using(rhs, scale, rounding, storage)
             }
-            DivisionPolicy::Exact => self.div_exact_using(rhs, storage),
+            DivisionPolicy::Exact => match self.div_exact_small(rhs) {
+                Some(SmallQuotient::Exact(quotient)) => Ok(quotient),
+                Some(SmallQuotient::NonTerminating) => Err(ExactError::NonTerminating.into()),
+                None => self.div_exact_using(rhs, storage),
+            },
             DivisionPolicy::ExactOrScale { scale, rounding } => {
-                match self.div_exact_using(rhs, storage) {
+                let exact = match self.div_exact_small(rhs) {
+                    Some(SmallQuotient::Exact(quotient)) => return Ok(quotient),
+                    Some(SmallQuotient::NonTerminating) => Err(ExactError::NonTerminating.into()),
+                    None => self.div_exact_using(rhs, storage),
+                };
+                match exact {
                     Err(super::ExactOperationError::Value(ExactError::NonTerminating)) => {
                         self.div_rounded_using(rhs, scale, rounding, storage)
                     }
@@ -1126,6 +1144,44 @@ impl Decimal {
                 }
             }
         }
+    }
+
+    /// Resolve a machine-word exact quotient before allocating general integer
+    /// scratch. A quotient outside the word range still takes the general path.
+    fn div_exact_small(&self, rhs: &Self) -> Option<SmallQuotient> {
+        let a = self.unscaled.as_i128()?.unsigned_abs();
+        let b = rhs.unscaled.as_i128()?.unsigned_abs();
+        let twos = b.trailing_zeros();
+        let mut rest = b >> twos;
+        let mut fives = 0_u32;
+        while rest % 5 == 0 {
+            rest /= 5;
+            fives += 1;
+        }
+        if a % rest != 0 {
+            return Some(SmallQuotient::NonTerminating);
+        }
+        let k = twos.max(fives);
+        let coefficient = (a / rest)
+            .checked_mul(1_u128.checked_shl(k - twos)?)?
+            .checked_mul(5_u128.checked_pow(k - fives)?)?;
+        let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
+        let (coefficient, scale) = if exponent >= 0 {
+            let up = usize::try_from(exponent).ok()?;
+            (coefficient.checked_mul(*POW10.get(up)?)?, 0)
+        } else {
+            (coefficient, u32::try_from(-exponent).ok()?)
+        };
+        let negative = self.is_negative() != rhs.is_negative();
+        let signed = if negative {
+            0_i128.checked_sub_unsigned(coefficient)?
+        } else {
+            i128::try_from(coefficient).ok()?
+        };
+        Some(SmallQuotient::Exact(Self::new(
+            Integer::from_i128(signed),
+            scale,
+        )))
     }
 
     /// The quotient rounded to `scale` digits: with the operands
@@ -1953,6 +2009,11 @@ fn cmp_magnitude_binary_admitted_using(
     if super::binary::log2_of_pow10(decimal_exponent - 1) > binade + 1 {
         return Ok(Ordering::Greater);
     }
+    if let Some(small) = unscaled.as_i128()
+        && let Some(order) = small_magnitude_cmp(small.unsigned_abs(), scale, significand, exponent)
+    {
+        return Ok(order);
+    }
     let shifted_left = if exponent < 0 {
         admit(cost::binary_shift_layout(
             unscaled.binary_bits(),
@@ -1983,6 +2044,37 @@ fn cmp_magnitude_binary_admitted_using(
     let scaled_right = scale_up_using(&right, scale, storage)?;
     let left = shifted_left.as_ref().unwrap_or(unscaled);
     Ok(left.with_bigint(|a| scaled_right.with_bigint(|b| a.cmp_abs(b))))
+}
+
+/// Compare a decimal coefficient and binary significand in machine words when
+/// their aligned products fit; wider products use the admitted integer path.
+fn small_magnitude_cmp(
+    magnitude: u128,
+    scale: u32,
+    significand: u64,
+    exponent: i32,
+) -> Option<Ordering> {
+    let trailing = significand.trailing_zeros();
+    let (significand, exponent) = (
+        u128::from(significand >> trailing),
+        exponent + trailing.cast_signed(),
+    );
+    let pow = *POW10.get(usize::try_from(scale).ok()?)?;
+    let shift = exponent.unsigned_abs();
+    let shl = |value: u128| -> Option<u128> {
+        let shifted = value.checked_shl(shift)?;
+        (shifted >> shift == value).then_some(shifted)
+    };
+    Some(if exponent >= 0 {
+        magnitude.cmp(&shl(significand)?.checked_mul(pow)?)
+    } else {
+        shl(magnitude)?.cmp(&significand.checked_mul(pow)?)
+    })
+}
+
+enum SmallQuotient {
+    Exact(Decimal),
+    NonTerminating,
 }
 
 /// `10^k` for `k ≤ 38`, every power of ten a `u128` holds.
@@ -2394,33 +2486,38 @@ mod physical_render_tests {
 
     #[test]
     fn decimal_group_and_output_refusals_keep_the_original_prefix_and_account() {
-        let coefficient =
-            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+        let large = "7".repeat(160_000);
+        for lexical in [
+            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            large.as_str(),
+        ] {
+            let coefficient = lexical
                 .parse::<crate::exact::Integer>()
                 .unwrap()
                 .to_bigint();
-        let layout = coefficient.decimal_render_layout(7).unwrap();
-        assert!(layout.temporary_bytes() > 0);
-        for allowed_temporary in [0, layout.temporary_bytes()] {
-            let mut account = Account {
-                live: 0,
-                peak: 0,
-                ceiling: usize::MAX,
-                refused: None,
-            };
-            let mut output = Memory::new(&mut account).string("prefix:").unwrap();
-            let baseline = output.capacity();
-            account.ceiling = baseline + allowed_temporary;
-            let mut memory = Memory::resume(&mut account, baseline);
-            assert_eq!(
-                append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
-                Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
-            );
-            assert_eq!(output, "prefix:");
-            assert_eq!(memory.admitted_bytes(), baseline);
-            memory.release_string(output).unwrap();
-            assert_eq!(account.live, 0);
-            assert!(account.refused.is_some());
+            let layout = coefficient.decimal_render_layout(7).unwrap();
+            assert!(layout.temporary_bytes() > 0);
+            for allowed_temporary in [0, layout.temporary_bytes()] {
+                let mut account = Account {
+                    live: 0,
+                    peak: 0,
+                    ceiling: usize::MAX,
+                    refused: None,
+                };
+                let mut output = Memory::new(&mut account).string("prefix:").unwrap();
+                let baseline = output.capacity();
+                account.ceiling = baseline + allowed_temporary;
+                let mut memory = Memory::resume(&mut account, baseline);
+                assert_eq!(
+                    append_scaled_integer_with_memory(&coefficient, 7, &mut output, &mut memory),
+                    Err(DecimalTextError::Storage(StorageError::AdmissionFailed))
+                );
+                assert_eq!(output, "prefix:");
+                assert_eq!(memory.admitted_bytes(), baseline);
+                memory.release_string(output).unwrap();
+                assert_eq!(account.live, 0);
+                assert!(account.refused.is_some());
+            }
         }
     }
 }

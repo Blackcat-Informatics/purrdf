@@ -133,7 +133,7 @@ fn registry(
     dataset: &RdfDataset,
     basis: ExclusionBasis,
 ) -> (
-    PropertyFunctionRegistry,
+    PropertyFunctionRegistry<'static>,
     Arc<SearchObservations>,
     Arc<HnswObservations>,
 ) {

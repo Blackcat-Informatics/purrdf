@@ -74,7 +74,16 @@ impl core::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+purrdf_lex::error_source!(Error { MlDsa });
+
+impl purrdf_hash::error::StructuredError for Error {
+    purrdf_hash::error_visit! {
+        InvalidPublicKey => "gts-composite-invalid-public-key" {},
+        InvalidSecretKey => "gts-composite-invalid-secret-key" {},
+        InvalidSignature => "gts-composite-invalid-signature" {},
+        MlDsa(error) => "gts-composite-mldsa-failure" { "cause" => Cause(error) },
+    }
+}
 
 /// Form `Prefix || Label || 0x00 || SHA512(message)`, exactly as the pinned
 /// drafts require. For COSE, `message` is the complete encoded Sig_structure.

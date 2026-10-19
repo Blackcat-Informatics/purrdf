@@ -411,7 +411,7 @@ SELECT ?p WHERE {
 const REL_NS: &str = "https://example.org/rel/";
 
 /// The relation case (k) calls: each of the 50 synthetic cities to one of 5 regions.
-fn city_regions() -> ExtensionEnv {
+fn city_regions() -> ExtensionEnv<'static> {
     let rows = (0..50)
         .map(|c| {
             vec![
@@ -473,7 +473,7 @@ fn run_with_relations(
     engine: &NativeSparqlEngine,
     ds: &Arc<RdfDataset>,
     query: &str,
-    env: &ExtensionEnv,
+    env: &ExtensionEnv<'static>,
 ) -> usize {
     let result = engine
         .query_with_options_view(

@@ -139,6 +139,14 @@ native_integer_value!(
 /// Storage used by strict record metadata and diagnostics. Implementations
 /// borrow the original native account; these methods create no alternate codec.
 pub trait RecordAllocation {
+    /// Retain native diagnostic fields and presentation under the original account.
+    fn diagnostic(
+        &self,
+        reason: DecodeReason<'_>,
+    ) -> Result<DecodeError, crate::allocation::StorageError>;
+    /// Destroy a retained diagnostic before refunding its original owned buffers.
+    fn release_diagnostic(&self, error: DecodeError)
+    -> Result<(), crate::allocation::StorageError>;
     /// Admit and append one declared field name.
     fn take(
         &self,
@@ -182,6 +190,18 @@ impl<'m, 'storage, S: crate::allocation::Admission + ?Sized> RecordMemory<'m, 's
     }
 }
 impl<S: crate::allocation::Admission + ?Sized> RecordAllocation for RecordMemory<'_, '_, S> {
+    fn diagnostic(
+        &self,
+        reason: DecodeReason<'_>,
+    ) -> Result<DecodeError, crate::allocation::StorageError> {
+        DecodeError::capture_with_memory(reason, &mut self.memory.borrow_mut())
+    }
+    fn release_diagnostic(
+        &self,
+        error: DecodeError,
+    ) -> Result<(), crate::allocation::StorageError> {
+        error.release_with_memory(&mut self.memory.borrow_mut())
+    }
     fn take(
         &self,
         fields: &mut Vec<&'static str>,
@@ -210,11 +230,20 @@ impl<S: crate::allocation::Admission + ?Sized> RecordAllocation for RecordMemory
         pointer: String,
     ) -> Result<String, crate::allocation::StorageError> {
         let mut memory = self.memory.borrow_mut();
-        let mut joined = String::new();
-        crate::json_pointer::push_token_with_memory(&mut joined, token, &mut memory)?;
-        memory.push_str(&mut joined, &pointer)?;
-        memory.release_string(pointer)?;
-        Ok(joined)
+        let result = memory.scope(|memory| {
+            let mut joined = String::new();
+            crate::json_pointer::push_token_with_memory(&mut joined, token, memory)?;
+            memory.push_str(&mut joined, &pointer)?;
+            Ok(joined)
+        });
+        match (result, memory.release_string(pointer)) {
+            (Ok(joined), Ok(())) => Ok(joined),
+            (Err(original), _) => Err(original),
+            (Ok(joined), Err(original)) => {
+                let _ = memory.release_string(joined);
+                Err(original)
+            }
+        }
     }
 }
 
@@ -224,8 +253,11 @@ impl<S: crate::allocation::Admission + ?Sized> RecordAllocation for RecordMemory
 pub struct DecodeError {
     pointer: String,
     message: String,
-    storage: Option<crate::allocation::StorageError>,
+    failure: error::Failure,
 }
+
+mod error;
+pub use error::DecodeReason;
 
 impl DecodeError {
     /// A refusal carrying a validation message.
@@ -239,18 +271,7 @@ impl DecodeError {
         message: impl fmt::Display,
         allocation: Option<&dyn RecordAllocation>,
     ) -> Self {
-        let text = match allocation {
-            Some(allocation) => match allocation.message(&message) {
-                Ok(message) => message,
-                Err(error) => return Self::from_storage(error),
-            },
-            None => message.to_string(),
-        };
-        Self {
-            pointer: String::new(),
-            message: text,
-            storage: None,
-        }
+        Self::from_reason_native(DecodeReason::Message(&message), allocation)
     }
 
     /// A typed physical refusal carrying no dynamically allocated diagnostic.
@@ -259,14 +280,14 @@ impl DecodeError {
         Self {
             pointer: String::new(),
             message: String::new(),
-            storage: Some(storage),
+            failure: error::Failure::Storage(storage),
         }
     }
 
     /// The original physical cause, distinct from malformed input.
     #[must_use]
     pub const fn storage_error(&self) -> Option<crate::allocation::StorageError> {
-        self.storage
+        self.failure.storage_error()
     }
 
     /// `found` is not the JSON kind `expected` names.
@@ -281,10 +302,7 @@ impl DecodeError {
         expected: &str,
         allocation: Option<&dyn RecordAllocation>,
     ) -> Self {
-        Self::custom_native(
-            format_args!("invalid type: {}, expected {expected}", Unexpected(found)),
-            allocation,
-        )
+        Self::from_reason_native(DecodeReason::InvalidType { found, expected }, allocation)
     }
 
     /// `found` has the right kind but a value `expected` does not admit.
@@ -299,10 +317,7 @@ impl DecodeError {
         expected: &str,
         allocation: Option<&dyn RecordAllocation>,
     ) -> Self {
-        Self::custom_native(
-            format_args!("invalid value: {}, expected {expected}", Unexpected(found)),
-            allocation,
-        )
+        Self::from_reason_native(DecodeReason::InvalidValue { found, expected }, allocation)
     }
 
     /// A string that names none of a closed set of variants.
@@ -317,11 +332,8 @@ impl DecodeError {
         expected: &[&str],
         allocation: Option<&dyn RecordAllocation>,
     ) -> Self {
-        Self::custom_native(
-            format_args!(
-                "unknown variant `{variant}`, {}",
-                OneOf(expected, "variants")
-            ),
+        Self::from_reason_native(
+            DecodeReason::UnknownVariant { variant, expected },
             allocation,
         )
     }
@@ -338,10 +350,7 @@ impl DecodeError {
         expected: &[&str],
         allocation: Option<&dyn RecordAllocation>,
     ) -> Self {
-        Self::custom_native(
-            format_args!("unknown field `{field}`, {}", OneOf(expected, "fields")),
-            allocation,
-        )
+        Self::from_reason_native(DecodeReason::UnknownField { field, expected }, allocation)
     }
 
     /// A mandatory member is absent.
@@ -352,7 +361,7 @@ impl DecodeError {
     /// The same stable record refusal under original native storage.
     #[must_use]
     pub fn missing_field_native(field: &str, allocation: Option<&dyn RecordAllocation>) -> Self {
-        Self::custom_native(format_args!("missing field `{field}`"), allocation)
+        Self::from_reason_native(DecodeReason::MissingField(field), allocation)
     }
 
     /// A declared member is written more than once.
@@ -363,7 +372,7 @@ impl DecodeError {
     /// The same stable record refusal under original native storage.
     #[must_use]
     pub fn duplicate_field_native(field: &str, allocation: Option<&dyn RecordAllocation>) -> Self {
-        Self::custom_native(format_args!("duplicate field `{field}`"), allocation)
+        Self::from_reason_native(DecodeReason::DuplicateField(field), allocation)
     }
 
     /// The JSON Pointer of the offending value, relative to the value the
@@ -382,7 +391,7 @@ impl fmt::Display for DecodeError {
     /// The message, then ` at ` and the pointer when the value is not the
     /// document itself.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(error) = self.storage {
+        if let Some(error) = self.storage_error() {
             return error.fmt(formatter);
         }
         formatter.write_str(&self.message)?;
@@ -397,13 +406,7 @@ impl std::error::Error for DecodeError {}
 
 impl From<Error> for DecodeError {
     fn from(error: Error) -> Self {
-        match error.kind() {
-            super::ErrorKind::Storage(storage)
-            | super::ErrorKind::Escape(crate::json_escape::JsonEscapeErrorKind::Storage(storage)) => {
-                Self::from_storage(storage)
-            }
-            _ => Self::custom(error),
-        }
+        Self::from_reason_native(DecodeReason::Json(error), None)
     }
 }
 
@@ -441,14 +444,17 @@ impl Within for DecodeError {
     }
 
     fn within_native(mut self, token: &str, allocation: Option<&dyn RecordAllocation>) -> Self {
-        if self.storage.is_some() {
+        if self.storage_error().is_some() {
             return self;
         }
         match allocation {
             Some(allocation) => {
                 match allocation.pointer(token, std::mem::take(&mut self.pointer)) {
                     Ok(pointer) => self.pointer = pointer,
-                    Err(error) => return Self::from_storage(error),
+                    Err(error) => {
+                        let _ = allocation.release_diagnostic(self);
+                        return Self::from_storage(error);
+                    }
                 }
             }
             None => {
@@ -462,7 +468,7 @@ impl Within for DecodeError {
     }
 
     fn within_index_native(self, index: usize, allocation: Option<&dyn RecordAllocation>) -> Self {
-        if self.storage.is_some() {
+        if self.storage_error().is_some() {
             return self;
         }
         let Some(allocation) = allocation else {
@@ -470,12 +476,18 @@ impl Within for DecodeError {
         };
         let token = match allocation.message(&index) {
             Ok(token) => token,
-            Err(error) => return Self::from_storage(error),
+            Err(error) => {
+                let _ = allocation.release_diagnostic(self);
+                return Self::from_storage(error);
+            }
         };
         let result = self.within_native(&token, Some(allocation));
         match allocation.release_text(token) {
             Ok(()) => result,
-            Err(error) if result.storage.is_none() => Self::from_storage(error),
+            Err(error) if result.storage_error().is_none() => {
+                let _ = allocation.release_diagnostic(result);
+                Self::from_storage(error)
+            }
             Err(_) => result,
         }
     }

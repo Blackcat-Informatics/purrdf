@@ -243,7 +243,7 @@ fn config() -> GeoIndexConfig {
 }
 
 /// Project `dataset` and register the Simple Features family over it.
-fn registry_over(dataset: &RdfDataset) -> PropertyFunctionRegistry {
+fn registry_over(dataset: &RdfDataset) -> PropertyFunctionRegistry<'static> {
     let index = Arc::new(
         GeoIndex::from_dataset(dataset, &vocab(), &config())
             .expect("every fixture geometry is well-formed WKT"),
@@ -262,7 +262,10 @@ fn registry_over(dataset: &RdfDataset) -> PropertyFunctionRegistry {
 /// The parser configuration a host derives **from the registry it built**: the
 /// registry's keys are exact IRIs, and that is exactly what
 /// [`ParserOptions::property_fn_iris`] matches on.
-fn parser_options(registry: &PropertyFunctionRegistry, extra_iris: &[String]) -> ParserOptions {
+fn parser_options(
+    registry: &PropertyFunctionRegistry<'static>,
+    extra_iris: &[String],
+) -> ParserOptions {
     let mut property_fn_iris: Vec<String> = registry
         .describe()
         .expect("no registered relation's declaration methods panic")
@@ -303,7 +306,7 @@ fn query_text(body: &str) -> String {
 /// admitted against and evaluated with.
 fn run(
     dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     options: ParserOptions,
     query: &str,
 ) -> Result<Answer, String> {
@@ -337,7 +340,7 @@ fn run(
 /// [`run`], asserting the query succeeds.
 fn answer(
     dataset: &RdfDataset,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     options: ParserOptions,
     query: &str,
 ) -> Answer {
@@ -946,7 +949,7 @@ fn the_serialized_answer_is_byte_identical_across_runs_and_across_ingestion_orde
     let forward_registry = registry_over(&forward);
     let reversed_registry = registry_over(&reversed);
 
-    let render_answer = |dataset: &RdfDataset, registry: &PropertyFunctionRegistry| {
+    let render_answer = |dataset: &RdfDataset, registry: &PropertyFunctionRegistry<'static>| {
         to_results_json(&answer(
             dataset,
             registry,

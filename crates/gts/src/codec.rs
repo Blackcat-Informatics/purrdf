@@ -9,7 +9,8 @@
 //! (no keys in the baseline) degrades to an opaque node (§7.6, §8.3).
 
 use std::borrow::Cow;
-use std::fmt;
+mod error;
+pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
 use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
 use structured_zstd::encoding::{
@@ -51,41 +52,6 @@ impl Codec {
     }
 }
 
-/// Why a transform chain could not be reversed.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum CodecError {
-    /// A missing capability: `reason` is `"unknown-codec"` or `"missing-key"`
-    /// — the frame degrades to an opaque node with that reason (§8.3).
-    Unavailable {
-        /// Opaque-node reason token: `"unknown-codec"` or `"missing-key"`.
-        reason: &'static str,
-        /// Human-readable detail naming the codec that could not be applied.
-        detail: String,
-    },
-    /// The codec is known but the data is corrupt — the frame is damaged.
-    Failed(String),
-    /// The data is well-formed but a caller-supplied byte ceiling refused it.
-    ///
-    /// Distinct from [`Self::Failed`] because refusing to *spend* bytes is not
-    /// evidence that the bytes are corrupt: a caller that set the ceiling may
-    /// legitimately skip this payload and keep reading, whereas corruption is a
-    /// statement about the container. Only a decode given an explicit limit can
-    /// produce this.
-    Limit(String),
-}
-
-impl fmt::Display for CodecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable { reason, detail } => write!(f, "{reason}: {detail}"),
-            Self::Failed(detail) | Self::Limit(detail) => f.write_str(detail),
-        }
-    }
-}
-
-impl std::error::Error for CodecError {}
-
 const DEFAULT_ZSTD_LEVEL: CompressionLevel = CompressionLevel::Fastest;
 
 /// Encoder options for transform chains.
@@ -121,7 +87,7 @@ fn decode_one<'a>(
     if codec.cls == "encrypt" {
         return Err(CodecError::Unavailable {
             reason: "missing-key",
-            detail: format!("no key for encrypt codec '{}'", codec.name),
+            detail: CodecUnavailable::MissingKey(codec.name.clone()),
         });
     }
     match codec.name.as_str() {
@@ -135,7 +101,7 @@ fn decode_one<'a>(
             match purrdf_deflate::gzip::decompress_with_limit(data, bound) {
                 Ok(out) => Ok(Cow::Owned(out)),
                 Err(purrdf_deflate::Error::LimitExceeded { .. }) => Err(decoded_limit(limit)),
-                Err(e) => Err(CodecError::Failed(format!("gzip decode failed: {e}"))),
+                Err(e) => Err(CodecError::Failed(CodecFailure::Gzip(e))),
             }
         }
         "zstd" | "zstd-rsyncable" => {
@@ -143,14 +109,17 @@ fn decode_one<'a>(
             if let Some(dict) = codec.dct.as_deref() {
                 decoder
                     .add_dict_from_bytes(dict)
-                    .map_err(|e| CodecError::Failed(format!("zstd dictionary load failed: {e}")))?;
+                    .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
             }
             // Start with a generous expansion factor and grow until the frame fits.
             let mut capacity = data.len().saturating_mul(4).max(4096).min(limit);
             loop {
                 let mut out = Vec::new();
                 out.try_reserve_exact(capacity).map_err(|e| {
-                    CodecError::Failed(format!("zstd decode failed: output allocation failed: {e}"))
+                    CodecError::Failed(CodecFailure::ZstdAllocation {
+                        capacity,
+                        message: e.to_string(),
+                    })
                 })?;
                 match decoder.decode_all_to_vec(data, &mut out) {
                     Ok(()) => return Ok(Cow::Owned(out)),
@@ -160,13 +129,15 @@ fn decode_one<'a>(
                         }
                         capacity = capacity.saturating_mul(2).max(1).min(limit);
                     }
-                    Err(e) => return Err(CodecError::Failed(format!("zstd decode failed: {e}"))),
+                    Err(e) => {
+                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(e.to_string())));
+                    }
                 }
             }
         }
         other => Err(CodecError::Unavailable {
             reason: "unknown-codec",
-            detail: format!("unknown codec '{other}'"),
+            detail: CodecUnavailable::UnknownCodec(other.to_owned()),
         }),
     }
 }
@@ -182,7 +153,7 @@ fn encode_zstd(data: &[u8], level: Option<i32>) -> Vec<u8> {
 fn dict_compressor(level: Option<i32>, dict: &[u8]) -> Result<DictCompressor, CodecError> {
     let mut cctx: DictCompressor = FrameCompressor::new(zstd_level(level));
     cctx.set_dictionary_from_bytes(dict)
-        .map_err(|e| CodecError::Failed(format!("zstd dictionary load failed: {e}")))?;
+        .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
     Ok(cctx)
 }
 
@@ -256,7 +227,7 @@ fn encode_one<'a>(
         }
         other => Err(CodecError::Unavailable {
             reason: "unknown-codec",
-            detail: format!("writer cannot encode with codec '{other}'"),
+            detail: CodecUnavailable::WriterCodec(other.to_owned()),
         }),
     }
 }
@@ -267,23 +238,21 @@ pub fn encode_chain_with_options(
     data: &[u8],
     options: EncodeOptions<'_>,
 ) -> Result<Vec<u8>, CodecError> {
-    if options.zstd_level.is_some()
+    if let Some(level) = options.zstd_level
         && !chain
             .iter()
             .any(|name| matches!(name.as_str(), "zstd" | "zstd-rsyncable"))
     {
-        return Err(CodecError::Failed(
-            "zstd_level requires a zstd or zstd-rsyncable transform".into(),
-        ));
+        return Err(CodecError::Failed(CodecFailure::UnusedLevel { level }));
     }
-    if options.dict.is_some()
+    if let Some(dict) = options.dict
         && !chain
             .iter()
             .any(|name| matches!(name.as_str(), "zstd" | "zstd-rsyncable"))
     {
-        return Err(CodecError::Failed(
-            "dict requires a zstd or zstd-rsyncable transform".into(),
-        ));
+        return Err(CodecError::Failed(CodecFailure::UnusedDictionary {
+            bytes: dict.len(),
+        }));
     }
     let mut current = Cow::Borrowed(data);
     for name in chain {
@@ -333,20 +302,17 @@ pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecErro
     let mut rest = payload;
     while !rest.is_empty() {
         let header = read_frame_header_info(rest, false)
-            .map_err(|e| CodecError::Failed(format!("zstd frame header is unreadable: {e}")))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdHeader(e.to_string())))?;
         let compressed_len = find_frame_compressed_size(rest)
-            .map_err(|e| CodecError::Failed(format!("zstd frame is truncated: {e:?}")))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(format!("{e:?}"))))?;
         if compressed_len == 0 || compressed_len > rest.len() {
-            return Err(CodecError::Failed(format!(
-                "zstd frame reports invalid compressed length {compressed_len} for {} remaining \
-                 bytes",
-                rest.len()
-            )));
+            return Err(CodecError::Failed(CodecFailure::CompressedLength {
+                compressed_len,
+                remaining: rest.len(),
+            }));
         }
         let FrameContentSize::Known(content_len) = header.content_size else {
-            return Err(CodecError::Failed(
-                "zstd frame omits its Frame_Content_Size, so its cut point is unobservable".into(),
-            ));
+            return Err(CodecError::Failed(CodecFailure::MissingContentSize));
         };
         out.push(ZstdBlockInfo {
             content_len,
@@ -367,7 +333,7 @@ pub fn decode_chain(chain: &[Codec], data: &[u8]) -> Result<Vec<u8>, CodecError>
 }
 
 fn decoded_limit(limit: usize) -> CodecError {
-    CodecError::Limit(format!("decoded transform output exceeds {limit} bytes"))
+    CodecError::Limit { limit }
 }
 
 /// Reverse a codec chain, bounding every decoded intermediate and final buffer.
@@ -418,7 +384,7 @@ pub(crate) fn decode_chain_with_decrypt_bounded(
                 None => {
                     return Err(CodecError::Unavailable {
                         reason: "missing-key",
-                        detail: format!("no key for encrypt codec '{}'", codec.name),
+                        detail: CodecUnavailable::MissingKey(codec.name.clone()),
                     });
                 }
             });

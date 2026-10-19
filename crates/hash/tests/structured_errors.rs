@@ -17,6 +17,8 @@ struct Capture<'error> {
     lists: [Option<(Option<&'static str>, usize)>; 4],
     list_count: usize,
     list_ends: usize,
+    records: [Option<(Option<&'static str>, &'static str)>; 4],
+    record_count: usize,
 }
 
 impl<'error> ErrorVisitor<'error> for Capture<'error> {
@@ -37,10 +39,21 @@ impl<'error> ErrorVisitor<'error> for Capture<'error> {
     fn end_list(&mut self) {
         self.list_ends += 1;
     }
+
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str) {
+        self.records[self.record_count] = Some((name, code));
+        self.record_count += 1;
+    }
+
+    fn end_record(&mut self) {
+        self.records[self.record_count] = Some((None, "record-end"));
+        self.record_count += 1;
+    }
 }
 
 enum NoFormat {
     Cause,
+    Refused { limit: u128 },
 }
 
 impl core::fmt::Debug for NoFormat {
@@ -60,6 +73,7 @@ impl std::error::Error for NoFormat {}
 impl StructuredError for NoFormat {
     purrdf_hash::error_visit! {
         Cause => "test-cause" {},
+        Refused { limit } => "test-caller-refused" { "limit" => Unsigned(*limit) },
     }
 }
 
@@ -134,6 +148,42 @@ fn native_hex_failures_expose_original_fields_without_allocating() {
     assert!(matches!(
         captures[2].fields[1],
         Some((Some("available"), ErrorValue::ByteCount(1)))
+    ));
+}
+
+#[test]
+fn temporary_record_views_keep_fields_borrowed_from_the_original_owner() {
+    struct Projected<'a>(&'a str);
+    impl StructuredError for Projected<'_> {
+        fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+            visitor.variant("projected-owner");
+            let (prefix, suffix) = self.0.split_at(2);
+            visitor.begin_record(Some("prefix"), "projected-fragment");
+            visitor.value(Some("text"), ErrorValue::Text(prefix));
+            visitor.end_record();
+            visitor.value(Some("suffix"), ErrorValue::Text(suffix));
+        }
+    }
+    let text = String::from("éx");
+    let original = Projected(&text);
+    let mut capture = Capture::default();
+    let window = CurrentThreadWindow::open();
+    original.visit(&mut capture);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(capture.code, "projected-owner");
+    assert_eq!(
+        capture.records[0],
+        Some((Some("prefix"), "projected-fragment"))
+    );
+    assert_eq!(capture.records[1], Some((None, "record-end")));
+    let Some((Some("text"), ErrorValue::Text(prefix))) = capture.fields[0] else {
+        panic!("the original prefix is present")
+    };
+    assert_eq!(prefix, "é");
+    assert!(core::ptr::eq(prefix.as_ptr(), text.as_ptr()));
+    assert!(matches!(
+        capture.fields[1],
+        Some((Some("suffix"), ErrorValue::Text("x")))
     ));
 }
 
@@ -246,4 +296,106 @@ fn standard_io_categories_retain_native_identity_without_formatting_or_allocatio
         kinds[2] == std::io::ErrorKind::Other,
         "an unnamed standard category must not be relabeled Other",
     );
+}
+
+#[test]
+fn io_failures_keep_native_metadata_and_the_original_shared_cause() {
+    use purrdf_hash::error::IoFailure;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct ExternalIo(Arc<AtomicBool>);
+    impl core::fmt::Display for ExternalIo {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            assert!(
+                !self.0.load(Ordering::Relaxed),
+                "captured I/O must not be rendered again"
+            );
+            f.write_str("external writer refusal")
+        }
+    }
+    impl std::error::Error for ExternalIo {}
+
+    let captured = Arc::new(AtomicBool::new(false));
+    let failure = IoFailure::from(std::io::Error::other(ExternalIo(captured.clone())));
+    captured.store(true, Ordering::Relaxed);
+    let mut record = Capture::default();
+    let mut kind = Capture::default();
+    let window = CurrentThreadWindow::open();
+    failure.visit(&mut record);
+    let Some((Some("kind"), ErrorValue::Record(original_kind))) = record.fields[0] else {
+        panic!("original standard kind must be retained")
+    };
+    original_kind.visit(&mut kind);
+    let copy = failure.clone();
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(record.code, "std-io");
+    assert_eq!(kind.code, "std-io-kind");
+    assert!(matches!(
+        kind.fields[0],
+        Some((Some("name"), ErrorValue::Code("other")))
+    ));
+    assert!(matches!(
+        record.fields[1],
+        Some((Some("raw_os_error"), ErrorValue::Absent))
+    ));
+    assert!(matches!(
+        record.fields[2],
+        Some((
+            Some("message"),
+            ErrorValue::Message("external writer refusal")
+        ))
+    ));
+    assert_eq!(failure, copy);
+    assert!(core::ptr::eq(failure.original(), copy.original()));
+    assert!(failure.original().get_ref().unwrap().is::<ExternalIo>());
+    drop(failure);
+    assert_eq!(copy.message(), "external writer refusal");
+    drop(copy);
+    assert_eq!(Arc::strong_count(&captured), 1);
+
+    let native = IoFailure::from(std::io::Error::from_raw_os_error(i32::MAX));
+    let mut record = Capture::default();
+    native.visit(&mut record);
+    assert_eq!(native.raw_os_error(), Some(i32::MAX));
+    assert_eq!(native.kind(), native.original().kind());
+    assert!(
+        matches!(record.fields[1], Some((Some("raw_os_error"), ErrorValue::Signed(value))) if value == i128::from(i32::MAX))
+    );
+    assert_eq!(native.message(), native.original().to_string());
+
+    let native = IoFailure::from(purrdf_hash::error::io_error(
+        std::io::ErrorKind::Other,
+        NoFormat::Refused { limit: u128::MAX },
+    ));
+    let mut record = Capture::default();
+    let mut bridge = Capture::default();
+    let mut cause = Capture::default();
+    let window = CurrentThreadWindow::open();
+    native.visit(&mut record);
+    let Some((Some("cause"), ErrorValue::Cause(original))) = record.fields[3] else {
+        panic!("the typed I/O bridge must preserve its native cause")
+    };
+    original.visit(&mut bridge);
+    let Some((Some("cause"), ErrorValue::Cause(original))) = bridge.fields[0] else {
+        panic!("the bridge must report its original native cause")
+    };
+    original.visit(&mut cause);
+    let copy = native.clone();
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(bridge.code, "std-io-native-cause");
+    assert_eq!(cause.code, "test-caller-refused");
+    assert!(matches!(
+        cause.fields[0],
+        Some((Some("limit"), ErrorValue::Unsigned(u128::MAX)))
+    ));
+    assert!(matches!(
+        record.fields[2],
+        Some((Some("message"), ErrorValue::Absent))
+    ));
+    assert!(copy.native_cause().is_some());
+    assert_eq!(native, copy);
 }

@@ -1793,11 +1793,14 @@ impl PropertyFunction for PathWitnessRelation {
         row_bound(mode, self.graph.shape, self.limits, u64::MAX)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         // `open_contained` already checked this for every engine-driven call; a direct
         // caller gets the same answer rather than a panic on a short argument vector.
         let supplied = args.arity();
@@ -2122,11 +2125,14 @@ impl PropertyFunction for ShortestPathWitnessRelation {
         row_bound(mode, self.graph.shape, self.limits, walks_per_seed_cap)
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let supplied = args.arity();
         if supplied != path_arity() {
             return Err(EvalError::function(format!(

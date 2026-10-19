@@ -141,11 +141,14 @@ impl PropertyFunction for IndexedRelation {
         1
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let subject = args
             .subject()
             .first()
@@ -208,7 +211,7 @@ const PER_ROW_CALL: &str = "PREFIX ex: <https://example.org/d/>\n\
                               ?s <https://example.org/rel/indexed> ?t\n\
                             }";
 
-fn registry(attests: Attests) -> ExtensionEnv {
+fn registry(attests: Attests) -> ExtensionEnv<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         REL_IRI.to_owned(),

@@ -39,7 +39,7 @@ const UNREGISTERED_IRI: &str = "http://example.org/agg#nope";
 // weighted sum exercises DISTINCT deduping the FULL argument tuple rather than a single
 // column: two rows sharing `value` but differing in `weight` must both be folded in.
 
-fn registry() -> ExtensionEnv {
+fn registry() -> ExtensionEnv<'static> {
     let mut registry = AggregateRegistry::default();
     registry.register(
         SUM_IRI,
@@ -63,7 +63,7 @@ fn registry() -> ExtensionEnv {
 }
 
 /// The environment a fixture registry is interpreted in.
-fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv {
+fn env_of(aggregates: AggregateRegistry) -> ExtensionEnv<'static> {
     ExtensionEnv::over_aggregates(aggregates).expect("the fixture declarations read cleanly")
 }
 
@@ -126,7 +126,7 @@ fn dataset() -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn run(ds: &Arc<RdfDataset>, query: &str, options: QueryOptions<'_>) -> SparqlResult {
+fn run(ds: &Arc<RdfDataset>, query: &str, options: QueryOptions<'_, '_>) -> SparqlResult {
     NativeSparqlEngine::new()
         .query_with_options_view(&**ds, request(query), options)
         .expect("query")
@@ -444,7 +444,7 @@ fn volatile_custom_aggregate_is_still_correct_and_deterministic_at_scale() {
 
 const STAT_NS: &str = "http://example.org/agg/";
 
-fn statistical_registry() -> ExtensionEnv {
+fn statistical_registry() -> ExtensionEnv<'static> {
     let mut registry = AggregateRegistry::default();
     registry.register_statistical_aggregates(STAT_NS);
     ExtensionEnv::over_aggregates(registry).expect("the fixture declarations read cleanly")

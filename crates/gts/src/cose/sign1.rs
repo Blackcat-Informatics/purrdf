@@ -112,7 +112,15 @@ impl core::fmt::Display for Sign1Error {
         }
     }
 }
-impl std::error::Error for Sign1Error {}
+purrdf_lex::error_source!(Sign1Error { Composite });
+
+impl purrdf_hash::error::StructuredError for Sign1Error {
+    purrdf_hash::error_visit! {
+        Malformed => "gts-sign1-malformed" {},
+        UnsupportedAlgorithm => "gts-sign1-unsupported-algorithm" {},
+        Composite(error) => "gts-sign1-composite-failure" { "cause" => Cause(error) },
+    }
+}
 
 /// A validated supported detached envelope. Its protected bytes are retained
 /// exactly as received, not normalized or re-encoded before authentication.

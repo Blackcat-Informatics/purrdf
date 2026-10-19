@@ -211,7 +211,7 @@ use crate::statistics::Statistics;
 /// cardinality, not admission.
 pub struct AdmissionEnvironment<'a> {
     /// The live registry the compiled units resolve against.
-    pub registry: &'a PropertyFunctionRegistry,
+    pub registry: &'a PropertyFunctionRegistry<'a>,
     /// The statistics provider whose revision the plan must have recorded.
     pub statistics: &'a dyn Statistics,
     /// The fusion profile the compiled units' rows will be fused under, when
@@ -1112,7 +1112,7 @@ fn registry_iri(text: &str) -> Result<Box<Iri>, AdmissionError> {
 
 /// Read the registry's declarations, refusing a registry that cannot describe
 /// itself.
-fn describe(registry: &PropertyFunctionRegistry) -> Result<Vec<PfDescriptor>, AdmissionError> {
+fn describe(registry: &PropertyFunctionRegistry<'_>) -> Result<Vec<PfDescriptor>, AdmissionError> {
     registry
         .describe()
         .map_err(|error| AdmissionError::MalformedPlan {

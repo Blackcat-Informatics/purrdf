@@ -107,7 +107,7 @@ fn fixture_profile() -> FusionProfile {
 }
 
 fn fixture_env<'a>(
-    registry: &'a PropertyFunctionRegistry,
+    registry: &'a PropertyFunctionRegistry<'static>,
     stats: &'a MockStatistics,
 ) -> AdmissionEnvironment<'a> {
     AdmissionEnvironment {
@@ -139,7 +139,7 @@ fn fixture_env<'a>(
 #[allow(clippy::future_not_send)]
 async fn manual_composition(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     dataset: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
@@ -571,7 +571,7 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
 /// is a property of the plan *and* the law: an environment naming no profile has
 /// nothing to measure against and would report nothing at all.
 fn compiled_under(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     stats: &MockStatistics,
     profile: &FusionProfile,
 ) -> purrdf_retrieval::CompiledRetrieval {
@@ -917,17 +917,20 @@ impl PropertyFunction for FailingProducer {
         10
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Err(EvalError::data("the fixture index is unavailable"))
     }
 }
 
 /// The fixture registry plus one producer whose stratum cannot run.
-fn registry_with_a_failing_stratum() -> PropertyFunctionRegistry {
+fn registry_with_a_failing_stratum() -> PropertyFunctionRegistry<'static> {
     let mut registry = fixture_registry();
     let arity = PfArity::new(1, 1);
     registry.register_ranked(
@@ -1063,7 +1066,7 @@ fn every_contributor_is_named_when_none_fail() {
 
 /// A registry with one literal producer and nothing else, so a vector term in
 /// the same request reaches no declaration at all.
-fn literal_only_registry() -> PropertyFunctionRegistry {
+fn literal_only_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/literal"),
@@ -1358,7 +1361,7 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
 }
 
 /// A registry whose *only* producer cannot run, so nothing reaches the fusion.
-fn registry_of_only_the_failing_stratum() -> PropertyFunctionRegistry {
+fn registry_of_only_the_failing_stratum() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let arity = PfArity::new(1, 1);
     registry.register_ranked(
@@ -1500,7 +1503,7 @@ fn repeating_producer() -> Arc<dyn PropertyFunction> {
 /// the moment it is read, so it certifies and leaves the frontier before the
 /// next row arrives — which is what puts the repeat past the frontier and on the
 /// path under test.
-fn repeating_registry(duplicates: DuplicatePolicy) -> PropertyFunctionRegistry {
+fn repeating_registry(duplicates: DuplicatePolicy) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/repeat"),
@@ -1688,7 +1691,7 @@ type FusedAnswer = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
 /// their own block from, declared as `block_position`. A several-block
 /// declaration with no such position is refused at the first row, which
 /// `a_several_block_declaration_no_row_backs_is_refused` executes beside this.
-fn domain_declaring_registry() -> PropertyFunctionRegistry {
+fn domain_declaring_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
         kind: TermKind::Literal,
@@ -1864,7 +1867,7 @@ fn block_declaring_registry(
     relation: Arc<dyn PropertyFunction>,
     domains: CandidateDomains,
     block_position: Option<usize>,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/any"),
@@ -1883,7 +1886,9 @@ fn block_declaring_registry(
 }
 
 /// Run the fixture request through the whole ladder against `registry`.
-fn search_against(registry: &PropertyFunctionRegistry) -> Result<SearchResult, SearchError> {
+fn search_against(
+    registry: &PropertyFunctionRegistry<'static>,
+) -> Result<SearchResult, SearchError> {
     let stats = statistics("r1");
     let env = fixture_env(registry, &stats);
     block_on(search(
@@ -2234,7 +2239,7 @@ fn docs_registry(
     rows: &[usize],
     domains: CandidateDomains,
     duplicates: DuplicatePolicy,
-) -> PropertyFunctionRegistry {
+) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
         ex("pf/docs"),
@@ -2267,7 +2272,7 @@ fn top_five() -> RetrievalRequest {
 }
 
 /// The depth the planner records for the fixture stratum under `registry`.
-fn docs_depth(registry: &PropertyFunctionRegistry) -> u32 {
+fn docs_depth(registry: &PropertyFunctionRegistry<'static>) -> u32 {
     *plan(&top_five(), registry, &docs_statistics())
         .expect("the fixture request plans")
         .stratum_depths
@@ -2277,7 +2282,7 @@ fn docs_depth(registry: &PropertyFunctionRegistry) -> u32 {
 
 /// The depth the planner records for the fixture stratum under `registry` when the
 /// request states no bound.
-fn docs_complete_depth(registry: &PropertyFunctionRegistry) -> u32 {
+fn docs_complete_depth(registry: &PropertyFunctionRegistry<'static>) -> u32 {
     *plan(&lexical_request(), registry, &docs_statistics())
         .expect("the fixture request plans")
         .stratum_depths
@@ -2286,18 +2291,18 @@ fn docs_complete_depth(registry: &PropertyFunctionRegistry) -> u32 {
 }
 
 /// The fixture request, searched through the whole ladder against `registry`.
-fn docs_search(registry: &PropertyFunctionRegistry) -> SearchResult {
+fn docs_search(registry: &PropertyFunctionRegistry<'static>) -> SearchResult {
     docs_search_for(&top_five(), registry)
 }
 
 /// The un-narrowed search: the whole stratum, fused at the bound its depths sum to.
-fn docs_complete_search(registry: &PropertyFunctionRegistry) -> SearchResult {
+fn docs_complete_search(registry: &PropertyFunctionRegistry<'static>) -> SearchResult {
     docs_search_for(&lexical_request(), registry)
 }
 
 fn docs_search_for(
     request: &RetrievalRequest,
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
 ) -> SearchResult {
     let stats = docs_statistics();
     let env = fixture_env(registry, &stats);

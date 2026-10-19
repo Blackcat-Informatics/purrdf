@@ -48,7 +48,7 @@ fn relation_ending_in(object: &str) -> Arc<MemoryRelation> {
 
 /// A registry holding exactly one relation, built from scratch — a fresh instance
 /// with its own [`RegistryId`].
-fn registry_ending_in(object: &str) -> PropertyFunctionRegistry {
+fn registry_ending_in(object: &str) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(EX_REL, relation_ending_in(object));
     registry

@@ -120,3 +120,13 @@ harness = false
 # The actual hedged writer and typed file resolver run natively and in wasm.
 name = "hedged_writer"
 harness = false
+
+[[test]]
+# Frozen MMR identities and variable-length frame preimages, native and wasm.
+name = "mmr_preimages"
+harness = false
+
+[[test]]
+# Native error fields through the same generic consumer on native and wasm.
+name = "structured_errors"
+harness = false

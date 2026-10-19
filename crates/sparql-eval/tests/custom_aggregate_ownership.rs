@@ -147,7 +147,7 @@ impl CustomAggregate for LastPairAggregate {
     }
 }
 
-fn environment() -> (ExtensionEnv, Arc<AtomicUsize>) {
+fn environment() -> (ExtensionEnv<'static>, Arc<AtomicUsize>) {
     let steps = Arc::new(AtomicUsize::new(0));
     let mut registry = AggregateRegistry::default();
     registry.register(

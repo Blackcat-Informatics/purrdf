@@ -287,7 +287,7 @@ fn embedding_space() -> EmbeddingSpace {
 
 /// Register both relations as ranked producers, each under the host's own
 /// producer IRI and stratum, using the declaration each relation hands out.
-fn registry(data: &RdfDataset) -> PropertyFunctionRegistry {
+fn registry(data: &RdfDataset) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
 
     let text = TextSearchRelation::new(Arc::new(text_index(data)));

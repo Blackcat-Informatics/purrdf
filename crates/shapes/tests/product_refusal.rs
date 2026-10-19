@@ -527,17 +527,20 @@ impl PropertyFunction for EmptyRelation {
         0
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         Ok(Box::new(EmptyCursor))
     }
 }
 
 /// A property-function registry declaring each IRI in `iris`, in the order given.
-fn relations(iris: &[&str]) -> PropertyFunctionRegistry {
+fn relations(iris: &[&str]) -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     for iri in iris {
         registry.register(
@@ -559,7 +562,7 @@ fn relations(iris: &[&str]) -> PropertyFunctionRegistry {
 /// what makes the "prepared against relations A, executed against relations B"
 /// case expressible at all, and the value is computed by the same public function
 /// the codec itself fingerprints with, never transcribed.
-fn relation_fingerprint(registry: &PropertyFunctionRegistry) -> Vec<u8> {
+fn relation_fingerprint(registry: &PropertyFunctionRegistry<'static>) -> Vec<u8> {
     property_function_content_fingerprint(registry)
         .expect("a relation registry states its own declarations")
         .as_bytes()

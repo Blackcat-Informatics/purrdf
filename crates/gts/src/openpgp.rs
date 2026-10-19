@@ -19,23 +19,10 @@ const ED25519_ALGO: u8 = 22;
 /// The curve OID GPG writes for the Ed25519 signing curve (`1.3.6.1.4.1.11591.15.1`).
 const ED25519_OID: [u8; 9] = [0x2b, 0x06, 0x01, 0x04, 0x01, 0xda, 0x47, 0x0f, 0x01];
 
-/// An error parsing an armored OpenPGP key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenPgpError(pub String);
-
-impl std::fmt::Display for OpenPgpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for OpenPgpError {}
+mod error;
+pub use error::{OpenPgpError, OpenPgpRule};
 
 type Result<T> = std::result::Result<T, OpenPgpError>;
-
-fn err<T>(msg: &str) -> Result<T> {
-    Err(OpenPgpError(msg.to_string()))
-}
 
 /// The parsed transport key: the raw Ed25519 public key plus its v4 fingerprint.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,14 +75,14 @@ fn strip_armor(text: &str) -> Result<Vec<u8>> {
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.iter().position(|l| l.starts_with("-----BEGIN PGP"));
     let Some(start) = start else {
-        return err("missing armor BEGIN line");
+        return Err(OpenPgpError::Rule(OpenPgpRule::MissingBegin));
     };
     let end = lines
         .iter()
         .enumerate()
         .position(|(i, l)| i > start && l.starts_with("-----END PGP"));
     let Some(end) = end else {
-        return err("missing armor END line");
+        return Err(OpenPgpError::Rule(OpenPgpRule::MissingEnd));
     };
 
     let mut idx = start + 1;
@@ -135,7 +122,7 @@ fn strip_armor(text: &str) -> Result<Vec<u8>> {
         idx += 1;
     }
     if body.is_empty() {
-        return err("empty armor body");
+        return Err(OpenPgpError::Rule(OpenPgpRule::EmptyArmor));
     }
     b64_decode(&body)
 }
@@ -179,7 +166,7 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
             continue;
         }
         let Some(v) = val(c) else {
-            return err("invalid base64 armor body");
+            return Err(OpenPgpError::Rule(OpenPgpRule::InvalidBase64));
         };
         acc = (acc << 6) | u32::from(v);
         bits += 6;
@@ -194,13 +181,13 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
 /// Read an OpenPGP multi-precision integer; returns `(big_endian_bytes, next_offset)`.
 fn read_mpi(data: &[u8], offset: usize) -> Result<(Vec<u8>, usize)> {
     if offset + 2 > data.len() {
-        return err("truncated MPI length");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedMpiLength));
     }
     let bits = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
     let length = bits.div_ceil(8);
     let end = offset + 2 + length;
     if end > data.len() {
-        return err("truncated MPI payload");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedMpiPayload));
     }
     Ok((data[offset + 2..end].to_vec(), end))
 }
@@ -209,11 +196,11 @@ fn read_mpi(data: &[u8], offset: usize) -> Result<(Vec<u8>, usize)> {
 /// Supports both old- and new-format headers.
 fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
     if offset >= data.len() {
-        return err("truncated packet header");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedPacketHeader));
     }
     let header = data[offset];
     if header & 0x80 == 0 {
-        return err("invalid packet tag octet");
+        return Err(OpenPgpError::Rule(OpenPgpRule::InvalidPacketTag));
     }
 
     let tag;
@@ -223,7 +210,7 @@ fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
         tag = header & 0x3f;
         offset += 1;
         if offset >= data.len() {
-            return err("truncated new-format length octet");
+            return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedNewLength));
         }
         let lo = data[offset];
         if lo < 192 {
@@ -231,13 +218,13 @@ fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
             offset += 1;
         } else if lo < 224 {
             if offset + 1 >= data.len() {
-                return err("truncated new-format 2-octet length");
+                return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedNewLength2));
             }
             length = (((lo as usize) - 192) << 8) + data[offset + 1] as usize + 192;
             offset += 2;
         } else if lo == 255 {
             if offset + 4 >= data.len() {
-                return err("truncated new-format 4-octet length");
+                return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedNewLength4));
             }
             length = u32::from_be_bytes([
                 data[offset + 1],
@@ -247,7 +234,7 @@ fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
             ]) as usize;
             offset += 5;
         } else {
-            return err("partial body lengths are not supported");
+            return Err(OpenPgpError::Rule(OpenPgpRule::PartialBodyLength));
         }
     } else {
         // Old-format packet.
@@ -257,21 +244,21 @@ fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
         match length_type {
             0 => {
                 if offset >= data.len() {
-                    return err("truncated old-format length octet");
+                    return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedOldLength));
                 }
                 length = data[offset] as usize;
                 offset += 1;
             }
             1 => {
                 if offset + 1 >= data.len() {
-                    return err("truncated old-format 2-octet length");
+                    return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedOldLength2));
                 }
                 length = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
                 offset += 2;
             }
             2 => {
                 if offset + 3 >= data.len() {
-                    return err("truncated old-format 4-octet length");
+                    return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedOldLength4));
                 }
                 length = u32::from_be_bytes([
                     data[offset],
@@ -281,13 +268,13 @@ fn next_packet(data: &[u8], mut offset: usize) -> Result<(u8, Vec<u8>, usize)> {
                 ]) as usize;
                 offset += 4;
             }
-            _ => return err("indeterminate-length packets are not supported"),
+            _ => return Err(OpenPgpError::Rule(OpenPgpRule::IndeterminateLength)),
         }
     }
 
     let end = offset + length;
     if end > data.len() {
-        return err("packet body exceeds input");
+        return Err(OpenPgpError::Rule(OpenPgpRule::PacketBeyondInput));
     }
     Ok((tag, data[offset..end].to_vec(), end))
 }
@@ -308,30 +295,29 @@ fn iter_packets(data: &[u8]) -> Result<Vec<(u8, Vec<u8>)>> {
 /// `(raw_public_key, end_offset_of_public_material)`.
 fn parse_ed25519_public_material(body: &[u8]) -> Result<([u8; 32], usize)> {
     if body.len() < 6 || body[0] != 4 {
-        return err("only OpenPGP v4 public keys are supported");
+        return Err(OpenPgpError::PublicHeader {
+            actual: body.len(),
+            version: body.first().copied(),
+        });
     }
     if body[5] != ED25519_ALGO {
-        return Err(OpenPgpError(format!(
-            "unsupported public-key algorithm {}",
-            body[5]
-        )));
+        return Err(OpenPgpError::Algorithm { actual: body[5] });
     }
     let mut offset = 6;
     if offset >= body.len() {
-        return err("truncated public-key packet");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedPublicPacket));
     }
     let oid_len = body[offset] as usize;
     offset += 1;
     if offset + oid_len > body.len() {
-        return err("truncated OID");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedOid));
     }
     let oid = &body[offset..offset + oid_len];
     offset += oid_len;
     if oid != ED25519_OID {
-        return Err(OpenPgpError(format!(
-            "unsupported curve OID {}",
-            purrdf_hash::hex::Lower(oid)
-        )));
+        return Err(OpenPgpError::Oid {
+            actual: oid.to_vec(),
+        });
     }
 
     let (mpi, end) = read_mpi(body, offset)?;
@@ -341,9 +327,7 @@ fn parse_ed25519_public_material(body: &[u8]) -> Result<([u8; 32], usize)> {
         33 => mpi[1..].try_into().expect("33-1 == 32"),
         32 => mpi[..].try_into().expect("len checked"),
         n => {
-            return Err(OpenPgpError(format!(
-                "unexpected Ed25519 public MPI length {n}"
-            )));
+            return Err(OpenPgpError::PublicMpiLength { actual: n });
         }
     };
     Ok((raw, end))
@@ -356,10 +340,10 @@ fn secret_mpi_to_seed(mpi: &[u8]) -> Result<[u8; 32]> {
         mpi
     };
     if bytes.len() > 32 {
-        return Err(OpenPgpError(format!(
-            "unexpected Ed25519 secret MPI length {}",
-            mpi.len()
-        )));
+        return Err(OpenPgpError::SecretMpiLength {
+            actual: mpi.len(),
+            normalized: bytes.len(),
+        });
     }
     let mut raw = [0u8; 32];
     raw[32 - bytes.len()..].copy_from_slice(bytes);
@@ -377,31 +361,29 @@ fn parse_ed25519_secret_material(body: &[u8]) -> Result<([u8; 32], SigningKey, u
     let mut offset = pub_end;
 
     if offset >= body.len() {
-        return err("truncated secret-key packet");
+        return Err(OpenPgpError::Rule(OpenPgpRule::TruncatedSecretPacket));
     }
     let s2k_usage = body[offset];
     offset += 1;
     if s2k_usage != 0 {
-        return err(
-            "encrypted secret keys are not supported; export an unencrypted Ed25519 secret key",
-        );
+        return Err(OpenPgpError::EncryptedSecret { usage: s2k_usage });
     }
 
     let secret_start = offset;
     let (mpi, next) = read_mpi(body, offset)?;
     if next + 2 != body.len() {
-        return err("unsupported secret-key packet structure");
+        return Err(OpenPgpError::Rule(OpenPgpRule::SecretStructure));
     }
     let expected = u16::from_be_bytes([body[next], body[next + 1]]);
     let actual = checksum16(&body[secret_start..next]);
     if actual != expected {
-        return err("OpenPGP secret-key checksum mismatch");
+        return Err(OpenPgpError::SecretChecksum);
     }
 
     let raw_secret = secret_mpi_to_seed(&mpi)?;
     let signing_key = SigningKey::from_bytes(&raw_secret);
     if signing_key.verifying_key().to_bytes() != raw_public {
-        return err("OpenPGP secret key does not match public key material");
+        return Err(OpenPgpError::Rule(OpenPgpRule::KeyMismatch));
     }
 
     Ok((raw_public, signing_key, pub_end))
@@ -443,7 +425,7 @@ pub fn parse_transport_key(armored: &str) -> Result<TransportKey> {
             fingerprint: fingerprint(&pub_body),
         });
     }
-    err("no public-key packet found")
+    Err(OpenPgpError::Rule(OpenPgpRule::MissingPublicPacket))
 }
 
 /// Parse an armored unencrypted OpenPGP Ed25519 secret key into signing material.
@@ -470,7 +452,7 @@ pub fn parse_secret_signing_key(
             raw_public,
         });
     }
-    err("no secret-key packet found")
+    Err(OpenPgpError::Rule(OpenPgpRule::MissingSecretPacket))
 }
 
 #[cfg(test)]
@@ -605,7 +587,7 @@ mod tests {
     fn secret_signing_key_rejects_public_armor() {
         let err = parse_secret_signing_key(&fixture("test_key.pub.asc"), None)
             .expect_err("public armor is rejected as signing material");
-        assert!(err.0.contains("no secret-key packet"));
+        assert!(err.to_string().contains("no secret-key packet"));
     }
 
     #[test]
@@ -617,7 +599,16 @@ mod tests {
 
         let err =
             parse_secret_signing_key(&armor, None).expect_err("encrypted secret key is rejected");
-        assert!(err.0.contains("encrypted secret keys are not supported"));
+        assert!(
+            err.to_string()
+                .contains("encrypted secret keys are not supported")
+        );
+        let fields = purrdf_testkit::error_capture::Capture::read(&err);
+        assert_eq!(fields.code, "gts-openpgp-encrypted-secret");
+        assert!(matches!(
+            fields.field("usage"),
+            purrdf_hash::error::ErrorValue::Unsigned(254)
+        ));
     }
 
     #[test]
@@ -625,6 +616,17 @@ mod tests {
         let seed = secret_mpi_to_seed(&[0x01, 0x23]).unwrap();
         assert_eq!(&seed[..30], &[0u8; 30]);
         assert_eq!(&seed[30..], &[0x01, 0x23]);
+        let error = secret_mpi_to_seed(&[0; 34]).unwrap_err();
+        let fields = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(fields.code, "gts-openpgp-secret-mpi-length");
+        assert!(matches!(
+            fields.field("actual"),
+            purrdf_hash::error::ErrorValue::ByteCount(34)
+        ));
+        assert!(matches!(
+            fields.field("normalized"),
+            purrdf_hash::error::ErrorValue::ByteCount(33)
+        ));
     }
 
     #[test]
@@ -636,7 +638,14 @@ mod tests {
 
         let err = parse_secret_signing_key(&armor, None)
             .expect_err("bad secret-key checksum is rejected");
-        assert!(err.0.contains("checksum mismatch"));
+        assert!(err.to_string().contains("checksum mismatch"));
+        let fields = purrdf_testkit::error_capture::Capture::read(&err);
+        assert_eq!(fields.code, "gts-openpgp-secret-checksum");
+        assert!(
+            fields.events.is_empty(),
+            "secret-derived checksums are not error data"
+        );
+        assert_eq!(format!("{err:?}"), "SecretChecksum");
     }
 
     #[test]
@@ -647,7 +656,10 @@ mod tests {
 
         let err = parse_secret_signing_key(&armor, None)
             .expect_err("unexpected secret-key trailer is rejected");
-        assert!(err.0.contains("unsupported secret-key packet structure"));
+        assert!(
+            err.to_string()
+                .contains("unsupported secret-key packet structure")
+        );
     }
 
     #[test]
@@ -659,7 +671,10 @@ mod tests {
 
         let err = parse_secret_signing_key(&armor, None)
             .expect_err("mismatched public and secret material is rejected");
-        assert!(err.0.contains("does not match public key material"));
+        assert!(
+            err.to_string()
+                .contains("does not match public key material")
+        );
     }
 
     #[test]
@@ -669,14 +684,32 @@ mod tests {
         });
         let err = parse_secret_signing_key(&wrong_algorithm, None)
             .expect_err("unsupported algorithm is rejected");
-        assert!(err.0.contains("unsupported public-key algorithm 1"));
+        assert!(
+            err.to_string()
+                .contains("unsupported public-key algorithm 1")
+        );
+        let fields = purrdf_testkit::error_capture::Capture::read(&err);
+        assert_eq!(fields.code, "gts-openpgp-algorithm");
+        assert!(matches!(
+            fields.field("actual"),
+            purrdf_hash::error::ErrorValue::Unsigned(1)
+        ));
 
         let v5 = mutated_secret_armor(|body| {
             body[0] = 5;
         });
         let err = parse_secret_signing_key(&v5, None)
             .expect_err("unsupported OpenPGP version is rejected");
-        assert!(err.0.contains("only OpenPGP v4 public keys are supported"));
+        assert!(
+            err.to_string()
+                .contains("only OpenPGP v4 public keys are supported")
+        );
+        let fields = purrdf_testkit::error_capture::Capture::read(&err);
+        assert_eq!(fields.code, "gts-openpgp-public-header");
+        assert!(matches!(
+            fields.field("version"),
+            purrdf_hash::error::ErrorValue::Unsigned(5)
+        ));
     }
 
     /// RFC 4880 §6.2: the armor headers are terminated by "a blank line",

@@ -235,7 +235,8 @@ static EMPTY_FUNCTIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
 static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
 
 /// The canonical empty property-function registry. See [`EMPTY_FUNCTIONS`].
-static EMPTY_PROPERTY_FUNCTIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+static EMPTY_PROPERTY_FUNCTIONS: PropertyFunctionRegistry<'static> =
+    PropertyFunctionRegistry::EMPTY;
 
 /// The parse configuration that declares nothing — the value a host which never
 /// declared a namespace binds, and the one every product written before row 11
@@ -370,7 +371,7 @@ pub struct HostBindings<'a> {
     /// The host's custom-aggregate table.
     aggregates: &'a AggregateRegistry,
     /// The host's property-function table.
-    property_functions: &'a PropertyFunctionRegistry,
+    property_functions: &'a PropertyFunctionRegistry<'a>,
     /// The caller's opaque name for the build of the native implementations behind
     /// the three registries' injected declarations. EMPTY means "nothing injected
     /// to identify".
@@ -409,7 +410,7 @@ impl<'a> HostBindings<'a> {
     pub const fn new(
         functions: &'a UserFunctionRegistry,
         aggregates: &'a AggregateRegistry,
-        property_functions: &'a PropertyFunctionRegistry,
+        property_functions: &'a PropertyFunctionRegistry<'a>,
         implementation_identity: &'a [u8],
         parser_options: &'a ParserOptions,
     ) -> Self {
@@ -435,7 +436,7 @@ impl<'a> HostBindings<'a> {
     pub const fn without_declarations(
         functions: &'a UserFunctionRegistry,
         aggregates: &'a AggregateRegistry,
-        property_functions: &'a PropertyFunctionRegistry,
+        property_functions: &'a PropertyFunctionRegistry<'a>,
         implementation_identity: &'a [u8],
     ) -> Self {
         Self::new(
@@ -461,7 +462,7 @@ impl<'a> HostBindings<'a> {
 
     /// The host's property-function table.
     #[must_use]
-    pub const fn property_functions(&self) -> &'a PropertyFunctionRegistry {
+    pub const fn property_functions(&self) -> &'a PropertyFunctionRegistry<'a> {
         self.property_functions
     }
 

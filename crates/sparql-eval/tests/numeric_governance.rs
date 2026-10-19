@@ -33,7 +33,11 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const STAT: &str = "http://example.org/stat#";
 
-fn governed(query: &str, options: QueryOptions<'_>, governors: &QueryGovernors) -> GovernedOutcome {
+fn governed(
+    query: &str,
+    options: QueryOptions<'_, '_>,
+    governors: &QueryGovernors,
+) -> GovernedOutcome {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     NativeSparqlEngine::new()
         .query_governed(
@@ -74,7 +78,7 @@ fn first_cell(outcome: &GovernedOutcome) -> String {
 fn refused_beside(
     refused: &str,
     neighbour: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     dimension: ResourceDimension,
 ) -> String {
     let metered = governed(neighbour, options, &QueryGovernors::METERED);

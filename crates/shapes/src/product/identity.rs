@@ -592,7 +592,7 @@ pub(crate) fn class_catalog_digest(catalog: &ClassCatalog) -> ContentDigest {
 pub(crate) fn build_identity(
     dataset: &PackDigest,
     shapes: &Shapes,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
@@ -627,7 +627,7 @@ pub(crate) fn build_identity(
 /// [`build_identity`] reports it.
 pub(crate) fn injected_population_is_empty(
     shapes: &Shapes,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
 ) -> Result<bool, ShapesProductError> {
     let wired = host_components(
         &shapes.functions,
@@ -676,7 +676,7 @@ pub(crate) fn injected_population_is_empty(
 pub(crate) fn check_restored_identity(
     declared: &Identity,
     shapes: &Shapes,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
@@ -724,7 +724,7 @@ pub(crate) fn check_host_bindings(
     declared: &Identity,
     functions: &UserFunctionRegistry,
     aggregates: &AggregateRegistry,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     implementation_identity: &[u8],
 ) -> Result<(), ShapesProductError> {
     let host = host_components(
@@ -762,7 +762,7 @@ pub(crate) fn check_host_bindings(
 fn host_components(
     functions: &UserFunctionRegistry,
     aggregates: &AggregateRegistry,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     implementation_identity: &[u8],
 ) -> Result<[Vec<u8>; 3], ShapesProductError> {
     Ok([
@@ -833,7 +833,7 @@ pub(crate) fn certify_dataset_component(
 fn assemble(
     dataset: &[u8],
     shapes: &Shapes,
-    property_functions: &PropertyFunctionRegistry,
+    property_functions: &PropertyFunctionRegistry<'_>,
     parser_options: &ParserOptions,
     implementation_identity: &[u8],
     classes: &ClassCatalog,
@@ -1225,7 +1225,7 @@ mod tests {
     }
 
     /// The identity of `shapes` under a caller-supplied property-function registry.
-    fn identity_with(shapes: &Shapes, relations: &PropertyFunctionRegistry) -> Identity {
+    fn identity_with(shapes: &Shapes, relations: &PropertyFunctionRegistry<'_>) -> Identity {
         identity_identified_by(shapes, relations, &[])
     }
 
@@ -1233,7 +1233,7 @@ mod tests {
     /// and a caller-supplied implementation identity.
     fn identity_identified_by(
         shapes: &Shapes,
-        relations: &PropertyFunctionRegistry,
+        relations: &PropertyFunctionRegistry<'_>,
         implementation_identity: &[u8],
     ) -> Identity {
         build_identity(
@@ -1395,17 +1395,20 @@ mod tests {
             0
         }
 
-        fn open(
+        fn open<'cursor>(
             &self,
             _args: &PfArgs<'_>,
             _ceiling: Option<u64>,
-        ) -> Result<Box<dyn PfCursor>, EvalError> {
+        ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+        where
+            Self: 'cursor,
+        {
             Ok(Box::new(NullCursor))
         }
     }
 
     /// A FRESH registry instance carrying [`NullRelation`] under [`EX_REL`].
-    fn relation_registry() -> PropertyFunctionRegistry {
+    fn relation_registry() -> PropertyFunctionRegistry<'static> {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(EX_REL, Arc::new(NullRelation::new()));
         registry

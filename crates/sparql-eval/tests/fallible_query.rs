@@ -798,7 +798,7 @@ fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
 const RELATION_QUERY: &str =
     "PREFIX rel: <https://example.org/rel/> SELECT ?a ?b WHERE { ?a rel:pair ?b }";
 
-fn pair_relation() -> PropertyFunctionRegistry {
+fn pair_relation() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         "https://example.org/rel/pair".to_owned(),

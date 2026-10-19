@@ -57,7 +57,7 @@ fn rows(result: &SparqlResult) -> String {
 
 fn try_governed(
     query: &str,
-    options: QueryOptions<'_>,
+    options: QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedOutcome, purrdf_core::RdfDiagnostic> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
@@ -73,7 +73,11 @@ fn try_governed(
     )
 }
 
-fn governed(query: &str, options: QueryOptions<'_>, governors: &QueryGovernors) -> GovernedOutcome {
+fn governed(
+    query: &str,
+    options: QueryOptions<'_, '_>,
+    governors: &QueryGovernors,
+) -> GovernedOutcome {
     try_governed(query, options, governors).unwrap_or_else(|e| panic!("{query}: {e}"))
 }
 

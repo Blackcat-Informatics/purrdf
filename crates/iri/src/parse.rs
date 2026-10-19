@@ -349,6 +349,13 @@ pub enum IriReadError {
     /// Original physical refusal before diagnostic allocation.
     Storage(purrdf_lex::allocation::StorageError),
 }
+impl purrdf_hash::error::StructuredError for IriReadError {
+    purrdf_hash::error_visit! {
+        Lexical(cause) => "iri-read-lexical" { "cause" => Cause(cause) },
+        Storage(cause) => "iri-read-storage" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(IriReadError { Lexical(IriError) });
 purrdf_lex::variant_from!(IriReadError { Storage(purrdf_lex::allocation::StorageError) });
 impl IriReadError {
@@ -913,18 +920,15 @@ fn validate_authority_with(
                 } else if let Some(stripped) = after.strip_prefix(':') {
                     (host, Some(host_off + close + 2), Some(stripped))
                 } else {
-                    return Err(IriError::BadAuthority(
-                        diagnostics
-                            .message(format_args!("trailing characters after IP-literal"))?,
-                    )
-                    .into());
+                    return Err(
+                        IriError::BadAuthority(crate::AuthorityError::TrailingIpLiteral).into(),
+                    );
                 }
             }
             None => {
-                return Err(IriError::BadAuthority(
-                    diagnostics.message(format_args!("unterminated IP-literal '['"))?,
-                )
-                .into());
+                return Err(
+                    IriError::BadAuthority(crate::AuthorityError::UnterminatedIpLiteral).into(),
+                );
             }
         }
     } else {

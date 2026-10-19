@@ -141,11 +141,14 @@ impl PropertyFunction for Producer {
         }
     }
 
-    fn open(
+    fn open<'cursor>(
         &self,
         args: &PfArgs<'_>,
         _ceiling: Option<u64>,
-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+    ) -> Result<Box<dyn PfCursor + 'cursor>, EvalError>
+    where
+        Self: 'cursor,
+    {
         let bound: Vec<Option<TermValue>> =
             args.flattened().map(Option::<&TermValue>::cloned).collect();
         // A bound candidate is the exclusion lookup: answered from the minted
@@ -205,7 +208,7 @@ impl PfCursor for Rows {
     }
 }
 
-fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry {
+fn registry(shape: Shape, rows: u64) -> PropertyFunctionRegistry<'static> {
     let arity = PfArity::new(1, 1);
     let block = DomainTag::parse(&ex("domain/shared")).expect("a valid tag");
     let prefixes = if shape.intersecting {
@@ -313,7 +316,7 @@ fn statistics(rows: u64) -> Cardinalities {
 
 /// The read `search` takes: every stratum on demand.
 fn on_demand(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &Cardinalities,
     dataset: &RdfDataset,
 ) -> usize {
@@ -338,7 +341,7 @@ fn on_demand(
 
 /// The same answer, read materialised: `execute` at the planned depths, then `fuse`.
 fn materialised(
-    registry: &PropertyFunctionRegistry,
+    registry: &PropertyFunctionRegistry<'static>,
     statistics: &Cardinalities,
     dataset: &RdfDataset,
 ) -> usize {

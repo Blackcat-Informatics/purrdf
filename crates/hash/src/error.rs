@@ -5,8 +5,12 @@
 //!
 //! Producers report a stable variant code and every semantic field. A consumer
 //! handles this fixed value algebra, rather than matching each producer's enum.
-//! Nested payloads are references, not recursive calls: a consumer can put them
-//! on its own heap work list. Inspection neither formats nor clones a payload.
+//! Stable nested owners are references a consumer can put on its own work list.
+//! Temporary views emit balanced record events with fields borrowed from their
+//! original owner. Inspection neither formats nor clones a payload.
+
+mod io;
+pub use io::{IoFailure, io_error};
 
 /// An error, or a structured compound value carried by an error.
 ///
@@ -23,11 +27,92 @@ pub trait StructuredError {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>);
 }
 
+/// An original error whose typed fields survive shared or boxed type erasure.
+/// Standard error upcasting preserves downcasting and the source chain, while
+/// structured upcasting preserves borrowed fields without rendering a message.
+pub trait NativeError: std::error::Error + StructuredError + Send + Sync {}
+impl<T: std::error::Error + StructuredError + Send + Sync> NativeError for T {}
+
 impl StructuredError for core::convert::Infallible {
     fn visit<'error>(&'error self, _visitor: &mut dyn ErrorVisitor<'error>) {
         // Generic query errors can name Infallible without ever carrying one.
         // Do not dereference an uninhabited reference to implement that bound.
         unreachable!("an Infallible error has no value to inspect")
+    }
+}
+
+impl StructuredError for core::fmt::Error {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-format");
+    }
+}
+
+impl StructuredError for core::num::TryFromIntError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        // The standard error has no payload; the native producer retains the
+        // source value and destination limit alongside this original cause.
+        visitor.variant("integer-conversion-range");
+    }
+}
+
+impl StructuredError for core::num::IntErrorKind {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        let name = match self {
+            Self::Empty => Some("empty"),
+            Self::InvalidDigit => Some("invalid-digit"),
+            Self::PosOverflow => Some("positive-overflow"),
+            Self::NegOverflow => Some("negative-overflow"),
+            Self::Zero => Some("zero"),
+            _ => None,
+        };
+        visitor.variant("std-integer-kind");
+        visitor.value(
+            Some("name"),
+            name.map_or(ErrorValue::Absent, ErrorValue::Code),
+        );
+        // As for ErrorKind, retain unlisted external unit categories without
+        // formatting them or confusing them with a known category.
+        visitor.value(
+            Some("native_discriminant"),
+            ErrorValue::Unsigned(*self as u128),
+        );
+    }
+}
+
+impl StructuredError for core::num::ParseIntError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-integer-parse");
+        visitor.value(Some("kind"), ErrorValue::Cause(self.kind()));
+    }
+}
+
+impl StructuredError for core::str::Utf8Error {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-utf8");
+        visitor.value(
+            Some("valid_up_to"),
+            ErrorValue::ByteCount(self.valid_up_to() as u128),
+        );
+        visitor.value(
+            Some("error_len"),
+            self.error_len()
+                .map_or(ErrorValue::Absent, |len| ErrorValue::ByteCount(len as u128)),
+        );
+    }
+}
+
+impl StructuredError for std::time::SystemTimeError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("std-system-time");
+        let duration = self.duration();
+        visitor.value(
+            Some("seconds"),
+            ErrorValue::Unsigned(u128::from(duration.as_secs())),
+        );
+        visitor.value(
+            Some("nanoseconds"),
+            ErrorValue::Unsigned(u128::from(duration.subsec_nanos())),
+        );
     }
 }
 
@@ -155,6 +240,53 @@ pub trait ErrorVisitor<'error> {
 
     /// End the most recently begun list.
     fn end_list(&mut self);
+
+    /// Begin a compound view whose temporary adapter need not survive inspection.
+    /// Its field values still borrow the original owner for `'error`. A named
+    /// record is a field; an unnamed record is an entry of the enclosing list.
+    fn begin_record(&mut self, name: Option<&'static str>, code: &'static str);
+
+    /// End the most recently begun record, after its fields and nested lists.
+    fn end_record(&mut self);
+}
+
+impl StructuredError for () {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("unit");
+    }
+}
+
+// Native views use these scalar counters as their original evidence. The
+// consumer sees the exact count rather than needing a wrapper or a downcast.
+macro_rules! unsigned_evidence {
+    ($($integer:ty => $widen:expr),* $(,)?) => {$ (
+        impl StructuredError for $integer {
+            fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+                visitor.variant("unsigned-evidence");
+                visitor.value(Some("value"), ErrorValue::Unsigned(($widen)(*self)));
+            }
+        }
+    )*};
+}
+unsigned_evidence!(u32 => u128::from, usize => |value: usize| value as u128);
+
+impl StructuredError for str {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.variant("text-value");
+        visitor.value(Some("text"), ErrorValue::Text(self));
+    }
+}
+
+impl StructuredError for String {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        self.as_str().visit(visitor);
+    }
+}
+
+impl<T: StructuredError + ?Sized> StructuredError for &T {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        T::visit(*self, visitor);
+    }
 }
 
 /// Emit a borrowed list without materializing or cloning its items.
