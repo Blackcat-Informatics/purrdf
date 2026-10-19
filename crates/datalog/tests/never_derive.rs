@@ -88,6 +88,30 @@ fn direct_and_transitive_refusals_name_authored_paths() {
                 EvalError::NeverDerive(reference.clone())
             );
         }
+        drop(rules);
+        let fields = purrdf_testkit::error_capture::Capture::read(&reference);
+        assert_eq!(fields.code, "admission-protected-head");
+        assert!(matches!(
+            fields.field("predicate"),
+            purrdf_hash::error::ErrorValue::Iri(INTENT)
+        ));
+        let chain = fields.records("chain");
+        assert_eq!(chain.len(), expected.len());
+        for (step, expected) in chain.iter().zip(&expected) {
+            assert!(
+                matches!(step.field("rule"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == expected.rule as u128)
+            );
+            assert!(
+                matches!(step.field("predicate"), purrdf_hash::error::ErrorValue::Text(value) if value == expected.predicate.as_str())
+            );
+        }
+        let sources = fields.records("sources");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].child("layer").code, "declaration-layer-ontology");
+        assert!(matches!(
+            sources[0].field("identity"),
+            purrdf_hash::error::ErrorValue::Text("https://example.org/assessor-obligation")
+        ));
     }
 }
 

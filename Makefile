@@ -921,6 +921,20 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				guard_and_build_identities_keep_full_width_values \
 				real_artifact_setup_retains_its_native_cause_after_owners_drop \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test structured_errors -- --exact \
+				reachable_snapshot_preserves_sharing_binders_and_deep_source_death \
+				actual_proof_decoder_preserves_rejected_bytes_and_native_lengths \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test never_derive -- --exact \
+				direct_and_transitive_refusals_name_authored_paths \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shex --test structured_errors -- --exact \
+				actual_shape_map_keeps_original_iri_cause_after_input_disposal \
+				structural_refusals_keep_the_original_unresolved_label \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-columnar --test structured_errors -- --exact \
+				original_parquet_bounds_survive_file_disposal_without_narrowing \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available official_modes_and_extended_output \
 				xof_large_output_and_seek_boundaries \

@@ -11,6 +11,13 @@ pub(super) enum CheckError {
     Operational(xpath::Error),
 }
 
+impl purrdf_hash::error::StructuredError for CheckError {
+    purrdf_hash::error_visit! {
+        Violation(reason) => "shex-check-violation" { "reason" => Text(reason) },
+        Operational(cause) => "shex-check-operational" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(CheckError { Violation(String) });
 
 impl CheckError {

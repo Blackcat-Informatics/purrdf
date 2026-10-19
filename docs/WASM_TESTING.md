@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 288 named cases in 44 integration targets,
-with 298 executions across 49 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 294 named cases in 48 integration targets,
+with 304 executions across 53 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
@@ -18,7 +18,8 @@ carrier, governed-request EXPLAIN, core `structured_inspection` and GTS
 `structured_errors` and `event_bridge` targets, and the JSON, Markdown, MIME and
 slice `structured_errors` targets, the SPARQL `lexer_owned_admission` target,
 the retrieval `structured_foundations` target, the evaluator and SPARQL results
-`structured_errors` targets, the HNSW `structured_errors` target and the JSON Schema `api` target.
+`structured_errors` targets, the HNSW, Datalog, ShEx and columnar `structured_errors`
+targets, Datalog's `never_derive` target and the JSON Schema `api` target.
 These inspection targets preserve original data,
 error payloads and refusal paths on the 32-bit target. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
@@ -147,6 +148,10 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-slice` / `structured_errors` | scalar | Four exact cases selected in `make wasm-test` | Retains native I/O ownership and full-width offsets, original JSON members after input disposal, IRI/RDF causes and the fallible canonicalization refusal with unchanged valid output. The real missing-filesystem-path control remains native. |
 | `purrdf-retrieval` / `structured_foundations` | scalar | All nine exact cases selected in `make wasm-test` | Inspects original native stack causes without rendering, scoped-base provenance, full-width fixed values, masks and registry IDs, shared attestation text, and parser causes retained through evaluator conversion after inputs and intermediate owners are dropped. Checks both witness-stratum fields retain their original IRI value kind. |
 | `purrdf-hnsw` / `structured_errors` | scalar | All four exact cases selected in `make wasm-test` | Exercises real matrix, parameter, payload and artifact-setup refusals, full-width guard commitments and build identity. Original digest causes remain inspectable after input and intermediate owners are dropped. |
+| `purrdf-datalog` / `structured_errors` | scalar | Both exact cases selected in `make wasm-test` | Retains the reachable 10,003-node DAG, shared binders and full-width variable coordinates after source destruction; checks actual proof decoder refusals and original wire bytes. |
+| `purrdf-datalog` / `never_derive` | scalar | `direct_and_transitive_refusals_name_authored_paths` | Preserves the authored admission chain and declaration sources after rule owners are dropped. |
+| `purrdf-shex` / `structured_errors` | scalar | Both exact cases selected in `make wasm-test` | Exercises real shape-map IRI causes and structural missing-label refusals after inputs and schema owners are dropped. |
+| `purrdf-columnar` / `structured_errors` | scalar | The one exact case selected in `make wasm-test` | Exercises the actual Parquet header bound and full-width wire counters without inspecting error messages. |
 | `purrdf-gts` / `structured_errors` | scalar | All 32 exact cases selected in `make wasm-test` | Exercises the actual native reader, writer, framing, proof, policy, compaction, dictionary, nested discovery and transport refusals through one generic borrowed visitor. Preserves original I/O owners and sources, nested records, full-width counts, JSON/CBOR values, exact floating-point bits, empty/absent fields and typed cryptographic/codec causes without rendering them. |
 | `purrdf-sparql-eval` / `structured_errors` | scalar | All six exact cases selected in `make wasm-test` | Retains original evaluator, governor, service, XPath and admitted diagnostic fields. The resident conversion reports formatter refusal with the original native cause and source chain intact, after one presentation attempt. |
 | `purrdf-gts` / `event_bridge` | scalar | All 14 exact cases selected in `make wasm-test` | Executes the public event bridge, original caller and reader causes, full-width resolution fields and literal refusals beside valid neighbors. Preserves original native owners through the event protocol without rendering; also checks cancellation, scopes, deterministic IDs and bounded per-segment state. |

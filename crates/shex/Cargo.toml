@@ -31,6 +31,7 @@ path = "src/lib.rs"
 name = "purrdf_shex"
 
 [dependencies]
+purrdf-hash.workspace = true
 purrdf-core = { workspace = true }
 purrdf-iri = { workspace = true }
 # The RDF 1.2 term syntax and literal/IRI escapers the ShExC writer and the
@@ -46,6 +47,10 @@ purrdf-testkit = { workspace = true }
 # Turtle parsing for the validation conformance harness only (the library
 # itself depends on the ring-fenced kernel, never the codec stack).
 purrdf-rdf = { workspace = true }
+
+[[test]]
+name = "structured_errors"
+harness = false
 
 [[bench]]
 name = "prepared_validate"

@@ -46,6 +46,15 @@ pub enum DictionaryError<E> {
     Source(E),
 }
 
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for DictionaryError<E>
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "datalog-dictionary-storage" { "cause" => Cause(cause) },
+        Source(cause) => "datalog-dictionary-source" { "cause" => Cause(cause) },
+    }
+}
+
 purrdf_lex::variant_from!(impl<E> DictionaryError<E> { Storage(StorageError) });
 
 impl<E: fmt::Display> fmt::Display for DictionaryError<E> {

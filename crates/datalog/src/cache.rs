@@ -326,6 +326,12 @@ pub struct ContractHash {
     digest: Digest32,
 }
 
+impl purrdf_hash::error::StructuredError for ContractHash {
+    purrdf_hash::error_visit! {
+        @record self { digest } => "datalog-contract-hash" { "digest" => Bytes(self.digest.as_bytes()) }
+    }
+}
+
 impl ContractHash {
     /// The 32-byte digest.
     pub fn digest(&self) -> &[u8; 32] {
