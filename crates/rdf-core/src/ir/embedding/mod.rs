@@ -20,7 +20,7 @@ mod wire;
 mod writer;
 
 pub use contract::*;
-pub use error::{DigestKind, EmbeddingError, EmbeddingWriteError};
+pub use error::{DigestKind, EmbeddingError, EmbeddingSourceError, EmbeddingWriteError};
 pub use identity::*;
 pub use metadata::*;
 pub use target::*;

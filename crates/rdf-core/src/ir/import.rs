@@ -132,7 +132,7 @@ pub(crate) fn record_values_from<D: DatasetView<ReadError = Infallible>>(
 }
 
 /// A read or bounded resident-materialization failure.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DatasetImportError<E> {
     /// The source could not be read completely.
@@ -141,6 +141,16 @@ pub enum DatasetImportError<E> {
     Capacity(CapacityError),
     /// A physical allocation refused before successful materialization.
     Storage(StorageError),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for DatasetImportError<E>
+{
+    purrdf_hash::error_visit! {
+        Read(cause) => "dataset-import-read" { "cause" => Cause(cause) },
+        Capacity(cause) => "dataset-import-capacity" { "cause" => Cause(cause) },
+        Storage(cause) => "dataset-import-storage" { "cause" => Cause(cause) },
+    }
 }
 impl<E: core::fmt::Display> core::fmt::Display for DatasetImportError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

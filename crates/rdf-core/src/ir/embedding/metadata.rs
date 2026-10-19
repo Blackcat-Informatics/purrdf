@@ -68,8 +68,7 @@ impl CertifiedPurrpckSource {
     /// Structurally opens and independently RDFC-certifies exact `.purrpck`
     /// bytes, then derives their RDF-dataset target.
     pub fn certify(source_bytes: &[u8]) -> Result<Self, EmbeddingError> {
-        let certified = verify_pack(source_bytes)
-            .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+        let certified = verify_pack(source_bytes).map_err(EmbeddingError::source_pack)?;
         let certified_rdf_digest = RdfcDigest::from_raw(*certified.as_bytes());
         let dataset_target = RdfDatasetTarget {
             rdfc_digest: *certified.as_bytes(),
@@ -86,8 +85,7 @@ impl CertifiedPurrpckSource {
 
     /// Builds and certifies a `.purrpck` directly from a frozen RDF dataset.
     pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), EmbeddingError> {
-        let bytes = PackBuilder::build_bytes(dataset)
-            .map_err(|error| EmbeddingError::InvalidSourcePack(error.to_string()))?;
+        let bytes = PackBuilder::build_bytes(dataset).map_err(EmbeddingError::source_pack)?;
         let source = Self::certify(&bytes)?;
         Ok((source, bytes))
     }
@@ -849,8 +847,7 @@ impl ExternalBinding {
         artifact_bytes: &[u8],
         contract: &ExternalBindingContract,
     ) -> Result<Self, EmbeddingError> {
-        let certified = verify_pack(artifact_bytes)
-            .map_err(|error| EmbeddingError::InvalidExternalPack(error.to_string()))?;
+        let certified = verify_pack(artifact_bytes).map_err(EmbeddingError::external_pack)?;
         Self::from_parts(
             scope,
             ContentDigest::of(artifact_bytes),

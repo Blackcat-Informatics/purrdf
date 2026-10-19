@@ -4,6 +4,53 @@
 //! Structured failures for PURREMB encoding, validation, and attachment.
 
 use core::fmt;
+use std::sync::Arc;
+
+/// Original native failure while opening or certifying an exact pack attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmbeddingSourceError {
+    /// The native pack reader or builder refused the attachment.
+    Pack(crate::PackError),
+    /// Importing or freezing the source RDF surface failed natively.
+    Dataset(crate::DatasetMaterializationError),
+    /// Independent canonicalization refused the source dataset.
+    Canonical(crate::CanonError),
+}
+
+purrdf_lex::variant_from!(EmbeddingSourceError {
+    Pack(crate::PackError),
+    Dataset(crate::DatasetMaterializationError),
+    Canonical(crate::CanonError),
+});
+
+impl purrdf_hash::error::StructuredError for EmbeddingSourceError {
+    purrdf_hash::error_visit! {
+        Pack(cause) => "purremb-source-pack" { "cause" => Cause(cause) },
+        Dataset(cause) => "purremb-source-dataset" { "cause" => Cause(cause) },
+        Canonical(cause) => "purremb-source-canonical" { "cause" => Cause(cause) },
+    }
+}
+
+impl fmt::Display for EmbeddingSourceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pack(cause) => cause.fmt(f),
+            Self::Dataset(cause) => cause.fmt(f),
+            Self::Canonical(cause) => cause.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for EmbeddingSourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Pack(cause) => Some(cause),
+            Self::Dataset(cause) => Some(cause),
+            Self::Canonical(cause) => Some(cause),
+        }
+    }
+}
 
 /// A digest or typed identity that failed validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,9 +204,9 @@ pub enum EmbeddingError {
         actual: u64,
     },
     /// The attached exact source bytes are not a structurally valid pack.
-    InvalidSourcePack(String),
+    InvalidSourcePack(Arc<EmbeddingSourceError>),
     /// A certified external binding does not contain a structurally valid pack.
-    InvalidExternalPack(String),
+    InvalidExternalPack(Arc<EmbeddingSourceError>),
     /// A cross-reference names no compatible record.
     MissingReference(&'static str),
     /// Two vector spaces are not semantically comparable.
@@ -240,8 +287,8 @@ impl purrdf_hash::error::StructuredError for EmbeddingError {
         ExternalLengthMismatch { expected, actual } => "purremb-external-length-mismatch" {
             "expected" => ByteCount(u128::from(*expected)), "actual" => ByteCount(u128::from(*actual)),
         },
-        InvalidSourcePack(reason) => "purremb-invalid-source-pack" { "reason" => Text(reason) },
-        InvalidExternalPack(reason) => "purremb-invalid-external-pack" { "reason" => Text(reason) },
+        InvalidSourcePack(cause) => "purremb-invalid-source-pack" { "cause" => Cause(&**cause) },
+        InvalidExternalPack(cause) => "purremb-invalid-external-pack" { "cause" => Cause(&**cause) },
         MissingReference(context) => "purremb-missing-reference" { "context" => Text(context) },
         IncompatibleVectorSpaces => "purremb-incompatible-vector-spaces" {},
         UnavailablePrefix(dimension) => "purremb-unavailable-prefix" { "dimension" => Unsigned(u128::from(*dimension)) },
@@ -351,8 +398,21 @@ impl std::error::Error for EmbeddingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FloatEnvironment(error) => Some(error),
+            Self::InvalidSourcePack(cause) | Self::InvalidExternalPack(cause) => {
+                Some(cause.as_ref())
+            }
             _ => None,
         }
+    }
+}
+
+impl EmbeddingError {
+    pub(super) fn source_pack(cause: impl Into<EmbeddingSourceError>) -> Self {
+        Self::InvalidSourcePack(Arc::new(cause.into()))
+    }
+
+    pub(super) fn external_pack(cause: crate::PackError) -> Self {
+        Self::InvalidExternalPack(Arc::new(cause.into()))
     }
 }
 

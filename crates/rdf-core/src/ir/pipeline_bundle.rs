@@ -297,11 +297,11 @@ pub enum PipelineBundleError {
     /// grown past its ceilings refuses the append rather than publishing a view it
     /// was never admitted to hold.
     AdmissionBreach(RdfDiagnostic),
-    /// Freezing a view carrier's composed surface into one owned dataset failed.
-    /// Raised only at an explicit ownership boundary
-    /// ([`PipelineViewBundle::to_flat_bundle`]); reading a view carrier never
-    /// materializes anything and so can never raise it.
+    /// Composing or projecting a resident RDF surface failed with its diagnostic.
     Materialization(RdfDiagnostic),
+    /// Importing or freezing a view carrier failed at an explicit ownership
+    /// boundary, retaining its original native cause.
+    ViewMaterialization(crate::DatasetMaterializationError),
 }
 
 impl fmt::Display for PipelineBundleError {
@@ -344,6 +344,9 @@ impl fmt::Display for PipelineBundleError {
                 "materializing the composed surface failed: {}",
                 diagnostic.message
             ),
+            Self::ViewMaterialization(cause) => {
+                write!(f, "materializing the composed surface failed: {cause}")
+            }
         }
     }
 }
@@ -352,9 +355,9 @@ impl std::error::Error for PipelineBundleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Canonicalization { source, .. } => Some(source.as_ref()),
-            Self::AdmissionBreach(diagnostic) | Self::Materialization(diagnostic) => {
-                Some(diagnostic)
-            }
+            Self::AdmissionBreach(diagnostic) => Some(diagnostic),
+            Self::Materialization(cause) => Some(cause),
+            Self::ViewMaterialization(cause) => Some(cause),
             _ => None,
         }
     }
@@ -1758,7 +1761,7 @@ impl<H> PipelineViewBundle<H> {
     /// # Errors
     ///
     /// Whatever the view's materialization returns, unchanged.
-    pub fn materialize(&self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    pub fn materialize(&self) -> Result<Arc<RdfDataset>, crate::DatasetMaterializationError> {
         self.view.materialize()
     }
 
@@ -1793,7 +1796,7 @@ impl<H> PipelineViewBundle<H> {
     pub fn into_flat_bundle(self) -> Result<PipelineBundle<H>, PipelineBundleError> {
         let dataset = self
             .materialize()
-            .map_err(PipelineBundleError::Materialization)?;
+            .map_err(PipelineBundleError::ViewMaterialization)?;
         for (graph, entry) in &self.core.handles {
             let actual = try_graph_digest_view(&*dataset, graph)
                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.clone()), source))?;
