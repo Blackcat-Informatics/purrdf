@@ -1735,7 +1735,7 @@ fn dispatch(
     vocab: &GeoVocab,
     args: &[&TermValue],
     decoded: &GeometryArguments<'_, '_>,
-    observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
+    mut observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
 ) -> Result<TermValue, GeoError> {
     match function {
         GeofFunction::Relation(relation) => {
@@ -1749,7 +1749,14 @@ fn dispatch(
         }
         GeofFunction::Relate => {
             let (a, b) = geometry_pair(decoded, args)?;
-            let pattern = Pattern::parse(string_arg(args[2])?)?;
+            let text = match observer.as_mut() {
+                Some(observer) => string_arg_metered(args[2], Some(&mut **observer))?,
+                None => string_arg_metered(args[2], None)?,
+            };
+            let pattern = match observer {
+                Some(observer) => Pattern::parse_metered(text, observer)?,
+                None => Pattern::parse(text)?,
+            };
             let matrix = relate(a.geometry(), b.geometry());
             Ok(TermValue::boolean(matrix.matches(&pattern)))
         }
@@ -1824,12 +1831,15 @@ fn dispatch(
         }
         GeofFunction::GeometryN => {
             let literal = decoded.get(args[0])?;
-            let index = integer_arg(args[1])?;
+            let index = match observer.as_mut() {
+                Some(observer) => integer_arg_metered(args[1], Some(&mut **observer))?,
+                None => integer_arg_metered(args[1], None)?,
+            };
             let member = usize::try_from(index)
                 .ok()
                 .and_then(|n| measure::geometry_n(literal.geometry(), n))
                 .ok_or_else(|| {
-                    missing_member(index, measure::num_geometries(literal.geometry()), None)
+                    missing_member(index, measure::num_geometries(literal.geometry()), observer)
                 })?;
             Ok(wkt_term(
                 &GeometryLiteral::new(literal.crs().clone(), member),
@@ -1884,15 +1894,19 @@ fn dispatch(
             ))
         }
 
-        GeofFunction::Area => unit_measure(decoded, args, measure::area),
+        GeofFunction::Area => unit_measure(decoded, args, measure::area, observer),
         GeofFunction::MetricArea => metric_measure(decoded, args, measure::area),
-        GeofFunction::Length => unit_measure(decoded, args, measure::length),
+        GeofFunction::Length => unit_measure(decoded, args, measure::length, observer),
         GeofFunction::MetricLength => metric_measure(decoded, args, measure::length),
-        GeofFunction::Perimeter => unit_measure(decoded, args, measure::perimeter),
+        GeofFunction::Perimeter => unit_measure(decoded, args, measure::perimeter, observer),
         GeofFunction::MetricPerimeter => metric_measure(decoded, args, measure::perimeter),
         GeofFunction::Distance => {
             let (a, b) = geometry_pair(decoded, args)?;
-            vocab.require_unit(a.crs(), unit_arg(args[2])?)?;
+            let unit = match observer.as_mut() {
+                Some(observer) => unit_arg_metered(args[2], Some(&mut **observer))?,
+                None => unit_arg_metered(args[2], None)?,
+            };
+            vocab.require_unit(a.crs(), unit)?;
             distance_term(&a, &b, observer)
         }
         GeofFunction::MetricDistance => {
@@ -1999,10 +2013,6 @@ fn geometry_pair<'a>(
 ///
 /// [`GeoError::ArgumentInput`] retaining what arrived, for a blank node, a triple term, a
 /// language-tagged literal, or a literal of any other datatype.
-fn unit_arg(value: &TermValue) -> Result<&str, GeoError> {
-    unit_arg_metered(value, None)
-}
-
 fn unit_arg_metered<'a>(
     value: &'a TermValue,
     observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
@@ -2029,10 +2039,6 @@ fn unit_arg_metered<'a>(
 ///
 /// [`GeoError::ArgumentInput`] retaining what arrived, for a non-literal, a literal whose
 /// datatype is not in the XSD integer family, or a lexical form outside `i64`.
-fn integer_arg(value: &TermValue) -> Result<i64, GeoError> {
-    integer_arg_metered(value, None)
-}
-
 fn integer_arg_metered(
     value: &TermValue,
     observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
@@ -2075,10 +2081,6 @@ fn integer_arg_metered(
 ///
 /// [`GeoError::ArgumentInput`] retaining what arrived, for anything that is not a
 /// plain (non-language-tagged) `xsd:string` literal.
-fn string_arg(value: &TermValue) -> Result<&str, GeoError> {
-    string_arg_metered(value, None)
-}
-
 fn string_arg_metered<'a>(
     value: &'a TermValue,
     observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
@@ -2260,11 +2262,12 @@ fn unit_measure(
     decoded: &GeometryArguments<'_, '_>,
     args: &[&TermValue],
     measure: impl Fn(&Geometry) -> Rat,
+    observer: Option<&mut dyn purrdf_geo_kernel::MetricWorkObserver>,
 ) -> Result<TermValue, GeoError> {
     let literal = decoded.get(args[0])?;
     decoded
         .vocab
-        .require_unit(literal.crs(), unit_arg(args[1])?)?;
+        .require_unit(literal.crs(), unit_arg_metered(args[1], observer)?)?;
     Ok(double_term(&measure(literal.geometry())))
 }
 
@@ -2333,7 +2336,7 @@ mod tests {
         use purrdf_testkit::error_capture::Capture;
         let value =
             TermValue::typed_literal("9223372036854775808", purrdf_xsd::datatype::XSD_INTEGER);
-        let error = super::integer_arg(&value).unwrap_err();
+        let error = super::integer_arg_metered(&value, None).unwrap_err();
         assert!(error.is_expression_error());
         drop(value);
         let original = Capture::read(error.original()).child("cause");
@@ -2348,7 +2351,7 @@ mod tests {
             ErrorValue::Code("positive-overflow")
         ));
         assert_eq!(
-            super::integer_arg(&TermValue::integer(i64::MAX)).unwrap(),
+            super::integer_arg_metered(&TermValue::integer(i64::MAX), None).unwrap(),
             i64::MAX
         );
     }
@@ -2398,6 +2401,49 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn scalar_argument_refusals_use_the_dispatchers_original_observer() {
+        #[derive(Default)]
+        struct Refused {
+            requests: usize,
+        }
+        impl purrdf_geo_kernel::MetricWorkObserver for Refused {
+            fn charge_chunk(&mut self, _: u64, _: u64) -> Result<(), GeoError> {
+                Ok(())
+            }
+            fn retain_produced(
+                &mut self,
+                _: core::alloc::Layout,
+                _: &mut dyn purrdf_geo_kernel::RetainedAllocationProducer,
+            ) -> Result<purrdf_lex::allocation::SharedOwned<()>, GeoError> {
+                self.requests += 1;
+                Err(GeoError::Cancelled)
+            }
+        }
+        let vocab = vocab();
+        let geometry = wkt(&vocab, "POINT(1 2)");
+        let parsed = purrdf_geo_kernel::carrier::geometry_arg(&vocab, &geometry).unwrap();
+        let cached = [(&geometry, parsed)];
+        let decoded = super::GeometryArguments {
+            vocab: &vocab,
+            cached: &cached,
+            storage: None,
+        };
+        let bad = TermValue::blank("refused");
+        for (name, args) in [
+            ("geometryN", vec![&geometry, &bad]),
+            ("relate", vec![&geometry, &geometry, &bad]),
+            ("area", vec![&geometry, &bad]),
+            ("distance", vec![&geometry, &geometry, &bad]),
+        ] {
+            let mut observer = Refused::default();
+            let error = super::dispatch(named(name), &vocab, &args, &decoded, Some(&mut observer))
+                .unwrap_err();
+            assert_eq!(error, GeoError::Cancelled, "{name}");
+            assert_eq!(observer.requests, 1, "{name}");
+        }
     }
 
     fn crs(iri: &str) -> Crs {
