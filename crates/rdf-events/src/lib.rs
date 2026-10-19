@@ -403,6 +403,21 @@ impl SourceSpan {
     }
 }
 
+/// An original producer failure retained across the object-safe event seam.
+///
+/// Clones share the same original cause. Equality identifies that shared cause,
+/// without rendering it or assuming equality on arbitrary caller-owned errors.
+#[derive(Clone, Debug)]
+pub struct EventCause(std::sync::Arc<dyn purrdf_hash::error::NativeError>);
+
+impl PartialEq for EventCause {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for EventCause {}
+
 /// The **concrete** ingestion error type. Deliberately not generic: the seam stays
 /// object-safe and the error space is fixed by the protocol (see the module docs).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -461,6 +476,8 @@ pub enum EventError {
     },
     /// The drive-global identifier space is exhausted; no identifier is reused.
     IdSpaceExhausted,
+    /// A producer-specific native failure, retained without rendering it.
+    Native(EventCause),
     /// Any other protocol failure, carried as a message (e.g. a sink-specific freeze
     /// failure surfaced through the seam).
     Message(String),
@@ -473,6 +490,7 @@ impl purrdf_hash::error::StructuredError for EventError {
             "attempted" => Unsigned(*attempted),
             "limit" => Unsigned(*limit),
         },
+        Native(cause) => "event-native" { "cause" => Cause(cause.0.as_ref()) },
         StorageSizeOverflow => "event-storage-size-overflow" {},
         StorageAllocationFailed => "event-storage-allocation-failed" {},
         StorageAdmissionFailed => "event-storage-admission-failed" {},
@@ -515,6 +533,12 @@ impl EventError {
     pub fn message(msg: impl Into<String>) -> Self {
         Self::Message(msg.into())
     }
+
+    /// Retain a producer's complete original cause through the event protocol.
+    /// Construction and inspection do not invoke its human presentation.
+    pub fn native(cause: impl purrdf_hash::error::NativeError + 'static) -> Self {
+        Self::Native(EventCause(std::sync::Arc::new(cause)))
+    }
 }
 
 impl core::fmt::Display for EventError {
@@ -552,12 +576,20 @@ impl core::fmt::Display for EventError {
                 id.0
             ),
             Self::IdSpaceExhausted => f.write_str("event term identifier space exhausted"),
+            Self::Native(cause) => core::fmt::Display::fmt(cause.0.as_ref(), f),
             Self::Message(msg) => f.write_str(msg),
         }
     }
 }
 
-impl std::error::Error for EventError {}
+impl std::error::Error for EventError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Native(cause) => Some(cause.0.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// The permissive ingestion **sink**: a receiver of an RDF 1.2 event stream that an
 /// arbitrary [`RdfEventSource`] drives *into* it.

@@ -65,6 +65,9 @@ use purrdf_events::{
 };
 use purrdf_lex::cbor::Value;
 
+mod error;
+use error::EventRefusal;
+
 use crate::FastMap;
 use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use crate::reader::{FrameContext, ReadOptions, StreamingReadResult, read_to_sink_with_options};
@@ -302,11 +305,11 @@ impl<'s> EventEmitter<'s> {
         direction: Option<&str>,
     ) -> Result<String, EventError> {
         match datatype {
-            Some(dt) => {
-                self.iri_map.get(&dt).cloned().ok_or_else(|| {
-                    EventError::message("GTS literal datatype must resolve to an IRI")
-                })
-            }
+            Some(dt) => self
+                .iri_map
+                .get(&dt)
+                .cloned()
+                .ok_or_else(|| EventError::native(EventRefusal::Datatype { id: dt })),
             None if lang.is_some() => {
                 Ok(purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned())
             }
@@ -327,13 +330,18 @@ fn parse_direction(
     let parsed = match direction {
         None => return Ok(None),
         Some(token) => TextDirection::from_str_token(token).ok_or_else(|| {
-            EventError::message(format!("unrecognized GTS literal base direction {token:?}"))
+            EventError::native(EventRefusal::Direction {
+                token: token.to_owned(),
+            })
         })?,
     };
     if lang.is_none_or(str::is_empty) {
-        return Err(EventError::message(
-            "an RDF 1.2 literal base direction requires a non-empty language tag",
-        ));
+        return Err(EventError::native(EventRefusal::DirectionLanguage {
+            direction: direction
+                .expect("a parsed direction has its original token")
+                .to_owned(),
+            language: lang.map(str::to_owned),
+        }));
     }
     Ok(Some(parsed))
 }
@@ -440,10 +448,16 @@ impl ResolvedSink for EventEmitter<'_> {
         if self.cancelled {
             return Ok(());
         }
-        if g.is_some() {
-            return Err(EventError::message(
-                "graph-scoped reifier cannot be represented on the RdfEventSink protocol (no graph slot)",
-            ));
+        if let Some(graph) = g {
+            return Err(EventError::native(EventRefusal::GraphScoped {
+                operation: "reifier",
+                segment: segment_index,
+                reifier,
+                subject: Some(s),
+                predicate: p,
+                object: o,
+                graph,
+            }));
         }
         if self.sink.reifier(reifier, EventTriple { s, p, o })? == ControlFlow::Break(()) {
             self.cancelled = true;
@@ -463,10 +477,16 @@ impl ResolvedSink for EventEmitter<'_> {
         if self.cancelled {
             return Ok(());
         }
-        if g.is_some() {
-            return Err(EventError::message(
-                "graph-scoped annotation cannot be represented on the RdfEventSink protocol (no graph slot)",
-            ));
+        if let Some(graph) = g {
+            return Err(EventError::native(EventRefusal::GraphScoped {
+                operation: "annotation",
+                segment: segment_index,
+                reifier,
+                subject: None,
+                predicate: p,
+                object: o,
+                graph,
+            }));
         }
         if self.sink.annotation(reifier, p, o)? == ControlFlow::Break(()) {
             self.cancelled = true;
@@ -475,27 +495,32 @@ impl ResolvedSink for EventEmitter<'_> {
     }
 
     fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error {
-        EventError::message(format!(
-            "GTS dangling term reference: segment {segment_index} {role} names undeclared term id {gts_id}"
-        ))
+        EventError::native(EventRefusal::Dangling {
+            segment: segment_index,
+            term: gts_id,
+            role: role.to_owned(),
+        })
     }
 
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error {
-        EventError::message(format!(
-            "GTS quoted-triple nesting limit exceeded resolving segment {segment_index} term id {gts_id}"
-        ))
+        EventError::native(EventRefusal::Nesting {
+            segment: segment_index,
+            term: gts_id,
+        })
     }
 
     fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error {
-        EventError::message(format!(
-            "GTS triple term has no reifier binding: segment {segment_index} term id {gts_id}"
-        ))
+        EventError::native(EventRefusal::UnboundTriple {
+            segment: segment_index,
+            term: gts_id,
+        })
     }
 
     fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> Self::Error {
-        EventError::message(format!(
-            "GTS triple term references missing reifier {reifier} in segment {segment_index}"
-        ))
+        EventError::native(EventRefusal::MissingReifier {
+            segment: segment_index,
+            reifier,
+        })
     }
 
     fn frame(&mut self, ctx: FrameContext<'_>) -> Result<(), Self::Error> {
@@ -590,10 +615,7 @@ impl ResolvedSink for EventEmitter<'_> {
             diag.code.as_str(),
             "PositionConstraint" | "ForwardReference"
         ) {
-            return Err(EventError::message(format!(
-                "GTS dangling term reference ({}): {}",
-                diag.code, diag.detail
-            )));
+            return Err(EventError::native(EventRefusal::Reader(diag.clone())));
         }
         // A frame-scoped diagnostic carries the cached frame provenance; a
         // file-level diagnostic (e.g. `EmptyFile`) carries none.

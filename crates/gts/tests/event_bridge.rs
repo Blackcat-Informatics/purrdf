@@ -9,7 +9,9 @@
 //! them against the offline `reader::read` union graph, plus the id/scope,
 //! provenance, cancellation, and hard-failure contracts.
 
+use purrdf_hash::error::ErrorValue;
 use purrdf_hash::fixed::FixedState;
+use purrdf_testkit::error_capture::{CallerRefusal, Capture};
 use std::collections::HashMap;
 
 use core::ops::ControlFlow;
@@ -129,6 +131,7 @@ struct CollectSink {
     finish_count: usize,
     next_scope: u32,
     break_on_first_quad: bool,
+    term_refusal: Option<EventError>,
     frames: Vec<(Vec<u8>, u64, bool)>,
 }
 
@@ -176,6 +179,9 @@ impl RdfEventSink for CollectSink {
         id: EventTermId,
         term: EventTerm<'_>,
     ) -> Result<ControlFlow<()>, EventError> {
+        if let Some(error) = self.term_refusal.take() {
+            return Err(error);
+        }
         let owned = OwnedTerm::capture(term);
         self.declaration_order.push((id, owned.clone()));
         self.terms.insert(id, owned);
@@ -285,7 +291,6 @@ fn offline_quad_tuple(graph: &Graph, quad: (usize, usize, usize, Option<usize>))
 // -- tests -------------------------------------------------------------------
 
 /// R7-exec: the bridge's resolved quad-set equals the offline `read` union graph.
-#[test]
 fn bridge_events_equal_offline_read() {
     let data = two_segment_rdf_fixture();
 
@@ -314,7 +319,6 @@ fn bridge_events_equal_offline_read() {
 }
 
 /// R7-exec2: the same blank label in two segments resolves to distinct scopes.
-#[test]
 fn per_segment_blank_scopes_are_distinct() {
     let mut a = Writer::new("generic");
     a.add_terms(&[
@@ -426,7 +430,6 @@ fn blob_fixture() -> Vec<u8> {
 
 /// R8-exec: the single-pass `content_id -> offset` index equals the offline
 /// inventory, and a damaged frame surfaces a diagnostic rather than a silent gap.
-#[test]
 fn claimid_offset_index_single_pass() {
     let data = blob_fixture();
 
@@ -474,7 +477,6 @@ fn claimid_offset_index_single_pass() {
 }
 
 /// A successful drive calls `finish` exactly once.
-#[test]
 fn bridge_calls_finish_once() {
     let data = two_segment_rdf_fixture();
     let mut sink = CollectSink::default();
@@ -485,7 +487,6 @@ fn bridge_calls_finish_once() {
 
 /// A `Break` cancels the drive: `stream_events` returns `Ok`, but the sink is
 /// never finalized and its collected output stays incomplete.
-#[test]
 fn bridge_break_cancels_drive() {
     let data = two_segment_rdf_fixture();
     let mut sink = CollectSink {
@@ -502,7 +503,6 @@ fn bridge_break_cancels_drive() {
 }
 
 /// Two drives over the same bytes mint an identical `EventTermId` sequence.
-#[test]
 fn stream_ids_are_file_order_deterministic() {
     let data = two_segment_rdf_fixture();
 
@@ -522,7 +522,6 @@ fn stream_ids_are_file_order_deterministic() {
 
 /// Re-indexing the whole segment(s) a diff fetched yields the same
 /// `content_id -> offset` map as inventorying just those fetched bytes.
-#[test]
 fn incremental_reindex_from_diff_fetch() {
     let mut a = Writer::new("generic");
     a.add_blob(b"local-a", Some("text/plain"), None);
@@ -577,7 +576,6 @@ fn incremental_reindex_from_diff_fetch() {
 
 /// A graph-scoped reifier cannot be carried on the graph-less RDF event
 /// protocol, so the bridge hard-fails rather than dropping the graph.
-#[test]
 fn graph_scoped_reifier_is_hard_error() {
     let mut w = Writer::new("generic");
     w.add_terms(&[
@@ -607,6 +605,168 @@ fn graph_scoped_reifier_is_hard_error() {
         "error names the unrepresentable graph slot: {err}"
     );
     assert_eq!(sink.finish_count, 0, "a failed drive is never finalized");
+    let fields = Capture::read(&err);
+    assert_eq!(fields.code, "event-native");
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "gts-event-graph-scoped");
+    assert!(matches!(
+        cause.field("operation"),
+        ErrorValue::Code("reifier")
+    ));
+    assert!(matches!(cause.field("segment"), ErrorValue::Unsigned(0)));
+    assert!(matches!(cause.field("graph"), ErrorValue::Unsigned(3)));
+}
+
+fn original_sink_refusal_crosses_the_event_bridge_without_rendering() {
+    let expected = EventError::native(CallerRefusal { limit: u128::MAX });
+    let mut sink = CollectSink {
+        term_refusal: Some(expected.clone()),
+        ..CollectSink::default()
+    };
+    let data = two_segment_rdf_fixture();
+    let error = stream_events(&data, ReadOptions::new(true, None), &mut sink).unwrap_err();
+    assert!(error == expected, "the original native owner must survive");
+    assert_eq!(sink.finish_count, 0);
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<CallerRefusal>()
+    );
+    drop(expected);
+    drop(data);
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "event-native");
+    assert_eq!(fields.child("cause").code, "caller-refused");
+    assert!(matches!(
+        fields.child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
+}
+
+fn event_emitter_retains_full_width_resolution_reasons() {
+    use purrdf_gts::segment_decode::ResolvedSink;
+    let mut sink = CollectSink::default();
+    let mut emitter = EventEmitter::new(&mut sink);
+    for (error, code, field) in [
+        (
+            emitter.err_dangling_term(u64::MAX, usize::MAX, "quad object"),
+            "gts-event-dangling",
+            "term",
+        ),
+        (
+            emitter.err_nesting_limit(u64::MAX, usize::MAX),
+            "gts-event-nesting",
+            "term",
+        ),
+        (
+            emitter.err_unbound_triple(u64::MAX, usize::MAX),
+            "gts-event-unbound-triple",
+            "term",
+        ),
+        (
+            emitter.err_missing_reifier(u64::MAX, usize::MAX),
+            "gts-event-missing-reifier",
+            "reifier",
+        ),
+    ] {
+        let fields = Capture::read(&error);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, code);
+        assert!(
+            matches!(cause.field("segment"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+        );
+        assert!(
+            matches!(cause.field(field), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+        );
+        if code == "gts-event-dangling" {
+            assert!(matches!(
+                cause.field("role"),
+                ErrorValue::Text("quad object")
+            ));
+        } else if code == "gts-event-nesting" {
+            assert!(
+                matches!(cause.field("limit"), ErrorValue::Unsigned(value) if value == purrdf_events::MAX_TERM_NESTING_DEPTH as u128)
+            );
+        }
+    }
+    let error = emitter
+        .push_annotation(
+            u64::MAX,
+            EventTermId(1),
+            EventTermId(2),
+            EventTermId(3),
+            Some(EventTermId(u64::MAX)),
+        )
+        .unwrap_err();
+    let fields = Capture::read(&error);
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "gts-event-graph-scoped");
+    assert!(matches!(
+        cause.field("operation"),
+        ErrorValue::Code("annotation")
+    ));
+    assert!(matches!(cause.field("subject"), ErrorValue::Absent));
+    assert!(
+        matches!(cause.field("graph"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+}
+
+fn literal_refusals_keep_original_tokens_and_accept_valid_neighbors() {
+    use purrdf_gts::segment_decode::ResolvedSink;
+    let mut sink = CollectSink::default();
+    let mut emitter = EventEmitter::new(&mut sink);
+    let datatype = emitter
+        .intern_literal(0, 0, "v".into(), Some(EventTermId(u64::MAX)), None, None)
+        .unwrap_err();
+    let fields = Capture::read(&datatype);
+    assert_eq!(fields.child("cause").code, "gts-event-datatype");
+    assert!(
+        matches!(fields.child("cause").field("id"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+    );
+    let direction = emitter
+        .intern_literal(
+            0,
+            0,
+            "v".into(),
+            None,
+            Some("en".into()),
+            Some("sideways".into()),
+        )
+        .unwrap_err();
+    let fields = Capture::read(&direction);
+    assert_eq!(fields.child("cause").code, "gts-event-direction");
+    assert!(matches!(
+        fields.child("cause").field("token"),
+        ErrorValue::Text("sideways")
+    ));
+    for language in [None, Some(String::new())] {
+        let error = emitter
+            .intern_literal(0, 0, "v".into(), None, language.clone(), Some("ltr".into()))
+            .unwrap_err();
+        let fields = Capture::read(&error);
+        let cause = fields.child("cause");
+        assert_eq!(cause.code, "gts-event-direction-language");
+        assert!(matches!(cause.field("direction"), ErrorValue::Text("ltr")));
+        match language {
+            None => assert!(matches!(cause.field("language"), ErrorValue::Absent)),
+            Some(value) => assert!(
+                matches!(cause.field("language"), ErrorValue::Text(original) if original == value)
+            ),
+        }
+    }
+    emitter
+        .intern_literal(
+            0,
+            0,
+            "v".into(),
+            None,
+            Some("en".into()),
+            Some("ltr".into()),
+        )
+        .unwrap();
+    emitter
+        .intern_literal(0, 1, "v".into(), None, None, None)
+        .unwrap();
 }
 
 /// R6-exec2 (real bytes): a quad naming an undeclared segment-local term id,
@@ -627,7 +787,6 @@ fn graph_scoped_reifier_is_hard_error() {
 /// `ForwardReference` sibling) to a hard `EventError`, so the public
 /// `stream_events` byte path fails closed instead of silently finalizing a
 /// sink that never even saw the dropped quad.
-#[test]
 fn dangling_term_ref_real_bytes_is_err() {
     let mut w = Writer::new("generic");
     w.add_terms(&[
@@ -675,6 +834,18 @@ fn dangling_term_ref_real_bytes_is_err() {
         sink.quads.is_empty(),
         "no quad was ever declared to the sink"
     );
+    drop(graph);
+    drop(data);
+    let fields = Capture::read(&err);
+    assert_eq!(fields.code, "event-native");
+    let original = fields.child("cause");
+    assert_eq!(original.code, "gts-event-reader");
+    let diagnostic = original.child("cause");
+    assert_eq!(diagnostic.code, "gts-diagnostic");
+    assert!(matches!(
+        diagnostic.field("code"),
+        ErrorValue::Code("PositionConstraint")
+    ));
 }
 
 /// R6-exec2 (defense in depth): the SAME `SegmentResolver` + `EventEmitter`
@@ -683,7 +854,6 @@ fn dangling_term_ref_real_bytes_is_err() {
 /// the resolver's own no-optionality contract independent of whatever the
 /// raw byte reader happens to filter first. See
 /// `dangling_term_ref_real_bytes_is_err` above for the real-byte-path proof.
-#[test]
 fn dangling_term_ref_is_err() {
     let mut sink = CollectSink::default();
     let mut resolver = SegmentResolver::new(EventEmitter::new(&mut sink));
@@ -757,7 +927,6 @@ fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>,
 /// (`resolve_buffered`) or `iri_map` (`EventEmitter::ensure_scope`) makes
 /// these counts grow with the segment index instead of staying flat, so this
 /// assertion is falsifiable: reverting either clear turns it red.
-#[test]
 fn bounded_memory_across_many_segments() {
     const SEGMENTS: usize = 12;
     const IRIS_PER_SEGMENT: usize = 5;
@@ -827,3 +996,20 @@ fn bounded_memory_across_many_segments() {
          {SEGMENTS} segments"
     );
 }
+
+purrdf_testkit::harness_main!(
+    bridge_events_equal_offline_read,
+    per_segment_blank_scopes_are_distinct,
+    claimid_offset_index_single_pass,
+    bridge_calls_finish_once,
+    bridge_break_cancels_drive,
+    stream_ids_are_file_order_deterministic,
+    incremental_reindex_from_diff_fetch,
+    graph_scoped_reifier_is_hard_error,
+    original_sink_refusal_crosses_the_event_bridge_without_rendering,
+    event_emitter_retains_full_width_resolution_reasons,
+    literal_refusals_keep_original_tokens_and_accept_valid_neighbors,
+    dangling_term_ref_real_bytes_is_err,
+    dangling_term_ref_is_err,
+    bounded_memory_across_many_segments,
+);

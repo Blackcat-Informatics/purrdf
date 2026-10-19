@@ -2281,6 +2281,105 @@ fn file_proof_keeps_original_identity_faults_and_valid_proofs() {
     assert!(matches!(fields.field("actual"), ErrorValue::ByteCount(1)));
 }
 
+fn nested_discovery_keeps_original_limits_and_child_failures() {
+    use purrdf_gts::{
+        nested::{GTS_MEDIA_TYPE, read_nested},
+        wire,
+        writer::Writer,
+    };
+    use purrdf_lex::{assoc, cbor::Value};
+    let child = Writer::new("generic").into_bytes();
+    let mut writer = Writer::new("generic");
+    writer.add_blob(&child, Some(GTS_MEDIA_TYPE), None);
+    let bytes = writer.into_bytes();
+    let digest = purrdf_gts::writer::digest_string(&child);
+    let valid = read_nested(&bytes, 1, child.len());
+    assert_eq!(valid.subgraphs.len(), 1);
+    assert_eq!(valid.diagnostics, []);
+    for (depth, budget, code) in [
+        (0, usize::MAX, "gts-nested-depth"),
+        (1, 0, "gts-nested-decoded-size"),
+    ] {
+        let result = read_nested(&bytes, depth, budget);
+        assert_eq!(result.subgraphs.len(), 0);
+        let diagnostic = result.diagnostics.into_iter().next().unwrap();
+        let fields = Capture::read(&diagnostic);
+        assert_eq!(fields.child("cause").code, code);
+        assert!(
+            matches!(fields.child("cause").field("digest"), ErrorValue::Text(value) if value == digest)
+        );
+        if depth == 0 {
+            assert!(matches!(
+                fields.child("cause").field("depth"),
+                ErrorValue::Unsigned(0)
+            ));
+            assert!(matches!(
+                fields.child("cause").field("limit"),
+                ErrorValue::Unsigned(0)
+            ));
+        } else {
+            assert!(
+                matches!(fields.child("cause").field("actual"), ErrorValue::ByteCount(value) if value == child.len() as u128)
+            );
+            assert!(matches!(
+                fields.child("cause").field("remaining"),
+                ErrorValue::ByteCount(0)
+            ));
+        }
+    }
+
+    let (mut items, torn) = wire::iter_items(&bytes);
+    assert_eq!(torn, None);
+    let frame = items.last_mut().unwrap().1.as_map_mut().unwrap();
+    assoc::insert(frame, Value::from("x"), Value::Array(vec![Value::from(1)]));
+    let id = wire::content_id(frame);
+    assoc::insert(frame, Value::from("id"), Value::Bytes(id));
+    let corrupted: Vec<u8> = items
+        .into_iter()
+        .flat_map(|(_, item)| wire::canonical(&item))
+        .collect();
+    let result = read_nested(&corrupted, 1, usize::MAX);
+    let diagnostic = result
+        .diagnostics
+        .into_iter()
+        .find(|finding| finding.detail.contains("decode failed"))
+        .unwrap();
+    drop(corrupted);
+    let fields = Capture::read(&diagnostic);
+    assert_eq!(fields.child("cause").code, "gts-nested-decode");
+    assert_eq!(
+        fields.child("cause").child("cause").code,
+        "gts-codec-failed"
+    );
+
+    let mut writer = Writer::new("generic");
+    writer.add_blob(&[0xff], Some(GTS_MEDIA_TYPE), None);
+    let bytes = writer.into_bytes();
+    let result = read_nested(&bytes, 1, 1);
+    let diagnostic = result
+        .diagnostics
+        .into_iter()
+        .find(|finding| finding.detail.contains("could not be parsed"))
+        .unwrap();
+    drop(bytes);
+    let retained = diagnostic.clone();
+    drop(diagnostic);
+    let events = Vec::with_capacity(4);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(retained.native_cause().unwrap(), events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "gts-nested-unreadable");
+    let children = fields.records("diagnostics");
+    assert_eq!(children.len(), 1);
+    let child = &children[0];
+    assert_eq!(child.code, "gts-diagnostic");
+    assert!(matches!(child.field("code"), ErrorValue::Code("EmptyFile")));
+    assert_eq!(
+        child.child("cause").child("cause").child("kind").code,
+        "cbor-malformed"
+    );
+}
+
 fn policy_findings_keep_native_counts_identifiers_and_vocabulary() {
     use purrdf_gts::model::{Graph, OpaqueNode, Signature, Term};
     use purrdf_gts::policy::{FILES_NS, TrustPolicy, evaluate_profile_policy};
@@ -2440,6 +2539,7 @@ fn policy_findings_keep_native_counts_identifiers_and_vocabulary() {
 }
 
 purrdf_testkit::harness_main!(
+    nested_discovery_keeps_original_limits_and_child_failures,
     policy_findings_keep_native_counts_identifiers_and_vocabulary,
     reader_preserves_terminal_io_and_sequence_causes,
     replication_callers_keep_native_findings_heads_and_full_width_ranges,

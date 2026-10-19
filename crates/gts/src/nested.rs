@@ -11,6 +11,9 @@ use crate::model::{Diagnostic, Graph};
 use crate::reader::read;
 use crate::wire::map_get;
 
+mod error;
+use error::NestedError;
+
 /// Media type identifying a blob as a nested GTS file (§16).
 pub const GTS_MEDIA_TYPE: &str = "application/vnd.blackcat.gts+cbor-seq";
 
@@ -86,38 +89,55 @@ fn visit(
             continue;
         }
         if depth >= max_depth {
-            graph.diagnostics.push(Diagnostic {
-                cause: None,
-                code: "RecursionLimit".to_string(),
-                detail: format!("nested GTS blob {digest} exceeds max depth {max_depth}"),
-                frame_index: None,
-            });
+            let error = NestedError::Depth {
+                digest,
+                depth,
+                limit: max_depth,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "RecursionLimit".to_string(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
             continue;
         }
         let nested_bytes = match graph.blob_bytes_cloned(&digest) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
             Err(err) => {
-                graph.diagnostics.push(Diagnostic {
-                    cause: None,
-                    code: "DamagedFrame".to_string(),
-                    detail: format!("nested GTS blob {digest} decode failed: {err:?}"),
-                    frame_index: None,
-                });
+                let error = NestedError::Decode { digest, cause: err };
+                graph.diagnostics.push(
+                    Diagnostic {
+                        cause: None,
+                        code: "DamagedFrame".to_string(),
+                        detail: error.to_string(),
+                        frame_index: None,
+                    }
+                    .with_native_cause(error),
+                );
                 continue;
             }
         };
         let nested_len = nested_bytes.len();
         if nested_len > *remaining {
-            graph.diagnostics.push(Diagnostic {
-                cause: None,
-                code: "RecursionLimit".to_string(),
-                detail: format!(
-                    "nested GTS decoded-size budget exceeded at {digest}: {} > {}",
-                    nested_len, *remaining
-                ),
-                frame_index: None,
-            });
+            let error = NestedError::DecodedSize {
+                digest,
+                actual: nested_len,
+                remaining: *remaining,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "RecursionLimit".to_string(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
             continue;
         }
         *remaining -= nested_len;
@@ -131,12 +151,19 @@ fn visit(
             subgraphs,
         );
         if child.segment_heads.is_empty() {
-            graph.diagnostics.push(Diagnostic {
-                cause: None,
-                code: "DamagedFrame".to_string(),
-                detail: format!("nested GTS blob {digest} could not be parsed"),
-                frame_index: None,
-            });
+            let error = NestedError::Unreadable {
+                digest,
+                diagnostics: child.diagnostics,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "DamagedFrame".to_string(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
             continue;
         }
         subgraphs.push((digest, child));

@@ -753,6 +753,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				graph_refusal_keeps_original_invalid_edge_without_rendering \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test structured_errors -- --exact \
+				nested_discovery_keeps_original_limits_and_child_failures \
 				policy_findings_keep_native_counts_identifiers_and_vocabulary \
 				reader_preserves_terminal_io_and_sequence_causes \
 				replication_callers_keep_native_findings_heads_and_full_width_ranges \
@@ -784,6 +785,22 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				codec_native_corruption_and_budget_remain_distinct \
 				ulid_native_counts_and_decoder_causes_are_exact \
 				caller_messages_remain_message_data \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test event_bridge -- --exact \
+				bridge_events_equal_offline_read \
+				per_segment_blank_scopes_are_distinct \
+				claimid_offset_index_single_pass \
+				bridge_calls_finish_once \
+				bridge_break_cancels_drive \
+				stream_ids_are_file_order_deterministic \
+				incremental_reindex_from_diff_fetch \
+				graph_scoped_reifier_is_hard_error \
+				original_sink_refusal_crosses_the_event_bridge_without_rendering \
+				event_emitter_retains_full_width_resolution_reasons \
+				literal_refusals_keep_original_tokens_and_accept_valid_neighbors \
+				dangling_term_ref_real_bytes_is_err \
+				dangling_term_ref_is_err \
+				bounded_memory_across_many_segments \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-gts --test mmr_preimages -- --exact \
 				streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids \
