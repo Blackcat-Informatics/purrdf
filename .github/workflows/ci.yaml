@@ -759,7 +759,9 @@ jobs:
   simd-asm-config:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A cold x86_64-v4 build can consume 30 minutes; retain time to upload its
+    # checked report instead of cancelling immediately after measurement passes.
+    timeout-minutes: 45
     outputs:
       compiler-version: ${{ steps.compiler.outputs.version }}
     strategy:
