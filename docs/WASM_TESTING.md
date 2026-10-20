@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 325 named cases in 53 integration targets,
-with 335 executions across 58 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 326 named cases in 53 integration targets,
+with 336 executions across 58 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
@@ -163,7 +163,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-gts` / `event_bridge` | scalar | All 14 exact cases selected in `make wasm-test` | Executes the public event bridge, original caller and reader causes, full-width resolution fields and literal refusals beside valid neighbors. Preserves original native owners through the event protocol without rendering; also checks cancellation, scopes, deterministic IDs and bounded per-segment state. |
 | `purrdf-deflate` / `deflate_conformance` | scalar | `bad_crc_refused_in_first_and_second_member`, `decompressed_limit_refuses_bomb` | Checks original CRC counts and decompression limits through the actual streaming I/O bridge and its borrowed native cause. |
 | `purrdf-sparql-eval` / `statement_indexes` | scalar + SIMD | `native_and_compact_statement_queries_keep_answers_and_candidate_work`, `named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause` | Compares native and compact statement-query answers and candidate work, and checks named-graph refusal before lazy index allocation with the original cause retained. |
-| `purrdf-datalog` / `rules_runtime` | scalar | Five `triple_` cases and five evaluation-contract cases | Exercises predicate-only keys, original wide host IDs, compiler/chase/proof, immutable Base through retraction, NoOutput, optional derivations, caller-selected arena limits, precise fact admission, interrupted generating rounds and sequential scheduling. |
+| `purrdf-datalog` / `rules_runtime` | scalar | Five `triple_` cases, five evaluation-contract cases and one predicate-row case | Exercises predicate-only keys, original wide host IDs, compiler/chase/proof, immutable Base through retraction, NoOutput, optional derivations, caller-selected arena limits, precise fact admission, interrupted generating rounds, sequential scheduling and numeric per-predicate results. |
 | `purrdf-sparql-eval` / `host_identity` | scalar | The three selected `triple_` cases | Checks typed named-graph refusal before nested/empty shortcuts and actual default-query bags, unbound cells, paths and graph output. |
 | `purrdf-shapes` / `srl_language` | scalar | `triple_carrier_runs_the_public_rl_program_without_quad_storage`, `triple_rl_keeps_statement_roles_and_scoped_blank_identity` | Runs the public compact SRL entry, pins quad-model parity and compact result tables, and preserves scoped blank and statement roles. |
 | `purrdf-text` / `physical_shapes` | scalar | All twenty-one exact cases registered in the original target | Compares dictionary, ordered-window and bucket execution with literal execution, exercises original owner lifetimes and admission refusal, and retains exact bytes and work bounds. |

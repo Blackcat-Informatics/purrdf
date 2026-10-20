@@ -47,6 +47,7 @@ jobs:
         run: |
           cargo test --locked -p purrdf-datalog --lib every_corpus_derivation_yields_a_checkable_proof
           cargo test --locked -p purrdf-datalog --lib sequential_and_parallel_rounds_agree
+          cargo test --locked -p purrdf-datalog --lib store::tests::
 
   wasm:
     runs-on: ubuntu-latest

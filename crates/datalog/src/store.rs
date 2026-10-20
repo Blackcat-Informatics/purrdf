@@ -97,7 +97,7 @@ use std::sync::OnceLock;
 
 use hashbrown::HashTable;
 
-use crate::cursor::{RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
+use crate::cursor::{LendingIterator, RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::dictionary::{
     DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row,
 };
@@ -1155,6 +1155,8 @@ where
         store: &'a RelationStore<D, N>,
         /// Bound RDF positions; only the shape's key coordinates select partitions.
         positions: [Option<D::Id>; N],
+        /// Only the matching predicate's partitions when the predicate is bound.
+        order: &'a [usize],
         /// The next index into the store's lexical partition order.
         next: usize,
     },
@@ -1167,6 +1169,7 @@ where
 /// `Vec` — see [`RelationStore::partitions`].
 pub struct Partitions<'a, D: TermDictionary = TermInterner, const N: usize = 4>(
     PartitionsCursor<'a, D, N>,
+    #[cfg(test)] usize,
 )
 where
     Arity<N>: StoreShape<N>;
@@ -1208,10 +1211,15 @@ where
             PartitionsCursor::Sweep {
                 store,
                 positions,
+                order,
                 next,
             } => {
-                while let Some(&slot) = store.order.get(*next) {
+                while let Some(&slot) = order.get(*next) {
                     *next += 1;
+                    #[cfg(test)]
+                    {
+                        self.1 += 1;
+                    }
                     let (_, key) = store.keys[slot];
                     if Arity::<N>::KEY_POSITIONS.iter().enumerate().all(
                         |(coordinate, &position)| {
@@ -1259,6 +1267,9 @@ where
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
     order: Vec<usize>,
+    /// Predicate identity to its graph partitions, in the same lexical order.
+    /// Never enumerate the hash table; only probe it by an original identity.
+    by_predicate: purrdf_core::FastMap<D::Id, Vec<usize>>,
     /// The number of rows inserted so far across ALL partitions — equivalently, the next
     /// dense [`RowId`] slot to assign. Row ids are minted `0, 1, 2, …` in store-wide
     /// insertion order, so at any point the live rows are exactly `0..row_count`. This
@@ -1282,6 +1293,8 @@ struct RowAdmission<I: TermIdentity> {
     row_id: RowId,
     partition_id: PartitionId,
     new_relation: Relation<I>,
+    /// An admitted directory bucket if this is the predicate's first partition.
+    predicate_bucket: Option<Vec<usize>>,
 }
 
 /// Original subject/object identities and the newly published row, if not a duplicate.
@@ -1323,6 +1336,7 @@ where
             keys: Vec::new(),
             by_key: BTreeMap::new(),
             order: Vec::new(),
+            by_predicate: purrdf_core::FastMap::default(),
             row_count: 0,
             row_log: Vec::new(),
             empty: Relation::default(),
@@ -1379,7 +1393,7 @@ where
         {
             return Ok(None);
         }
-        let admission = self.admit_row(existing)?;
+        let admission = self.admit_row(existing, known[1])?;
         let ordered = Arity::<N>::MINT_ORDER
             .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
@@ -1402,7 +1416,11 @@ where
         Ok(Some(self.publish_row(ids, existing, position, admission)))
     }
 
-    fn admit_row(&mut self, existing: Option<usize>) -> Result<RowAdmission<D::Id>, StorageError> {
+    fn admit_row(
+        &mut self,
+        existing: Option<usize>,
+        predicate: Option<D::Id>,
+    ) -> Result<RowAdmission<D::Id>, StorageError> {
         let row_id = RowId::from_address(self.row_count)?;
         let partition_id = match existing {
             Some(slot) => self.keys[slot].0,
@@ -1417,6 +1435,7 @@ where
             .try_reserve(1)
             .map_err(|_| StorageError::AllocationFailed)?;
         let mut new_relation = Relation::default();
+        let mut predicate_bucket = None;
         if let Some(slot) = existing {
             self.relations[slot].tail.reserve_row()?;
         } else {
@@ -1430,11 +1449,26 @@ where
                 .try_reserve(1)
                 .map_err(|_| StorageError::AllocationFailed)?;
             new_relation.tail.reserve_row()?;
+            if let Some(slots) = predicate.and_then(|id| self.by_predicate.get_mut(&id)) {
+                slots
+                    .try_reserve(1)
+                    .map_err(|_| StorageError::AllocationFailed)?;
+            } else {
+                self.by_predicate
+                    .try_reserve(1)
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                let mut slots = Vec::new();
+                slots
+                    .try_reserve(1)
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                predicate_bucket = Some(slots);
+            }
         }
         Ok(RowAdmission {
             row_id,
             partition_id,
             new_relation,
+            predicate_bucket,
         })
     }
 
@@ -1451,15 +1485,37 @@ where
             row_id,
             partition_id,
             new_relation,
+            predicate_bucket,
         } = admission;
         let slot = if let Some(slot) = existing {
             slot
         } else {
+            let predicate = Arity::<N>::key_term(key, 0);
+            let previous = position
+                .checked_sub(1)
+                .and_then(|index| self.order.get(index))
+                .copied()
+                .filter(|&slot| Arity::<N>::key_term(self.keys[slot].1, 0) == predicate);
             let slot = self.relations.len();
             self.relations.push(new_relation);
             self.keys.push((partition_id, key));
             self.by_key.insert(key, slot);
             self.order.insert(position, slot);
+            let slots = self.by_predicate.entry(predicate).or_insert_with(|| {
+                predicate_bucket.expect("a new predicate's directory bucket was admitted")
+            });
+            let position = previous.map_or(0, |previous| {
+                if slots.last() == Some(&previous) {
+                    slots.len()
+                } else {
+                    slots
+                        .iter()
+                        .position(|&slot| slot == previous)
+                        .expect("the preceding partition belongs to this predicate")
+                        + 1
+                }
+            });
+            slots.insert(position, slot);
             slot
         };
         self.relations[slot].insert(subject_id, object_id, row_id);
@@ -1704,14 +1760,42 @@ where
     /// Match the shape's actual partition coordinates in lexical order, without allocation.
     pub fn partitions_for(&self, positions: [Option<D::Id>; N]) -> Partitions<'_, D, N> {
         if Arity::<N>::known_key(&positions).is_some() {
-            Partitions(PartitionsCursor::Single(self.partition_for(&positions)))
+            Partitions(
+                PartitionsCursor::Single(self.partition_for(&positions)),
+                #[cfg(test)]
+                0,
+            )
         } else {
-            Partitions(PartitionsCursor::Sweep {
-                store: self,
-                positions,
-                next: 0,
-            })
+            Partitions(
+                PartitionsCursor::Sweep {
+                    store: self,
+                    positions,
+                    order: positions[1].map_or(self.order.as_slice(), |predicate| {
+                        self.by_predicate.get(&predicate).map_or(&[], Vec::as_slice)
+                    }),
+                    next: 0,
+                },
+                #[cfg(test)]
+                0,
+            )
         }
+    }
+
+    /// Original rows for one predicate, without scanning other predicates or
+    /// rendering terms. Partitions are lexical; rows use their arrangement order.
+    pub fn rows_for_predicate(
+        &self,
+        predicate: D::Id,
+    ) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
+        let mut positions = [None; N];
+        positions[1] = Some(predicate);
+        self.partitions_for(positions).flat_map(|partition| {
+            let mut cursor = partition.select(Bound::Any);
+            std::iter::from_fn(move || {
+                let (subject, object, row) = cursor.next()?;
+                Some((row, partition.row(subject, object)))
+            })
+        })
     }
 
     /// The partition at a dense slot.
@@ -1841,7 +1925,7 @@ where
             };
             let mut cursor = self.relations[slot].select(Bound::Any);
             core::iter::from_fn(move || {
-                let (subject, object, row) = crate::cursor::LendingIterator::next(&mut cursor)?;
+                let (subject, object, row) = LendingIterator::next(&mut cursor)?;
                 let mut terms = core::array::from_fn(|_| String::new());
                 self.interner.resolve(subject).clone_into(&mut terms[0]);
                 self.interner.resolve(object).clone_into(&mut terms[2]);
@@ -1876,6 +1960,56 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{HostDictionary, SourceLost};
+
+    #[test]
+    fn predicate_directory_skips_other_predicates_and_preserves_graph_order() {
+        for reverse in [false, true] {
+            let mut store = RelationStore::default();
+            let mut rows = (0..100)
+                .flat_map(|predicate| {
+                    ["<z>", "<a>", "<m>"].map(move |graph| {
+                        [
+                            "<s>".to_owned(),
+                            format!("<p{predicate:03}>"),
+                            "<o>".to_owned(),
+                            graph.to_owned(),
+                        ]
+                    })
+                })
+                .collect::<Vec<_>>();
+            if reverse {
+                rows.reverse();
+            }
+            for row in rows {
+                store.insert(&row[0], &row[1], &row[2], &row[3]).unwrap();
+            }
+            let predicate = store.term_id("<p050>").unwrap();
+            let mut partitions = store.partitions(Some(predicate), None);
+            let graphs = partitions
+                .by_ref()
+                .map(|partition| store.interner().resolve(partition.graph()).to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(graphs, ["<a>", "<m>", "<z>"]);
+            assert_eq!(
+                partitions.1, 3,
+                "unrelated predicates must never be examined"
+            );
+            let rows = store.rows_for_predicate(predicate).collect::<Vec<_>>();
+            assert_eq!(rows.len(), 3);
+            assert!(rows.iter().all(|(_, row)| row[1] == predicate));
+            let unknown = store.term_id("<s>").unwrap();
+            let mut absent = store.partitions(Some(unknown), None);
+            assert!(absent.next().is_none());
+            assert_eq!(absent.1, 0);
+            assert_eq!(
+                store
+                    .clone()
+                    .rows_for_predicate(predicate)
+                    .collect::<Vec<_>>(),
+                rows
+            );
+        }
+    }
 
     #[test]
     fn host_store_preserves_ids_and_original_source_refusal() {
@@ -1928,6 +2062,11 @@ mod tests {
             before,
             "actual indexed cursor join performs no lexical access"
         );
+        assert_eq!(store.rows_for_predicate(Q).count(), 1);
+        assert_eq!(
+            store.interner().resolves.load(AtomicOrdering::Relaxed),
+            before
+        );
         assert_eq!(store.interner().lookups.load(AtomicOrdering::Relaxed), 0);
         store.partition_limit = Some(2);
         assert_eq!(store.insert_ids([TRIPLE, Q, 0, GRAPH]).unwrap(), None);
@@ -1959,6 +2098,7 @@ mod tests {
             Err(DictionaryError::Source(SourceLost(17)))
         );
         assert_eq!(store.rows_from(0).collect::<Vec<_>>(), rows);
+        assert_eq!(store.rows_for_predicate(Q).count(), 2);
         assert_eq!(store.partition_count(), 2);
         store.interner().lost.store(true, AtomicOrdering::Relaxed);
         assert_eq!(

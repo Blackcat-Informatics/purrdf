@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
+  visit only that predicate's partitions. `RelationStore::rows_for_predicate`
+  returns original row and term identities for triple and quad stores without
+  rendering terms or scanning other predicates, in lexical partition order.
+
 - **Editor's-draft SHACL law (breaking):** `ShaclProfile::ED_20261016`
   (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at commit
   `4cd469867a1cc6d2fff80e8a40723b26c695d67a`, with XPath 3.1. It is the working
