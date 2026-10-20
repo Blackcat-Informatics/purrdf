@@ -241,21 +241,19 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
 
 test("entailMaterialize's evaluation limits refuse naming this host's arguments", () => {
   const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], []);
-  const stored = BigInt(
-    closed.report
-      .split("\n")
-      .find((line) => line.startsWith("budget stored-facts "))
-      .slice("budget stored-facts ".length),
-  );
-  assert.throws(
-    () => entailMaterialize(SCHEMA, "rdfs", "", [], [], [], stored - 1n),
-    (error) =>
-      error.message.includes("evaluation exceeded the stored-fact limit: ") &&
-      error.message.includes(`${stored - 1n} permitted (the caller's limit)`) &&
-      error.message.endsWith("raise it with entailMaterialize's maxStoredFacts"),
-  );
-  const exact = entailMaterialize(SCHEMA, "rdfs", "", [], [], [], stored);
-  assert.equal(exact.nquads, closed.nquads);
+  for (const [dimension, name, position] of [
+    ["stored-facts", "maxStoredFacts", 0], ["term-arena-bytes", "maxTermArenaBytes", 2],
+  ]) {
+    const prefix = `budget ${dimension} `;
+    const needed = BigInt(closed.report.split("\n").find((line) => line.startsWith(prefix)).slice(prefix.length));
+    const limits = [undefined, undefined, undefined];
+    limits[position] = needed - 1n;
+    assert.throws(() => entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits),
+      (error) => error.message.includes(`${needed}${position === 0 ? " facts" : ""} observed, ${needed - 1n} permitted`) &&
+        error.message.endsWith(`raise it with entailMaterialize's ${name}`));
+    limits[position] = needed;
+    assert.equal(entailMaterialize(SCHEMA, "rdfs", "", [], [], [], ...limits).nquads, closed.nquads);
+  }
   assert.throws(
     () => entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, 1n),
     (error) =>
@@ -314,14 +312,14 @@ test("the conclusion-directed services take the evaluation limits, naming this h
     [entailVerifyEntailment, "entailVerifyEntailment"],
     [entailCertainAnswers, "entailCertainAnswers"],
   ]) {
-    assert.throws(
-      () => service("owl-rl", SCHEMA, conclusion, [], [], [], undefined, 1n),
-      (error) =>
-        error.message.includes("evaluation exceeded the join-step limit: ") &&
-        error.message.endsWith(`raise it with ${name}'s maxJoinSteps`),
-    );
-    const answered = service("owl-rl", SCHEMA, conclusion, [], [], [], 4194304n, 1048576n);
-    assert.match(answered.answer, /^mechanism /);
+    for (const [key, limits] of [["maxJoinSteps", [undefined, 1n]],
+      ["maxTermArenaBytes", [undefined, undefined, 0n]]]) {
+      assert.throws(() => service("owl-rl", SCHEMA, conclusion, [], [], [], ...limits),
+        (error) => error.message.includes("evaluation exceeded") &&
+          error.message.endsWith(`raise it with ${name}'s ${key}`));
+    }
+    assert.match(service("owl-rl", SCHEMA, conclusion, [], [], [],
+      4194304n, 1048576n, 16777216n).answer, /^mechanism /);
   }
 });
 

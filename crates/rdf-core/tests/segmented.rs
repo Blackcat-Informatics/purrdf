@@ -606,6 +606,49 @@ fn corruption_cannot_turn_an_omitted_fact_into_success() {
     );
 }
 
+fn compression_candidates_do_not_allocate_record_count_physical_blocks() {
+    let values: Vec<_> = (0_u64..256)
+        .map(|index| {
+            let text: String = purrdf_testkit::rng::splitmix64_bytes(5120, 0x63600 + index)
+                .into_iter()
+                .map(|byte| char::from(b'a' + byte % 26))
+                .collect();
+            TermValue::simple_literal(text)
+        })
+        .collect();
+    let mut builder = SegmentedBuilder::new(
+        SegmentedBuildLimits::new(1024, 5_000_000, 1, 1_048_576, 256).unwrap(),
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let image = builder.seal().unwrap();
+    let measured = window.close();
+    println!(
+        "large-block candidate image_bytes={} seal_peak_bytes={}",
+        image.bytes().len(),
+        measured.peak_working_bytes
+    );
+    assert!(
+        measured.peak_working_bytes < 64 * 1024 * 1024,
+        "a 1.3-MiB payload must not allocate 256 physical MiB: {measured:?}"
+    );
+    let read = SegmentedSession::open(
+        Arc::new(image.provider()),
+        image.receipt(),
+        SegmentedReadLimits::new(32_000_000, 4, 1000, 1_000_000_000, 8),
+    )
+    .unwrap();
+    for index in [0, 127, 255] {
+        assert_eq!(read.term_value(ids[index]).unwrap(), values[index]);
+        assert_eq!(
+            read.term_id_by_value(&values[index]).unwrap(),
+            Some(ids[index])
+        );
+    }
+}
+
 fn compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace() {
     let paragraph = text_fixture::ARCHIVE_TEXT.repeat(12);
     let archive = |long: bool| {
@@ -1124,6 +1167,7 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 }
 
 purrdf_testkit::harness_main!(
+    compression_candidates_do_not_allocate_record_count_physical_blocks,
     compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace,
     reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot,
     routing_growth_cannot_refuse_an_already_admitted_payload,

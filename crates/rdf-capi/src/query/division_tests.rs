@@ -378,6 +378,7 @@ fn an_entailment_query_runs_under_the_policy() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,

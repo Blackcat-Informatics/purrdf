@@ -296,8 +296,17 @@
  * admission refusal from a malformed shapes graph; error accessors retain the
  * diagnostic. No earlier status is renumbered, and the wildcard-free status test
  * pins the appended value.
+ *
+ * # `0.11.0` → `0.12.0`: caller-controlled regime term arenas
+ *
+ * Seven prototypes gain nullable `const uint64_t *max_term_arena_bytes` after
+ * `max_join_steps`: the four `purrdf_entail_` materialization/conclusion services
+ * and `purrdf_query_entailment_governed` with its XPath and geo variants. This
+ * inserts an argument before existing controls/out-pointers and requires every
+ * affected C caller to rebuild. Null retains the engine default; a supplied
+ * limit is enforced and arena refusals name the actual calling parameter.
  */
-#define PURRDF_ABI_MINOR 11
+#define PURRDF_ABI_MINOR 12
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -1470,7 +1479,8 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `max_stored_facts` bounds the facts each evaluation store may hold and
  * `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
  * `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
- * 1048576 join steps natively — or point at an exact limit. A run past either fails
+ * 1048576 join steps natively — or point at an exact limit. `max_term_arena_bytes`
+ * bounds retained term surfaces, defaulting to 16777216 bytes. A run past a limit fails
  * the call naming the limit, the numbers and the parameter that raises it; a run inside
  * them returns exactly the closure larger limits would, and the report's
  * `contract-hash` names the calculus under the limits in force.
@@ -1491,7 +1501,7 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
  * null or writable.
  */
@@ -1505,6 +1515,7 @@ int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             size_t premise_iri_count,
                                             const uint64_t *max_stored_facts,
                                             const uint64_t *max_join_steps,
+                                            const uint64_t *max_term_arena_bytes,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
                                             PurrdfError **out_error);
@@ -1900,7 +1911,7 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1914,6 +1925,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
                                       size_t premise_iri_count,
                                       const uint64_t *max_stored_facts,
                                       const uint64_t *max_join_steps,
+                                      const uint64_t *max_term_arena_bytes,
                                       PurrdfBuffer **out_answer,
                                       PurrdfBuffer **out_certificate,
                                       PurrdfError **out_error);
@@ -1962,7 +1974,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1976,6 +1988,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
                                     size_t premise_iri_count,
                                     const uint64_t *max_stored_facts,
                                     const uint64_t *max_join_steps,
+                                    const uint64_t *max_term_arena_bytes,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
                                     PurrdfError **out_error);
@@ -2015,7 +2028,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -2029,6 +2042,7 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
                                         size_t premise_iri_count,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
+                                        const uint64_t *max_term_arena_bytes,
                                         PurrdfBuffer **out_answer,
                                         PurrdfBuffer **out_certificate,
                                         PurrdfError **out_error);
@@ -2949,7 +2963,7 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
  * the call. When `import_count` is non-zero, `import_iris` and `import_documents` must
  * each address at least `import_count` non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many.
- * `max_stored_facts` and `max_join_steps` must each be null or readable.
+ * `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or readable.
  */
 int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const char *query,
@@ -2963,6 +2977,7 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          size_t premise_iri_count,
                                          const uint64_t *max_stored_facts,
                                          const uint64_t *max_join_steps,
+                                         const uint64_t *max_term_arena_bytes,
                                          const char *aggregate_namespace,
                                          const PurrdfQueryGovernors *governors,
                                          int32_t *out_outcome,
@@ -3000,6 +3015,7 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
                                                      size_t premise_iri_count,
                                                      const uint64_t *max_stored_facts,
                                                      const uint64_t *max_join_steps,
+                                                     const uint64_t *max_term_arena_bytes,
                                                      const char *aggregate_namespace,
                                                      const char *regex_profile,
                                                      const PurrdfQueryGovernors *governors,
@@ -3161,6 +3177,7 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
                                                   size_t premise_iri_count,
                                                   const uint64_t *max_stored_facts,
                                                   const uint64_t *max_join_steps,
+                                                  const uint64_t *max_term_arena_bytes,
                                                   const char *aggregate_namespace,
                                                   const char *regex_profile,
                                                   const PurrdfQueryGovernors *governors,

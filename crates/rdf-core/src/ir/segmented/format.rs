@@ -375,10 +375,17 @@ pub(super) fn record_block(
         }) {
             return Err(SegmentedError::ConstructionLimit);
         }
-        let expanded = block_bytes
-            .checked_mul(count)
-            .ok_or(SegmentedError::AddressExhausted)?;
-        let (candidate, used) = raw_record_block(&records[..count], expanded)?;
+        let mut previous = &[][..];
+        let mut framed = RECORD_HEADER;
+        for (_, key) in &records[..count] {
+            let prefix = purrdf_deflate::common_prefix_len(previous, key);
+            framed = framed
+                .checked_add(16)
+                .and_then(|bytes| bytes.checked_add(key.len() - prefix))
+                .ok_or(SegmentedError::AddressExhausted)?;
+            previous = key;
+        }
+        let (candidate, used) = raw_record_block(&records[..count], framed)?;
         let payload = usize::try_from(
             read_u32_le(&candidate, 9)
                 .ok_or(SegmentedError::Corrupt("record encoder omitted its header"))?,
@@ -496,6 +503,20 @@ fn record_header(
         return Err(SegmentedError::Corrupt("record decode bound exceeded"));
     }
     Ok((count, decoded, payload))
+}
+
+pub(super) fn decode_memory_bytes(
+    bytes: &[u8],
+    max_records: u32,
+    max_decoded: u64,
+) -> Result<u64, SegmentedError> {
+    let (count, decoded, _) = record_header(bytes, max_records, max_decoded)?;
+    let entry_bytes = u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>())
+        .map_err(|_| SegmentedError::AddressExhausted)?;
+    u64::from(count)
+        .checked_mul(entry_bytes)
+        .and_then(|entries| entries.checked_add(u64::from(decoded)))
+        .ok_or(SegmentedError::AddressExhausted)
 }
 
 pub(super) fn decode_scratch_bytes(

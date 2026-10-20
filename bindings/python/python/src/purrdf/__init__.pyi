@@ -838,6 +838,7 @@ class _QuadStore:
         premise_iris: Sequence[str] | None = ...,
         max_stored_facts: int | None = ...,
         max_join_steps: int | None = ...,
+        max_term_arena_bytes: int | None = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         property_fn_namespaces: list[str] | None = ...,
@@ -2172,10 +2173,11 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
     # document in, canonical flat N-Quads under the shipped profile plus the report out,
-    # under the same two evaluation limits.
+    # under the same three evaluation limits.
     @staticmethod
     def materialize_nt(
         data: str,
@@ -2186,6 +2188,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
@@ -2410,6 +2413,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -2430,6 +2434,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
@@ -2448,6 +2453,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::dataset_view::{
     DatasetView, FallibleDatasetView, GraphMatch, TermGuard, ViewOperationStatus,
+    WorkspaceReservation as _,
 };
 use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
@@ -1101,18 +1102,10 @@ impl SegmentedSession {
         let decoded = encoded
             .checked_mul(records)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let entries = records
-            .checked_mul(
-                u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>())
-                    .map_err(|_| SegmentedError::AddressExhausted)?,
-            )
-            .ok_or(SegmentedError::AddressExhausted)?;
         let overhead = u64::try_from(size_of::<CachedBlock>() + 64)
             .map_err(|_| SegmentedError::AddressExhausted)?;
         let charge = encoded
-            .checked_add(decoded)
-            .and_then(|v| v.checked_add(entries))
-            .and_then(|v| v.checked_add(overhead))
+            .checked_add(overhead)
             .ok_or(SegmentedError::AddressExhausted)?;
         self.make_room(&mut state, charge, true)?;
         if let Err(error) = state.reserve_buffer(ReaderBuffer::Cache {
@@ -1164,12 +1157,23 @@ impl SegmentedSession {
             if digest != self.receipt.root {
                 return Err(SegmentedError::Corrupt("block/index authentication failed"));
             }
-            let scratch_bytes = if in_dictionary {
-                format::decode_scratch_bytes(&bytes, self.header.records_per_block, decoded)?
+            let (decode_bytes, scratch_bytes) = if in_dictionary {
+                (
+                    format::decode_memory_bytes(&bytes, self.header.records_per_block, decoded)?,
+                    format::decode_scratch_bytes(&bytes, self.header.records_per_block, decoded)?,
+                )
             } else {
-                0
+                (0, 0)
             };
-            self.make_room(&mut state, scratch_bytes, false)?;
+            let additional = decode_bytes
+                .checked_add(scratch_bytes)
+                .ok_or(SegmentedError::AddressExhausted)?;
+            self.make_room(&mut state, additional, false)?;
+            reservation.resize(
+                charge
+                    .checked_add(decode_bytes)
+                    .ok_or(SegmentedError::AddressExhausted)?,
+            )?;
             let scratch = self.budget.reserve(scratch_bytes)?;
             let decoded_records = match bytes[0] {
                 format::DICTIONARY if slot != 0 => Some(DecodedRecords::decode(

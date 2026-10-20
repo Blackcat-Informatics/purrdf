@@ -541,6 +541,7 @@ pub(crate) struct ClosureInputs {
     pub(crate) premise_iris: Vec<String>,
     pub(crate) max_stored_facts: Option<u64>,
     pub(crate) max_join_steps: Option<u64>,
+    pub(crate) max_term_arena_bytes: Option<u64>,
 }
 
 /// Everything an operation is built from.
@@ -793,8 +794,11 @@ impl OperationInput<'_> {
                     &closure.premise_iris,
                 )
                 .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
-                let limits =
-                    crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
+                let limits = crate::entail::wasm_limits(
+                    closure.max_stored_facts,
+                    closure.max_join_steps,
+                    closure.max_term_arena_bytes,
+                );
                 let env = governed_env(aggregate_namespace.as_deref())?;
                 let governors = run.governors(
                     ceilings

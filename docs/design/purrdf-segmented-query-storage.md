@@ -52,6 +52,13 @@ key bytes plus sixteen bytes per record. The scratch reservation is released
 before the decoded block enters the cache. Truncated streams, trailing bytes and
 native codec refusals retain their typed `purrdf_deflate::Error` cause.
 
+Before authentication, admission covers the physical page and its control block.
+After authentication, the stored count and decoded-byte fields determine the
+additional cache allocation. The maximum layout product is a validation bound;
+it is never reserved as though every record filled a physical page. Compression
+probes likewise allocate their exact front-coded frame instead of padding one
+physical block per offered record.
+
 Learned routing bounds are cache hints, not required read state. Their index
 grows only from spare capacity, without evicting cached payloads. If growth
 exceeds the live-byte ceiling after a payload is admitted, the reader keeps the
@@ -171,17 +178,17 @@ One native optimized development-profile quick run measured:
 
 | Text | Image bytes | Build peak heap | Certification peak heap | Cold read peak heap | Admitted read peak | Cold forward/reverse provider requests |
 |---|---:|---:|---:|---:|---:|---:|
-| Short | 16,640 | 75,751 | 16,912 | 16,752 | 305,005 | 12 |
-| Repeated prose | 16,640 | 1,032,324 | 359,824 | 272,132 | 1,370,384 | 12 |
-| Lower redundancy | 100,352 | 1,202,715 | 360,656 | 381,459 | 1,480,855 | 144 |
+| Short | 16,640 | 75,751 | 16,912 | 16,752 | 41,412 | 12 |
+| Repeated prose | 16,640 | 885,691 | 359,824 | 272,132 | 1,223,700 | 12 |
+| Lower redundancy | 100,352 | 1,067,803 | 360,656 | 381,459 | 1,222,728 | 144 |
 
 Heap peaks are incremental allocations within each measurement window, not RSS.
 The certification input copy is prepared outside its window; fixture values and
 immutable provider bytes are prepared outside the read window. Warm reverse
 lookup adds no provider requests. Median build times in this quick run were
-93 microseconds, 639 microseconds and 81 milliseconds respectively; ten samples
+131 microseconds, 801 microseconds and 76 milliseconds respectively; ten samples
 on a shared host establish neither stable release timing nor a universal ratio.
-The lower-redundancy build requested 64,920,621 total allocation bytes across
+The lower-redundancy build requested 61,511,493 total allocation bytes across
 candidate encoding attempts despite its much smaller peak. Candidate encoding
 therefore has a measured construction cost; this reader/storage improvement does
 not establish the bounded, caller-owned writer required by the separate writer
@@ -196,3 +203,11 @@ neighbor. It checks exact forward/reverse values, certification, sticky typed
 residency refusal, escaped guards and a warm full-dictionary read with no extra
 provider requests. This authored high-redundancy result does not promise that
 arbitrary long text has the same size as short text.
+
+The maximum-layout regression uses 256 seeded 5120-byte literals with 1 MiB
+pages. Exact-frame compression probes reduce incremental sealing heap peak from
+276,341,234 bytes to 19,960,034 bytes, with a 4,194,560-byte image. Fixture values
+and the mutable builder are prepared outside this window. The sealed image's
+selected forward/reverse values also resolve under a 32,000,000-byte read ceiling; the
+reader admits authenticated decoded sizes instead of reserving the 256 MiB
+layout maximum. These controls do not establish bounded construction or RSS.

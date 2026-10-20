@@ -4,6 +4,14 @@ name: Segmented storage focused tests
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/segmented-storage.yaml
+      - crates/rdf-core/src/ir/segmented/**
+      - crates/rdf-core/tests/segmented.rs
+      - crates/rdf-core/tests/segmented_stack.rs
+      - crates/rdf-core/tests/support/segmented_text.rs
+      - crates/deflate/**
   push:
     branches-ignore: [main]
     paths:
@@ -24,6 +32,8 @@ env:
 
 jobs:
   native:
+    # Same-repository changes already run on push; forks need the PR event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -53,6 +63,7 @@ jobs:
             bounded_virtual_streams_and_empty_graph_declarations_match_resident
 
   wasm:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -84,6 +95,7 @@ jobs:
             indexed_reopen_preserves_high_ids_and_bidirectional_batches \
             rdf12_references_empty_graphs_and_streamed_lines_survive \
             compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace \
+            compression_candidates_do_not_allocate_record_count_physical_blocks \
             cache_eviction_preserves_exact_non_cache_owner_conservation
           cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test segmented_stack -- --exact \
             persisted_layer_row_orders_disagree_after_shared_identity_translation \
