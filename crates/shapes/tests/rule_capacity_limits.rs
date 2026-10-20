@@ -148,7 +148,13 @@ fn arena_refusals_name_a_host_usable_remedy() {
         &InferOptions::default(),
     )
     .unwrap_err();
-    assert_eq!(shapes_error, srl_error);
+    assert_eq!(
+        srl_error.strip_prefix("SPARQL 1.2 RL evaluation failed: "),
+        Some(shapes_error.as_str()),
+    );
+    let expected_bytes =
+        oversized.len() + "<http://example.org/ns#s>".len() + "<http://example.org/ns#p>".len() + 2;
+    assert!(shapes_error.contains(&format!("limit: {expected_bytes} observed,")));
     assert!(shapes_error.contains("term arena bytes limit:"));
     assert!(
         shapes_error
