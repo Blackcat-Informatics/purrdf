@@ -702,6 +702,19 @@ impl fmt::Display for NonDatalogClause {
 
 impl std::error::Error for NonDatalogClause {}
 
+/// One authored step of a positive rule body.
+///
+/// Guards create evaluation barriers: their inputs come from preceding atoms and
+/// guards, and their outputs may constrain subsequent atoms. Negated conjunctions
+/// are attached separately through [`DlClause::with_negations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyLiteral<const N: usize = 4> {
+    /// A positive relation probe.
+    Atom(ClauseAtom<N>),
+    /// Native filtering or caller-defined computation.
+    Guard(Guard),
+}
+
 /// One DL-clause: `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, each `Cᵢ` a conjunction of atoms.
 ///
 /// See the [module docs](self) for the five head forms and for why all five are
@@ -719,9 +732,12 @@ pub struct DlClause<const N: usize = 4> {
     /// The head disjunction `C₁ ∨ … ∨ Cₘ`, in authored order. Empty means the head is
     /// `false`; each disjunct is itself a non-empty conjunction.
     head: Vec<HeadDisjunct<N>>,
-    /// The body's guard literals ([`crate::guard`]), in authored order: evaluated after
-    /// the positive atoms have joined, before any negation is decided.
+    /// The body's guard literals ([`crate::guard`]), in authored order: evaluated at
+    /// explicit barriers, or after all positive atoms when no barriers are present.
     guards: Vec<Guard>,
+    /// Number of authored atoms before each guard in an explicitly ordered body.
+    /// Absent when every guard follows the complete positive join.
+    guard_after: Option<Vec<usize>>,
     /// The body's negated conjunctions ([`crate::guard::Negation`]), in authored order:
     /// decided after the guards, alongside the negated atoms.
     negations: Vec<Negation<N>>,
@@ -805,11 +821,14 @@ impl<const N: usize> DlClause<N> {
             existentials,
             head,
             guards: Vec::new(),
+            guard_after: None,
             negations: Vec::new(),
         }
     }
 
     /// This clause with `guards` as its guard literals, in authored order.
+    /// All supplied guards follow the complete positive join, replacing any ordered
+    /// barriers. Use [`Self::with_ordered_body`] to place guards between atoms.
     ///
     /// # Panics
     ///
@@ -819,8 +838,57 @@ impl<const N: usize> DlClause<N> {
     #[must_use]
     pub fn with_guards(mut self, guards: Vec<Guard>) -> Self {
         self.guards = guards;
+        self.guard_after = None;
         self.assert_scoped();
         self
+    }
+
+    /// Replace the positive body with atoms and guards in authored evaluation order.
+    ///
+    /// A guard output is fresh when the guard runs and may be read by later atoms.
+    /// Atoms between two guards may be reordered by the join planner; no atom may
+    /// cross a guard barrier. Existing negated conjunctions run after this body.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a negated atom, an unbound guard input, a repeated output binding,
+    /// or an existential head variable also bound by this body.
+    #[must_use]
+    pub fn with_ordered_body(mut self, literals: Vec<BodyLiteral<N>>) -> Self {
+        self.body.clear();
+        self.guards.clear();
+        let mut positions = Vec::new();
+        for literal in literals {
+            match literal {
+                BodyLiteral::Atom(atom) => {
+                    assert!(!atom.negated, "an ordered body atom must be positive");
+                    self.body.push(atom);
+                }
+                BodyLiteral::Guard(guard) => {
+                    positions.push(self.body.len());
+                    self.guards.push(guard);
+                }
+            }
+        }
+        self.guard_after = positions
+            .iter()
+            .any(|&position| position != self.body.len())
+            .then_some(positions);
+        self.assert_scoped();
+        let bound = self.bound_variables();
+        for name in &self.existentials {
+            assert!(
+                !bound.contains(name),
+                "existential variable {name} is also bound by the ordered body"
+            );
+        }
+        self
+    }
+
+    /// Authored atom-prefix length at each guard barrier, when guards precede atoms.
+    /// An absent value means every guard follows the complete positive join.
+    pub fn guard_positions(&self) -> Option<&[usize]> {
+        self.guard_after.as_deref()
     }
 
     /// This clause with `negations` as its negated conjunctions, in authored order.
@@ -829,10 +897,10 @@ impl<const N: usize> DlClause<N> {
     ///
     /// Panics if the guards and negations are not SCOPED:
     ///
-    /// * a body guard's input must be bound by a positive body atom or by an EARLIER
-    ///   body guard's output — a guard runs after the positive join, in authored
-    ///   order, so nothing later can have bound it;
-    /// * a body guard's output must be fresh: bound by no positive body atom and by no
+    /// * a body guard's input must be bound by a preceding positive body atom or an
+    ///   earlier body guard's output. With [`Self::with_guards`], every positive atom
+    ///   precedes every guard; [`Self::with_ordered_body`] states explicit barriers;
+    /// * a body guard's output must be fresh: bound by no preceding positive atom or
     ///   earlier guard, or the guard would silently overwrite a join binding;
     /// * inside a negated conjunction, a guard's input must be bound by the enclosing
     ///   rule (positive atoms and body guards), by an atom of the group, or by an
@@ -848,10 +916,16 @@ impl<const N: usize> DlClause<N> {
     /// Check the scoping rule documented on [`Self::with_negations`].
     fn assert_scoped(&self) {
         let mut bound = BTreeSet::new();
-        for atom in self.body.iter().filter(|atom| !atom.negated) {
-            atom.collect_variables(&mut bound);
-        }
-        for guard in &self.guards {
+        let mut consumed = 0;
+        for (position, guard) in self.guards.iter().enumerate() {
+            let end = self
+                .guard_after
+                .as_ref()
+                .map_or(self.body.len(), |positions| positions[position]);
+            for atom in self.body[consumed..end].iter().filter(|atom| !atom.negated) {
+                atom.collect_variables(&mut bound);
+            }
+            consumed = end;
             for input in guard.inputs() {
                 assert!(
                     bound.contains(input),
@@ -866,6 +940,9 @@ impl<const N: usize> DlClause<N> {
                     guard.name()
                 );
             }
+        }
+        for atom in self.body[consumed..].iter().filter(|atom| !atom.negated) {
+            atom.collect_variables(&mut bound);
         }
         for negation in &self.negations {
             let mut scope = bound.clone();
@@ -1038,6 +1115,37 @@ mod tests {
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn ordered_guard_outputs_are_fresh_before_later_atoms_read_them() {
+        let rule = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::assign("key", vec!["?Y".into()], "?K")),
+            BodyLiteral::Atom(atom("?K", Q, "?V")),
+        ]);
+        assert_eq!(rule.guard_positions(), Some([1].as_slice()));
+        assert_eq!(rule.body().len(), 2);
+        assert!(rule.bound_variables().contains("?K"));
+    }
+
+    #[test]
+    #[should_panic(expected = "reads ?K")]
+    fn an_ordered_guard_cannot_read_a_later_atom_binding() {
+        let _ = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::filter("test", vec!["?K".into()])),
+            BodyLiteral::Atom(atom("?K", Q, "?V")),
+        ]);
+    }
+
+    #[test]
+    #[should_panic(expected = "already binds")]
+    fn an_ordered_guard_cannot_overwrite_a_preceding_atom_binding() {
+        let _ = DlClause::datalog(atom("?X", R, "?Y"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::assign("key", vec!["?X".into()], "?Y")),
+        ]);
+    }
     /// The `rdf:type`-shaped predicate a DL concept name lowers through. PurRDF mints no
     /// vocabulary, so the fixture names its own.
     const TYPE: &str = "https://example.org/type";

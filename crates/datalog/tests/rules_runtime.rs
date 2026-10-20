@@ -1953,6 +1953,164 @@ fn conjunctive_heads_settle_at_each_predicates_actual_stratum() {
     assert!(!actual.facts().contains_row(["a", "out", "b"]));
 }
 
+fn triple_pattern(subject: &str, predicate: &str, object: &str) -> ClauseAtom<3> {
+    ClauseAtom::triple(
+        ClauseTerm::var(subject),
+        ClauseTerm::literal(predicate),
+        ClauseTerm::var(object),
+    )
+}
+
+fn ordered_guard_outputs_probe_later_atoms_without_intermediate_relations() {
+    use purrdf_datalog::clause::BodyLiteral::{Atom, Guard as Compute};
+    use purrdf_datalog::store::TermInterner;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Keys {
+        keys: AtomicUsize,
+        labels: AtomicUsize,
+    }
+    impl GuardEvaluator<TermInterner, 3> for Keys {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, TermInterner, 3>,
+        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+            match call.guard.name() {
+                "place" => {
+                    self.keys.fetch_add(1, Ordering::Relaxed);
+                    assert_eq!(call.inputs, ["module", "name"]);
+                    Ok(vec![vec!["module/name".into()], vec!["missing".into()]])
+                }
+                "label" => {
+                    self.labels.fetch_add(1, Ordering::Relaxed);
+                    Ok(vec![vec![format!("label:{}", call.inputs[0])]])
+                }
+                name => panic!("unexpected guard {name}"),
+            }
+        }
+    }
+    let program = compile(vec![
+        DlClause::datalog(triple_pattern("?St", "out", "?Final"), Vec::new()).with_ordered_body(
+            vec![
+                Atom(triple_pattern("?St", "at", "?X")),
+                Atom(triple_pattern("?St", "pstep", "?N")),
+                Compute(Guard::assign("place", vec!["?X".into(), "?N".into()], "?P")),
+                Atom(triple_pattern("?P", "pub", "?Dv")),
+                Compute(Guard::assign("label", vec!["?Dv".into()], "?Label")),
+                Atom(triple_pattern("?Label", "value", "?Final")),
+            ],
+        ),
+    ])
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["step", "at", "module"],
+        ["step", "pstep", "name"],
+        ["module/name", "pub", "one"],
+        ["module/name", "pub", "two"],
+        ["label:one", "value", "first"],
+        ["label:two", "value", "second"],
+        ["unrelated", "pub", "wrong"],
+        ["label:wrong", "value", "unexpected"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    let keys = Keys::default();
+    let result = evaluate_guarded(
+        &program,
+        input,
+        &keys,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.work().committed_facts(), 2);
+    assert!(result.facts().contains_row(["step", "out", "first"]));
+    assert!(result.facts().contains_row(["step", "out", "second"]));
+    assert!(!result.facts().contains_row(["step", "out", "wrong"]));
+    assert!(!result.facts().contains_row(["step", "out", "unexpected"]));
+    assert_eq!(keys.keys.load(Ordering::Relaxed), 1);
+    assert_eq!(keys.labels.load(Ordering::Relaxed), 2);
+    for derivation in result.derivations().unwrap() {
+        assert_eq!(
+            derivation
+                .sources()
+                .iter()
+                .map(|source| source.predicate.as_str())
+                .collect::<Vec<_>>(),
+            ["at", "pstep", "pub", "value"],
+            "guard barriers preserve authored positive provenance",
+        );
+    }
+    let must_run = compile(vec![
+        DlClause::datalog(triple_pattern("?St", "out", "?Dv"), Vec::new()).with_ordered_body(vec![
+            Atom(triple_pattern("?St", "seed", "?X")),
+            Compute(Guard::filter("must-run", vec!["?X".into()])),
+            Atom(triple_pattern("?X", "absent-predicate", "?Dv")),
+        ]),
+    ])
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["step", "seed", "key"]).unwrap();
+    assert!(matches!(
+        evaluate_guarded(&must_run, input, &NoGuards, &EvalOptions::default(), None),
+        Err(seminaive::EvalError::Guard { guard, .. }) if guard == "must-run"
+    ));
+}
+
+fn ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms() {
+    use purrdf_datalog::clause::BodyLiteral::{Atom, Guard as Compute};
+    use purrdf_datalog::store::TermInterner;
+    struct Choose;
+    impl GuardEvaluator<TermInterner, 3> for Choose {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, TermInterner, 3>,
+        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+            Ok(vec![vec![call.inputs[0].into()], vec!["absent-key".into()]])
+        }
+    }
+    let program = compile(vec![
+        DlClause::datalog(triple_pattern("?St", "out", "?Z"), Vec::new()).with_ordered_body(vec![
+            Atom(triple_pattern("?St", "seed", "?X")),
+            Compute(Guard::assign("choose", vec!["?X".into()], "?K")),
+            Atom(triple_pattern("?K", "p", "?Y")),
+            Atom(triple_pattern("?Y", "q", "?Z")),
+            Atom(triple_pattern("?Z", "r", "?K")),
+        ]),
+        DlClause::datalog(triple_pattern("?St", "reach", "?Y"), Vec::new()).with_ordered_body(
+            vec![
+                Atom(triple_pattern("?St", "reach", "?X")),
+                Compute(Guard::assign("choose", vec!["?X".into()], "?K")),
+                Atom(triple_pattern("?K", "next", "?Y")),
+            ],
+        ),
+    ])
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["step", "seed", "a"],
+        ["a", "p", "b"],
+        ["b", "q", "c"],
+        ["c", "r", "a"],
+        ["x", "p", "y"],
+        ["y", "q", "z"],
+        ["z", "r", "x"],
+        ["step", "reach", "a"],
+        ["a", "next", "b"],
+        ["b", "next", "c"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    let result = evaluate_guarded(&program, input, &Choose, &EvalOptions::default(), None).unwrap();
+    assert_eq!(result.work().committed_facts(), 3);
+    assert!(result.facts().contains_row(["step", "out", "c"]));
+    assert!(!result.facts().contains_row(["step", "out", "z"]));
+    assert!(result.facts().contains_row(["step", "reach", "b"]));
+    assert!(result.facts().contains_row(["step", "reach", "c"]));
+}
+
 fn native_inequality_needs_no_callback_and_is_independently_checked() {
     use purrdf_datalog::cache::canonical_rule_hash;
     use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
@@ -2033,13 +2191,7 @@ fn native_inequality_needs_no_callback_and_is_independently_checked() {
 fn native_inequality_in_a_negative_group_uses_the_same_filter() {
     use purrdf_datalog::guard::Negation;
     use purrdf_datalog::store::TermInterner;
-    let atom = |s: &str, p: &str, o: &str| {
-        ClauseAtom::triple(
-            ClauseTerm::var(s),
-            ClauseTerm::literal(p),
-            ClauseTerm::var(o),
-        )
-    };
+    let atom = triple_pattern;
     let rule = DlClause::datalog(atom("?s", "out", "?o"), vec![atom("?s", "seed", "?o")])
         .with_negations(vec![Negation::new(
             vec![atom("?s", "p", "?other")],
@@ -2065,6 +2217,8 @@ fn native_inequality_in_a_negative_group_uses_the_same_filter() {
 purrdf_testkit::harness_main!(
     narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,
     late_delta_seed_completes_under_a_prefix_independent_work_limit,
+    ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms,
+    ordered_guard_outputs_probe_later_atoms_without_intermediate_relations,
     native_inequality_needs_no_callback_and_is_independently_checked,
     native_inequality_in_a_negative_group_uses_the_same_filter,
     conjunctive_recursion_and_factor_projection_match_split_programs,
