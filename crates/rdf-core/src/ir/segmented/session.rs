@@ -2426,8 +2426,11 @@ mod operation_tests {
     #[test]
     fn dictionary_positions_are_bound_to_their_certified_source() {
         let mut images = Vec::new();
-        for width in [180, 80] {
-            let limits = SegmentedBuildLimits::new(20, 20_000, 0, 512, 8)
+        // Fix the two page populations independently of text compression: the
+        // selected ID starts a five-record page but lies inside an eight-record
+        // page that crosses the routing bucket boundary.
+        for (width, records_per_block) in [(180, 5), (80, 8)] {
+            let limits = SegmentedBuildLimits::new(20, 20_000, 0, 512, records_per_block)
                 .unwrap()
                 .with_first_term_index((1_u64 << 54) + 251)
                 .unwrap();
@@ -2462,11 +2465,24 @@ mod operation_tests {
                     .unwrap()
             })
             .collect();
+        // Load a separate page before pinning both cache slots below. Its
+        // unpinned payload must be evicted while its routing bound survives.
+        let other = GlobalTermId::from_index(sessions[0].header.first_term_index).unwrap();
+        drop(sessions[0].resolve(other).unwrap());
         let pins: Vec<_> = sessions
             .iter()
             .zip(&images)
             .map(|(session, (_, id, _))| session.resolve(*id).unwrap())
             .collect();
+        {
+            let state = lock_read_state(&operation.state);
+            let key = CacheKey {
+                snapshot: images[0].0.receipt().snapshot(),
+                slot: sessions[0].header.dictionary.first,
+            };
+            assert!(!state.cache.iter().any(|entry| entry.key == key));
+            drop(state);
+        }
         let before = operation.evidence(()).request_count();
         for index in [0, 1, 0, 1] {
             let (_, id, value) = &images[index];

@@ -200,7 +200,7 @@ integration control additionally carries scoped blanks, quoted triples, reifiers
 annotations, named and explicit empty graphs, and sparse identifiers above 2^54.
 Its 116,288 literal text bytes fit the same 71,680-byte image as its short-text
 neighbor. It checks exact forward/reverse values, certification, sticky typed
-residency refusal, escaped guards and a warm full-dictionary read with no extra
+residency refusal, guards for escaped values and a warm full-dictionary read with no extra
 provider requests. This authored high-redundancy result does not promise that
 arbitrary long text has the same size as short text.
 
