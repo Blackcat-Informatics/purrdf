@@ -76,6 +76,7 @@ use std::fmt;
 use hashbrown::HashTable;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::guard::GuardOperation;
 use crate::id::ProofId;
 use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::Evaluation;
@@ -194,8 +195,28 @@ where
         /// The unbound head variable, as authored.
         variable: String,
     },
-    /// A rule application names a clause carrying guard literals or negated conjunctions
-    /// ([`crate::guard`]). Their truth is caller code the checker has no evaluator for, so
+    /// A native guard reads a variable that its checked premises did not bind.
+    UnboundGuardVariable {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original variable name.
+        variable: String,
+    },
+    /// A native guard rejects the terms established by the checked premises.
+    GuardRejected {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original native operation.
+        operation: GuardOperation,
+        /// Original checked input terms, in declared order.
+        inputs: Box<[String]>,
+    },
+    /// A rule application names a clause carrying callbacks or negated conjunctions
+    /// ([`crate::guard`]). The checker has no interpretation for these, so
     /// it cannot re-derive the step — and it refuses rather than accept a step it did not
     /// check.
     GuardedRule {
@@ -283,6 +304,18 @@ where
                 f,
                 "clause {rule} head variable {variable} is not bound by the checked premises"
             ),
+            Self::UnboundGuardVariable {
+                rule,
+                guard,
+                variable,
+            } => write!(
+                f,
+                "clause {rule} guard {guard} variable {variable} is not bound by the checked premises"
+            ),
+            Self::GuardRejected { rule, guard, .. } => write!(
+                f,
+                "clause {rule} native guard {guard} rejects the checked input terms"
+            ),
             Self::GuardedRule { rule } => write!(
                 f,
                 "clause {rule} carries guard literals, whose truth this checker cannot re-derive"
@@ -331,6 +364,8 @@ where
         PremiseMismatch { rule, body_position, proven } => "datalog-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128), "proven" => Record(proven.as_ref()) },
         NegatedPremiseSatisfied { rule, body_position } => "datalog-proof-negated-premise-satisfied" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128) },
         UnboundHeadVariable { rule, variable } => "datalog-proof-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
+        UnboundGuardVariable { rule, guard, variable } => "datalog-proof-unbound-guard-variable" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "variable" => Text(variable) },
+        GuardRejected { rule, guard, operation, inputs } => "datalog-proof-guard-rejected" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "operation" => Record(operation), "inputs" => List(inputs.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value.as_str()))) },
         GuardedRule { rule } => "datalog-proof-guarded-rule" { "rule" => Unsigned(*rule as u128) },
         GoalMismatch { rule, derived, stated } => "datalog-proof-goal-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Record(derived.as_ref()), "stated" => Record(stated.as_ref()) },
     }
@@ -855,7 +890,12 @@ where
             head,
             heads: heads.len(),
         })?;
-        if clause.is_guarded() {
+        if !clause.negations().is_empty()
+            || clause
+                .guards()
+                .iter()
+                .any(|guard| guard.operation() == GuardOperation::Callback)
+        {
             return Err(ProofError::GuardedRule { rule });
         }
 
@@ -899,6 +939,36 @@ where
                     body_position,
                     proven: Box::new(fact.clone()),
                 });
+            }
+        }
+
+        // Native filters are independently decided from the checked substitution.
+        // The guarded-fragment gate above has already refused caller callbacks.
+        for (position, guard) in clause.guards().iter().enumerate() {
+            let inputs = guard
+                .inputs()
+                .iter()
+                .map(|variable| {
+                    subst.get(variable.as_str()).copied().ok_or_else(|| {
+                        ProofError::UnboundGuardVariable {
+                            rule,
+                            guard: position,
+                            variable: variable.clone(),
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            match guard.operation().filter(&inputs) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(ProofError::GuardRejected {
+                        rule,
+                        guard: position,
+                        operation: guard.operation(),
+                        inputs: inputs.into_iter().map(str::to_owned).collect(),
+                    });
+                }
+                None => unreachable!("caller callbacks were refused before checking premises"),
             }
         }
 

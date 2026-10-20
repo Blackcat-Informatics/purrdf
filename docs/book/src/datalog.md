@@ -55,6 +55,13 @@ did not ask for.
 
 ## Determinism
 
+Use `Guard::not_equal("?left", "?right")` for native term inequality, without a
+callback. It compares exact bound term identity without numeric coercion.
+A caller-defined `Guard::filter("!=", ...)` remains a callback: operation kind,
+not its name, selects native behavior and participates in the clause digest.
+The independent proof checker re-evaluates native top-level filters from the
+checked premises.
+
 - Per-key rows keep insertion order; the arrangement is sorted; no map iteration
   order reaches an output path.
 - Plans are content-addressed by a BLAKE3 digest over the planner version, the

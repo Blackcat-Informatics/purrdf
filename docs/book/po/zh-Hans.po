@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-20T00:37:20-06:00\n"
+"POT-Creation-Date: 2026-10-20T01:01:58-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -23279,10 +23279,10 @@ msgid ""
 "Independent proofs check the selected head ordinal; their version 2 encoding "
 "carries it explicitly."
 msgstr ""
-"半朴素求值器执行原子头和不含存在量词的合取头。多个头共享一次体求值；每条记录的"
-"推导都标明原始子句索引和头序号。递归、因子投影与分层否定使用同一个求值器。"
-"谓词须等到所有生成规则完成后才算完备，即使共享规则提前产生了较高层的头。"
-"独立证明检查所选的头序号；第 2 版编码显式携带这一序号。"
+"半朴素求值器执行原子头和不含存在量词的合取头。多个头共享一次体求值；每条记录"
+"的推导都标明原始子句索引和头序号。递归、因子投影与分层否定使用同一个求值器。"
+"谓词须等到所有生成规则完成后才算完备，即使共享规则提前产生了较高层的头。独立"
+"证明检查所选的头序号；第 2 版编码显式携带这一序号。"
 
 #: src/datalog.md:47
 msgid ""
@@ -23295,11 +23295,11 @@ msgid ""
 "materialization boundary and reports the withholding, rather than inventing "
 "an answer the caller did not ask for."
 msgstr ""
-"存在式头、析取头和假头会被**点名**拒绝。存在形式并不会因这一拒绝而丢失："
-"受限 chase 会消费它，生成按前沿寻址的 Skolem 见证，四个存在式 RDF/"
-"RDFS 模式正是由此触发，规则清单也因此显示为完整。永远不会发生的是替代项泄漏到"
-"答案中——上层的蕴涵层会在物化边界处扣留每一个提及见证的结论，并报告这一扣留，"
-"而不是凭空编造调用方并未要求的答案。"
+"存在式头、析取头和假头会被**点名**拒绝。存在形式并不会因这一拒绝而丢失：受限 "
+"chase 会消费它，生成按前沿寻址的 Skolem 见证，四个存在式 RDF/RDFS 模式正是由"
+"此触发，规则清单也因此显示为完整。永远不会发生的是替代项泄漏到答案中——上层的"
+"蕴涵层会在物化边界处扣留每一个提及见证的结论，并报告这一扣留，而不是凭空编造"
+"调用方并未要求的答案。"
 
 #: src/datalog.md:56
 msgid "Determinism"
@@ -23307,13 +23307,27 @@ msgstr "确定性"
 
 #: src/datalog.md:58
 msgid ""
+"Use `Guard::not_equal(\"?left\", \"?right\")` for native term inequality, "
+"without a callback. It compares exact bound term identity without numeric "
+"coercion. A caller-defined `Guard::filter(\"!=\", ...)` remains a callback: "
+"operation kind, not its name, selects native behavior and participates in "
+"the clause digest. The independent proof checker re-evaluates native top-"
+"level filters from the checked premises."
+msgstr ""
+"使用 `Guard::not_equal(\"?left\", \"?right\")` 可进行原生项不等比较，无需回调。"
+"它精确比较已绑定项的身份，不进行数值强制转换。调用方定义的 "
+"`Guard::filter(\"!=\", ...)` 仍是回调：决定原生行为并参与子句摘要的是操作种类，"
+"而不是名称。独立证明检查器根据已检查的前提重新求值原生顶层过滤器。"
+
+#: src/datalog.md:65
+msgid ""
 "Per-key rows keep insertion order; the arrangement is sorted; no map "
 "iteration order reaches an output path."
 msgstr ""
 "每个键下的行保持插入顺序；arrangement（排布）是已排序的；任何映射的迭代顺序都"
 "不会到达输出路径。"
 
-#: src/datalog.md:60
+#: src/datalog.md:67
 msgid ""
 "Plans are content-addressed by a BLAKE3 digest over the planner version, the "
 "caller's contract hash, and a canonical digest of the clause program. The "
@@ -23324,7 +23338,7 @@ msgstr ""
 "及子句程序的规范摘要。缓存由调用方持有，绝不是进程级全局变量——全局缓存会使答"
 "案依赖于求值历史。"
 
-#: src/datalog.md:64
+#: src/datalog.md:71
 msgid ""
 "Where work is parallelised it uses indexed `par_iter`/`par_chunks` reduced "
 "in source order, never `par_sort` or `par_bridge`, and degrades to inline-"
@@ -23334,15 +23348,15 @@ msgstr ""
 "用 `par_sort` 或 `par_bridge`，并在 `wasm32-unknown-unknown` 上退化为内联顺序"
 "执行。"
 
-#: src/datalog.md:68
+#: src/datalog.md:75
 msgid "Identical input yields byte-identical output, on every target."
 msgstr "相同的输入在每个目标上都产生逐字节相同的输出。"
 
-#: src/datalog.md:70
+#: src/datalog.md:77
 msgid "Limits refuse; they never truncate"
 msgstr "上限只会拒绝，从不截断"
 
-#: src/datalog.md:72
+#: src/datalog.md:79
 msgid ""
 "Three limits bound what every run holds and enumerates. All are caller-"
 "selected through `EvalOptions`, with explicit defaults:"
@@ -23350,79 +23364,79 @@ msgstr ""
 "三个上限约束每一次运行所持有与枚举的内容。调用方通过 `EvalOptions` 选择所有上"
 "限，每项都有明确的默认值："
 
-#: src/datalog.md:75
+#: src/datalog.md:82
 msgid "Limit"
 msgstr "上限"
 
-#: src/datalog.md:75
+#: src/datalog.md:82
 msgid "Bounds"
 msgstr "所约束的对象"
 
-#: src/datalog.md:75
+#: src/datalog.md:82
 msgid "Set with"
 msgstr "设置方式"
 
-#: src/datalog.md:75
+#: src/datalog.md:82
 msgid "Default on `wasm32`"
 msgstr "`wasm32` 上的默认值"
 
-#: src/datalog.md:75
+#: src/datalog.md:82
 msgid "Default elsewhere"
 msgstr "其他平台上的默认值"
 
-#: src/datalog.md:77
+#: src/datalog.md:84
 msgid "join steps"
 msgstr "连接步数"
 
-#: src/datalog.md:77
+#: src/datalog.md:84
 msgid "candidate solutions enumerated"
 msgstr "枚举的候选解"
 
-#: src/datalog.md:77
+#: src/datalog.md:84
 msgid "`EvalOptions::with_max_join_steps`"
 msgstr "`EvalOptions::with_max_join_steps`"
 
-#: src/datalog.md:77
+#: src/datalog.md:84
 msgid "1,048,576"
 msgstr "1,048,576"
 
-#: src/datalog.md:78
+#: src/datalog.md:85
 msgid "stored facts"
 msgstr "存储的事实"
 
-#: src/datalog.md:78
+#: src/datalog.md:85
 msgid "facts seeded or derived"
 msgstr "初始给定或推导出的事实"
 
-#: src/datalog.md:78
+#: src/datalog.md:85
 msgid "`EvalOptions::with_max_stored_facts`"
 msgstr "`EvalOptions::with_max_stored_facts`"
 
-#: src/datalog.md:78
+#: src/datalog.md:85
 msgid "131,072"
 msgstr "131,072"
 
-#: src/datalog.md:78
+#: src/datalog.md:85
 msgid "4,194,304"
 msgstr "4,194,304"
 
-#: src/datalog.md:79
+#: src/datalog.md:86
 msgid "term arena bytes"
 msgstr "项存储区字节数"
 
-#: src/datalog.md:79
+#: src/datalog.md:86
 msgid "interned term surface bytes"
 msgstr "驻留项的词法形式字节数"
 
-#: src/datalog.md:79
+#: src/datalog.md:86
 msgid "`EvalOptions::with_max_term_arena_bytes`"
 msgstr "`EvalOptions::with_max_term_arena_bytes`"
 
-#: src/datalog.md:79
+#: src/datalog.md:86
 msgid "16,777,216"
 msgstr "16,777,216"
 
-#: src/datalog.md:81
+#: src/datalog.md:88
 msgid ""
 "`EvalOptions::without_term_arena_limit` removes the logical surface-byte "
 "ceiling. Actual storage admission still applies. The effective ceiling is "
@@ -23431,7 +23445,7 @@ msgstr ""
 "`EvalOptions::without_term_arena_limit` 移除词法形式字节数的逻辑上限。实际存"
 "储准入仍然适用。预算报告提供有效上限，该值也参与契约哈希。"
 
-#: src/datalog.md:85
+#: src/datalog.md:92
 msgid ""
 "Stored-fact admission checks each unique insertion before changing the "
 "store. On refusal, `BudgetReport::stored_facts` reports the admitted count "
@@ -23442,7 +23456,7 @@ msgstr ""
 "`BudgetReport::stored_facts` 报告已准入的数量，`observed_stored_facts` 报告第"
 "一次被拒绝的插入，恰好多一个。重复候选不再消耗存储事实额度。"
 
-#: src/datalog.md:90
+#: src/datalog.md:97
 msgid ""
 "The stored-fact defaults differ because the memory the store lives in does: "
 "a `wasm32` evaluation shares one linear memory with the rest of its page, "
@@ -23458,7 +23472,7 @@ msgstr ""
 "那里拒绝普通的、会终止的规则集——仅仅是一条把 70,000 条 `ex:p` 三元组逐条复制"
 "到 `ex:q` 的规则。默认值在编译时依据目标架构选定，绝不经由 Cargo feature。"
 
-#: src/datalog.md:98
+#: src/datalog.md:105
 msgid ""
 "The join-step default is the same on every target. Evaluation reserves a "
 "candidate's credit before expanding it, using one round-wide pool; an "
@@ -23474,7 +23488,7 @@ msgstr ""
 "若需要更多候选工作量，调用方必须显式声明该额度（命令行上为 `--max-join-"
 "steps`）。"
 
-#: src/datalog.md:106
+#: src/datalog.md:113
 msgid ""
 "The join-step limit is not what stops a divergent rule. A SHACL shape rule "
 "minting a new focus node every round is re-executed only for the focus nodes "
@@ -23487,7 +23501,7 @@ msgstr ""
 "项生成有独立的防护：新项长度有界时，由生成新项的轮数上限约束；保留的词法形式"
 "增长时，由项存储区上限约束。"
 
-#: src/datalog.md:112
+#: src/datalog.md:119
 msgid ""
 "A limit can only refuse. A run inside its limits returns the program's least "
 "model, the same model under every limit that admits it; a run past one "
@@ -23506,17 +23520,17 @@ msgstr ""
 "决于求值器的计划，因此针对某个版本收得过紧的上限，可能会在下一个版本中拒绝；"
 "留有余量的上限则不会改变一个已完成的答案。"
 
-#: src/datalog.md:122
+#: src/datalog.md:129
 msgid ""
 "There is deliberately no wall-clock budget: it would break both `wasm32` and "
 "reproducibility."
 msgstr "这里刻意没有挂钟时间预算：它会同时破坏 `wasm32` 兼容性与可复现性。"
 
-#: src/datalog.md:125
+#: src/datalog.md:132
 msgid "Model output, proofs and measured work"
 msgstr "模型输出、证明与工作量计数"
 
-#: src/datalog.md:127
+#: src/datalog.md:134
 msgid ""
 "Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set "
 "`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported "
@@ -23532,7 +23546,7 @@ msgstr ""
 "`Some([])`。证明构造以 `ProofError::DerivationsNotRecorded` 拒绝仅有模型的结"
 "果。记录不会改变最小模型、内部规范见证的优先选择或候选计数。"
 
-#: src/datalog.md:135
+#: src/datalog.md:142
 msgid ""
 "`Evaluation::work` separates unique input facts and committed fact "
 "insertions from physical candidate admissions. For an ordinary completed "
@@ -23546,7 +23560,7 @@ msgstr ""
 "报告给出规划器版本，调用方可以比较每个已提交事实对应的候选数。调度撤回可能导"
 "致稍后再次提交同一事实，因此产生另一次提交事件。"
 
-#: src/datalog.md:142
+#: src/datalog.md:149
 msgid ""
 "`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the "
 "direct execution path for one call, without changing a global thread pool. "
@@ -23557,7 +23571,7 @@ msgstr ""
 "择直接执行路径，不改变全局线程池。两种调度策略使用同一个求值器、按程序顺序归"
 "并并排序提交，保持相同的模型和已记录推导。"
 
-#: src/datalog.md:147
+#: src/datalog.md:154
 msgid ""
 "Passing a limit is a **total** refusal, not a truncation. There is no "
 "partial fixpoint to hand back with a note attached, and a truncated closure "

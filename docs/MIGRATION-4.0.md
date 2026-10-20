@@ -16,6 +16,12 @@ Regenerate stored version 1 proof bytes from the original inputs and rule progra
 the decoder refuses their old tag. Planner version 4 also changes content-addressed
 plan identities, causing earlier cached plans to miss and be replanned.
 
+`Guard::not_equal` supplies native term inequality without a callback. Programs
+containing native filters use an operation-tagged version 2 clause identity.
+Unchanged callback-only programs retain their clause and reasoning-contract
+identities. A callback named `!=` keeps its caller-defined meaning and has a
+different identity.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`

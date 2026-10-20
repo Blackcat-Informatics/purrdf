@@ -80,6 +80,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   ordinal; version 1 proof bytes require regeneration. Physical plans use
   planner version 4, invalidating earlier cached plan identities.
 
+- **Native Datalog inequality:** `Guard::not_equal` filters exact bound terms
+  without a caller callback, including inside negated groups. Independent proofs
+  recheck native top-level filters. Programs with native filters use an
+  operation-tagged version 2 clause identity; unchanged callback-only identities
+  remain stable.
+
 - **One exact XSD numeric value API:** public `XsdValue::Integer` and
   `XsdValue::Decimal` carry the exact integer and decimal types at every size.
   The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal

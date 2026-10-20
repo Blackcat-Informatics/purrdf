@@ -58,7 +58,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
-use crate::guard::{Guard, GuardReads};
+use crate::guard::{Guard, GuardOperation, GuardReads};
 use crate::plan::Executable;
 use crate::schedule::Schedule;
 use crate::seminaive::{EvalError, EvalOptions, compile};
@@ -85,18 +85,26 @@ const CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-dl-clause-ir-v
 /// ([`crate::guard`]).
 ///
 /// A guard-free program hashes under [`CLAUSE_IR_DIGEST_TAG`] exactly as it always has,
-/// so no existing digest moves; a guarded one hashes under this tag, and every clause's
+/// so no existing digest moves; a callback-only guarded one hashes under this tag, and every clause's
 /// encoding is then followed by its guard section — a guard count, then per guard its
 /// name, inputs, outputs and read kind, then a negation count, then per negated
 /// conjunction its atoms and guards — framed unconditionally, so within this domain the
 /// encoding is injective too.
 const GUARDED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v1");
 
+/// Programs containing native filters encode every guard's explicit operation kind.
+/// Their separate domain preserves identities of unchanged callback-only programs.
+const NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v2");
+
 /// Graph-free clause identity: no graph term or dataset-kind field is encoded.
 const TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-triple-clause-ir-v1");
 /// The guarded graph-free clause encoding.
 const GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
     Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v1");
+/// The operation-tagged graph-free encoding for programs containing native filters.
+const NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v2");
 
 /// Domain-separation tag for [`scheduled_contract_hash`].
 const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-scheduled-contract-v1");
@@ -191,12 +199,24 @@ fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &Cl
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
     let guarded = rules.iter().any(DlClause::is_guarded);
+    let native = rules.iter().any(|rule| {
+        rule.guards()
+            .iter()
+            .chain(
+                rule.negations()
+                    .iter()
+                    .flat_map(crate::guard::Negation::guards),
+            )
+            .any(|guard| guard.operation() != GuardOperation::Callback)
+    });
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let domain = match (N, guarded) {
-        (3, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (3, true) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (_, true) => GUARDED_CLAUSE_IR_DIGEST_TAG,
-        (_, false) => CLAUSE_IR_DIGEST_TAG,
+    let domain = match (N, guarded, native) {
+        (3, _, true) => NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, _, true) => NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (3, false, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (3, true, false) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, true, false) => GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (_, false, false) => CLAUSE_IR_DIGEST_TAG,
     };
     frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
@@ -222,14 +242,14 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
             }
         }
         if guarded {
-            hash_guards(&mut hasher, rule.guards());
+            hash_guards(&mut hasher, rule.guards(), native);
             hasher.update(&(rule.negations().len() as u64).to_le_bytes());
             for negation in rule.negations() {
                 hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
                 for atom in negation.atoms() {
                     hash_atom(&mut hasher, atom);
                 }
-                hash_guards(&mut hasher, negation.guards());
+                hash_guards(&mut hasher, negation.guards(), native);
             }
         }
     }
@@ -237,9 +257,15 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
 }
 
 /// Hash a guard list: its length, then per guard its name, inputs, outputs and read kind.
-fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
+fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard], native: bool) {
     hasher.update(&(guards.len() as u64).to_le_bytes());
     for guard in guards {
+        if native {
+            hasher.update(&[match guard.operation() {
+                GuardOperation::Callback => 0,
+                GuardOperation::NotEqual => 1,
+            }]);
+        }
         frame_le_into(hasher, guard.name().as_bytes());
         hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
         for input in guard.inputs() {
@@ -1521,6 +1547,15 @@ mod tests {
     #[test]
     fn every_cache_digest_is_frozen() {
         let hex = |digest: &[u8; 32]| purrdf_hash::hex::Lower(digest).to_string();
+        let native: Vec<_> = transitive_step(Q)
+            .into_iter()
+            .map(|clause| clause.with_guards(vec![Guard::not_equal("?s", "?o")]))
+            .collect();
+        assert_eq!(
+            hex(&canonical_rule_hash(&native)),
+            "9de678b4bf5b3c34416eb88788cb7f37dba81fed708a09c953c3fb6a1b9a648b",
+            "the operation-tagged native clause digest moved",
+        );
         assert_eq!(
             hex(&canonical_rule_hash(&transitive_step(Q))),
             "a8d8438226d780583249aa985250add53f899547c92240a145c97c3de0f0d0a0",

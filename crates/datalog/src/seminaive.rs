@@ -3521,9 +3521,13 @@ where
             guard: call.guard.name().to_owned(),
             message,
         };
-        let rows = guards
-            .evaluate(call)
-            .map_err(|error| error.into_eval_error(refuse))?;
+        let rows = match call.guard.operation().filter(call.inputs) {
+            Some(true) => vec![Vec::new()],
+            Some(false) => Vec::new(),
+            None => guards
+                .evaluate(call)
+                .map_err(|error| error.into_eval_error(refuse))?,
+        };
         let width = call.guard.outputs().len();
         for row in &rows {
             if !governor.charge() {
