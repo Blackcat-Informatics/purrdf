@@ -19,12 +19,12 @@ struct Rows<I: TermIdentity> {
     partition: PartitionId,
     position: RowPosition<I>,
     first: bool,
-    pending: Option<RowId>,
+    pending: Option<(I, I, RowId)>,
 }
 
 /// The original partition sweep, including a partition not yet admitted.
 #[derive(Debug)]
-struct Selection<I: TermIdentity, const N: usize>
+pub(super) struct Selection<I: TermIdentity, const N: usize>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -33,6 +33,116 @@ where
     pending: Option<PartitionId>,
     started: bool,
     rows: Option<Rows<I>>,
+    #[cfg(test)]
+    row_visits: u64,
+    #[cfg(test)]
+    partition_visits: u64,
+}
+
+/// Exhaustion and a refused reservation are distinct native scan outcomes.
+#[derive(Debug)]
+pub(super) enum ScanStep<I: TermIdentity, const N: usize> {
+    Matched([I; N], RowId),
+    Paused,
+    Exhausted,
+}
+
+impl<I: TermIdentity, const N: usize> Selection<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Freeze bounds over the original selected source once per probe input.
+    pub(super) fn new<D: TermDictionary<Id = I>>(
+        rel: &RelationStore<D, N>,
+        values: [Option<I>; N],
+    ) -> Self {
+        let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
+            (Some(subject), Some(object)) => Bound::Both(subject, object),
+            (Some(subject), None) => Bound::Subject(subject),
+            (None, Some(object)) => Bound::Object(object),
+            (None, None) => Bound::Any,
+        };
+        Self {
+            partitions: PartitionPosition::new(rel, values),
+            bound,
+            pending: None,
+            started: false,
+            rows: None,
+            #[cfg(test)]
+            row_visits: 0,
+            #[cfg(test)]
+            partition_visits: 0,
+        }
+    }
+
+    /// Group atoms reserve every partition and row; a standalone atom's initial
+    /// probe already reserved its first partition and each partition's first row.
+    pub(super) fn next<const ALL: bool, D: TermDictionary<Id = I>>(
+        &mut self,
+        rel: &RelationStore<D, N>,
+        governor: &mut StepGovernor,
+    ) -> ScanStep<I, N> {
+        loop {
+            if self.rows.is_none() {
+                if self.pending.is_none() {
+                    self.pending = self.partitions.next(rel, None).map(|part| {
+                        #[cfg(test)]
+                        {
+                            self.partition_visits += 1;
+                        }
+                        part.id()
+                    });
+                }
+                let Some(partition) = self.pending else {
+                    return ScanStep::Exhausted;
+                };
+                if (ALL || self.started) && !governor.charge() {
+                    return ScanStep::Paused;
+                }
+                self.started = true;
+                self.rows = Some(Rows {
+                    partition,
+                    position: RowPosition::new(
+                        rel.partition_at(partition.resident_index()).arrangement(),
+                        self.bound,
+                    ),
+                    first: true,
+                    pending: None,
+                });
+                self.pending = None;
+            }
+            let rows = self.rows.as_mut().expect("the partition was admitted");
+            if rows.pending.is_none() {
+                rows.pending = rows.position.next(
+                    rel.partition_at(rows.partition.resident_index())
+                        .arrangement(),
+                );
+                #[cfg(test)]
+                if rows.pending.is_some() {
+                    self.row_visits += 1;
+                }
+            }
+            let Some((subject, object, row)) = rows.pending else {
+                self.rows = None;
+                continue;
+            };
+            if (ALL || !rows.first) && !governor.charge() {
+                return ScanStep::Paused;
+            }
+            rows.first = false;
+            rows.pending = None;
+            return ScanStep::Matched(
+                rel.partition_at(rows.partition.resident_index())
+                    .row(subject, object),
+                row,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn counts(&self) -> (u64, u64) {
+        (self.row_visits, self.partition_visits)
+    }
 }
 
 /// A negative atom's original bounds, native scan and pending admission.
@@ -105,82 +215,27 @@ where
                 }
             }
             if !self.complete {
-                let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
-                    (Some(subject), Some(object)) => Bound::Both(subject, object),
-                    (Some(subject), None) => Bound::Subject(subject),
-                    (None, Some(object)) => Bound::Object(object),
-                    (None, None) => Bound::Any,
-                };
-                self.selection = Some(Selection {
-                    partitions: PartitionPosition::new(rel, values),
-                    bound,
-                    pending: None,
-                    started: false,
-                    rows: None,
-                });
+                self.selection = Some(Selection::new(rel, values));
             }
         }
         while !self.complete {
             let Some(selection) = &mut self.selection else {
                 break;
             };
-            if selection.rows.is_none() {
-                if selection.pending.is_none() {
-                    selection.pending = selection.partitions.next(rel, None).map(|part| {
-                        #[cfg(test)]
-                        {
-                            self.partitions += 1;
-                        }
-                        part.id()
-                    });
+            let step = selection.next::<false, D>(rel, governor);
+            #[cfg(test)]
+            {
+                (self.rows, self.partitions) = selection.counts();
+            }
+            match step {
+                ScanStep::Paused => break,
+                ScanStep::Exhausted => self.complete = true,
+                ScanStep::Matched(_, row) => {
+                    if visit(row)? {
+                        self.found = true;
+                        self.complete = true;
+                    }
                 }
-                let Some(partition) = selection.pending else {
-                    self.complete = true;
-                    break;
-                };
-                if selection.started && !governor.charge() {
-                    break;
-                }
-                selection.started = true;
-                selection.rows = Some(Rows {
-                    partition,
-                    position: RowPosition::new(
-                        rel.partition_at(partition.resident_index()).arrangement(),
-                        selection.bound,
-                    ),
-                    first: true,
-                    pending: None,
-                });
-                selection.pending = None;
-            }
-            let rows = selection.rows.as_mut().expect("the partition was admitted");
-            if rows.pending.is_none() {
-                rows.pending = rows
-                    .position
-                    .next(
-                        rel.partition_at(rows.partition.resident_index())
-                            .arrangement(),
-                    )
-                    .map(|(_, _, row)| {
-                        #[cfg(test)]
-                        {
-                            self.rows += 1;
-                        }
-                        row
-                    });
-            }
-            let Some(row) = rows.pending else {
-                selection.rows = None;
-                continue;
-            };
-            if !rows.first && !governor.charge() {
-                break;
-            }
-            rows.first = false;
-            rows.pending = None;
-            if visit(row)? {
-                self.found = true;
-                self.complete = true;
             }
         }
         rel.interner().check_read().map_err(&source_error)?;

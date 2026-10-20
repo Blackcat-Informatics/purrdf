@@ -7,8 +7,59 @@ use super::{
     EvalError, GuardCall, GuardEvaluator, GuardSite, INLINE_BINDING_SLOTS, RelationStore,
     RuleEntry, SlotSolution, SmallVec, StepGovernor, TermDictionary, TermId, TermIdentity,
 };
-use crate::guard::{CallbackDiagnostic, GuardRows};
+use crate::dictionary::DictionaryTerm;
+use crate::guard::{CallbackDiagnostic, Guard, GuardRows};
 use crate::store::{Arity, StoreShape};
+
+/// Stable invocation metadata; inputs need borrowing only for the original call.
+pub(super) struct Context<'a, D: TermDictionary, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    pub(super) rule: usize,
+    pub(super) site: GuardSite,
+    pub(super) guard: &'a Guard,
+    pub(super) model: &'a RelationStore<D, N>,
+}
+
+impl<D: TermDictionary, const N: usize> Context<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn refuse(&self, message: CallbackDiagnostic) -> EvalError<D::Error> {
+        EvalError::Guard {
+            rule: self.rule,
+            site: self.site,
+            guard: self.guard.name().to_owned(),
+            message,
+        }
+    }
+
+    /// The one built-in/caller dispatch, with the original input borrows.
+    pub(super) fn invoke(
+        &self,
+        guards: &dyn GuardEvaluator<D, N>,
+        inputs: &[DictionaryTerm<'_, D::Id>],
+    ) -> Result<GuardRows<D::Id>, EvalError<D::Error>> {
+        self.model
+            .interner()
+            .check_read()
+            .map_err(EvalError::Source)?;
+        match self.guard.operation().filter(inputs) {
+            Some(true) => Ok(vec![Vec::new()]),
+            Some(false) => Ok(Vec::new()),
+            None => guards
+                .evaluate(&GuardCall {
+                    rule: self.rule,
+                    site: self.site,
+                    guard: self.guard,
+                    inputs,
+                    model: self.model,
+                })
+                .map_err(|error| error.into_eval_error(|message| self.refuse(message))),
+        }
+    }
+}
 
 /// The original returned batch and its next unadmitted row; never an opaque replay.
 #[derive(Debug)]
@@ -43,43 +94,54 @@ impl<I: TermIdentity> Invocation<I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        call.model
+        let context = Context {
+            rule: call.rule,
+            site: call.site,
+            guard: call.guard,
+            model: call.model,
+        };
+        self.advance_with(&context, governor, || context.invoke(guards, call.inputs))
+    }
+
+    /// Prepare inputs only when invoking; a resumed admission reuses the batch.
+    pub(super) fn advance_with<D: TermDictionary<Id = I>, const N: usize>(
+        &mut self,
+        context: &Context<'_, D, N>,
+        governor: &mut StepGovernor,
+        invoke: impl FnOnce() -> Result<GuardRows<I>, EvalError<D::Error>>,
+    ) -> Result<(), EvalError<D::Error>>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        context
+            .model
             .interner()
             .check_read()
             .map_err(EvalError::Source)?;
-        let refuse = |message: CallbackDiagnostic| EvalError::Guard {
-            rule: call.rule,
-            site: call.site,
-            guard: call.guard.name().to_owned(),
-            message,
-        };
         if matches!(self, Self::Uncalled) {
-            let rows = match call.guard.operation().filter(call.inputs) {
-                Some(true) => vec![Vec::new()],
-                Some(false) => Vec::new(),
-                None => guards
-                    .evaluate(call)
-                    .map_err(|error| error.into_eval_error(refuse))?,
+            *self = Self::Returned {
+                rows: invoke()?,
+                next: 0,
             };
-            *self = Self::Returned { rows, next: 0 };
         }
         let Self::Returned { rows, next } = self else {
             unreachable!("the invocation returned its original row batch")
         };
-        let width = call.guard.outputs().len();
+        let width = context.guard.outputs().len();
         for row in rows.iter().skip(*next) {
             if !governor.charge() {
                 break;
             }
             if row.len() != width {
-                return Err(refuse(CallbackDiagnostic::RowWidth {
+                return Err(context.refuse(CallbackDiagnostic::RowWidth {
                     actual: row.len(),
                     expected: width,
                 }));
             }
             *next += 1;
         }
-        call.model
+        context
+            .model
             .interner()
             .check_read()
             .map_err(EvalError::Source)

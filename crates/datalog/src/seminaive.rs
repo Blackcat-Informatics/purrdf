@@ -89,6 +89,7 @@ mod evidence;
 mod factors;
 mod guards;
 mod join;
+mod negation;
 mod negative;
 mod ordered;
 pub use evidence::NegationScope;
@@ -2731,7 +2732,8 @@ where
     }
 }
 
-/// Evidence accumulated by the original conjunction search, without replaying it.
+/// Independent recursive test oracle; shipping execution uses the owned heap DFS.
+#[cfg(test)]
 struct GroupEvidence<'a, D: TermDictionary = TermInterner, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
@@ -2816,6 +2818,8 @@ where
 {
     /// Whether the group HOLDS under `probe.solution`: some extension of its local
     /// variables matches every atom and passes every guard.
+    /// Retained only as an independent oracle for the owned production search.
+    #[cfg(test)]
     fn holds<D: TermDictionary>(
         &self,
         probe: GroupProbe<'_, D, N>,
@@ -2847,36 +2851,10 @@ where
         governor: &mut StepGovernor,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        let Some(owner) = evidence.as_deref_mut() else {
-            return Ok((self.holds(probe, governor)?, None));
-        };
-        let mut trace = Some(GroupEvidence {
-            owner,
-            current: purrdf_core::evidence::EvidenceId::DEFAULT,
-            witnesses: None,
-        });
-        if governor.charge() {
-            let mut locals = vec![None; self.locals];
-            self.match_atom(0, probe, &mut locals, governor, &mut trace)?;
-        }
-        let trace = trace.expect("the original search retains its evidence owner");
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        let (id, blocked) = trace.owner.negative(trace.witnesses)?;
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        Ok((blocked, Some(id)))
+        let mut frame = negation::Frame::new(evidence.is_some());
+        frame.advance(self, probe, governor, evidence)?;
+        debug_assert!(frame.is_complete() || governor.spent());
+        Ok(frame.outcome())
     }
 
     /// The store probe value of `arg` under the current bindings.
@@ -2907,6 +2885,7 @@ where
     }
 
     /// Match atom `k` onward.
+    #[cfg(test)]
     fn match_atom<D: TermDictionary>(
         &self,
         k: usize,
@@ -3004,6 +2983,7 @@ where
     }
 
     /// Evaluate guard `j` onward, every atom having matched.
+    #[cfg(test)]
     fn match_guard<D: TermDictionary>(
         &self,
         j: usize,
@@ -3105,6 +3085,7 @@ where
 /// [`EvalError::Guard`] when the evaluator reports an error, or answers a row whose
 /// width is not the guard's output count — a malformed answer is not read as some
 /// answer.
+#[cfg(test)]
 fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
