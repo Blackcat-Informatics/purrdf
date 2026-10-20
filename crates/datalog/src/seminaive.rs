@@ -28,7 +28,7 @@
 //!
 //! - the **indexed binary join** (the fallback, and the only path for an acyclic body):
 //!   each planned atom, in sideways-information-passing order, extends the partial
-//!   solutions by selecting exactly the rows its [`IndexChoice`] admits;
+//!   solutions by selecting exactly the rows its [`crate::plan::IndexChoice`] admits;
 //! - the **leapfrog triejoin**: for a planner-certified cyclic component, a multiway
 //!   intersection descends the component's variables through the same galloping
 //!   positions as [`crate::cursor::ValueCursor`], so no binary intermediate relation is
@@ -87,6 +87,7 @@ mod atom;
 mod cycle;
 mod evidence;
 mod factors;
+mod join;
 pub use evidence::NegationScope;
 use std::fmt;
 use std::sync::{
@@ -109,8 +110,8 @@ use purrdf_lex::allocation::StorageError;
 
 pub use crate::plan::Executable;
 use crate::plan::{
-    AtomOperator, AtomShape, CyclicPlan, IndexChoice, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT,
-    Parsed, PositionPlan, RulePlan, predicate_symbol,
+    AtomOperator, AtomShape, CyclicPlan, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT, Parsed,
+    PositionPlan, RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
@@ -1875,7 +1876,7 @@ where
     /// One slot per plan variable, `None` until an atom binds it.
     ///
     /// Inline rather than heap. This frame is CLONED once per surviving candidate row
-    /// in [`extend_atom`], so a heap frame is one allocation per intermediate solution
+    /// in the indexed atom frame, so a heap frame is one allocation per intermediate solution
     /// — the join's most frequent allocation by a wide margin, and one the evaluator
     /// paid unconditionally.
     ///
@@ -2061,45 +2062,15 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    match scan {
-        Scan::Delta => extend_slot_operator::<SCAN_DELTA, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::Full => extend_slot_operator::<SCAN_FULL, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::OldOnly => extend_slot_operator::<SCAN_OLD_ONLY, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
-}
-
-/// Dispatch one operator to its statically-shaped index kernel.
-fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
-    operator: &AtomOperator<N>,
-    rel: &RelationStore<D, N>,
-    delta: Delta,
-    indexes: &DeltaIndexes<D::Id>,
-    solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    match operator.index() {
-        IndexChoice::Any => {
-            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, indexes, solutions, governor)
-        }
-        IndexChoice::Subject => extend_atom::<SCAN, INDEX_SUBJECT, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        IndexChoice::Object => extend_atom::<SCAN, INDEX_OBJECT, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        IndexChoice::Both => extend_atom::<SCAN, INDEX_BOTH, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
+    extend_selected_atom(
+        operator,
+        rel,
+        delta,
+        indexes,
+        atom::Access::Planned(scan),
+        solutions,
+        governor,
+    )
 }
 
 /// Probe a physically reordered atom while retaining its logical scan ordinal.
@@ -2115,36 +2086,24 @@ fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    match scan {
-        Scan::Delta => extend_atom::<SCAN_DELTA, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::Full => extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::OldOnly => extend_atom::<SCAN_OLD_ONLY, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
+    extend_selected_atom(
+        operator,
+        rel,
+        delta,
+        indexes,
+        atom::Access::Rebound(scan),
+        solutions,
+        governor,
+    )
 }
 
-/// The shared atom kernel: address the partitions the predicate and optional graph
-/// admit, and inside each one select exactly the rows the `(subject, object)` index admits.
-///
-/// The two halves are independent, which is the whole performance argument. `INDEX` is a
-/// monomorphization parameter, so the subject/object access path is decided at compile
-/// time and is the SAME path a predicate-keyed store would have taken. The partition half
-/// is a single ordered-map probe whenever the predicate and graph are known
-/// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
-/// names its predicate — and only degrades to a sweep of matching partitions when the rule
-/// genuinely quantifies over the predicate or the graph.
-/// Reordered delta probes use `INDEX_REBOUND`: the same kernel binds against the
-/// current frame and selects the subject/object arrangement from those bindings.
-fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usize>(
+/// Drive one original native atom frame through the shared mode dispatch.
+fn extend_selected_atom<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
+    access: atom::Access,
     solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -2152,7 +2111,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     let mut frame = atom::Frame::new(operator, rel, solutions)?;
-    frame.advance::<SCAN, INDEX, D>(operator, rel, delta, indexes, governor)?;
+    frame.advance_selected(operator, rel, delta, indexes, access, governor)?;
     // The existing round owner observes this same refusal flag and returns no
     // complete model. The resumable owner retains the frame instead of dropping it.
     debug_assert!(frame.is_complete() || governor.spent());
@@ -2440,36 +2399,10 @@ fn join_body<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    snapshot.rel.interner().check_read()?;
-    let owned_counts = if full_counts.is_none() {
-        Some(constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?)
-    } else {
-        None
-    };
-    let full_counts = full_counts
-        .or(owned_counts.as_deref())
-        .expect("the join's metadata advice was prepared");
-    let leapfrog = plan.has_cyclic_subplan()
-        && matches!(strategy, JoinStrategy::Planned)
-        && plan.operators().iter().all(|operator| {
-            operator.shape().read_source() == crate::clause::ReadSource::Evaluation
-        });
-    let joined = if plan.positive().is_empty() {
-        // The empty conjunction is relational identity: one empty substitution, so an
-        // unconditional or NAF-only rule fires exactly once. Its head is suppressed on the
-        // following round by the store's own membership test.
-        if governor.charge() {
-            Ok(vec![SlotSolution::empty(plan.variables().len())])
-        } else {
-            Ok(Vec::new())
-        }
-    } else if leapfrog {
-        join_positive_leapfrog(plan, snapshot, governor)
-    } else {
-        join_positive_binary(plan, snapshot, governor, full_counts)
-    }?;
-    snapshot.rel.interner().check_read()?;
-    Ok(joined)
+    let mut frame = join::Frame::new(plan, snapshot, strategy, full_counts)?;
+    frame.advance(plan, snapshot, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 /// What a positive join reads: the accumulated store and the delta it is decomposed over.
@@ -2552,194 +2485,6 @@ where
         .select_partitions(positions, run)
         .next()
         .is_some())
-}
-
-/// The indexed binary positive join. Partial deltas seed each decomposition
-/// before the remaining planned operators; logical scan ordinals stay fixed.
-fn join_positive_binary<D: TermDictionary, const N: usize>(
-    plan: &RulePlan<N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
-    full_counts: &[Option<usize>],
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    snapshot.rel.interner().check_read()?;
-    let operators = plan.operators();
-    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
-    let base = operators
-        .iter()
-        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
-    let anchors = if base {
-        0..1
-    } else {
-        snapshot.delta_positions(operators.len())
-    };
-    for delta_position in anchors {
-        if !base && !delta_can_match(&operators[delta_position], snapshot)? {
-            continue;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
-        let seed = if reordered {
-            decomposition_seed(plan, snapshot, delta_position, full_counts)?
-        } else {
-            delta_position
-        };
-        let order = [seed, delta_position]
-            .into_iter()
-            .enumerate()
-            .filter(|&(index, position)| reordered && (index == 0 || position != seed))
-            .map(|(_, position)| position)
-            .chain((0..operators.len()).filter(|&position| {
-                !reordered || (position != seed && position != delta_position)
-            }));
-        for position in order {
-            let extend = if reordered {
-                extend_rebound_solutions
-            } else {
-                extend_slot_solutions
-            };
-            partial = extend(
-                &operators[position],
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                if base {
-                    Scan::Full
-                } else {
-                    scan_for(position, delta_position)
-                },
-                partial,
-                governor,
-            )?;
-            if partial.is_empty() {
-                break;
-            }
-        }
-        if reordered {
-            for solution in &mut partial {
-                solution
-                    .sources
-                    .sort_unstable_by_key(|source| source.body_index);
-            }
-        } else {
-            for solution in &mut partial {
-                for &(left, right) in plan.operator_source_order_swaps() {
-                    solution.sources.swap(left, right);
-                }
-            }
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    snapshot.rel.interner().check_read()?;
-    Ok(all)
-}
-
-/// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, seeded by the partial delta before old
-/// prefixes. Cyclic components keep their certified leapfrog traversal.
-fn join_positive_leapfrog<D: TermDictionary, const N: usize>(
-    plan: &RulePlan<N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
-    for delta_position in snapshot.delta_positions(plan.positive().len()) {
-        if !delta_can_match(plan.operator_at(delta_position), snapshot)? {
-            continue;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
-        let seed_in_cycle = reordered && plan.join_groups().iter().any(|group| {
-            matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == delta_position))
-        });
-        if reordered {
-            partial = extend_rebound_solutions(
-                plan.operator_at(delta_position),
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                Scan::Delta,
-                partial,
-                governor,
-            )?;
-        }
-        for group in plan.join_groups() {
-            if reordered
-                && matches!(group, JoinGroup::Binary(atom) if atom.positive_position() == delta_position)
-            {
-                continue;
-            }
-            if partial.is_empty() || governor.spent() {
-                partial.clear();
-                break;
-            }
-            partial = match group {
-                JoinGroup::Binary(planned) => {
-                    let operator = plan.operator_at(planned.positive_position());
-                    let extend = if reordered {
-                        extend_rebound_solutions
-                    } else {
-                        extend_slot_solutions
-                    };
-                    extend(
-                        operator,
-                        snapshot.rel,
-                        snapshot.delta,
-                        snapshot.indexes,
-                        scan_for(planned.positive_position(), delta_position),
-                        partial,
-                        governor,
-                    )?
-                }
-                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    &LeapfrogRun {
-                        plan,
-                        cycle,
-                        scan: JoinScan::DeltaPosition(delta_position),
-                        rel: snapshot.rel,
-                        delta: snapshot.delta,
-                        indexes: snapshot.indexes,
-                    },
-                    partial,
-                    governor,
-                )?,
-            };
-            if partial.is_empty() {
-                break;
-            }
-        }
-        for solution in &mut partial {
-            if seed_in_cycle {
-                // The seed fixes bindings before any old prefix. The original
-                // group still captures its source in the authored group order.
-                solution.sources.remove(0);
-            }
-            if reordered {
-                solution
-                    .sources
-                    .sort_unstable_by_key(|source| source.body_index);
-            } else {
-                for &(left, right) in plan.hybrid_source_order_swaps() {
-                    solution.sources.swap(left, right);
-                }
-            }
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    snapshot.rel.interner().check_read()?;
-    Ok(all)
 }
 
 // ── Per-rule runtime shapes ─────────────────────────────────────────────────────
@@ -5732,15 +5477,16 @@ mod tests {
                 hi: store.row_count(),
             };
             let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
-            let solutions = join_positive_binary(
+            let solutions = join_body(
                 plan,
                 JoinSnapshot {
                     rel: &store,
                     delta,
                     indexes: &indexes,
                 },
+                JoinStrategy::ForcedBinary,
                 &mut governor,
-                &constant_pattern_counts(plan, &store, delta).unwrap(),
+                Some(&constant_pattern_counts(plan, &store, delta).unwrap()),
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
