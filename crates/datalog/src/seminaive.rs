@@ -83,6 +83,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod atom;
+mod cycle;
 mod evidence;
 mod factors;
 pub use evidence::NegationScope;
@@ -95,7 +96,7 @@ use std::sync::{
 use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
-use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
+use crate::cursor::LendingIterator;
 use crate::dictionary::{
     DictionaryError, DictionaryTerm, DictionaryValue, TermDictionary, TermIdentity,
 };
@@ -2159,185 +2160,6 @@ where
 
 // ── The leapfrog triejoin ───────────────────────────────────────────────────────
 
-/// One relation's distinct, sorted trie-level values under a fixed semi-naive scan.
-///
-/// `SCAN` stays a monomorphization parameter here exactly as it is in the binary kernels,
-/// so a leapfrog seek pays no per-row branch on the scan mode either.
-#[derive(Debug)]
-struct FilteredValueCursor<'a, const SCAN: u8, const COLUMN: u8, I: TermIdentity = TermId> {
-    /// The underlying globally value-ordered cursor.
-    rows: ValueCursor<'a, COLUMN, I>,
-    /// The round's delta span.
-    delta: Delta,
-    /// The current distinct admitted value, if any.
-    current: Option<I>,
-}
-
-impl<'a, const SCAN: u8, const COLUMN: u8, I: TermIdentity>
-    FilteredValueCursor<'a, SCAN, COLUMN, I>
-{
-    /// A filtered cursor positioned at its first admitted value.
-    fn new(rows: ValueCursor<'a, COLUMN, I>, delta: Delta) -> Self {
-        let mut cursor = Self {
-            rows,
-            delta,
-            current: None,
-        };
-        cursor.fill(None);
-        cursor
-    }
-
-    /// Fill `current` with the next distinct admitted value, skipping `prior`.
-    fn fill(&mut self, prior: Option<I>) -> Option<I> {
-        self.current = None;
-        for (value, row) in self.rows.by_ref() {
-            if keep_row::<SCAN>(self.delta, row) && Some(value) != prior {
-                self.current = Some(value);
-                break;
-            }
-        }
-        self.current
-    }
-
-    /// Advance to the first admitted value `>= target`.
-    fn seek(&mut self, target: I) -> Option<I> {
-        if self.current.is_some_and(|value| value >= target) {
-            return self.current;
-        }
-        self.rows.seek(target);
-        self.fill(None)
-    }
-
-    /// Advance past the current value to the next distinct admitted one.
-    fn advance(&mut self) -> Option<I> {
-        let prior = self.current;
-        self.fill(prior)
-    }
-}
-
-/// Runtime scan/orientation selection at cursor construction.
-///
-/// Each variant wraps a const-generic filtered cursor, so the scan mode is resolved once
-/// per cursor rather than per seek.
-#[derive(Debug)]
-enum LeapfrogValueCursor<'a, I: TermIdentity = TermId> {
-    /// Subject-ordered, delta rows only.
-    DeltaSubject(FilteredValueCursor<'a, SCAN_DELTA, VALUE_SUBJECT, I>),
-    /// Subject-ordered, every row.
-    FullSubject(FilteredValueCursor<'a, SCAN_FULL, VALUE_SUBJECT, I>),
-    /// Subject-ordered, non-delta rows only.
-    OldOnlySubject(FilteredValueCursor<'a, SCAN_OLD_ONLY, VALUE_SUBJECT, I>),
-    /// Object-ordered, delta rows only.
-    DeltaObject(FilteredValueCursor<'a, SCAN_DELTA, VALUE_OBJECT, I>),
-    /// Object-ordered, every row.
-    FullObject(FilteredValueCursor<'a, SCAN_FULL, VALUE_OBJECT, I>),
-    /// Object-ordered, non-delta rows only.
-    OldOnlyObject(FilteredValueCursor<'a, SCAN_OLD_ONLY, VALUE_OBJECT, I>),
-}
-
-impl<'a, I: TermIdentity> LeapfrogValueCursor<'a, I> {
-    /// A subject-ordered cursor under `scan`.
-    fn subject(rows: ValueCursor<'a, VALUE_SUBJECT, I>, scan: Scan, delta: Delta) -> Self {
-        match scan {
-            Scan::Delta => Self::DeltaSubject(FilteredValueCursor::new(rows, delta)),
-            Scan::Full => Self::FullSubject(FilteredValueCursor::new(rows, delta)),
-            Scan::OldOnly => Self::OldOnlySubject(FilteredValueCursor::new(rows, delta)),
-        }
-    }
-
-    /// An object-ordered cursor under `scan`.
-    fn object(rows: ValueCursor<'a, VALUE_OBJECT, I>, scan: Scan, delta: Delta) -> Self {
-        match scan {
-            Scan::Delta => Self::DeltaObject(FilteredValueCursor::new(rows, delta)),
-            Scan::Full => Self::FullObject(FilteredValueCursor::new(rows, delta)),
-            Scan::OldOnly => Self::OldOnlyObject(FilteredValueCursor::new(rows, delta)),
-        }
-    }
-
-    /// The cursor's current value.
-    fn current(&self) -> Option<I> {
-        match self {
-            Self::DeltaSubject(cursor) => cursor.current,
-            Self::FullSubject(cursor) => cursor.current,
-            Self::OldOnlySubject(cursor) => cursor.current,
-            Self::DeltaObject(cursor) => cursor.current,
-            Self::FullObject(cursor) => cursor.current,
-            Self::OldOnlyObject(cursor) => cursor.current,
-        }
-    }
-
-    /// Advance to the first value `>= target`.
-    fn seek(&mut self, target: I) -> Option<I> {
-        match self {
-            Self::DeltaSubject(cursor) => cursor.seek(target),
-            Self::FullSubject(cursor) => cursor.seek(target),
-            Self::OldOnlySubject(cursor) => cursor.seek(target),
-            Self::DeltaObject(cursor) => cursor.seek(target),
-            Self::FullObject(cursor) => cursor.seek(target),
-            Self::OldOnlyObject(cursor) => cursor.seek(target),
-        }
-    }
-
-    /// Advance past the current value.
-    fn advance(&mut self) -> Option<I> {
-        match self {
-            Self::DeltaSubject(cursor) => cursor.advance(),
-            Self::FullSubject(cursor) => cursor.advance(),
-            Self::OldOnlySubject(cursor) => cursor.advance(),
-            Self::DeltaObject(cursor) => cursor.advance(),
-            Self::FullObject(cursor) => cursor.advance(),
-            Self::OldOnlyObject(cursor) => cursor.advance(),
-        }
-    }
-}
-
-/// A leapfrog intersection across sorted distinct value cursors.
-#[derive(Debug)]
-struct LeapfrogIntersection<'a, I: TermIdentity = TermId> {
-    /// One cursor per relation constrained on the descent variable.
-    cursors: Vec<LeapfrogValueCursor<'a, I>>,
-}
-
-impl<'a, I: TermIdentity> LeapfrogIntersection<'a, I> {
-    /// An intersection over `cursors`.
-    fn new(cursors: Vec<LeapfrogValueCursor<'a, I>>) -> Self {
-        Self { cursors }
-    }
-
-    /// The next value present in EVERY cursor.
-    ///
-    /// The first cursor advances past the returned value before control returns, so
-    /// repeated calls enumerate the intersection without duplicates.
-    fn next(&mut self) -> Option<I> {
-        let mut target = self
-            .cursors
-            .iter()
-            .filter_map(LeapfrogValueCursor::current)
-            .max()?;
-        loop {
-            let mut aligned = true;
-            for cursor in &mut self.cursors {
-                let value = cursor.seek(target)?;
-                if value > target {
-                    target = value;
-                    aligned = false;
-                }
-            }
-            if aligned {
-                self.cursors[0].advance();
-                return Some(target);
-            }
-        }
-    }
-
-    /// Whether an externally-bound value occurs in every cursor.
-    fn contains(&mut self, wanted: I) -> bool {
-        self.cursors
-            .iter_mut()
-            .all(|cursor| cursor.seek(wanted) == Some(wanted))
-    }
-}
-
 /// The single partition a certified cycle atom addresses, or `None` if the store has no
 /// such partition (in which case the component's intersection is empty).
 ///
@@ -2376,38 +2198,7 @@ where
     (subject, object)
 }
 
-/// Build one cycle atom's trie cursor for `variable_slot`, constrained by any binding of
-/// its other variable.
-fn cycle_atom_cursor<'a, I: TermIdentity, const N: usize>(
-    partition: PartitionRef<'a, I, N>,
-    shape: &AtomShape<N>,
-    variable_slot: usize,
-    solution: &SlotSolution<I, N>,
-    scan: Scan,
-    delta: Delta,
-) -> Option<LeapfrogValueCursor<'a, I>>
-where
-    Arity<N>: StoreShape<N>,
-{
-    let (subject_slot, object_slot) = cycle_atom_slots(shape);
-    if subject_slot == variable_slot {
-        Some(LeapfrogValueCursor::subject(
-            partition.values_subject(solution.get(object_slot)),
-            scan,
-            delta,
-        ))
-    } else if object_slot == variable_slot {
-        Some(LeapfrogValueCursor::object(
-            partition.values_object(solution.get(subject_slot)),
-            scan,
-            delta,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Immutable state shared by every recursive variable level of one leapfrog component.
+/// Immutable state shared by every variable level of one leapfrog component.
 #[derive(Debug)]
 struct LeapfrogRun<'a, D: TermDictionary = TermInterner, const N: usize = 4>
 where
@@ -2443,12 +2234,17 @@ where
     ///
     /// Returns `false` — restoring `solution` — if a scan-mode constraint excludes any of
     /// them, which is how the semi-naive decomposition is enforced on a multiway group.
-    fn append_sources(&self, solution: &mut SlotSolution<D::Id, N>) -> Result<bool, D::Error> {
+    fn append_sources(
+        &self,
+        solution: &mut SlotSolution<D::Id, N>,
+        work: &cycle::Work,
+    ) -> Result<bool, D::Error> {
         let original = solution.sources.len();
         for &planned in self.cycle.atoms() {
             let operator = self.plan.operator_at(planned.positive_position());
             let shape = operator.shape();
             let (subject_slot, object_slot) = cycle_atom_slots(shape);
+            work.record(cycle::Probe::PartitionLookup);
             let (Some(subject), Some(object), Some(partition)) = (
                 solution.get(subject_slot),
                 solution.get(object_slot),
@@ -2460,7 +2256,11 @@ where
             let scan = self.scan.at(planned.positive_position());
             let mut rows = partition.select(Bound::Both(subject, object));
             let mut matched = None;
-            while let Some((subject, object, row)) = rows.next() {
+            loop {
+                work.record(cycle::Probe::LeafRow);
+                let Some((subject, object, row)) = rows.next() else {
+                    break;
+                };
                 if keep_row_for_scan(scan, self.delta, row) {
                     matched = Some(SourceRow {
                         source: crate::clause::ReadSource::Evaluation,
@@ -2479,78 +2279,9 @@ where
         }
         Ok(true)
     }
-
-    /// Recursive variable descent for one certified cycle component.
-    fn recurse(
-        &self,
-        variable_position: usize,
-        solution: &mut SlotSolution<D::Id, N>,
-        out: &mut Vec<SlotSolution<D::Id, N>>,
-        governor: &mut StepGovernor,
-    ) -> Result<(), D::Error> {
-        if governor.spent() {
-            return Ok(());
-        }
-        if variable_position == self.cycle.variable_slots().len() {
-            if governor.charge() && self.append_sources(solution)? {
-                out.push(solution.clone());
-                solution
-                    .sources
-                    .truncate(solution.sources.len() - self.cycle.atoms().len());
-            }
-            return Ok(());
-        }
-
-        let variable_slot = self.cycle.variable_slots()[variable_position];
-        let externally_bound = solution.get(variable_slot);
-        let mut cursors = Vec::new();
-        for &planned in self.cycle.atoms() {
-            let operator = self.plan.operator_at(planned.positive_position());
-            let shape = operator.shape();
-            let (subject_slot, object_slot) = cycle_atom_slots(shape);
-            if subject_slot != variable_slot && object_slot != variable_slot {
-                continue;
-            }
-            let scan = self.scan.at(planned.positive_position());
-            let Some(partition) =
-                cycle_atom_partition(shape, self.rel, self.delta_run(planned.positive_position()))?
-            else {
-                return Ok(());
-            };
-            let Some(cursor) =
-                cycle_atom_cursor(partition, shape, variable_slot, solution, scan, self.delta)
-            else {
-                return Ok(());
-            };
-            cursors.push(cursor);
-        }
-        if cursors.is_empty() {
-            return Ok(());
-        }
-        let mut intersection = LeapfrogIntersection::new(cursors);
-
-        if let Some(value) = externally_bound {
-            if intersection.contains(value) {
-                self.recurse(variable_position + 1, solution, out, governor)?;
-            }
-            return Ok(());
-        }
-
-        while let Some(value) = intersection.next() {
-            debug_assert!(solution.bindings[variable_slot].is_none());
-            solution.bindings[variable_slot] = Some(value);
-            self.recurse(variable_position + 1, solution, out, governor)?;
-            solution.bindings[variable_slot] = None;
-            if governor.spent() {
-                break;
-            }
-        }
-        Ok(())
-    }
 }
 
-/// Extend every partial solution through one certified cyclic component, materialising no
-/// binary intermediate relation.
+/// Extend the certified component through its one owned traversal frame.
 fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
     solutions: Vec<SlotSolution<D::Id, N>>,
@@ -2559,27 +2290,10 @@ fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    run.rel.interner().check_read()?;
-    let mut out = Vec::new();
-    for solution in solutions {
-        if governor.spent() {
-            break;
-        }
-        if run
-            .cycle
-            .variable_slots()
-            .iter()
-            .any(|&slot| matches!(solution.value(slot), SlotValue::Computed(_)))
-        {
-            // A freshly computed term absent from the dictionary cannot occur in
-            // any stored edge. It must not be mistaken for an unbound cycle slot.
-            continue;
-        }
-        let mut working = solution;
-        run.recurse(0, &mut working, &mut out, governor)?;
-    }
-    run.rel.interner().check_read()?;
-    Ok(out)
+    let mut frame = cycle::Frame::new(solutions);
+    frame.advance(run, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 // ── Joining a rule body ─────────────────────────────────────────────────────────
