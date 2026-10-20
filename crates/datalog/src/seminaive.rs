@@ -1149,6 +1149,22 @@ pub fn render_capacity_refusal(
     }
 }
 
+/// Render an exact resource refusal with remediation available to the caller.
+/// Hosts supply an action from their own entry point rather than an inner API.
+#[must_use]
+pub fn render_budget_refusal(
+    resource: BudgetResource,
+    report: BudgetReport,
+    remediation: &str,
+) -> String {
+    format!(
+        "evaluation exceeded the {} limit: {} observed, {} permitted; {remediation}",
+        resource.name(),
+        resource.observed(report),
+        resource.limit(report)
+    )
+}
+
 /// Where a report's term-generating round limit came from, for a diagnostic.
 #[must_use]
 pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
@@ -1252,13 +1268,11 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
                 };
                 match render_capacity_refusal(*resource, *report, knob) {
                     Some(rendered) => f.write_str(&rendered),
-                    None => write!(
-                        f,
-                        "evaluation exceeded the {} limit: {} observed, {} permitted; raise it with EvalOptions::with_max_term_arena_bytes",
-                        resource.name(),
-                        resource.observed(*report),
-                        resource.limit(*report)
-                    ),
+                    None => f.write_str(&render_budget_refusal(
+                        *resource,
+                        *report,
+                        "raise it with EvalOptions::with_max_term_arena_bytes",
+                    )),
                 }
             }
             Self::Stopped { report } => write!(

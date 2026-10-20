@@ -756,6 +756,17 @@ fn describe(error: &EvalError, set: &RuleSet<'_>) -> String {
                 name(*rule)
             )
         }
+        EvalError::BudgetExhausted {
+            resource: BudgetResource::TermArenaBytes,
+            report,
+        } => format!(
+            "SHACL rules did not complete: {}",
+            purrdf_datalog::seminaive::render_budget_refusal(
+                BudgetResource::TermArenaBytes,
+                *report,
+                "reduce retained term sizes in the input or rules",
+            )
+        ),
         EvalError::Guard {
             rule,
             guard,

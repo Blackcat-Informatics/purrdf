@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Actionable SHACL arena refusals:** rule entry points retain the actual
+  observed bytes and ceiling and advise reducing retained term sizes. Direct
+  Datalog refusals continue to name their available `EvalOptions` setting.
+
 - **Indexed round deltas:** Datalog builds native arrangements from each distinct
   new-row span once per round and shares them across rule tasks. Binary probes,
   cyclic leapfrog cursors and productive-anchor checks read those arrangements;

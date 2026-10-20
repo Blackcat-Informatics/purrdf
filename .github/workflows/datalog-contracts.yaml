@@ -13,6 +13,8 @@ on:
       - crates/entail/src/engine.rs
       - crates/entail/src/explain.rs
       - crates/shapes/src/srl/eval.rs
+      - crates/shapes/tests/rule_capacity_limits.rs
+      - crates/cli/tests/shapes_tools_cli.rs
 
 permissions:
   contents: read
@@ -45,6 +47,10 @@ jobs:
         run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
       - name: Check evaluator, proof, store and scheduling regressions
         run: cargo test --locked -p purrdf-datalog --lib
+      - name: Check arena remediation through actual rule entry points
+        run: |
+          cargo test --locked -p purrdf-shapes --test rule_capacity_limits -- --exact arena_refusals_name_a_host_usable_remedy a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_join_step_limit
+          cargo test --locked -p purrdf-cli --test shapes_tools_cli -- --exact cli_rules_per_focus_divergence_is_refused_by_a_term_limit
 
   wasm:
     runs-on: ubuntu-latest
