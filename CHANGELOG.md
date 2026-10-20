@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Native integer row storage:** `store::RowColumns<I, N, R>` retains arbitrary-width
+  rows and original handles without interning or rendering. `store::RowIndex`
+  indexes caller-selected columns and returns matching key-prefix rows without
+  query-time allocation. RDF tails use the same column buffer, and RDF secondary
+  indexes use the same integer-column sorter.
+
 - **Guard-computed join keys:** `DlClause::with_ordered_body` interleaves positive
   atoms and guards through `clause::BodyLiteral`. Fresh guard outputs can bind
   subsequent binary and cyclic probes. Guards are evaluation barriers; absent
