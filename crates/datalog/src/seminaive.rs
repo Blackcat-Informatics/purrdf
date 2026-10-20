@@ -1380,20 +1380,20 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkReport {
     /// Unique seeded facts.
-    input_facts: usize,
+    input_facts: u64,
     /// Successful unique rule insertions.
-    committed_facts: usize,
+    committed_facts: u64,
     /// Physical candidate admissions.
     join_steps: u64,
 }
 
 impl WorkReport {
     /// Unique facts in the seeded store.
-    pub fn input_facts(self) -> usize {
+    pub fn input_facts(self) -> u64 {
         self.input_facts
     }
     /// Unique fact insertions performed by rule commits.
-    pub fn committed_facts(self) -> usize {
+    pub fn committed_facts(self) -> u64 {
         self.committed_facts
     }
     /// Physical candidate admissions; divide by committed facts to compare plans.
@@ -1402,7 +1402,7 @@ impl WorkReport {
     }
     /// Physical candidate admissions per committed fact, as an exact numerator
     /// and denominator. No ratio is defined when nothing was committed.
-    pub fn candidates_per_committed_fact(self) -> Option<(u64, usize)> {
+    pub fn candidates_per_committed_fact(self) -> Option<(u64, u64)> {
         (self.committed_facts != 0).then_some((self.join_steps, self.committed_facts))
     }
 
@@ -4529,9 +4529,9 @@ where
     /// Per-call scheduling, also used by ordered execution.
     pub(crate) execution: RoundExecution,
     /// Unique input facts, before any schedule assumptions.
-    input_facts: usize,
+    input_facts: u64,
     /// Successful unique rule insertions.
-    committed_facts: usize,
+    committed_facts: u64,
     /// Candidate solutions enumerated so far.
     pub(crate) join_steps: u64,
     /// A refused reservation, including an observation past u64::MAX.
@@ -4556,7 +4556,7 @@ where
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
         let depth = vec![0u32; edb.row_count()];
         let input_terms = edb.interner().term_count();
-        let input_facts = edb.retained_rows();
+        let input_facts = edb.retained_rows() as u64;
         Self {
             rel: edb,
             depth,
