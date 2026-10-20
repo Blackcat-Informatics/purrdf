@@ -1,0 +1,17 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: 76fcac0e6a60fc11ce6ad07c9ad7b0bbee7bc5f5
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 657
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/657
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: a356d66a49189524c6112402f537312635e3d4c5
+GhpRsq-Head-Ref: delivery/558-regime-arena-controls
+GhpRsq-Head-OID: 76fcac0e6a60fc11ce6ad07c9ad7b0bbee7bc5f5
+GhpRsq-Result-Tree: 2441fe22721f7989f35c2f9450016e4ade0f7781
+GhpRsq-Result-Commit: 5a5a0a3969ee46882ed497f6510a57d63638667e
+GhpRsq-Parent-Hashes: 76fcac0e6a60fc11ce6ad07c9ad7b0bbee7bc5f5
+GhpRsq-Squash-Notes-SHA256: 2b6e5a298ee1ba83f0fa9f99a41f30accc76097f411a56534b53f66c68dae095
