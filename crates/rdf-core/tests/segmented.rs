@@ -5,6 +5,9 @@
 
 use std::sync::Arc;
 
+#[path = "support/segmented_text.rs"]
+mod text_fixture;
+
 #[global_allocator]
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
@@ -173,11 +176,12 @@ fn demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic() {
 fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
     let values: Vec<_> = (0..80)
         .map(|index| {
-            let prefix = if index % 2 == 0 { "a" } else { "z" };
-            TermValue::iri(format!(
-                "https://example.org/{}/{index:03}",
-                prefix.repeat(180)
-            ))
+            // Retain genuinely sparse pages even when DEFLATE compresses runs.
+            let body: String = purrdf_testkit::rng::splitmix64_bytes(180, 0x6360 + index)
+                .into_iter()
+                .map(|byte| char::from(b'a' + byte % 26))
+                .collect();
+            TermValue::iri(format!("https://example.org/{body}/{index:03}"))
         })
         .collect();
     let first = (1_u64 << 54) + 251;
@@ -206,14 +210,21 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
     let dictionary_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 56).unwrap();
     let reverse_first = purrdf_core::bytes::read_u64_le(image.bytes(), 72).unwrap();
     let reverse_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 80).unwrap();
-    assert_eq!(dictionary_blocks, 80);
+    let terms = purrdf_core::bytes::read_u64_le(image.bytes(), 24).unwrap();
+    let block_bytes = purrdf_core::bytes::read_u32_le(image.bytes(), 12).unwrap();
+    let reverse_capacity = (block_bytes - 9) / 8;
+    assert_eq!(reverse_blocks, terms.div_ceil(u64::from(reverse_capacity)));
+    assert!(
+        dictionary_blocks > terms.div_ceil(8),
+        "the control must exercise sparse dictionary routing"
+    );
     assert!(reverse_blocks < dictionary_blocks);
     let mut count = 0_u64;
     let mut widest = 0;
     for slot in reverse_first..reverse_first + reverse_blocks {
         let offset = usize::try_from(slot * 512).unwrap();
         let population = purrdf_core::bytes::read_u32_le(image.bytes(), offset + 1).unwrap();
-        assert!((1..=8).contains(&population));
+        assert!((1..=reverse_capacity).contains(&population));
         widest = widest.max(population);
         count += u64::from(population);
     }
@@ -267,8 +278,8 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
                 .iter()
                 .filter(|request| request.bytes() == 512)
                 .count(),
-            81,
-            "header plus one payload read per term, without distant search fences"
+            1 + usize::try_from(dictionary_blocks).unwrap(),
+            "header plus one payload read per packed dictionary page, without distant search fences"
         );
     });
 
@@ -317,12 +328,66 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
 fn a_single_oversized_encoded_term_refuses_without_a_sealed_image() {
     let mut builder =
         SegmentedBuilder::new(SegmentedBuildLimits::new(4, 4096, 0, 512, 8).unwrap()).unwrap();
-    let term = TermValue::iri(format!("https://example.org/{}", "x".repeat(300)));
+    let term = TermValue::iri(format!("https://example.org/{}", "x".repeat(600)));
     builder.intern_batch(&[term], |_, _| {}).unwrap();
     assert!(matches!(
         builder.seal(),
         Err(SegmentedError::ConstructionLimit)
     ));
+}
+
+fn reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot() {
+    let marker = "Only one original encoding of this authored literal survives in the image. ";
+    let lexical = format!("{marker}{}", "natural language payload ".repeat(8));
+    let values = [
+        TermValue::iri("urn:single-owner"),
+        TermValue::simple_literal(lexical),
+        TermValue::iri("urn:lexically-before"),
+        TermValue::iri("urn:lexically-after"),
+    ];
+    let (image, ids) = build(&values, (1_u64 << 54) + 19);
+    let mut previous_profile = image.bytes().to_vec();
+    previous_profile[7] = b'2';
+    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 2).unwrap();
+    assert!(matches!(
+        SegmentedImage::certify(previous_profile),
+        Err(SegmentedError::Corrupt(
+            "unsupported segmented format/profile"
+        ))
+    ));
+    assert_eq!(
+        image
+            .bytes()
+            .windows(marker.len())
+            .filter(|bytes| *bytes == marker.as_bytes())
+            .count(),
+        1
+    );
+    let reverse_first = purrdf_core::bytes::read_u64_le(image.bytes(), 72).unwrap();
+    let reverse_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 80).unwrap();
+    for slot in reverse_first..reverse_first + reverse_blocks {
+        let start = usize::try_from(slot * 1024).unwrap();
+        let bytes = &image.bytes()[start..start + 1024];
+        let records = purrdf_core::bytes::read_u32_le(bytes, 1).unwrap();
+        assert_eq!(purrdf_core::bytes::read_u32_le(bytes, 5), Some(records * 8));
+        assert!(
+            !bytes
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        );
+    }
+    let read = session(&image, 1);
+    for (value, id) in values.iter().zip(ids) {
+        assert_eq!(read.term_id_by_value(value).unwrap(), Some(id));
+        assert_eq!(read.term_value(id).unwrap(), *value);
+    }
+    assert_eq!(
+        read.term_id_by_value(&TermValue::iri("urn:absent"))
+            .unwrap(),
+        None
+    );
+    assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
+    assert_eq!(read.read_error(), None);
 }
 
 fn indexed_reopen_preserves_high_ids_and_bidirectional_batches() {
@@ -538,6 +603,209 @@ fn corruption_cannot_turn_an_omitted_fact_into_success() {
     assert!(
         read.checked_read(|view| view.quads().count()).is_err(),
         "sticky corruption refuses the complete result"
+    );
+}
+
+fn compression_candidates_do_not_allocate_record_count_physical_blocks() {
+    let values: Vec<_> = (0_u64..256)
+        .map(|index| {
+            let text: String = purrdf_testkit::rng::splitmix64_bytes(5120, 0x63600 + index)
+                .into_iter()
+                .map(|byte| char::from(b'a' + byte % 26))
+                .collect();
+            TermValue::simple_literal(text)
+        })
+        .collect();
+    let mut builder = SegmentedBuilder::new(
+        SegmentedBuildLimits::new(1024, 5_000_000, 1, 1_048_576, 256).unwrap(),
+    )
+    .unwrap();
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let image = builder.seal().unwrap();
+    let measured = window.close();
+    println!(
+        "large-block candidate image_bytes={} seal_peak_bytes={}",
+        image.bytes().len(),
+        measured.peak_working_bytes
+    );
+    assert!(
+        measured.peak_working_bytes < 64 * 1024 * 1024,
+        "a 1.3-MiB payload must not allocate 256 physical MiB: {measured:?}"
+    );
+    let read = SegmentedSession::open(
+        Arc::new(image.provider()),
+        image.receipt(),
+        SegmentedReadLimits::new(32_000_000, 4, 1000, 1_000_000_000, 8),
+    )
+    .unwrap();
+    for index in [0, 127, 255] {
+        assert_eq!(read.term_value(ids[index]).unwrap(), values[index]);
+        assert_eq!(
+            read.term_id_by_value(&values[index]).unwrap(),
+            Some(ids[index])
+        );
+    }
+}
+
+fn compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace() {
+    let paragraph = text_fixture::ARCHIVE_TEXT.repeat(12);
+    let archive = |long: bool| {
+        let predicate = TermValue::iri("urn:archive:record");
+        let mut values = vec![
+            predicate.clone(),
+            TermValue::iri("urn:archive:graph"),
+            TermValue::iri("urn:archive:annotation"),
+            TermValue::iri("urn:archive:empty"),
+        ];
+        let mut text_bytes = 0;
+        for index in 0..64 {
+            let subject = TermValue::Blank {
+                label: "source".into(),
+                scope: BlankScope(0x3600 + index),
+            };
+            let lexical = if long {
+                format!("{index:04} {paragraph}")
+            } else {
+                format!("{index:04}")
+            };
+            text_bytes += lexical.len();
+            let literal = TermValue::simple_literal(lexical);
+            let quoted = TermValue::Triple {
+                s: TermBox::new(subject.clone()),
+                p: TermBox::new(predicate.clone()),
+                o: TermBox::new(literal.clone()),
+            };
+            values.extend([
+                subject,
+                literal,
+                quoted,
+                TermValue::iri(format!("urn:archive:claim:{index}")),
+            ]);
+        }
+        let mut builder = SegmentedBuilder::new(
+            SegmentedBuildLimits::new(1024, 2_000_000, 1024, 4096, 64)
+                .unwrap()
+                .with_first_term_index((1_u64 << 54) + 31)
+                .unwrap(),
+        )
+        .unwrap();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        builder.declare_named_graph(ids[3]).unwrap();
+        for index in 0..64 {
+            let start = 4 + index * 4;
+            builder
+                .push_quad(QuadIds {
+                    s: ids[start],
+                    p: ids[0],
+                    o: ids[start + 1],
+                    g: Some(ids[1]),
+                })
+                .unwrap();
+            builder
+                .push_reifier(ids[start + 3], ids[start + 2], Some(ids[1]))
+                .unwrap();
+            builder
+                .push_annotation(QuadIds {
+                    s: ids[start + 3],
+                    p: ids[2],
+                    o: ids[start + 1],
+                    g: Some(ids[1]),
+                })
+                .unwrap();
+        }
+        (builder.seal().unwrap(), ids, values, text_bytes)
+    };
+    let (short, _, _, _) = archive(false);
+    let (image, ids, values, text_bytes) = archive(true);
+    assert!(
+        image.bytes().len() <= short.bytes().len() + text_bytes / 8,
+        "long={} short={} text={text_bytes}",
+        image.bytes().len(),
+        short.bytes().len()
+    );
+    let certified = SegmentedImage::certify(image.bytes().to_vec()).unwrap();
+    assert_eq!(certified.receipt(), image.receipt());
+    let refused = SegmentedSession::open(
+        Arc::new(certified.provider()),
+        certified.receipt(),
+        SegmentedReadLimits::new(1_000_000, 1, 20_000, 10_000_000, 8),
+    )
+    .unwrap();
+    let cause = refused.term_value(ids[0]).unwrap_err();
+    assert!(matches!(
+        cause,
+        purrdf_core::TermLookupError::Read(SegmentedError::Residency {
+            limit: 1_000_000,
+            ..
+        })
+    ));
+    assert_eq!(refused.term_value(ids[0]).unwrap_err(), cause);
+    let pinned = session(&certified, 1);
+    let held = pinned.resolve(ids[0]).unwrap();
+    assert_eq!(
+        pinned.resolve(*ids.last().unwrap()).err(),
+        Some(SegmentedError::PinnedBlocks)
+    );
+    drop(held);
+    drop(pinned);
+    // Quoted values retain the parent guard while visiting children.
+    let small = session(&certified, 4);
+    for index in [6, 134, 258] {
+        assert_eq!(small.term_value(ids[index]).unwrap(), values[index]);
+        assert_eq!(
+            small.term_id_by_value(&values[index]).unwrap(),
+            Some(ids[index])
+        );
+    }
+    drop(small);
+    // The five dictionary blocks and packed reverse block fit this warm cache
+    // under the original two-MB physical and ten-MB cumulative I/O ceilings.
+    let read = session(&certified, 8);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    for (&id, value) in ids.iter().zip(&values) {
+        assert_eq!(read.term_value(id).unwrap(), *value);
+        assert_eq!(read.term_id_by_value(value).unwrap(), Some(id));
+    }
+    let measured = window.close();
+    assert!(
+        measured.peak_working_bytes <= i64::try_from(read.evidence().peak_bytes()).unwrap(),
+        "{measured:?}"
+    );
+    let requests = read.evidence().request_count();
+    for (&id, value) in ids.iter().zip(&values) {
+        assert_eq!(read.term_value(id).unwrap(), *value);
+        assert_eq!(read.term_id_by_value(value).unwrap(), Some(id));
+    }
+    assert_eq!(
+        read.evidence().request_count(),
+        requests,
+        "warm value lookups perform no provider I/O"
+    );
+    assert_eq!(read.checked_read(|view| view.quads().count()).unwrap(), 64);
+    assert_eq!(
+        read.checked_read(|view| view.reifier_quads().count())
+            .unwrap(),
+        64
+    );
+    assert_eq!(
+        read.checked_read(|view| view.annotation_quads().count())
+            .unwrap(),
+        64
+    );
+    assert_eq!(
+        read.checked_read(|view| view.named_graphs().count())
+            .unwrap(),
+        2
+    );
+    eprintln!(
+        "archive: short={} long={} text={text_bytes} peak={} measured={}",
+        short.bytes().len(),
+        image.bytes().len(),
+        read.evidence().peak_bytes(),
+        measured.peak_working_bytes
     );
 }
 
@@ -899,6 +1167,9 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 }
 
 purrdf_testkit::harness_main!(
+    compression_candidates_do_not_allocate_record_count_physical_blocks,
+    compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace,
+    reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot,
     routing_growth_cannot_refuse_an_already_admitted_payload,
     construction_limits_grow_on_input_instead_of_reserving_their_ceilings,
     demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic,
