@@ -12,9 +12,10 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG2";
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG3";
 pub(super) const HEADER_BYTES: usize = 312;
-pub(super) const RECORD_HEADER: usize = 17;
+pub(super) const RECORD_HEADER: usize = 13;
+const COMPRESSED_RECORDS: u32 = 1 << 31;
 pub(super) const SUMMARY_BYTES: usize = 88;
 pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
 pub(super) const DICTIONARY: u8 = 1;
@@ -71,7 +72,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&2_u32.to_le_bytes());
+        out.extend_from_slice(&3_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -100,7 +101,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(2) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(3) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile",
             ));
@@ -150,11 +151,11 @@ impl Header {
                 "dictionary/index cardinality mismatch",
             ));
         }
-        let expected = terms / u64::from(records_per_block)
-            + u64::from(terms % u64::from(records_per_block) != 0);
-        if [header.dictionary, header.reverse]
-            .iter()
-            .any(|stream| stream.blocks < expected || stream.blocks > terms)
+        let expected = terms.div_ceil(u64::from(records_per_block));
+        let reverse_expected = terms.div_ceil((u64::from(block_bytes) - 9) / 8);
+        if header.dictionary.blocks < expected
+            || header.dictionary.blocks > terms
+            || header.reverse.blocks != reverse_expected
         {
             return Err(SegmentedError::Corrupt("dictionary block count mismatch"));
         }
@@ -348,36 +349,99 @@ pub(super) fn decode_term(bytes: &[u8]) -> Result<TermRef<'_, GlobalTermId>, Seg
 }
 
 pub(super) fn record_block(
-    kind: u8,
     records: &[(GlobalTermId, Vec<u8>)],
     block_bytes: usize,
 ) -> Result<(Vec<u8>, usize), SegmentedError> {
-    let fence = records
+    let raw = raw_record_block(records, block_bytes)?;
+    let decoded_limit = block_bytes
+        .checked_mul(records.len())
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let mut count = records.len();
+    while count > raw.1 {
+        let decoded = records[..count]
+            .iter()
+            .try_fold(0_usize, |size, (_, key)| {
+                size.checked_add(key.len())
+                    .ok_or(SegmentedError::AddressExhausted)
+            })?;
+        if decoded > decoded_limit {
+            count = raw.1 + (count - raw.1) / 2;
+            continue;
+        }
+        if records[..count].iter().any(|(_, key)| {
+            key.len()
+                .checked_add(RECORD_HEADER + 16)
+                .is_none_or(|size| size > block_bytes)
+        }) {
+            return Err(SegmentedError::ConstructionLimit);
+        }
+        let mut previous = &[][..];
+        let mut framed = RECORD_HEADER;
+        for (_, key) in &records[..count] {
+            let prefix = purrdf_deflate::common_prefix_len(previous, key);
+            framed = framed
+                .checked_add(16)
+                .and_then(|bytes| bytes.checked_add(key.len() - prefix))
+                .ok_or(SegmentedError::AddressExhausted)?;
+            previous = key;
+        }
+        let (candidate, used) = raw_record_block(&records[..count], framed)?;
+        let payload = usize::try_from(
+            read_u32_le(&candidate, 9)
+                .ok_or(SegmentedError::Corrupt("record encoder omitted its header"))?,
+        )
+        .map_err(|_| SegmentedError::AddressExhausted)?;
+        let compressed = purrdf_deflate::deflate::compress(
+            &candidate[RECORD_HEADER..RECORD_HEADER + payload],
+            purrdf_deflate::Level::DEFAULT,
+        );
+        if used > raw.1
+            && compressed
+                .len()
+                .checked_add(RECORD_HEADER)
+                .is_some_and(|size| size <= block_bytes)
+        {
+            let mut block = candidate[..RECORD_HEADER].to_vec();
+            crate::bytes::put_u32_le(
+                &mut block,
+                9,
+                u32::try_from(compressed.len()).map_err(|_| SegmentedError::AddressExhausted)?
+                    | COMPRESSED_RECORDS,
+            )
+            .expect("record header is present");
+            block.extend_from_slice(&compressed);
+            block.resize(block_bytes, 0);
+            return Ok((block, used));
+        }
+        // Actual compressed size need not be monotone. Probe deterministic
+        // shorter prefixes; every selected block has independently fitted.
+        count = raw.1 + (count - raw.1) / 2;
+    }
+    Ok(raw)
+}
+
+fn raw_record_block(
+    records: &[(GlobalTermId, Vec<u8>)],
+    block_bytes: usize,
+) -> Result<(Vec<u8>, usize), SegmentedError> {
+    let first = records
         .first()
         .ok_or(SegmentedError::Corrupt("empty record block input"))?
         .1
         .as_slice();
-    // The first key is also the fence. Refuse it before copying either instance;
-    // all following records are admitted at this same encoder before appending.
-    let first_bytes = fence
+    // Routing reads the first decoded record; no second copy of its key is stored.
+    let first_bytes = first
         .len()
-        .checked_mul(2)
-        .and_then(|bytes| bytes.checked_add(RECORD_HEADER + 16))
+        .checked_add(RECORD_HEADER + 16)
         .ok_or(SegmentedError::AddressExhausted)?;
     if first_bytes > block_bytes {
         return Err(SegmentedError::ConstructionLimit);
     }
     let mut out = Vec::with_capacity(block_bytes);
-    out.push(kind);
+    out.push(DICTIONARY);
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
-    out.extend_from_slice(
-        &u32::try_from(fence.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(fence);
     let mut previous = &[][..];
     let mut count = 0_usize;
     let mut decoded = 0_u32;
@@ -423,6 +487,58 @@ pub(super) fn record_block(
     Ok((out, count))
 }
 
+fn record_header(
+    bytes: &[u8],
+    max_records: u32,
+    max_decoded: u64,
+) -> Result<(u32, u32, u32), SegmentedError> {
+    let mut input = Reader::at(bytes, 0);
+    if input.byte()? != DICTIONARY {
+        return Err(SegmentedError::Corrupt("wrong record block kind"));
+    }
+    let count = input.u32()?;
+    let decoded = input.u32()?;
+    let payload = input.u32()?;
+    if count == 0 || count > max_records || u64::from(decoded) > max_decoded {
+        return Err(SegmentedError::Corrupt("record decode bound exceeded"));
+    }
+    Ok((count, decoded, payload))
+}
+
+pub(super) fn decode_memory_bytes(
+    bytes: &[u8],
+    max_records: u32,
+    max_decoded: u64,
+) -> Result<u64, SegmentedError> {
+    let (count, decoded, _) = record_header(bytes, max_records, max_decoded)?;
+    let entry_bytes = u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>())
+        .map_err(|_| SegmentedError::AddressExhausted)?;
+    u64::from(count)
+        .checked_mul(entry_bytes)
+        .and_then(|entries| entries.checked_add(u64::from(decoded)))
+        .ok_or(SegmentedError::AddressExhausted)
+}
+
+pub(super) fn decode_scratch_bytes(
+    bytes: &[u8],
+    max_records: u32,
+    max_decoded: u64,
+) -> Result<u64, SegmentedError> {
+    let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
+    if payload & COMPRESSED_RECORDS == 0 {
+        return Ok(0);
+    }
+    let workspace = u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes())
+        .map_err(|_| SegmentedError::AddressExhausted)?;
+    framed_bytes(count, decoded)
+        .checked_add(workspace)
+        .ok_or(SegmentedError::AddressExhausted)
+}
+
+fn framed_bytes(count: u32, decoded: u32) -> u64 {
+    u64::from(decoded) + u64::from(count) * 16
+}
+
 #[derive(Debug)]
 pub(super) struct DecodedRecords {
     pub arena: Vec<u8>,
@@ -434,29 +550,50 @@ impl DecodedRecords {
     /// session before this function allocates either collection.
     pub(super) fn decode(
         bytes: &[u8],
-        kind: u8,
         max_records: u32,
         max_decoded: u64,
     ) -> Result<Self, SegmentedError> {
-        let mut input = Reader::at(bytes, 0);
-        if input.byte()? != kind {
-            return Err(SegmentedError::Corrupt("wrong record block kind"));
+        let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
+        let end = RECORD_HEADER
+            .checked_add(
+                usize::try_from(payload & !COMPRESSED_RECORDS)
+                    .map_err(|_| SegmentedError::AddressExhausted)?,
+            )
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let stored = bytes
+            .get(RECORD_HEADER..end)
+            .ok_or(SegmentedError::Corrupt("truncated dictionary payload"))?;
+        if bytes[end..].iter().any(|&byte| byte != 0) {
+            return Err(SegmentedError::Corrupt(
+                "non-canonical record block length/padding",
+            ));
         }
-        let count = input.u32()?;
-        let decoded = input.u32()?;
-        let payload = input.u32()?;
-        let fence_len = input.u32()?;
-        if count == 0 || count > max_records || u64::from(decoded) > max_decoded {
-            return Err(SegmentedError::Corrupt("record decode bound exceeded"));
-        }
-        let fence = input
-            .take(usize::try_from(fence_len).map_err(|_| SegmentedError::AddressExhausted)?)?;
-        let mut arena = Vec::with_capacity(
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        let mut inflated = Vec::new();
+        let framed = if payload & COMPRESSED_RECORDS != 0 {
+            let bound = framed_bytes(count, decoded);
+            memory.reserve(
+                &mut inflated,
+                usize::try_from(bound).map_err(|_| SegmentedError::AddressExhausted)?,
+            )?;
+            purrdf_deflate::inflate::decompress_into(stored, &mut inflated, bound)
+                .map_err(SegmentedError::Compression)?;
+            inflated.as_slice()
+        } else {
+            stored
+        };
+        let mut input = Reader::at(framed, 0);
+        let mut arena = Vec::new();
+        memory.reserve(
+            &mut arena,
             usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?,
-        );
-        let mut entries: Vec<(GlobalTermId, core::ops::Range<usize>)> = Vec::with_capacity(
+        )?;
+        let mut entries: Vec<(GlobalTermId, core::ops::Range<usize>)> = Vec::new();
+        memory.reserve(
+            &mut entries,
             usize::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
-        );
+        )?;
         for _ in 0..count {
             let prefix =
                 usize::try_from(input.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -484,20 +621,11 @@ impl DecodedRecords {
             arena.extend_from_slice(input.take(suffix)?);
             entries.push((id, start..next));
         }
-        let used = bytes.len() - input.remaining();
         if arena.len() != usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?
-            || used
-                != RECORD_HEADER
-                    + usize::try_from(payload).map_err(|_| SegmentedError::AddressExhausted)?
-            || bytes[used..].iter().any(|&byte| byte != 0)
+            || input.remaining() != 0
         {
             return Err(SegmentedError::Corrupt(
                 "non-canonical record block length/padding",
-            ));
-        }
-        if arena.get(entries[0].1.clone()) != Some(fence) {
-            return Err(SegmentedError::Corrupt(
-                "index fence does not name its first record",
             ));
         }
         Ok(Self { arena, entries })
@@ -549,11 +677,69 @@ pub(super) fn snapshot_digest(root: &[u8; 32], block_bytes: u32, count: u64) -> 
 }
 
 #[cfg(test)]
+#[path = "../../../tests/support/segmented_text.rs"]
+mod text_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn record_fit_includes_fence_framing_and_actual_front_coding() {
+    fn compressed_dictionary_refusals_retain_the_native_codec_cause() {
+        let mut bytes = vec![0; 512];
+        bytes[0] = DICTIONARY;
+        crate::bytes::put_u32_le(&mut bytes, 1, 1).unwrap();
+        crate::bytes::put_u32_le(&mut bytes, 5, 1).unwrap();
+        crate::bytes::put_u32_le(&mut bytes, 9, COMPRESSED_RECORDS | 1).unwrap();
+        bytes[RECORD_HEADER] = 7; // BFINAL=1, reserved BTYPE=11.
+        let error = DecodedRecords::decode(&bytes, 1, 512).unwrap_err();
+        assert_eq!(
+            error,
+            SegmentedError::Compression(purrdf_deflate::Error::InvalidBlockType)
+        );
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<purrdf_deflate::Error>(),
+            Some(&purrdf_deflate::Error::InvalidBlockType)
+        );
+        assert_eq!(
+            decode_scratch_bytes(&bytes, 1, 512).unwrap(),
+            17 + u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes()).unwrap()
+        );
+        crate::bytes::put_u32_le(&mut bytes, 5, 513).unwrap();
+        assert_eq!(
+            decode_scratch_bytes(&bytes, 1, 512),
+            Err(SegmentedError::Corrupt("record decode bound exceeded"))
+        );
+    }
+
+    #[test]
+    fn long_nonprefix_text_records_share_one_compressed_dictionary_block() {
+        let text = text_fixture::ARCHIVE_TEXT.repeat(12).into_bytes();
+        let records: Vec<_> = (0..64)
+            .map(|index| {
+                let mut key = vec![u8::try_from(index).unwrap()];
+                key.extend_from_slice(&text);
+                (GlobalTermId::from_index(100 + index).unwrap(), key)
+            })
+            .collect();
+        let (bytes, used) = record_block(&records, 4096).expect("compressible text fits");
+        assert_eq!(
+            used,
+            records.len(),
+            "prefix coding cannot share these leading bytes"
+        );
+        assert_eq!(bytes.len(), 4096);
+        let decoded = DecodedRecords::decode(&bytes, 64, 4096 * 64).unwrap();
+        for (index, (id, key)) in records.iter().enumerate() {
+            assert_eq!(decoded.entries[index].0, *id);
+            assert_eq!(decoded.key(index), key);
+        }
+    }
+
+    #[test]
+    fn record_fit_stores_the_first_key_once_and_counts_actual_front_coding() {
         let mut second = vec![b'a'; 200];
         second[199] = b'b';
         let records = [
@@ -561,13 +747,20 @@ mod tests {
             (GlobalTermId::from_index(13).unwrap(), second),
             (GlobalTermId::from_index(14).unwrap(), vec![b'z'; 200]),
         ];
-        // 17 header + 200 fence + 16 framing + 200 first key = 433.
+        // 13 header + 16 framing + 200 first key = 229; no duplicate fence.
         // The next key shares 199 bytes, so adds exactly 17 bytes.
-        for (width, expected) in [(433, 1), (449, 1), (450, 2), (512, 2)] {
-            let (bytes, used) = record_block(DICTIONARY, &records, width).unwrap();
+        for (width, expected) in [(229, 1), (245, 1), (246, 2), (461, 2), (462, 3), (512, 3)] {
+            let (bytes, used) = raw_record_block(&records, width).unwrap();
             assert_eq!(bytes.len(), width);
             assert_eq!(used, expected);
-            let decoded = DecodedRecords::decode(&bytes, DICTIONARY, 3, 600).unwrap();
+            assert_eq!(
+                bytes
+                    .windows(200)
+                    .filter(|key| *key == records[0].1)
+                    .count(),
+                1
+            );
+            let decoded = DecodedRecords::decode(&bytes, 3, 600).unwrap();
             assert_eq!(decoded.entries.len(), expected);
             for (index, (id, key)) in records[..used].iter().enumerate() {
                 assert_eq!(decoded.entries[index].0, *id);
@@ -575,15 +768,13 @@ mod tests {
             }
         }
         assert!(matches!(
-            record_block(DICTIONARY, &records, 432),
+            raw_record_block(&records, 228),
             Err(SegmentedError::ConstructionLimit)
         ));
-        let (bytes, used) = record_block(REVERSE, &records[..1], 512).unwrap();
+        let (bytes, used) = raw_record_block(&records[..1], 512).unwrap();
         assert_eq!(used, 1);
         assert_eq!(
-            DecodedRecords::decode(&bytes, REVERSE, 1, 200)
-                .unwrap()
-                .key(0),
+            DecodedRecords::decode(&bytes, 1, 200).unwrap().key(0),
             records[0].1
         );
     }

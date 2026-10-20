@@ -8,6 +8,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Segmented data profile 3 (breaking persisted format):** the reverse index
+  stores identifiers into the forward dictionary, and dictionary blocks read
+  their first key from its record instead of a second stored fence. Exact reverse
+  lookup uses the same authenticated forward reader. Older segmented profiles
+  must be regenerated from their original RDF input; the reader refuses them.
+  Receipt encoding and hash laws remain separate from the data profile.
+  Dictionary payloads use native DEFLATE when it admits more records per physical
+  block; numeric reverse-index pages fill independently of the dictionary record
+  cap. Readers admit bounded inflation scratch and preserve native codec causes.
+
 - **Regime arena controls (C ABI 0.12.0):** Rust, Python, JavaScript, C and
   CLI callers can set the retained term-surface byte limit. Refusals preserve
   the original counts and name the calling surface's available control.
