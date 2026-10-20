@@ -177,10 +177,13 @@ pub use report::{
     TerminationCertificate, WitnessTriple,
 };
 pub use rif::{
-    Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until,
+    Atom, Fact, RifTerm, RifVariableError, Rule, RuleSet, materialize_rif, materialize_rif_until,
     materialize_rif_with,
 };
-pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
+pub use rif_xml::{
+    ParsedRifDocument, RifComponent, RifImport, RifIriPhase, RifXmlError, parse_rif_xml,
+    resolve_rif_imports,
+};
 pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
@@ -340,6 +343,10 @@ impl Materialization<'_> {
     }
 }
 
+/// Original key-membership source and preparation-phase mismatch data.
+pub use owl_dl::key_proofs::{KeyMembershipError, KeyMembershipPhase};
+/// Native OWL expression and data-range extraction refusals.
+pub use owl_dl::parser::OwlSyntaxError;
 /// The typed refusal of an object-property hierarchy before reasoning starts.
 pub use owl_dl::roles::RoleHierarchyError;
 
@@ -382,9 +389,19 @@ pub enum EntailError<E = std::convert::Infallible> {
         /// The original diagnostic, retained without rendering or copying.
         cause: purrdf_core::RdfDiagnostic,
     },
-    /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
-    /// class-expression graph or an unrecognized RIF construct).
+    /// A caller-authored or legacy parse failure carrying only a message.
+    /// Native OWL and RIF producers retain their typed causes in the variants below.
     Parse(String),
+    /// Native OWL syntax refusal, retaining original terms, counts and parser causes.
+    OwlSyntax(Box<OwlSyntaxError>),
+    /// Original XML, IRI, structural or variable refusal of a RIF document.
+    RifXml(Box<RifXmlError>),
+    /// An original RIF variable without a binding in this operation.
+    RifVariable(RifVariableError),
+    /// An incomplete OWL decision, with its original native certificate.
+    Decision(Box<DlCertificate>),
+    /// A key-membership check presented to a different source or preparation phase.
+    KeyMembership(Box<KeyMembershipError>),
     /// An object-property hierarchy is malformed, nonregular, or physically
     /// refused before the regular-language program could be constructed.
     RoleHierarchy(RoleHierarchyError),
@@ -593,6 +610,11 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
             "phase" => Record(phase), "cause" => Cause(cause),
         },
         Parse(message) => "entailment-parse" { "message" => Message(message) },
+        OwlSyntax(cause) => "entailment-owl-syntax" { "cause" => Cause(cause.as_ref()) },
+        RifXml(cause) => "entailment-rif-xml" { "cause" => Cause(cause.as_ref()) },
+        RifVariable(cause) => "entailment-rif-variable" { "cause" => Cause(cause) },
+        Decision(report) => "entailment-owl-decision" { "report" => Record(report.as_ref()) },
+        KeyMembership(cause) => "entailment-key-membership" { "cause" => Cause(cause.as_ref()) },
         RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
         ProofsNotRecorded => "entailment-proofs-not-recorded" {},
         Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
@@ -646,6 +668,11 @@ impl EntailError {
             Self::Build(reason) => EntailError::Build(reason),
             Self::Dataset { phase, cause } => EntailError::Dataset { phase, cause },
             Self::Parse(reason) => EntailError::Parse(reason),
+            Self::OwlSyntax(cause) => EntailError::OwlSyntax(cause),
+            Self::RifXml(cause) => EntailError::RifXml(cause),
+            Self::RifVariable(cause) => EntailError::RifVariable(cause),
+            Self::Decision(report) => EntailError::Decision(report),
+            Self::KeyMembership(cause) => EntailError::KeyMembership(cause),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
@@ -670,6 +697,11 @@ impl EntailError {
 }
 
 purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { OwlSyntax(OwlSyntaxError) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { RifXml(RifXmlError) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { RifVariable(RifVariableError) });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { Decision(DlCertificate) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { KeyMembership(KeyMembershipError) via Box::new });
 
 impl<E> From<purrdf_core::RdfDiagnostic> for EntailError<E> {
     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
@@ -705,6 +737,13 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
                 ),
             },
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
+            Self::OwlSyntax(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::RifXml(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::RifVariable(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::Decision(_) => {
+                f.write_str("entailment build error: OWL-Direct decision could not complete")
+            }
+            Self::KeyMembership(cause) => write!(f, "entailment build error: {cause}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
             Self::ProofsNotRecorded => write!(
                 f,
@@ -833,9 +872,14 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::RoleHierarchy(inner) => Some(inner),
+            Self::OwlSyntax(inner) => Some(inner.as_ref()),
+            Self::RifXml(inner) => Some(inner.as_ref()),
+            Self::RifVariable(inner) => Some(inner),
+            Self::KeyMembership(inner) => Some(inner.as_ref()),
             Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
+            | Self::Decision(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
             | Self::Inconsistent(_)
@@ -2912,11 +2956,14 @@ mod tests {
             panic!("expected the chase's limit refusal, got {refused:?}");
         };
         assert_eq!(*resource, BudgetResource::StoredFacts);
-        assert!(
-            report.stored_facts() as u64 > WASM_DEFAULT_MAX_STORED_FACTS,
-            "the report must carry the observation that passed the limit, not the limit: \
-             {} vs {WASM_DEFAULT_MAX_STORED_FACTS}",
-            report.stored_facts()
+        assert_eq!(report.stored_facts() as u64, WASM_DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(
+            report.observed_stored_facts() as u64,
+            WASM_DEFAULT_MAX_STORED_FACTS + 1
+        );
+        assert_eq!(
+            resource.observed(*report),
+            WASM_DEFAULT_MAX_STORED_FACTS + 1
         );
         assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
         let rendered = refused.to_string();

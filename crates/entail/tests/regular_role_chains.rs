@@ -420,6 +420,124 @@ struct Ontology {
     next: usize,
 }
 
+fn authored_cardinality_refusals_retain_the_original_operands_and_integer_cause() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::RdfLiteral;
+    use purrdf_entail::OwlSyntaxError;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_xsd::datatype;
+
+    for lexical in ["  not-an-integer\t", "4294967295", "2"] {
+        let mut ontology = Ontology::default();
+        let class = ontology.named("CardinalityClass");
+        let property = ontology.named("cardinality-property");
+        let restriction = ontology.blank();
+        let bound = ontology
+            .builder
+            .intern_literal(RdfLiteral::typed(
+                lexical,
+                datatype::XSD_NON_NEGATIVE_INTEGER,
+            ))
+            .unwrap();
+        let object_property = ontology.standard(owl::OBJECT_PROPERTY);
+        let restriction_class = ontology.standard(owl::RESTRICTION);
+        ontology.relation(property, rdf::TYPE, object_property);
+        ontology.relation(restriction, rdf::TYPE, restriction_class);
+        ontology.relation(restriction, owl::ON_PROPERTY, property);
+        ontology.relation(restriction, owl::MAX_CARDINALITY, bound);
+        ontology.relation(class, rdfs::SUB_CLASS_OF, restriction);
+        let dataset = ontology.finish();
+        let original = TermValue::typed_literal(lexical, datatype::XSD_NON_NEGATIVE_INTEGER);
+        let result = Reasoner::new(&dataset);
+        if lexical == "2" {
+            assert!(result.is_ok(), "adjacent supported cardinality: {result:?}");
+            continue;
+        }
+        let error = match result {
+            Err(EntailError::OwlSyntax(error)) => error,
+            other => panic!("actual restriction must retain its native refusal: {other:?}"),
+        };
+        drop(dataset);
+        match error.as_ref() {
+            OwlSyntaxError::CardinalityLexical { literal, cause } => {
+                assert_eq!(literal, &original);
+                assert_eq!(cause.kind(), &std::num::IntErrorKind::InvalidDigit);
+                assert!(
+                    std::error::Error::source(error.as_ref())
+                        .unwrap()
+                        .downcast_ref::<std::num::ParseIntError>()
+                        .is_some()
+                );
+            }
+            OwlSyntaxError::CardinalityRange {
+                literal,
+                value,
+                maximum,
+            } => {
+                assert_eq!(literal, &original);
+                assert_eq!(*value, u32::MAX);
+                assert_eq!(*maximum, u32::MAX - 1);
+            }
+            other => panic!("wrong native cardinality refusal: {other:?}"),
+        }
+        let buffer = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(error.as_ref(), buffer);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.child("literal").code, "rdf-term-literal");
+    }
+}
+
+fn actual_rif_refusals_keep_original_scope_and_survive_the_document() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_entail::{RifComponent, RifIriPhase, RifXmlError, parse_rif_xml};
+    use purrdf_testkit::error_capture::Capture;
+
+    let document = format!(
+        "<Document xmlns=\"{}\"><directive><Import><location>facts.ttl</location></Import></directive></Document>",
+        purrdf_iri::vocab::rif::NS
+    );
+    let error = match parse_rif_xml(&document, None) {
+        Err(EntailError::RifXml(error)) => error,
+        other => panic!("relative reference without a base must refuse: {other:?}"),
+    };
+    assert!(parse_rif_xml(&document, Some("https://example.org/rules/")).is_ok());
+    drop(document);
+    match error.as_ref() {
+        RifXmlError::Iri {
+            phase,
+            reference,
+            base,
+            cause,
+        } => {
+            assert_eq!(*phase, RifIriPhase::Reference);
+            assert_eq!(reference, "facts.ttl");
+            assert!(base.is_none());
+            assert!(matches!(cause, purrdf_iri::IriError::NoBase { .. }));
+            assert!(
+                std::error::Error::source(error.as_ref())
+                    .unwrap()
+                    .downcast_ref::<purrdf_iri::IriError>()
+                    .is_some()
+            );
+        }
+        other => panic!("lost the original IRI scope: {other:?}"),
+    }
+    let buffer = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(error.as_ref(), buffer);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "rif-xml-iri");
+    let missing = format!(
+        "<Document xmlns=\"{}\"><directive><Import/></directive></Document>",
+        purrdf_iri::vocab::rif::NS
+    );
+    assert!(
+        matches!(parse_rif_xml(&missing, None), Err(EntailError::RifXml(error))
+        if matches!(error.as_ref(), RifXmlError::Missing(RifComponent::ImportLocation)))
+    );
+}
+
 impl Ontology {
     fn named(&mut self, name: &str) -> TermId {
         self.builder
@@ -1239,6 +1357,8 @@ fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
 }
 
 purrdf_testkit::harness_main!(
+    authored_cardinality_refusals_retain_the_original_operands_and_integer_cause,
+    actual_rif_refusals_keep_original_scope_and_survive_the_document,
     dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering,
     actual_collection_refusals_keep_original_terms_and_the_ordered_prefix,
     empty_collection_admission_checks_nil_structure,

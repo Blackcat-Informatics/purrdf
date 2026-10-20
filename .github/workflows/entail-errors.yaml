@@ -62,6 +62,8 @@ jobs:
           grep -Fq actual_collection_refusals_keep_original_terms_and_the_ordered_prefix target/role-error-test-inventory.txt
           grep -Fq empty_collection_admission_checks_nil_structure target/role-error-test-inventory.txt
           grep -Fq dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering target/role-error-test-inventory.txt
+          grep -Fq authored_cardinality_refusals_retain_the_original_operands_and_integer_cause target/role-error-test-inventory.txt
+          grep -Fq actual_rif_refusals_keep_original_scope_and_survive_the_document target/role-error-test-inventory.txt
           cargo test --locked -p purrdf-entail --test regular_role_chains
       - name: Execute native collection indexing and existing structural refusal controls
         run: |
@@ -71,8 +73,22 @@ jobs:
           cargo test --locked -p purrdf-entail --lib lists::tests::
           cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::syntax::tests::malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax
           cargo test --locked -p purrdf-entail --test reasoner -- --exact malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals
+      - name: Execute native RIF, original search certificate and key phase controls
+        run: |
+          grep -Fq owl_dl::hyper::tests::native_decision_refusal_keeps_the_executed_search_certificate target/collection-unit-test-inventory.txt
+          grep -Fq owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world target/collection-unit-test-inventory.txt
+          grep -Fq rif_xml::tests:: target/collection-unit-test-inventory.txt
+          grep -Fq rif::eval::tests::unbound_head_variable_is_rejected target/collection-unit-test-inventory.txt
+          cargo test --locked -p purrdf-entail --lib rif_xml::tests::
+          cargo test --locked -p purrdf-entail --lib -- --exact rif::eval::tests::unbound_head_variable_is_rejected
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::hyper::tests::native_decision_refusal_keeps_the_executed_search_certificate
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
       - name: Execute public reasoning facade inspection
-        run: cargo test --locked -p purrdf --test reasoning_inspection
+        run: |
+          cargo test --locked -p purrdf --test reasoning_inspection
+          cargo test --locked -p purrdf-entail --test schema_cardinality_boundary
+          cargo test --locked -p purrdf-validate --test dl_proof_vectors
+          cargo test --locked -p purrdf-entail --lib
 
   wasm:
     name: WASM role refusal inspection
@@ -118,8 +134,13 @@ jobs:
             actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
             empty_collection_admission_checks_nil_structure \
             dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
+            authored_cardinality_refusals_retain_the_original_operands_and_integer_cause \
+            actual_rif_refusals_keep_original_scope_and_survive_the_document \
             non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
             class_expression_role_refusals_retain_original_source_terms
           cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
             actual_query_and_entailment_failures_retain_their_original_owners \
             original_reader_failures_cross_both_generic_reasoning_boundaries
+          cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
+            all_shared_dl_proof_vectors_match_the_current_native_boundary \
+            imported_closure_proofs_check_against_the_consumers_native_snapshot

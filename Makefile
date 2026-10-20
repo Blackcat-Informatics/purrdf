@@ -899,6 +899,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
 				empty_collection_admission_checks_nil_structure \
 				dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
+				authored_cardinality_refusals_retain_the_original_operands_and_integer_cause \
+				actual_rif_refusals_keep_original_scope_and_survive_the_document \
 				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
@@ -1028,6 +1030,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				predicate_rows_keep_native_identities_and_lexical_graph_order \
+				model_only_and_recorded_models_have_explicit_evidence_and_equal_counts \
+				interrupted_guarded_commit_counts_only_completed_generating_rounds \
+				term_arena_limits_are_caller_selected_and_reach_contracts \
+				stored_fact_admission_refuses_the_first_extra_fact_in_both_engines \
+				public_sequential_execution_preserves_models_proofs_and_counters \
 				triple_base_authority_survives_data_growth_and_layer_retraction \
 				triple_negated_base_preserves_seminaive_work_and_limits \
 				triple_no_output_runs_the_body_without_fabricating_a_fact \

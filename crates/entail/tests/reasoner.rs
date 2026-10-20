@@ -2256,8 +2256,8 @@ fn malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals() {
             );
         } else {
             assert!(
-                matches!(error, purrdf_entail::EntailError::Parse(ref message)
-                if message == "cyclic OWL data range")
+                matches!(error, purrdf_entail::EntailError::OwlSyntax(ref original)
+                if matches!(original.as_ref(), purrdf_entail::OwlSyntaxError::DataRangeCycle { .. }))
             );
         }
     }

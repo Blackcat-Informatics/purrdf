@@ -160,7 +160,8 @@ fn malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax() 
     );
     assert_eq!(original.original.members, [interner.value(member).clone()]);
     assert!(
-        matches!(ce.into_syntax(), Err(EntailError::Parse(message)) if message == "native syntax capture did not complete")
+        matches!(ce.into_syntax(), Err(EntailError::OwlSyntax(original))
+            if matches!(original.as_ref(), crate::OwlSyntaxError::IncompleteCapture))
     );
 }
 

@@ -14,9 +14,7 @@ use purrdf_datalog::plan::Parsed;
 use purrdf_datalog::schedule::{
     Layer, NoHooks, Schedule, compile_scheduled_with_declarations, evaluate_scheduled,
 };
-use purrdf_datalog::seminaive::{
-    EvalError, EvalOptions, compile, compile_with_declarations, evaluate,
-};
+use purrdf_datalog::seminaive::{EvalError, EvalOptions, compile, compile_with_declarations};
 use purrdf_datalog::store::RelationStore;
 
 const INTENT: &str = "https://example.org/deceptiveIntentClaim";
@@ -182,7 +180,15 @@ fn unrelated_deception_structure_executes_and_asserted_intent_stays_readable() {
             )
             .unwrap();
     }
-    let outcome = evaluate(&program, input).unwrap();
+    let outcome = purrdf_datalog::seminaive::evaluate_guarded(
+        &program,
+        input,
+        &NoGuards,
+        &EvalOptions::default()
+            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
+        None,
+    )
+    .unwrap();
     for predicate in [
         FLAGGED,
         INTENT,
@@ -196,10 +202,17 @@ fn unrelated_deception_structure_executes_and_asserted_intent_stays_readable() {
             RelationStore::DEFAULT_GRAPH
         ));
     }
-    assert_eq!(outcome.derivations().len(), 2);
+    assert_eq!(
+        outcome
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        2
+    );
     assert!(
         outcome
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .all(|derivation| derivation.fact().predicate != format!("<{INTENT}>"))
     );
@@ -288,7 +301,8 @@ fn existential_conjunctive_disjunctive_heads_cannot_bypass_admission() {
             chase_with_declarations(
                 &rules,
                 RelationStore::new(),
-                &EvalOptions::default(),
+                &EvalOptions::default()
+                    .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
                 None,
                 &policy
             ),
@@ -398,17 +412,31 @@ fn scheduled_and_chase_safe_programs_really_produce_structural_witnesses() {
         input.clone(),
         &NoGuards,
         &mut NoHooks,
-        &EvalOptions::default(),
+        &EvalOptions::default()
+            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
         None,
     )
     .unwrap();
-    let chased =
-        chase_with_declarations(&rules, input, &EvalOptions::default(), None, &policy).unwrap();
+    let chased = chase_with_declarations(
+        &rules,
+        input,
+        &EvalOptions::default()
+            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
+        None,
+        &policy,
+    )
+    .unwrap();
     assert_eq!(
         scheduled.facts().facts_sorted(),
         chased.facts().facts_sorted()
     );
-    assert_eq!(scheduled.derivations().len(), 1);
+    assert_eq!(
+        scheduled
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        1
+    );
     assert_eq!(chased.derivations().len(), 1);
     assert!(scheduled.facts().contains(
         "<https://example.org/alice>",

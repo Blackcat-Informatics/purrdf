@@ -317,10 +317,7 @@ fn translate_rule(rule: &Rule, terms: &mut Terms) -> Result<Vec<DlClause>, Entai
     let body_vars: FastSet<&str> = rule.body.iter().flat_map(atom_var_names).collect();
     for name in rule.head.iter().flat_map(atom_var_names) {
         if !body_vars.contains(name) {
-            return Err(EntailError::Parse(format!(
-                "RIF rule head variable ?{name} is not range-restricted \
-                 (not bound by the rule body)"
-            )));
+            return Err(super::RifVariableError::UnboundHead(name.to_owned()).into());
         }
     }
     let body: Vec<ClauseAtom> = rule.body.iter().map(|a| clause_atom(a, terms)).collect();
@@ -572,7 +569,7 @@ mod tests {
     #[test]
     fn unbound_head_variable_is_rejected() {
         // parent(x,y) ⇒ uncle(x,z): ?z is in the head but never bound by the body,
-        // so the rule is not range-restricted and must be a typed Parse error — not
+        // so the rule is not range-restricted and must retain its native variable — not
         // a panic — when materialized over untrusted input.
         let rule = Rule {
             body: vec![atom(var("x"), con(iri("parent")), var("y"))],
@@ -586,13 +583,10 @@ mod tests {
         // The refusal is typed; nothing is materialized and nothing is reported, because
         // there was no run.
         match err {
-            EntailError::Parse(msg) => {
-                assert!(
-                    msg.contains("?z"),
-                    "message names the offending variable: {msg}"
-                );
+            EntailError::RifVariable(crate::RifVariableError::UnboundHead(name)) => {
+                assert_eq!(name, "z");
             }
-            other => panic!("expected Parse error, got {other:?}"),
+            other => panic!("expected the original unbound variable, got {other:?}"),
         }
     }
 
