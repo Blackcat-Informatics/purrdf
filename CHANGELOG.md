@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Native integer dictionaries (breaking):** `TermDictionary::compare_terms`
+  defines canonical publication order, preserving lexical RDF order while allowing
+  original integer comparisons. `IntegerDictionary<u32/u64>` evaluates native
+  model-only fixed points without string interning or lexical projection, using
+  explicit caller-supplied program symbols. Explicit lexical requests fail with a
+  typed error. Tied witnesses and round winners use the same dictionary contract.
+
 - **Datalog guard values (breaking):** guard calls carry original identities or
   fresh spellings, and `GuardRows` returns typed identity/surface cells. Native
   callbacks and native inequality avoid lexical round trips. Lexical callbacks

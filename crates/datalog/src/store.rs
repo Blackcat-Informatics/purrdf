@@ -268,6 +268,13 @@ impl TermDictionary for TermInterner {
     fn resolve_term(&self, id: TermId) -> Result<&str, Infallible> {
         Ok(self.resolve(id))
     }
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, TermId>,
+        right: DictionaryTerm<'_, TermId>,
+    ) -> Result<Ordering, Infallible> {
+        crate::dictionary::compare_lexical_terms(self, left, right)
+    }
     fn with_interned<T, const N: usize>(
         &mut self,
         terms: [DictionaryTerm<'_, TermId>; N],
@@ -1573,17 +1580,20 @@ fn partition_position<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let terms = resolve_key::<D, N>(dictionary, key)?;
     let (mut lo, mut hi) = (0, order.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         let (_, existing) = keys[order[mid]];
-        let other = resolve_key::<D, N>(dictionary, existing)?;
-        let ordering = other
-            .iter()
-            .flatten()
-            .map(AsRef::as_ref)
-            .cmp(terms.iter().flatten().map(AsRef::as_ref));
+        let mut ordering = Ordering::Equal;
+        for coordinate in 0..Arity::<N>::KEY_POSITIONS.len() {
+            ordering = dictionary.compare_terms(
+                DictionaryTerm::Id(Arity::<N>::key_term(existing, coordinate)),
+                DictionaryTerm::Id(Arity::<N>::key_term(key, coordinate)),
+            )?;
+            if !ordering.is_eq() {
+                break;
+            }
+        }
         if ordering.is_lt() {
             lo = mid + 1;
         } else {

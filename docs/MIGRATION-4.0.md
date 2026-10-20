@@ -57,6 +57,28 @@ explicit `DictionaryValue::Surface`; the engine reuses an existing identity when
 the spelling is already known. Native inequality compares the original bindings.
 Guard declarations and clause identities retain their existing meaning.
 
+## Datalog dictionary order and native integers
+
+`TermDictionary` implementations now provide `compare_terms`. This defines the
+canonical total order used by partition scans, round publication and tied witness
+selection. An RDF dictionary calls `dictionary::compare_lexical_terms` to preserve
+canonical lexical order and original dictionary pins. A native dictionary may
+compare original IDs directly. `compare_rows` applies that contract in position
+order and preserves source errors.
+
+`dictionary::IntegerDictionary<u32>` and `IntegerDictionary<u64>` provide the
+native alternative. Construct one with an explicit `with_symbols` table for the
+program's named constants, insert `DictionaryTerm::Id` rows and return
+`DictionaryValue::Id` from native guards. No cell value is interned, formatted or
+resolved, including during recursive model-only evaluation and witness ties.
+Unknown symbols and explicitly requested lexical projection fail with typed
+errors; this dictionary supplies no fabricated numeric spellings. Recorded
+lexical derivations therefore require a dictionary with actual spellings.
+
+The rule evaluator continues to use triple or quad shapes. Separately,
+`RowColumns<I, N, R>` and `RowIndex` store and index caller-selected row widths;
+they do not add an arbitrary-arity rule language.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`

@@ -3985,11 +3985,15 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        let value = match self {
+        Ok(self.as_term().lexical(rel.interner())?.as_ref().to_owned())
+    }
+
+    /// Borrow a publication argument without resolving its original identity.
+    fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
             Self::Interned(id) => DictionaryTerm::Id(*id),
             Self::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
-        };
-        Ok(value.lexical(rel.interner())?.as_ref().to_owned())
+        }
     }
 }
 
@@ -4080,13 +4084,13 @@ where
     /// A TOTAL order over observable provenance:
     /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
     /// head ordinal)`,
-    /// smallest wins. Every component is content-derived — proof heights, lexical fact
-    /// surfaces and the authored rule position — so the winner is a function of the
+    /// smallest wins. Every component is content-derived — proof heights, the
+    /// dictionary's canonical fact order and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
     ///
-    /// The comparison resolves lexical surfaces, so it is deliberately staged: the cheap
-    /// numeric prefix decides almost every real collision, and the allocating tail runs
-    /// only on an exact numeric tie.
+    /// The comparison is deliberately staged: the cheap numeric prefix decides
+    /// almost every real collision, and the dictionary-ordered source tail runs
+    /// only on an exact numeric tie. Native dictionaries need no lexical projection.
     fn preferred_over<D: TermDictionary<Id = I>>(
         &self,
         other: &Self,
@@ -4103,7 +4107,7 @@ where
     }
 }
 
-/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+/// The canonical numeric prefix, comparing the source tail only on a tie.
 fn witness_preference<E>(
     mine: (u32, u64),
     theirs: (u32, u64),
@@ -4115,7 +4119,7 @@ fn witness_preference<E>(
     }
 }
 
-/// The lexical tail of the canonical witness law, shared with projected frontiers.
+/// The dictionary-ordered tail of the canonical witness law.
 fn source_preference<D: TermDictionary, const N: usize>(
     mine: &[SourceRow<D::Id, N>],
     my_rule: usize,
@@ -4127,16 +4131,25 @@ where
     Arity<N>: StoreShape<N>,
 {
     rel.interner().check_read()?;
-    let mine: Vec<_> = mine
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
-    let theirs: Vec<_> = theirs
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
+    let compare = |left: &SourceRow<D::Id, N>, right: &SourceRow<D::Id, N>| {
+        rel.interner().compare_rows(
+            &left.terms.map(DictionaryTerm::Id),
+            &right.terms.map(DictionaryTerm::Id),
+        )
+    };
+    let mut mine_sorted = mine.to_vec();
+    let mut theirs_sorted = theirs.to_vec();
+    purrdf_lex::walk::try_sort_unstable_by(&mut mine_sorted, compare)?;
+    purrdf_lex::walk::try_sort_unstable_by(&mut theirs_sorted, compare)?;
+    let mut order = crate::dictionary::compare_sequences(&mine_sorted, &theirs_sorted, compare)?;
+    if order.is_eq() {
+        order = my_rule.cmp(&their_rule);
+    }
+    if order.is_eq() {
+        order = crate::dictionary::compare_sequences(mine, theirs, compare)?;
+    }
     rel.interner().check_read()?;
-    Ok(fact_preference(&mine, my_rule, &theirs, their_rule))
+    Ok(order)
 }
 
 /// The lexical tail over owned surfaces, also valid after a store rebuild.
@@ -5740,16 +5753,30 @@ fn commit_round<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let mut winners = round
+    let mut winners: Vec<_> = round
         .entries
         .into_iter()
-        .map(|(key, candidate)| Ok::<_, D::Error>((key.fact(&state.rel)?, key, candidate)))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|(key, candidate)| {
+            let fact = if state.derivation_mode == DerivationMode::Record {
+                Some(key.fact(&state.rel)?)
+            } else {
+                None
+            };
+            Ok::<_, D::Error>((key, candidate, fact))
+        })
+        .collect::<Result<_, _>>()
         .map_err(EvalError::Source)?;
-    // Head facts are unique in a round buffer, so the lexical order is total.
-    winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+    // Head facts are unique in a round buffer. The dictionary supplies the
+    // canonical order without requiring a lexical projection of model-only rows.
+    purrdf_lex::walk::try_sort_unstable_by(&mut winners, |(left, _, _), (right, _, _)| {
+        state.rel.interner().compare_rows(
+            &left.terms().map(HeadTerm::as_term),
+            &right.terms().map(HeadTerm::as_term),
+        )
+    })
+    .map_err(EvalError::Source)?;
 
-    for (fact, key, candidate) in winners {
+    for (key, candidate, fact) in winners {
         state
             .report()
             .admit_fact()
@@ -5786,7 +5813,7 @@ where
         state.committed_facts = state.committed_facts.saturating_add(1);
         if let Some(sources) = sources {
             state.derivations.push(Derivation {
-                fact,
+                fact: fact.expect("recorded winners project their facts before publication"),
                 rule: candidate.rule,
                 head: candidate.head,
                 sources,

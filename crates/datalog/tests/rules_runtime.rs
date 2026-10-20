@@ -2069,6 +2069,95 @@ fn native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier() {
     }
 }
 
+fn native_integer_dictionary_runs_recursive_models_without_lexical_projection() {
+    use purrdf_datalog::dictionary::{
+        DictionaryTerm, IntegerDictionary, IntegerDictionaryError, TermDictionary,
+    };
+    use std::collections::BTreeSet;
+    struct KeepIdentity;
+    impl GuardEvaluator<IntegerDictionary<'_, u64>, 3> for KeepIdentity {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, IntegerDictionary<'_, u64>, 3>,
+        ) -> Result<GuardRows<u64>, purrdf_datalog::guard::CallbackError<IntegerDictionaryError>>
+        {
+            let DictionaryTerm::Id(id) = call.inputs[0] else {
+                panic!("native guard inputs retain original identities");
+            };
+            Ok(vec![vec![dictionary::DictionaryValue::Id(id)]])
+        }
+    }
+    let symbols = [("p", u64::MAX - 1), ("out", u64::MAX)];
+    let dictionary = IntegerDictionary::with_symbols(&symbols).unwrap();
+    let mut input = RelationStore::<_, 3>::with_dictionary(dictionary);
+    for row in [
+        [0, u64::MAX - 1, 1],
+        [1, u64::MAX - 1, 2],
+        [2, u64::MAX - 1, 3],
+    ] {
+        input.insert_terms(row.map(DictionaryTerm::Id)).unwrap();
+    }
+    let program = compile(vec![
+        DlClause::datalog(
+            triple_pattern("?s", "out", "?o"),
+            vec![triple_pattern("?s", "p", "?value")],
+        )
+        .with_guards(vec![Guard::assign("identity", vec!["?value".into()], "?o")]),
+        DlClause::datalog(
+            triple_pattern("?s", "out", "?o"),
+            vec![
+                triple_pattern("?s", "out", "?m"),
+                triple_pattern("?m", "p", "?o"),
+            ],
+        ),
+        DlClause::datalog(
+            triple_pattern("?s", "out", "?o"),
+            vec![
+                triple_pattern("?s", "p", "?m"),
+                triple_pattern("?m", "out", "?o"),
+            ],
+        ),
+    ])
+    .unwrap();
+    let result = evaluate_guarded(
+        &program,
+        input.clone(),
+        &KeepIdentity,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.work().committed_facts(), 6);
+    let actual: BTreeSet<_> = result.facts().rows_from(0).map(|(_, row)| row).collect();
+    let mut expected: BTreeSet<_> = [
+        [0, u64::MAX - 1, 1],
+        [1, u64::MAX - 1, 2],
+        [2, u64::MAX - 1, 3],
+    ]
+    .into_iter()
+    .collect();
+    for subject in 0..3 {
+        for object in subject + 1..4 {
+            expected.insert([subject, u64::MAX, object]);
+        }
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(result.facts().interner().resident_bytes(), 0);
+    assert_eq!(result.facts().interner().term_count(), 6);
+    let error = evaluate_guarded(
+        &program,
+        input,
+        &KeepIdentity,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        seminaive::EvalError::Source(IntegerDictionaryError::LexicalUnavailable { id: 0 })
+    ));
+}
+
 fn native_integer_columns_and_indexes_preserve_wide_original_handles() {
     use purrdf_datalog::store::{RowColumns, RowIndex, RowIndexError};
     let mut rows = RowColumns::<u32, 6, u64>::default();
@@ -2370,6 +2459,7 @@ fn native_inequality_in_a_negative_group_uses_the_same_filter() {
 }
 
 purrdf_testkit::harness_main!(
+    native_integer_dictionary_runs_recursive_models_without_lexical_projection,
     native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier,
     native_integer_columns_and_indexes_preserve_wide_original_handles,
     narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,

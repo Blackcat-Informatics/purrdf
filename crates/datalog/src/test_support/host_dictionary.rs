@@ -77,6 +77,13 @@ impl TermDictionary for HostDictionary {
             live: &self.pins,
         })
     }
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, u64>,
+        right: DictionaryTerm<'_, u64>,
+    ) -> Result<core::cmp::Ordering, SourceLost> {
+        super::dictionary::compare_lexical_terms(self, left, right)
+    }
     fn with_interned<T, const N: usize>(
         &mut self,
         terms: [DictionaryTerm<'_, u64>; N],

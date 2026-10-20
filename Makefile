@@ -1035,6 +1035,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				ordered_guard_outputs_probe_later_atoms_without_intermediate_relations \
 				ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms \
 				native_integer_columns_and_indexes_preserve_wide_original_handles \
+				native_integer_dictionary_runs_recursive_models_without_lexical_projection \
 				native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier \
 				native_inequality_needs_no_callback_and_is_independently_checked \
 				native_inequality_in_a_negative_group_uses_the_same_filter \
