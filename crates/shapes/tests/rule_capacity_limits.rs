@@ -120,7 +120,7 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
     assert_eq!(
         shacl(&data, COPY, &wasm_defaults()),
         Err(
-            "SHACL rules did not complete: the rules exceeded the stored-fact limit: 140000 \
+            "SHACL rules did not complete: the rules exceeded the stored-fact limit: 131073 \
              facts observed, 131072 permitted (the caller's limit); raise it with \
              RuleOptions::with_max_stored_facts"
                 .to_owned()

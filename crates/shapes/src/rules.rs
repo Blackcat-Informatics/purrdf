@@ -756,7 +756,7 @@ impl RulesError {
                 knobs.generated_terms(),
             ),
             RuleLimit::StoredFacts => (
-                u64::try_from(report.stored_facts()).unwrap_or(u64::MAX),
+                u64::try_from(report.observed_stored_facts()).unwrap_or(u64::MAX),
                 report.stored_fact_limit(),
                 report.stored_fact_limit_stated(),
                 knobs.stored_facts(),

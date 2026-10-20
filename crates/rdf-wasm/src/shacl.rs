@@ -2800,7 +2800,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             .expect_err("140,000 facts pass the wasm32 default")
             .to_string();
         assert!(
-            refused.contains("140000 facts observed, 131072 permitted (the caller's limit)")
+            refused.contains("131073 facts observed, 131072 permitted (the caller's limit)")
                 && refused.ends_with("raise it with shaclApplyRules's maxStoredFacts"),
             "{refused}"
         );

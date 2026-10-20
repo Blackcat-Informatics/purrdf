@@ -1473,7 +1473,7 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
         assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
         assert!(
             stderr(&ceiling).contains(
-                "evaluation exceeded the fixed term arena bytes ceiling: 16782539 observed, \
+                "evaluation exceeded the term arena bytes limit: 16782539 observed, \
                  16777216 permitted"
             ),
             "{}",
