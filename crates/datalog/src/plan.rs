@@ -1657,7 +1657,6 @@ mod tests {
 
     #[test]
     fn snapshot_statistics_change_connected_order_and_preserve_native_proofs() {
-        use crate::seminaive::evaluate;
         use crate::store::RelationStore;
         use purrdf_core::{DatasetView, GraphMatch, ProbePattern, RdfDatasetBuilder};
 
@@ -1714,14 +1713,50 @@ mod tests {
         assert_eq!(order(&ordinary), [0, 1, 2]);
         // The disconnected one-row atom cannot outrank the connected five-row atom.
         assert_eq!(order(&statistical), [1, 0, 2]);
-        let baseline = evaluate(&ordinary, input.clone()).unwrap();
-        let actual = evaluate(&statistical, input).unwrap();
+        let baseline = crate::seminaive::evaluate_guarded(
+            &ordinary,
+            input.clone(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        let actual = crate::seminaive::evaluate_guarded(
+            &statistical,
+            input,
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
         assert_eq!(actual.facts().row_count(), baseline.facts().row_count());
         assert_eq!(actual.facts().row_count(), 8);
-        assert_eq!(actual.derivations().len(), 1);
-        let proof = &actual.derivations()[0];
-        assert_eq!(proof.fact(), baseline.derivations()[0].fact());
-        assert_eq!(proof.sources(), baseline.derivations()[0].sources());
+        assert_eq!(
+            actual
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let proof = &actual
+            .derivations()
+            .expect("derivation recording was requested")[0];
+        assert_eq!(
+            proof.fact(),
+            baseline
+                .derivations()
+                .expect("derivation recording was requested")[0]
+                .fact()
+        );
+        assert_eq!(
+            proof.sources(),
+            baseline
+                .derivations()
+                .expect("derivation recording was requested")[0]
+                .sources()
+        );
         assert_eq!(
             proof
                 .sources()

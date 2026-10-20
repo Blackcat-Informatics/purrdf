@@ -6,7 +6,7 @@
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
-use purrdf_datalog::seminaive::{compile, evaluate};
+use purrdf_datalog::seminaive::compile;
 use purrdf_datalog::store::RelationStore;
 
 #[global_allocator]
@@ -44,10 +44,36 @@ fn independent_existential_factor_work_and_allocation_grow_additively() {
                     .unwrap();
             }
         }
+        let model_input = input.clone();
         let window = WholeProcessWindow::open();
-        let evaluation = evaluate(&program, input).expect("default additive work succeeds");
+        let evaluation = purrdf_datalog::seminaive::evaluate_guarded(
+            &program,
+            input,
+            &purrdf_datalog::guard::NoGuards,
+            &purrdf_datalog::seminaive::EvalOptions::default()
+                .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("default additive work succeeds");
         let allocation = window.close();
-        assert_eq!(evaluation.derivations().len(), n);
+        let window = WholeProcessWindow::open();
+        let model = purrdf_datalog::seminaive::evaluate(&program, model_input).unwrap();
+        let model_allocation = window.close();
+        assert!(model.derivations().is_none());
+        assert_eq!(model.work(), evaluation.work());
+        assert_eq!(
+            model.facts().facts_sorted(),
+            evaluation.facts().facts_sorted()
+        );
+        assert!(model_allocation.requested_bytes < allocation.requested_bytes);
+        assert!(model_allocation.retained_bytes < allocation.retained_bytes);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            n
+        );
         assert_eq!(evaluation.budget().join_steps(), 3 * n as u64);
         assert!(allocation.requested_bytes > 0);
         assert!(allocation.peak_working_bytes > 0);

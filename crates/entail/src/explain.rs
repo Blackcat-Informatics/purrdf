@@ -81,7 +81,7 @@ use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::id::ProofId;
 use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
 use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
-use purrdf_datalog::seminaive::{compile, evaluate};
+use purrdf_datalog::seminaive::compile;
 use purrdf_datalog::store::{Fact, RelationStore};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
@@ -596,9 +596,20 @@ pub fn explain_conclusion(
     // evaluation that consumes it.
     let seeded = edb.clone();
     let executable = compile(program.clone()).map_err(EntailError::Evaluate)?;
-    let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
+    let evaluation = purrdf_datalog::seminaive::evaluate_guarded(
+        &executable,
+        edb,
+        &purrdf_datalog::guard::NoGuards,
+        &purrdf_datalog::seminaive::EvalOptions::default()
+            .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record),
+        None,
+    )
+    .map_err(EntailError::Evaluate)?;
 
-    let proofs = EvaluationProofs::of(&evaluation).map_err(EntailError::from)?;
+    let proofs = EvaluationProofs::of(&evaluation).map_err(|error| match error {
+        ProofError::Storage(cause) => ExplainError::from(EntailError::from(cause)),
+        other => ExplainError::Unchecked(other),
+    })?;
     // Re-intern through the canonical encoding, so the returned arena is EXACTLY this
     // conclusion's sub-DAG rather than a handle into the whole evaluation's.
     let (arena, root) = match proofs.root_for(&goal) {

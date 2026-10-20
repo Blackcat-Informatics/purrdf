@@ -1173,9 +1173,22 @@ mod tests {
             DlClause::datalog(atom("?x", B, "?y"), vec![atom("?x", Q, "?y")]),
         ])
         .unwrap();
-        let result = crate::seminaive::evaluate(&exe, rel).unwrap();
+        let result = crate::seminaive::evaluate_guarded(
+            &exe,
+            rel,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.facts().row_count(), 10);
-        assert_eq!(result.derivations().len(), 8);
+        assert_eq!(
+            result
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            8
+        );
         assert_eq!(result.budget().input_terms(), (1u64 << 40) + 7);
         assert_eq!(result.budget().generated_terms(), 0);
         for (_, ids) in result.facts().rows_from(2) {
@@ -1191,7 +1204,14 @@ mod tests {
             .lost
             .store(true, Ordering::Relaxed);
         assert!(matches!(
-            crate::seminaive::evaluate(&compile(Vec::new()).unwrap(), result.into_facts()),
+            crate::seminaive::evaluate_guarded(
+                &compile(Vec::new()).unwrap(),
+                result.into_facts(),
+                &NoGuards,
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None
+            ),
             Err(crate::seminaive::EvalError::Source(SourceLost(99)))
         ));
     }
@@ -1224,7 +1244,8 @@ mod tests {
                         seeded(&input),
                         None,
                         &NoGuards,
-                        EvalOptions::default(),
+                        EvalOptions::default()
+                            .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                         RoundExecution::Sequential,
                         JoinStrategy::Planned,
                     )
@@ -1234,7 +1255,8 @@ mod tests {
                         seeded(&input),
                         None,
                         &NoGuards,
-                        EvalOptions::default(),
+                        EvalOptions::default()
+                            .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                         RoundExecution::Sequential,
                         JoinStrategy::ForcedBinary,
                     )
@@ -1245,8 +1267,12 @@ mod tests {
                         "mask {mask}, projection {projection}, seed {seed}"
                     );
                     assert_eq!(
-                        planned.derivations(),
-                        binary.derivations(),
+                        planned
+                            .derivations()
+                            .expect("derivation recording was requested"),
+                        binary
+                            .derivations()
+                            .expect("derivation recording was requested"),
                         "mask {mask}, projection {projection}, seed {seed}"
                     );
                     let a: Vec<_> = input
@@ -1266,8 +1292,17 @@ mod tests {
                             _ => a.len() * b.len(),
                         }
                     };
-                    assert_eq!(planned.derivations().len(), expected);
-                    for derivation in planned.derivations() {
+                    assert_eq!(
+                        planned
+                            .derivations()
+                            .expect("derivation recording was requested")
+                            .len(),
+                        expected
+                    );
+                    for derivation in planned
+                        .derivations()
+                        .expect("derivation recording was requested")
+                    {
                         assert_eq!(derivation.proof_height, 1);
                         assert_eq!(derivation.sources.len(), 2);
                         assert_eq!(derivation.sources[0].predicate, format!("<{B}>"));
@@ -1313,12 +1348,19 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
             .expect("linear input stays within default limits");
-            assert_eq!(evaluation.derivations().len(), n);
+            assert_eq!(
+                evaluation
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                n
+            );
             assert_eq!(evaluation.budget().join_steps, 3 * n as u64);
         }
     }
@@ -1359,7 +1401,8 @@ mod tests {
                     seeded(&input),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     strategy,
                 )
@@ -1371,8 +1414,21 @@ mod tests {
                 planned.facts().facts_sorted(),
                 binary.facts().facts_sorted()
             );
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations().len(), (n - 1) * (n - 2) / 2);
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                (n - 1) * (n - 2) / 2
+            );
             assert!(
                 planned.budget().join_steps <= 4 * (n * n) as u64,
                 "recursive factor work must stay quadratic: n={n}, report={:?}",
@@ -1771,11 +1827,16 @@ mod tests {
                 JoinStrategy::Planned,
             )
         };
-        let reference = run(EvalOptions::default(), RoundExecution::Sequential)
-            .expect("recursive reference completes");
+        let reference = run(
+            EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            RoundExecution::Sequential,
+        )
+        .expect("recursive reference completes");
         let expected = reference.budget().join_steps();
         let exact_reference = run(
-            EvalOptions::default().with_max_join_steps(expected),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_join_steps(expected),
             RoundExecution::Sequential,
         )
         .expect("sequential exact credits complete");
@@ -1787,7 +1848,9 @@ mod tests {
                 .expect("test worker pool");
             pool.install(|| {
                 let exact = run(
-                    EvalOptions::default().with_max_join_steps(expected),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                        .with_max_join_steps(expected),
                     RoundExecution::Parallel,
                 )
                 .expect("exact partial-round credits complete");
@@ -1795,13 +1858,22 @@ mod tests {
                     exact.facts().facts_sorted(),
                     reference.facts().facts_sorted()
                 );
-                assert_eq!(exact.derivations(), reference.derivations());
+                assert_eq!(
+                    exact
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    reference
+                        .derivations()
+                        .expect("derivation recording was requested")
+                );
                 assert_eq!(exact.budget(), exact_reference.budget());
                 let reports: Vec<_> = [0, expected - 1]
                     .into_iter()
                     .map(|ceiling| {
                         let error = run(
-                            EvalOptions::default().with_max_join_steps(ceiling),
+                            EvalOptions::default()
+                                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                                .with_max_join_steps(ceiling),
                             RoundExecution::Parallel,
                         )
                         .expect_err("insufficient partial-round credits refuse");
@@ -1931,7 +2003,8 @@ mod tests {
                     seeded(&shuffled),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     JoinStrategy::Planned,
                 )
@@ -1941,7 +2014,8 @@ mod tests {
                     seeded(&shuffled),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     JoinStrategy::ForcedBinary,
                 )
@@ -1950,7 +2024,14 @@ mod tests {
                     planned.facts().facts_sorted(),
                     binary.facts().facts_sorted()
                 );
-                assert_eq!(planned.derivations(), binary.derivations());
+                assert_eq!(
+                    planned
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    binary
+                        .derivations()
+                        .expect("derivation recording was requested")
+                );
             }
         }
     }
@@ -2093,7 +2174,8 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -2103,14 +2185,31 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::ForcedBinary,
             )
             .expect("the exhaustive model completes");
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations().len(), 16);
-            for proof in planned.derivations() {
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                16
+            );
+            for proof in planned
+                .derivations()
+                .expect("derivation recording was requested")
+            {
                 assert_eq!(proof.fact.subject, proof.sources[0].subject);
                 assert_eq!(proof.fact.predicate, proof.sources[1].predicate);
                 assert_eq!(proof.fact.object, proof.sources[2].object);
@@ -2191,7 +2290,8 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -2201,13 +2301,28 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::ForcedBinary,
             )
             .expect("exhaustive evaluation completes");
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations()[0].sources[0].subject, surface("a"));
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")[0]
+                    .sources[0]
+                    .subject,
+                surface("a")
+            );
         }
     }
 

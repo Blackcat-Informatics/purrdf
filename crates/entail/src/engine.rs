@@ -95,7 +95,9 @@ use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::guard::NoGuards;
-use purrdf_datalog::seminaive::{Derivation, EvalError, EvalOptions, evaluate_guarded};
+use purrdf_datalog::seminaive::{
+    Derivation, DerivationMode, EvalError, EvalOptions, evaluate_guarded,
+};
 use purrdf_datalog::stop::StopSignal;
 use purrdf_datalog::store::RelationStore;
 
@@ -586,7 +588,7 @@ fn close_graph<D: DatasetView>(
         &executable,
         edb,
         &NoGuards,
-        options,
+        &options.with_derivation_mode(DerivationMode::Record),
         stop.map(|stop| &**stop as &dyn StopSignal),
     )
     .map_err(evaluate_error)?;
@@ -620,7 +622,10 @@ fn close_graph<D: DatasetView>(
         clash: None,
         termination: None,
     };
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("entailment requested derivation recording")
+    {
         let fact = derivation.fact();
         // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
         // accumulate their list traversals in relations whose predicate is an
@@ -935,6 +940,7 @@ fn first_clash(
     let owl = matches!(regime, Regime::OwlRl);
     evaluation
         .derivations()
+        .expect("entailment requested derivation recording")
         .iter()
         .find(|derivation| derivation.fact().predicate == CLASH_RELATION)
         .map(|derivation| witness_of(derivation, attribution, terms, owl, graph))
@@ -1217,7 +1223,14 @@ impl Refuter {
             .map_err(EntailError::Evaluate)?;
         // The incremental re-evaluation seam names no stop signal: it re-runs one delta over
         // an already-seeded store for an explanation, not the caller's closure.
-        evaluate_guarded(&executable, edb, &NoGuards, &self.options, None).map_err(evaluate_error)
+        evaluate_guarded(
+            &executable,
+            edb,
+            &NoGuards,
+            &self.options.with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .map_err(evaluate_error)
     }
 }
 
@@ -1231,7 +1244,10 @@ fn derived_triples(
     terms: &Terms,
 ) -> Vec<[TermValue; 3]> {
     let mut derived = Vec::new();
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("entailment requested derivation recording")
+    {
         let fact = derivation.fact();
         if is_internal(&fact.predicate) {
             continue;

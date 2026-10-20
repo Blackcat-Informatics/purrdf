@@ -41,8 +41,9 @@
 //!   natively because a body's candidates are materialised before it is checked, so a
 //!   Cartesian body under a larger default exhausts memory before it is refused; see
 //!   [`seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS`]. A program that needs more work states it.
-//! * the **term-arena** ceiling ([`seminaive::MAX_TERM_ARENA_BYTES`]) bounds the bytes of
-//!   interned term surfaces. It is a constant, the same on every target.
+//! * the **term-arena** ceiling ([`seminaive::DEFAULT_MAX_TERM_ARENA_BYTES`]) bounds the bytes of
+//!   interned term surfaces. Its default is the same on every target; the caller
+//!   can raise or remove it through [`seminaive::EvalOptions`].
 //! * the **term-generating round** limit and the **generated-term** budget bound a guarded
 //!   program that keeps computing new terms; see below.
 //!
