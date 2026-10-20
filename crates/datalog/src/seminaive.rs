@@ -7027,9 +7027,9 @@ mod tests {
     /// not the budget report.
     ///
     /// This is the property that admits a stop signal into a crate whose budgets are
-    /// deliberately constants: attaching one is observationally nothing until it fires.
+    /// deterministic: attaching one is observationally nothing until it fires.
     /// Asserted over the whole synthetic corpus rather than over one program, and against
-    /// the ungoverned [`evaluate`] rather than against itself.
+    /// the same execution without a stop signal rather than against itself.
     #[test]
     fn an_unfired_stop_signal_changes_no_answer() {
         let never = StopsAfter {
@@ -7045,8 +7045,22 @@ mod tests {
                 None,
             )
             .expect("inside every ceiling");
-            let watched =
+            let model_only =
                 evaluate_until(&exe, workload.edb(), Some(&never)).expect("inside every ceiling");
+            assert!(model_only.derivations().is_none());
+            assert_eq!(
+                plain.facts().facts_sorted(),
+                model_only.facts().facts_sorted()
+            );
+            assert_eq!(plain.budget(), model_only.budget());
+            let watched = evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &NoGuards,
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                Some(&never),
+            )
+            .expect("inside every ceiling");
             assert_eq!(
                 plain.facts().facts_sorted(),
                 watched.facts().facts_sorted(),
