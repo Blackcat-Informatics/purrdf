@@ -424,6 +424,16 @@
 # counts, not latency, allocations or an assertion that logical work increased.
 # END CONNECTED RULE EVALUATION TRANSITION.
 #
+# SELECTIVE DELTA JOIN TRANSITION.
+# Round deltas own indexed row ranges. Partial-round joins seed from delta, or
+# from a strictly smaller existing constant-key index followed immediately by
+# delta. Impossible constant patterns refuse before broad candidate expansion.
+# Cardinality advice never constructs a cold historical object permutation.
+# Advice is frozen before tasks; a sibling's lazy index cannot change round work.
+# Only measured join-steps change: every input, closure, witness, rule tally,
+# contract hash, stored-facts and term-arena-bytes field remains identical.
+# END SELECTIVE DELTA JOIN TRANSITION.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # NEW FIXTURE — no committed golden moved; this one did not exist.
@@ -756,7 +766,7 @@
   boundaries: (2)
       generalized-rdf datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=1801 stored-facts=140 term-arena-bytes=2525
+  budget: join-steps=1440 stored-facts=140 term-arena-bytes=2525
   contract-hash: f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
   termination: none
   inconsistency: none
@@ -810,7 +820,7 @@
   boundaries: (2)
       generalized-rdf datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=48 stored-facts=67 term-arena-bytes=1849
+  budget: join-steps=47 stored-facts=67 term-arena-bytes=1849
   contract-hash: fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
   termination: none
   inconsistency: none

@@ -575,7 +575,7 @@ fired dt-type1 32
 fired scm-cls 5
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 1903
+budget join-steps 1550
 budget stored-facts 127
 budget term-arena-bytes 2500
 contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
@@ -788,7 +788,7 @@ fired dt-type1 32
 boundary generalized-rdf a conclusion whose subject position would hold a literal or a triple term, or whose predicate position would hold anything but an IRI, is a generalized-RDF triple, which the RDF 1.2 dataset IR cannot represent; such a conclusion is derived in the evaluator's own term space and then abandoned when the answer is materialized, rather than a term being fabricated for it. It is still a PREMISE, so nothing downstream is lost. Rules that can conclude into subject position (rdfs3 / prp-rng, prp-symp, prp-inv1, prp-inv2, eq-ref, eq-rep-p) are therefore incomplete over literal objects, and every conclusion of dt-type2, dt-eq and dt-diff is unrepresentable by construction, because each of the three puts a literal in subject position
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 68
+budget join-steps 64
 budget stored-facts 98
 budget term-arena-bytes 1759
 contract-hash fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
@@ -937,7 +937,7 @@ fired dt-type1 32
 fired scm-cls 5
 boundary datatype-value-space rdfD1 and rdfD1a conclude about a FRESH blank node standing for a datatyped literal, or for an inhabited value space, and both FIRE: the restricted chase evaluates their existentially quantified heads. What is withheld is the SURROGATE itself — a SPARQL entailment regime draws its answers from the scoping graph, which no minted blank node is in — and the surrogate boundary is where those withheld conclusions are counted. rdfs1 recognizes the datatypes RDF 1.2 Semantics §8 makes mandatory (rdf:langString, rdf:dirLangString, xsd:string) and no others. The OWL 2 RL rules quantified over value spaces (dt-type2, dt-eq, dt-diff) DO fire, over the literals the dataset holds rather than over the infinitely many a value space contains, and value-space membership is decided through the candidate datatype's LEXICAL space, so a value in a datatype's value space whose lexical form is not in that datatype's lexical space is not found: "1.0"^^xsd:decimal is not typed xsd:integer. A datatype purrdf-xsd does not model is not judged either way
 mechanism none
-budget join-steps 1809
+budget join-steps 1530
 budget stored-facts 115
 budget term-arena-bytes 2466
 contract-hash f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba

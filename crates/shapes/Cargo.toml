@@ -157,6 +157,10 @@ harness = false
 name = "srl_language"
 harness = false
 
+[[test]]
+name = "sparql_argument_failures"
+harness = false
+
 [[bench]]
 name = "validate"
 harness = false

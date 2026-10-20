@@ -8,9 +8,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **SHACL SPARQL argument failures:** COALESCE, IF, boolean and membership forms can mask
+  catchable nested node-expression failures using SPARQL semantics, while
+  unmasked failures retain their original cause and empty results stay distinct.
+  Validation recursion refusals now carry typed
+  `ProcessorFailure::ValidationDepth` fields and cannot be caught as expression
+  errors. Processor, storage and stop failures always escape the call.
+
 - **Actionable SHACL arena refusals:** rule entry points retain the actual
   observed bytes and ceiling and advise reducing retained term sizes. Direct
   Datalog refusals continue to name their available `EvalOptions` setting.
+
+- **Indexed round deltas:** Datalog builds native arrangements from each distinct
+  new-row span once per round and shares them across rule tasks. Binary probes,
+  cyclic leapfrog cursors and productive-anchor checks read those arrangements;
+  the all-row seed borrows the accumulated store. Original row, partition and
+  term IDs are retained, with no term rendering or whole-store delta scans.
+
+- **Selective delta rule joins:** partial Datalog rounds bind their new-row anchor
+  before visiting old join prefixes, including factored and cyclic bodies.
+  Binary joins may first use one strictly smaller indexed seed, then immediately
+  probe the delta. Cardinality advice reads existing runs and never constructs a
+  cold historical object index. Impossible constant patterns skip delta seeding.
+  Advice is frozen before rule tasks run, so a sibling warming a lazy index
+  cannot change the round's candidate work.
+  Dynamic probes constrain every already-bound position and retain authored
+  proof order. Physical planner version 5 identifies the changed candidate
+  accounting; completed models and semantic fact counts retain their meaning.
 
 - **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
   visit only that predicate's partitions. `RelationStore::rows_for_predicate`

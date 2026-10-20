@@ -13,11 +13,12 @@
 use crate::store::{Arity, StoreShape};
 
 use super::{
-    ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence, JoinGroup,
-    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
-    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_slot_solutions,
-    extend_solutions_leapfrog, source_heights, source_preference,
+    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, GroupProbe,
+    HeadEvidence, JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan,
+    RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan,
+    SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, delta_can_match,
+    emit_solution, extend_rebound_solutions, extend_slot_solutions, extend_solutions_leapfrog,
+    source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -204,12 +205,52 @@ fn factor_matches<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_count()) => {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    let seed_in_cycle = entry.plan.has_cyclic_subplan() && seed.is_some_and(|anchor| entry.plan.join_groups().iter().any(|group| {
+        matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+    }));
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            entry.plan.operator_at(anchor),
+            snapshot.rel,
+            entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
     let binary = |position, partial: &[SlotSolution<D::Id, N>], governor: &mut StepGovernor| {
-        extend_slot_solutions(
+        let extend = if seed.is_some() {
+            extend_rebound_solutions
+        } else {
+            extend_slot_solutions
+        };
+        extend(
             entry.plan.operator_at(position),
             snapshot.rel,
             entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
             scan.at(position),
             partial,
             governor,
@@ -217,6 +258,9 @@ where
     };
     if !entry.plan.has_cyclic_subplan() {
         for &position in &factor.positions {
+            if seed == Some(position) {
+                continue;
+            }
             partial = binary(position, &partial, governor).map_err(EvalError::Source)?;
             if partial.is_empty() || governor.spent() {
                 break;
@@ -224,6 +268,9 @@ where
         }
     } else {
         for group in entry.plan.join_groups() {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
             let position = match group {
                 JoinGroup::Binary(atom) => atom.positive_position(),
                 JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].positive_position(),
@@ -241,6 +288,9 @@ where
                         scan,
                         rel: snapshot.rel,
                         delta: entry.delta,
+                        indexes: snapshot
+                            .delta_indexes
+                            .expect("the factor's delta indexes were prepared"),
                     },
                     &partial,
                     governor,
@@ -256,6 +306,9 @@ where
     for mut solution in partial {
         if governor.spent() {
             break;
+        }
+        if seed_in_cycle {
+            solution.sources.remove(0);
         }
         solution.sources.sort_by_key(|source| source.body_index);
         let mut blocked = false;
@@ -330,6 +383,9 @@ where
     let join = JoinSnapshot {
         rel: snapshot.rel,
         delta: entry.delta,
+        indexes: snapshot
+            .delta_indexes
+            .expect("the factor's delta indexes were prepared"),
     };
     let mut matches = Vec::new();
     for &position in &factor.positions {
@@ -728,6 +784,15 @@ pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -738,6 +803,9 @@ where
         let join = JoinSnapshot {
             rel: snapshot.rel,
             delta: entry.delta,
+            indexes: snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
         };
         let mut can_match = false;
         for operator in entry.plan.operators() {
@@ -908,8 +976,8 @@ mod tests {
     use crate::guard::{Guard, Negation, NoGuards};
     use crate::plan::RulePlan;
     use crate::seminaive::{
-        Delta, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry, RuleRuntime,
-        SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
+        Delta, DeltaIndexes, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry,
+        RuleRuntime, SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
         source_heights, source_preference,
     };
     use crate::store::RelationStore;
@@ -996,15 +1064,18 @@ mod tests {
             JoinSnapshot {
                 rel: &rel,
                 delta: Delta::all(2),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
+            None,
         )
         .unwrap();
         let snapshot = RoundSnapshot {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         let delta = Delta { lo: 1, hi: 2 };
         let projection = project(&matches, &[], snapshot, delta, true).unwrap();
@@ -1077,6 +1148,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             let binary = evaluate_rule(
@@ -1085,6 +1157,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1136,6 +1209,7 @@ mod tests {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         assert!(matches!(
             project(&missing, &[], snapshot, delta, true),
@@ -1167,7 +1241,14 @@ mod tests {
                 delta: Delta { lo: 2, hi: 2 },
             };
             assert!(matches!(
-                evaluate_rule(entry, snapshot, strategy, StepGovernor::new(0), &NoGuards),
+                evaluate_rule(
+                    entry,
+                    snapshot,
+                    strategy,
+                    StepGovernor::new(0),
+                    &NoGuards,
+                    None
+                ),
                 Err(crate::seminaive::EvalError::Source(SourceLost(99)))
             ));
         }
@@ -1473,6 +1554,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 let entry = RuleEntry {
                     index: 0,
@@ -1503,6 +1585,7 @@ mod tests {
                     JoinStrategy::ForcedBinary,
                     StepGovernor::new(u64::MAX),
                     &NoGuards,
+                    None,
                 )
                 .expect("exhaustive partial join matches");
                 assert_eq!(planned.entries.len(), binary.entries.len());
@@ -1540,6 +1623,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let entry = RuleEntry {
                 index: 0,
@@ -1615,6 +1699,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let planned = evaluate_rule(
                 entry,
@@ -1622,6 +1707,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("factor round completes");
             let binary = evaluate_rule(
@@ -1630,6 +1716,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("exhaustive round completes");
             assert_eq!(planned.entries, binary.entries, "delta lower bound {lo}");
@@ -1684,6 +1771,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             for lo in 0..=input.len() {
                 for hi in lo..=input.len() {
@@ -1701,6 +1789,7 @@ mod tests {
                             strategy,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("hybrid factor round matches")
                     };
@@ -1757,6 +1846,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -1975,6 +2065,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=shuffled.len() {
                     for hi in lo..=shuffled.len() {
@@ -1992,6 +2083,7 @@ mod tests {
                                 strategy,
                                 StepGovernor::new(u64::MAX),
                                 &NoGuards,
+                                None,
                             )
                             .expect("negative factor round completes")
                         };
@@ -2085,6 +2177,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -2099,6 +2192,7 @@ mod tests {
             JoinStrategy::Planned,
             StepGovernor::new(3),
             &NoGuards,
+            None,
         )
         .expect("a false body requires no positive product");
         assert!(buffer.entries.is_empty());
@@ -2405,6 +2499,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=input.len() {
                     for hi in lo..=input.len() {
@@ -2422,6 +2517,7 @@ mod tests {
                             JoinStrategy::Planned,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("factored round completes");
                         let binary = evaluate_rule(
@@ -2430,6 +2526,7 @@ mod tests {
                             JoinStrategy::ForcedBinary,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("exhaustive round completes");
                         assert_eq!(

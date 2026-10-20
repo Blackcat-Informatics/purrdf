@@ -1408,6 +1408,73 @@ pub(crate) fn scalar_call_query(call: &FnCall) -> String {
     crate::sparql::scalar_expr_query(&expr)
 }
 
+/// Supply values to the shared scalar engine. A catchable failure has SPARQL's
+/// error operand representation here, but its original cause remains in `args`;
+/// the caller must propagate it when the outer form does not mask it. An empty
+/// argument is separately `Ok(None)`, and never becomes an invented failure.
+fn eval_sparql_arguments(
+    store: &ShaclData,
+    query: &str,
+    args: &[Result<Option<Term>, crate::error::ShapesError>],
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    let bound: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(position, arg)| arg.as_ref().ok()?.as_ref().map(|value| (position, value)))
+        .collect();
+    let names: Vec<String> = bound
+        .iter()
+        .map(|(position, _)| format!("a{position}"))
+        .collect();
+    let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
+    crate::sparql::eval_cached_scalar_query_view(
+        store.sparql_view(),
+        query,
+        &parameters,
+        |execution| {
+            for (slot, (_, value)) in bound.iter().enumerate() {
+                execution.bind(slot, value.to_term_value())?;
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Let SPARQL decide masking and EBV; retain the node-expression failure cause.
+/// IF selects the argument outcome itself, because a selected empty argument
+/// remains empty even when its unselected branch failed. Processor failures have
+/// already escaped before this boundary and are never stored as operands.
+fn finish_sparql_arguments(
+    store: &ShaclData,
+    form: SparqlCallForm,
+    query: &str,
+    args: Vec<Result<Option<Term>, crate::error::ShapesError>>,
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    if form == SparqlCallForm::Call("IF") {
+        if args.len() != 3 {
+            return Err(crate::error::ShapesError::internal(
+                "an admitted SPARQL IF has three arguments",
+            ));
+        }
+        if let Err(error) = &args[0] {
+            return Err(error.clone());
+        }
+        let condition =
+            eval_sparql_arguments(store, "SELECT ((!(! ?a0)) AS ?result) WHERE {}", &args[..1])?;
+        let Some(condition) = condition else {
+            return Ok(None);
+        };
+        let selected = if is_true_term(&condition) { 1 } else { 2 };
+        return args.into_iter().nth(selected).ok_or_else(|| {
+            crate::error::ShapesError::internal("an admitted SPARQL IF lost its selected argument")
+        })?;
+    }
+    if let Some(value) = eval_sparql_arguments(store, query, &args)? {
+        return Ok(Some(value));
+    }
+    args.into_iter().find_map(Result::err).map_or(Ok(None), Err)
+}
+
 // ── Evaluator ───────────────────────────────────────────────────────────────────
 
 /// Evaluate a node expression against `store`, from `focus`.
@@ -1942,15 +2009,42 @@ fn eval_node_expr_at_depth(
         // the empty list. The working group's own approved test reads it that way —
         // `inference-rules/expectedPredicate-example` computes a rectangle's area as
         // `sparql:multiply` over a width the incomplete rectangle does not have, and
-        // expects no area rather than a failure. A failure of the evaluation itself
-        // (an argument that fails, a query the engine cannot run) propagates.
+        // expects no area rather than a failure. Catchable nested failures retain
+        // their causes while the SPARQL error-handling forms decide whether to
+        // mask them. Processor/storage failures and declaration refusals always
+        // escape; a successful sibling cannot make a stopped evaluation complete.
         NodeExpr::Call(FnCall::Sparql { iri, args, .. }) => {
-            let mut bound: Vec<(usize, Term)> = Vec::with_capacity(args.len());
+            let local = iri
+                .as_str()
+                .strip_prefix(crate::model::sparql_ns::NS)
+                .ok_or_else(|| {
+                    crate::error::ShapesError::internal(
+                        "a SPARQL call lost its vocabulary namespace",
+                    )
+                })?;
+            let form = sparql_ns_lowering(local)?;
+            let catches = matches!(
+                form,
+                SparqlCallForm::Call("COALESCE" | "IF")
+                    | SparqlCallForm::Infix("&&" | "||")
+                    | SparqlCallForm::Membership(_)
+            );
+            let mut arguments = Vec::with_capacity(args.len());
             for (position, arg) in args.iter().enumerate() {
-                let mut values = descend!(arg, position)?;
-                match values.len() {
-                    0 => {}
-                    1 => bound.extend(values.pop().map(|value| (position, value))),
+                let mut values = match descend!(arg, position) {
+                    Ok(values) => values,
+                    Err(error)
+                        if catches
+                            && error.failure_class() == crate::error::FailureClass::Evaluation =>
+                    {
+                        arguments.push(Err(error));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let argument = match values.len() {
+                    0 => None,
+                    1 => values.pop(),
                     more => {
                         return Err(format!(
                             "<{}> argument {position} produced {more} nodes; a SPARQL function \
@@ -1960,7 +2054,8 @@ fn eval_node_expr_at_depth(
                         )
                         .into());
                     }
-                }
+                };
+                arguments.push(Ok(argument));
             }
             let query = lowered.scalar_query()?;
             // Only the arguments that produced a node are PARAMETERS of the run; the
@@ -1968,22 +2063,7 @@ fn eval_node_expr_at_depth(
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.
-            let names: Vec<String> = bound
-                .iter()
-                .map(|(position, _)| format!("a{position}"))
-                .collect();
-            let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
-            let result = crate::sparql::eval_cached_scalar_query_view(
-                store.sparql_view(),
-                query,
-                &parameters,
-                |execution| {
-                    for (slot, (_, value)) in bound.iter().enumerate() {
-                        execution.bind(slot, value.to_term_value())?;
-                    }
-                    Ok(())
-                },
-            )?;
+            let result = finish_sparql_arguments(store, form, query, arguments)?;
             Ok(result.into_iter().collect())
         }
         // §4.2.1 Distinct expression: first occurrences, in input order, by term

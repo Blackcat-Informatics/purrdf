@@ -607,6 +607,7 @@ where
             rel: &state.rel,
             depth: &state.depth,
             assumed: run.assumed,
+            delta_indexes: None,
         },
         state.execution,
         JoinStrategy::Planned,

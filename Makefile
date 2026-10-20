@@ -1030,6 +1030,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work \
+				late_delta_seed_completes_under_a_prefix_independent_work_limit \
 				native_inequality_needs_no_callback_and_is_independently_checked \
 				native_inequality_in_a_negative_group_uses_the_same_filter \
 				conjunctive_heads_share_joins_and_check_the_authored_head \
@@ -1055,6 +1057,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test srl_language -- --exact \
 				triple_carrier_runs_the_public_rl_program_without_quad_storage \
 				triple_rl_keeps_statement_roles_and_scoped_blank_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test sparql_argument_failures -- --exact \
+				sparql_node_calls_mask_catchable_argument_failures \
+				sparql_node_calls_preserve_unmasked_failures_and_empty_branches \
+				sparql_argument_failures_follow_the_same_path_in_dated_validation \
+				sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test rule_coordinates -- --exact \
 				shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes \

@@ -49,6 +49,20 @@ jobs:
         run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
       - name: Check evaluator, proof, store and scheduling regressions
         run: cargo test --locked -p purrdf-datalog --lib
+      - name: Compare physical work in the entailment oracle
+        id: oracle
+        run: cargo test --locked -p purrdf-entail --test oracle -- --exact goldens_match_the_current_engine
+      - name: Render actual oracle reports for review after a mismatch
+        id: regenerated_oracle
+        if: failure() && steps.oracle.outcome == 'failure'
+        run: cargo test --locked -p purrdf-entail --test oracle -- --ignored --exact regenerate_goldens
+      - name: Retain complete source-bound oracle reports
+        if: failure() && steps.regenerated_oracle.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: datalog-entail-oracle-${{ github.sha }}
+          path: crates/entail/tests/goldens/*.golden
+          if-no-files-found: error
 
   wasm:
     runs-on: ubuntu-latest

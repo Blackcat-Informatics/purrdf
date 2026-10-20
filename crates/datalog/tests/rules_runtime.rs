@@ -1618,6 +1618,129 @@ fn predicate_rows_keep_native_identities_and_lexical_graph_order() {
     }
 }
 
+fn late_delta_seed_completes_under_a_prefix_independent_work_limit() {
+    use purrdf_datalog::seminaive::RoundExecution;
+    let atom = |subject: &str, predicate: &str, object: &str| {
+        ClauseAtom::positive(
+            ClauseTerm::var(subject),
+            format!("https://example.org/{predicate}"),
+            ClauseTerm::var(object),
+        )
+    };
+    let program = compile(vec![
+        DlClause::datalog(atom("?m", "q", "?o"), vec![atom("?m", "seed", "?o")]),
+        DlClause::datalog(
+            atom("?s", "out", "?o"),
+            vec![atom("?s", "p", "?m"), atom("?m", "q", "?o")],
+        ),
+    ])
+    .unwrap();
+    for count in [100, 1000] {
+        let mut input = RelationStore::default();
+        for index in 0..count {
+            input
+                .insert(
+                    &format!("s{index}"),
+                    "<https://example.org/p>",
+                    &format!("m{index}"),
+                    "",
+                )
+                .unwrap();
+        }
+        input
+            .insert("m0", "<https://example.org/seed>", "end", "")
+            .unwrap();
+        let evaluation = evaluate_guarded(
+            &program,
+            input,
+            &NoGuards,
+            &EvalOptions::default()
+                .with_max_join_steps(10)
+                .with_round_execution(RoundExecution::Sequential),
+            None,
+        )
+        .unwrap();
+        assert!(
+            evaluation
+                .facts()
+                .contains("s0", "<https://example.org/out>", "end", "")
+        );
+        assert_eq!(evaluation.facts().row_count(), count + 3);
+        assert_eq!(evaluation.work().join_steps(), 3);
+    }
+}
+
+fn narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work() {
+    use purrdf_datalog::store::TermInterner;
+    const LABEL: &str = "https://example.org/label";
+    const EDGE: &str = "https://example.org/edge";
+    let label = |subject: &str| {
+        ClauseAtom::<3>::triple(
+            ClauseTerm::var(subject),
+            ClauseTerm::iri(LABEL),
+            ClauseTerm::iri("https://example.org/marked"),
+        )
+    };
+    let program = compile(vec![DlClause::datalog(
+        label("?y"),
+        vec![
+            label("?x"),
+            ClauseAtom::<3>::triple(
+                ClauseTerm::var("?x"),
+                ClauseTerm::iri(EDGE),
+                ClauseTerm::var("?y"),
+            ),
+        ],
+    )])
+    .unwrap();
+    for depth in [32, 64, 128] {
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        input
+            .insert_row(["n0", &format!("<{LABEL}>"), "<https://example.org/marked>"])
+            .unwrap();
+        for index in 0..depth {
+            input
+                .insert_row([
+                    &format!("n{index}"),
+                    &format!("<{EDGE}>"),
+                    &format!("n{}", index + 1),
+                ])
+                .unwrap();
+        }
+        let recorded = evaluate_guarded(
+            &program,
+            input.clone(),
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        let model =
+            evaluate_guarded(&program, input, &NoGuards, &EvalOptions::default(), None).unwrap();
+        assert_eq!(
+            model.facts().facts_sorted(),
+            recorded.facts().facts_sorted()
+        );
+        assert_eq!(model.work(), recorded.work());
+        assert_eq!(model.facts().row_count(), 2 * depth + 1);
+        assert_eq!(model.work().join_steps(), (2 * depth + 1) as u64);
+        assert!(model.derivations().is_none());
+        assert_eq!(recorded.derivations().unwrap().len(), depth);
+        let predicate = model.facts().term_id(&format!("<{LABEL}>")).unwrap();
+        assert_eq!(
+            model.facts().rows_for_predicate(predicate).count(),
+            depth + 1
+        );
+        assert!(
+            recorded
+                .derivations()
+                .unwrap()
+                .iter()
+                .all(|derivation| derivation.sources().len() == 2)
+        );
+    }
+}
+
 fn conjunctive_heads_share_joins_and_check_the_authored_head() {
     use purrdf_datalog::clause::HeadDisjunct;
     use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
@@ -1940,6 +2063,8 @@ fn native_inequality_in_a_negative_group_uses_the_same_filter() {
 }
 
 purrdf_testkit::harness_main!(
+    narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,
+    late_delta_seed_completes_under_a_prefix_independent_work_limit,
     native_inequality_needs_no_callback_and_is_independently_checked,
     native_inequality_in_a_negative_group_uses_the_same_filter,
     conjunctive_recursion_and_factor_projection_match_split_programs,

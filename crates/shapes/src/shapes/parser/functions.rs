@@ -933,6 +933,11 @@ mod tests {
                 depth: 257,
                 limit: 256,
             },
+            ProcessorFailure::ValidationDepth {
+                shape: "s".to_owned(),
+                depth: 65,
+                limit: 64,
+            },
             ProcessorFailure::ReentryCycle {
                 shape: "s".to_owned(),
                 focus: "f".to_owned(),

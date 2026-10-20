@@ -932,15 +932,31 @@ impl Reference {
             // unbound.
             Expr::Bound(arg) => Ok(vec![boolean(self.argument(arg, focus)?.is_some())]),
             // §5 with SPARQL's COALESCE: "the value of the first expression that
-            // evaluates without error" — an unbound argument is the error. With
-            // none left, COALESCE raises an error, and the call produces no result.
+            // evaluates without error". Nested evaluation failures are catchable;
+            // an empty argument is unbound. The outer list-parameter cardinality
+            // check still applies to every successfully evaluated argument.
             Expr::Coalesce(args) => {
                 let mut first: Option<Term> = None;
+                let mut failure = None;
                 for arg in args {
-                    let value = self.argument(arg, focus)?;
-                    if first.is_none() {
-                        first = value;
+                    let mut values = match self.eval(arg, focus) {
+                        Ok(values) => values,
+                        Err(error) => {
+                            failure.get_or_insert(error);
+                            continue;
+                        }
+                    };
+                    if values.len() > 1 {
+                        return Err(format!("argument produced {} nodes", values.len()));
                     }
+                    if first.is_none() {
+                        first = values.pop();
+                    }
+                }
+                if first.is_none()
+                    && let Some(error) = failure
+                {
+                    return Err(error);
                 }
                 Ok(first.into_iter().collect())
             }

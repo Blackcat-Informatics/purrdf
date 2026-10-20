@@ -283,6 +283,15 @@ pub enum ProcessorFailure {
         /// The bound.
         limit: u32,
     },
+    /// Nested filter/exists validation crossed the processor's recursion bound.
+    ValidationDepth {
+        /// The shape at the refused re-entry.
+        shape: String,
+        /// The depth that was refused.
+        depth: u32,
+        /// The bound.
+        limit: u32,
+    },
     /// A `(shape, focus)` pair re-entered itself.
     ReentryCycle {
         /// The shape, as the engine renders its id.
@@ -345,6 +354,15 @@ impl fmt::Display for ProcessorFailure {
                 f,
                 "node expression nesting depth exceeded ({depth} > {limit}): the expression \
                  tree is nested past the structural limit"
+            ),
+            Self::ValidationDepth {
+                shape,
+                depth,
+                limit,
+            } => write!(
+                f,
+                "SHACL validation recursion depth exceeded ({depth} > {limit}) at shape \
+                 {shape}: a cyclic sh:filterShape / sh:exists reference"
             ),
             Self::ReentryCycle { shape, focus } => write!(
                 f,
