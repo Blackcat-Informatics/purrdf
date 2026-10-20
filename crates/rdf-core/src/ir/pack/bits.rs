@@ -457,6 +457,47 @@ impl BitVec {
         self.len == 0
     }
 
+    /// Read a bit, or `None` outside the initialized sequence.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<bool> {
+        (index < self.len).then(|| self.words[index / 64] & (1_u64 << (index % 64)) != 0)
+    }
+
+    /// Set a bit, zero-filling an absent intervening tail after admission.
+    ///
+    /// The backing buffer must belong to `memory`'s live total, as for
+    /// [`purrdf_lex::allocation::Memory::reserve`]. Refusal leaves the bit sequence
+    /// unchanged, although a successful reservation may replace its buffer.
+    ///
+    /// # Errors
+    /// Returns the original admission/allocation refusal or an index overflow.
+    pub fn set_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        index: usize,
+        value: bool,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let required = index
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let words = required.div_ceil(64);
+        if words > self.words.capacity() {
+            let capacity =
+                purrdf_lex::allocation::growth_capacity::<u64>(self.words.capacity(), words)?;
+            memory.reserve(&mut self.words, capacity)?;
+        }
+        if required > self.len {
+            self.set_len(required);
+        }
+        let mask = 1_u64 << (index % 64);
+        if value {
+            self.words[index / 64] |= mask;
+        } else {
+            self.words[index / 64] &= !mask;
+        }
+        Ok(())
+    }
+
     /// Grow or truncate to exactly `new_len` bits: growing zero-fills the new
     /// tail; truncating clears any now-out-of-range tail bits still sitting in the
     /// boundary word, so the backing words always stay a clean zero-padded prefix
@@ -1496,6 +1537,56 @@ mod tests {
         let rs2 = b2.freeze();
         assert_eq!(rs2.rank1(1), 1);
         assert_eq!(rs2.total_ones(), 1);
+    }
+
+    #[test]
+    fn bit_vec_sparse_writes_preserve_holes_and_refuse_growth_before_mutation() {
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+        struct Limit(usize);
+        impl Admission for Limit {
+            fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+                if live > self.0 {
+                    Err(StorageError::AllocationFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let mut bits = BitVec::default();
+        let mut admission = Limit(usize::MAX);
+        let mut memory = Memory::new(&mut admission);
+        for index in [0, 63, 64, 511, 512] {
+            bits.set_with_memory(index, true, &mut memory).unwrap();
+        }
+        bits.set_with_memory(64, false, &mut memory).unwrap();
+        for index in 0..bits.len() {
+            assert_eq!(bits.get(index), Some([0, 63, 511, 512].contains(&index)));
+        }
+        assert_eq!(bits.get(513), None);
+        let live = memory.admitted_bytes();
+        let old_capacity = bits.words.capacity();
+        admission.0 = live;
+        let mut memory = Memory::resume(&mut admission, live);
+        assert_eq!(
+            bits.set_with_memory(old_capacity * 64, true, &mut memory),
+            Err(StorageError::AllocationFailed),
+        );
+        assert_eq!(bits.len(), 513);
+        assert_eq!(bits.words.capacity(), old_capacity);
+        assert_eq!(bits.get(512), Some(true));
+        assert_eq!(bits.get(64), Some(false));
+        assert_eq!(
+            bits.set_with_memory(usize::MAX, true, &mut memory),
+            Err(StorageError::SizeOverflow),
+        );
+        bits.set_len(64);
+        bits.set_len(513);
+        assert_eq!(bits.get(63), Some(true));
+        assert_eq!(bits.get(511), Some(false));
+        assert_eq!(bits.get(512), Some(false));
+        assert_eq!(bits.freeze().total_ones(), 2);
     }
 
     // -- varint / zigzag / delta -------------------------------------------------

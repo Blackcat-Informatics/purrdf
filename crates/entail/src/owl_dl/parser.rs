@@ -1233,6 +1233,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         poll(stop)?;
         let mut interner = Interner::default();
         let mut v = Vocab::intern(&mut interner);
+        let mut source_terms = super::source_terms::SourceTerms::from_prefix(
+            u32::try_from(interner.len()).expect("term count fits u32"),
+        );
         let mut table = ConceptTable::default();
         let top = table.top();
         let bottom = table.bottom();
@@ -1248,6 +1251,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             let s = interner.intern(ds.term_value(q.s)?);
             let p = interner.intern(ds.term_value(q.p)?);
             let o = interner.intern(ds.term_value(q.o)?);
+            for term in [s, p, o] {
+                source_terms.record(term)?;
+            }
             triples.push((s, p, o));
             index_insert(&mut index, s, p, o);
         }
@@ -1449,7 +1455,6 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         }
 
         poll(stop)?;
-        let source_terms = u32::try_from(interner.len()).expect("term count fits u32");
         let mut kb = Kb {
             syntax,
             query_syntax: Syntax::query(),

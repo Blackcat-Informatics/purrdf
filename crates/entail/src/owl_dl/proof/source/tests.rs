@@ -1511,7 +1511,9 @@ fn exact_literal_metadata_is_borrowed_without_reinterpretation() {
         direction: Some(purrdf_core::RdfTextDirection::Rtl),
     };
     let id = kb.interner.intern(literal.clone());
-    kb.source_terms = u32::try_from(kb.interner.len()).unwrap();
+    kb.source_terms = crate::owl_dl::source_terms::SourceTerms::from_prefix(
+        u32::try_from(kb.interner.len()).unwrap(),
+    );
     let ResolvedTerm::Source(value) = term(&kb, id) else {
         panic!("source literal")
     };
@@ -1520,11 +1522,45 @@ fn exact_literal_metadata_is_borrowed_without_reinterpretation() {
 }
 
 #[test]
+fn source_resolution_preserves_query_holes_and_original_promoted_terms() {
+    let mut kb = Kb::empty();
+    let initial = kb.interner.intern_iri("https://example.org/initial");
+    kb.source_terms.record(initial).unwrap();
+    let query = kb.interner.intern_iri("https://example.org/query-only");
+    let promoted = kb.interner.intern(TermValue::Literal {
+        lexical_form: "مرحبا".to_owned(),
+        datatype: rdf::DIR_LANG_STRING.to_owned(),
+        language: Some("ar".to_owned()),
+        direction: Some(purrdf_core::RdfTextDirection::Rtl),
+    });
+    assert!(matches!(term(&kb, promoted), ResolvedTerm::QuerySymbol(_)));
+    let late = kb.interner.intern_iri("https://example.org/late-source");
+    kb.source_terms.record(late).unwrap();
+    kb.source_terms.record(promoted).unwrap();
+    for id in [initial, promoted, late] {
+        let ResolvedTerm::Source(value) = term(&kb, id) else {
+            panic!("actual source membership must survive query interning")
+        };
+        assert!(std::ptr::eq(value, kb.interner.value(id)));
+    }
+    assert!(matches!(term(&kb, query), ResolvedTerm::QuerySymbol(_)));
+    assert!(matches!(
+        term(&kb, promoted),
+        ResolvedTerm::Source(TermValue::Literal {
+            lexical_form, language: Some(language),
+            direction: Some(purrdf_core::RdfTextDirection::Rtl), ..
+        }) if lexical_form == "مرحبا" && language == "ar"
+    ));
+}
+
+#[test]
 fn every_native_constructor_has_a_borrowed_structural_view() {
     let mut kb = Kb::empty();
     let name = kb.interner.intern_iri("https://example.org/A");
     let property = kb.interner.intern_iri("https://example.org/p");
-    kb.source_terms = u32::try_from(kb.interner.len()).unwrap();
+    kb.source_terms = crate::owl_dl::source_terms::SourceTerms::from_prefix(
+        u32::try_from(kb.interner.len()).unwrap(),
+    );
     let filler = kb.table.intern(Concept::Named(name));
     let range = kb.data_ranges.intern(DataRange::Any);
     let named = || Box::new(Concept::Named(name));
@@ -1625,7 +1661,9 @@ fn query_symbols_and_recursive_reserved_roots_never_gain_source_identity() {
     let mut kb = Kb::empty();
     let source = kb.interner.intern_iri("https://example.org/source");
     let property = kb.interner.intern_iri("https://example.org/p");
-    kb.source_terms = u32::try_from(kb.interner.len()).unwrap();
+    kb.source_terms = crate::owl_dl::source_terms::SourceTerms::from_prefix(
+        u32::try_from(kb.interner.len()).unwrap(),
+    );
     let query = kb.interner.intern_iri("https://example.org/query");
     let filler = kb.table.intern(Concept::Top);
     let nested = NodeRef::Reserved(Box::new(super::super::ReservedRef {

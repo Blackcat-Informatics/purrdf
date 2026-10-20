@@ -159,11 +159,16 @@ impl FreshSymbols {
         Self { prefix, next: 0 }
     }
 
-    /// Mint the next fresh symbol into `interner`, returning its term id.
+    /// Mint the next absent symbol, including terms interned since preparation.
     pub(crate) fn mint(&mut self, interner: &mut Interner) -> u32 {
-        let label = format!("{}{}", self.prefix, self.next);
-        self.next += 1;
-        interner.intern(TermValue::blank(&label))
+        loop {
+            let label = format!("{}{}", self.prefix, self.next);
+            self.next += 1;
+            let value = TermValue::blank(&label);
+            if interner.id_of(&value).is_none() {
+                return interner.intern(value);
+            }
+        }
     }
 }
 
@@ -220,4 +225,30 @@ pub(crate) fn holds_role_inclusion(
 /// which is the DL way to say "this individual is NOT `role`-related to that one".
 pub(crate) fn reaches(role: u32, filler: u32) -> Concept {
     Concept::Some(Role::Named(role), Box::new(Concept::nominal(vec![filler])))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refutation_symbols_do_not_alias_terms_added_after_preparation() {
+        let mut interner = Interner::default();
+        let mut fresh = FreshSymbols::for_interner(&interner);
+        let source = interner.intern(TermValue::blank("purrdfDlRefutation0"));
+        let first = fresh.mint(&mut interner);
+        assert_ne!(first, source);
+        assert_eq!(
+            interner.value(first),
+            &TermValue::blank("purrdfDlRefutation1")
+        );
+        let later = interner.intern(TermValue::blank("purrdfDlRefutation2"));
+        let second = fresh.mint(&mut interner);
+        assert_ne!(second, later);
+        assert_ne!(second, first);
+        assert_eq!(
+            interner.value(second),
+            &TermValue::blank("purrdfDlRefutation3")
+        );
+    }
 }

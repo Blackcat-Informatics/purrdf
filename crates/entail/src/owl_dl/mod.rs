@@ -74,6 +74,7 @@ pub(crate) mod proof;
 pub(crate) mod query;
 pub(crate) mod roles;
 pub(crate) mod saturate;
+mod source_terms;
 pub(crate) mod support;
 pub(crate) mod syntax;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
@@ -118,8 +119,8 @@ pub(crate) struct Kb {
     pub(crate) inputs: input_source::Inputs,
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
-    /// Term-id boundary before any query/refutation symbol is minted.
-    pub(crate) source_terms: u32,
+    /// Actual source membership, preserving holes occupied by query symbols.
+    pub(crate) source_terms: source_terms::SourceTerms,
     /// The structural concept interner.
     pub(crate) table: ConceptTable,
     /// Source-owned class-bound products; invalidated only at TBox ingress.
@@ -311,7 +312,7 @@ impl Kb {
             query_syntax: syntax::Syntax::query(),
             inputs: input_source::Inputs::default(),
             interner: Interner::default(),
-            source_terms: 0,
+            source_terms: source_terms::SourceTerms::default(),
             meta_sources: Vec::new(),
             absorbed_sources: Vec::new(),
             tbox_sources: Vec::new(),

@@ -20,7 +20,7 @@ mod schema;
 pub use origin::ResolvedAxiomSource;
 pub use schema::{QualifierKind, ResolvedSchema, ResolvedSchemaStep, SchemaReason, SchemaUpper};
 
-/// An exact RDF term and whether it existed before query preparation.
+/// An exact RDF term and whether it belongs to this prepared source world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedTerm<'a> {
     /// Consumer source vocabulary, retaining blank scope and literal metadata.
@@ -33,7 +33,7 @@ pub enum ResolvedTerm<'a> {
 
 fn term(kb: &Kb, id: u32) -> ResolvedTerm<'_> {
     let value = kb.interner.value(id);
-    if id < kb.source_terms {
+    if kb.source_terms.contains(id) {
         ResolvedTerm::Source(value)
     } else {
         ResolvedTerm::QuerySymbol(value)

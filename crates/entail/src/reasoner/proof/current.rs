@@ -221,8 +221,8 @@ fn matches_axiom(kb: &Kb, axiom: &DlAxiom, assumptions: &RunAssumptions) -> bool
             };
             *property == sub
                 && *subject != *object
-                && *subject >= kb.source_terms
-                && *object >= kb.source_terms
+                && !kb.source_terms.contains(*subject)
+                && !kb.source_terms.contains(*object)
                 && negative_reach(kb, assumptions, *subject, sup, *object, true)
         }
     }
