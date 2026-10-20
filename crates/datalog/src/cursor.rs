@@ -196,6 +196,28 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
     pub fn any_remaining(mut self) -> bool {
         self.next().is_some()
     }
+
+    /// Count the remaining matches from indexed run lengths and the bounded tail.
+    /// Sealed rows are never enumerated and no result buffer is allocated.
+    pub(crate) fn remaining_count(mut self) -> usize {
+        let mut count = 0;
+        loop {
+            count += match &self.inner {
+                Inner::Range { pos, end } => end - pos,
+                Inner::Perm { perm, pos } => perm.len() - pos,
+                Inner::One(position) => usize::from(position.is_some()),
+                Inner::Tail { pos } => self
+                    .rel
+                    .tail()
+                    .iter()
+                    .skip(*pos)
+                    .filter(|&(subject, object, _)| Self::tail_matches(self.bound, subject, object))
+                    .count(),
+                Inner::Done => return count,
+            };
+            self.enter(self.src + 1);
+        }
+    }
 }
 
 impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
@@ -628,6 +650,27 @@ mod tests {
 
     fn big_store() -> RelationStore {
         store_of(&big_tuples())
+    }
+
+    #[test]
+    fn indexed_remaining_counts_cover_batches_tail_and_consumed_rows() {
+        let store = big_store();
+        let subject = store.term_id(&iri("a")).unwrap();
+        let other = store.term_id(&iri("z")).unwrap();
+        let object = store.term_id(&iri("o000")).unwrap();
+        let missing_pair = store.term_id(&iri("o199")).unwrap();
+        for (bound, expected) in [
+            (Bound::Any, 201),
+            (Bound::Subject(subject), 200),
+            (Bound::Object(object), 2),
+            (Bound::Both(subject, object), 1),
+            (Bound::Both(other, missing_pair), 0),
+        ] {
+            assert_eq!(select(&store, P, bound).remaining_count(), expected);
+            let mut cursor = select(&store, P, bound);
+            let consumed = usize::from(cursor.next().is_some());
+            assert_eq!(cursor.remaining_count(), expected - consumed);
+        }
     }
 
     #[test]

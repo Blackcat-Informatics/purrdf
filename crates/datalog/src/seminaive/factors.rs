@@ -657,6 +657,8 @@ where
     tables: Vec<&'a FrontierTable<'a, D::Id, N>>,
     /// The authored head currently emitted.
     head: &'r [ArgShape; N],
+    /// The position in the authored head conjunction.
+    head_ordinal: usize,
     /// Rule identity and variable-frame width.
     entry: RuleEntry<'r, N>,
     /// Store and source proof heights.
@@ -751,6 +753,7 @@ where
             self.snapshot,
             evidence,
             HeadEvidence {
+                head: self.head_ordinal,
                 witness,
                 uses_absence: !self.entry.runtime.negated.is_empty()
                     || !self.entry.runtime.negations.is_empty(),
@@ -844,7 +847,7 @@ where
                 solution.retain_negative(id, owner)?;
             }
         }
-        for head in &entry.runtime.head {
+        for (head_ordinal, head) in entry.runtime.head.iter().enumerate() {
             let projections: Vec<_> = entry
                 .runtime
                 .factors
@@ -884,6 +887,7 @@ where
                 Product {
                     tables,
                     head,
+                    head_ordinal,
                     entry,
                     snapshot,
                 }
@@ -1064,6 +1068,7 @@ mod tests {
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
+            None,
         )
         .unwrap();
         let snapshot = RoundSnapshot {
@@ -1143,6 +1148,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             let binary = evaluate_rule(
@@ -1151,6 +1157,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1234,7 +1241,14 @@ mod tests {
                 delta: Delta { lo: 2, hi: 2 },
             };
             assert!(matches!(
-                evaluate_rule(entry, snapshot, strategy, StepGovernor::new(0), &NoGuards),
+                evaluate_rule(
+                    entry,
+                    snapshot,
+                    strategy,
+                    StepGovernor::new(0),
+                    &NoGuards,
+                    None
+                ),
                 Err(crate::seminaive::EvalError::Source(SourceLost(99)))
             ));
         }
@@ -1571,6 +1585,7 @@ mod tests {
                     JoinStrategy::ForcedBinary,
                     StepGovernor::new(u64::MAX),
                     &NoGuards,
+                    None,
                 )
                 .expect("exhaustive partial join matches");
                 assert_eq!(planned.entries.len(), binary.entries.len());
@@ -1692,6 +1707,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("factor round completes");
             let binary = evaluate_rule(
@@ -1700,6 +1716,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("exhaustive round completes");
             assert_eq!(planned.entries, binary.entries, "delta lower bound {lo}");
@@ -1772,6 +1789,7 @@ mod tests {
                             strategy,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("hybrid factor round matches")
                     };
@@ -2065,6 +2083,7 @@ mod tests {
                                 strategy,
                                 StepGovernor::new(u64::MAX),
                                 &NoGuards,
+                                None,
                             )
                             .expect("negative factor round completes")
                         };
@@ -2173,6 +2192,7 @@ mod tests {
             JoinStrategy::Planned,
             StepGovernor::new(3),
             &NoGuards,
+            None,
         )
         .expect("a false body requires no positive product");
         assert!(buffer.entries.is_empty());
@@ -2497,6 +2517,7 @@ mod tests {
                             JoinStrategy::Planned,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("factored round completes");
                         let binary = evaluate_rule(
@@ -2505,6 +2526,7 @@ mod tests {
                             JoinStrategy::ForcedBinary,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("exhaustive round completes");
                         assert_eq!(

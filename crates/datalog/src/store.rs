@@ -1104,6 +1104,25 @@ where
         self.relation.row_count()
     }
 
+    /// Count an indexed pattern without constructing a new historical access path.
+    /// A cold object permutation is unknown; subject/both bounds use primary runs,
+    /// and the mutable tail remains bounded by the sealing threshold.
+    pub(crate) fn indexed_count(self, bound: Bound<I>) -> Option<usize> {
+        if matches!(bound, Bound::Object(_))
+            && self
+                .relation
+                .batches()
+                .iter()
+                .any(|batch| batch.object_index.get().is_none())
+        {
+            return None;
+        }
+        Some(match bound {
+            Bound::Any => self.row_count(),
+            _ => self.select(bound).remaining_count(),
+        })
+    }
+
     /// Whether this partition holds a row whose store-global id is at least `index` —
     /// one O(1) comparison against the newest row id, so a semi-naive round can tell that
     /// a partition gained nothing since row `index` without scanning it.
@@ -2064,6 +2083,40 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{HostDictionary, SourceLost};
+
+    #[test]
+    fn cardinality_advice_never_builds_a_cold_historical_object_index() {
+        let mut store = RelationStore::new();
+        for index in 0..1000 {
+            store
+                .insert(&format!("s{index}"), "<p>", "marked", "")
+                .unwrap();
+        }
+        let predicate = store.term_id("<p>").unwrap();
+        let graph = store.term_id("").unwrap();
+        let subject = store.term_id("s0").unwrap();
+        let object = store.term_id("marked").unwrap();
+        let partition = store.partition(predicate, graph).unwrap();
+        assert!(!partition.relation.batches().is_empty());
+        assert_eq!(partition.indexed_count(Bound::Object(object)), None);
+        assert_eq!(partition.indexed_count(Bound::Subject(subject)), Some(1));
+        assert_eq!(
+            partition.indexed_count(Bound::Both(subject, object)),
+            Some(1)
+        );
+        assert!(
+            partition
+                .relation
+                .batches()
+                .iter()
+                .all(|batch| batch.object_index.get().is_none())
+        );
+        assert_eq!(
+            partition.select(Bound::Object(object)).remaining_count(),
+            1000
+        );
+        assert_eq!(partition.indexed_count(Bound::Object(object)), Some(1000));
+    }
 
     #[test]
     fn predicate_directory_skips_other_predicates_and_preserves_graph_order() {

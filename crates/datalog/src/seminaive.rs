@@ -920,27 +920,23 @@ pub enum EvalError<E = core::convert::Infallible> {
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
     /// The full rule bundle violates an assessor-only declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
-    /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
+    /// A clause's head is existential, disjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
     ///
     /// The DL-clause IR ([`crate::clause`]) represents all five head forms in one type, so a
-    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential and
-    /// conjunctive forms, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
+    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential
+    /// form, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
     /// disjunctive one (over its own concept-id atoms, through this crate's
     /// [`crate::clause::HeadForm`]), and both are refused by name HERE rather than
     /// parsed away. A semi-naive least-fixpoint evaluator computes the
-    /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
-    /// existential mints witnesses, a disjunction has no single least model, a conjunction
-    /// abbreviates several clauses at once, and `false` derives nothing while asserting
-    /// its body is unsatisfiable. None of the four is a definite clause, so each is
+    /// least model of definite clauses: an existential mints witnesses, a disjunction
+    /// has no single least model, and `false` derives nothing while asserting
+    /// its body is unsatisfiable. Each is
     /// refused by its OWN name here rather than silently ignored, silently treated as
     /// atomic, or reported under a neighbouring form's name.
     ///
-    /// The conjunctive case deserves the emphasis: `→ p(x) ∧ q(x)` *is* equivalent to two
-    /// Datalog rules over one body, and this evaluator could have split it. It does not,
-    /// because a [`Derivation`] names its producing clause by authored index, so splitting
-    /// one clause into two would renumber the program and move an observable. A caller who
-    /// wants the split performs it before compiling.
+    /// A head conjunction without existential variables shares one body evaluation.
+    /// Its derivations retain both the authored clause index and head ordinal.
     NonDatalogHead {
         /// The clause's index in authored program order.
         rule: usize,
@@ -1205,7 +1201,7 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
             Self::NonDatalogHead { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
-                 clauses (one head atom, no existential) only",
+                 clauses (an atomic or conjunctive head, no existential) only",
                 form.article()
             ),
             Self::NonStratifiable {
@@ -1362,6 +1358,8 @@ where
     fact: ShapeFact<N>,
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The producing atom's position in the authored head conjunction.
+    head: usize,
     /// The matched positive body facts, in authored body order.
     sources: Vec<ShapeFact<N>>,
     /// `1 + max(source proof heights)`; a seeded fact has height 0.
@@ -1380,6 +1378,11 @@ where
     /// The producing rule's index in authored program order.
     pub fn rule(&self) -> usize {
         self.rule
+    }
+
+    /// The producing atom's position in the authored head conjunction.
+    pub fn head(&self) -> usize {
+        self.head
     }
 
     /// The matched positive body facts, in authored body order.
@@ -1442,7 +1445,7 @@ where
 {
     /// The least model: the seeded EDB plus every derived fact.
     facts: RelationStore<D, N>,
-    /// Every derivation, in lexical `(fact, rule, sources)` order.
+    /// Every derivation, in lexical `(fact, rule, head, sources)` order.
     derivations: Option<Vec<Derivation<N>>>,
     /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
@@ -1503,7 +1506,7 @@ where
 /// Compile a rule program into the executor's [`Executable`], or refuse it.
 ///
 /// This is [`crate::plan`]'s pipeline with three refusals attached: a clause whose head is
-/// not a single unquantified atom is reported by head form, a non-stratifiable program is
+/// existential, disjunctive or false is reported by head form, a non-stratifiable program is
 /// reported with the concrete cycle its negative edge sits in, and a clause whose head
 /// carries a variable no positive body atom can bind is reported as not range-restricted.
 /// All three are hard errors; none has a best-effort fallback.
@@ -1516,12 +1519,8 @@ pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>,
 where
     Arity<N>: StoreShape<N>,
 {
-    // The head form is decided FIRST, because the other two checks are both defined in
-    // terms of a single head atom: an existential, a disjunctive or an empty head has no
-    // "the head predicate" to stratify on and no "the head variables" to range-restrict.
-    // Reporting either of those instead would be reporting a consequence of the real
-    // defect. This is the same gate `Parsed::new` enforces below; it runs here so the
-    // diagnostic is an `EvalError` alongside the other two.
+    // Decide the fragment before stratification and safety: neither check supplies
+    // semantics for witnesses, branching or inconsistency.
     for (index, rule) in rules.iter().enumerate() {
         let form = rule.head_form();
         if !form.is_datalog() {
@@ -1555,7 +1554,7 @@ where
     check_range_restricted(&rules)?;
 
     Ok(Parsed::new(rules)
-        .expect("every head form was just established to be atomic on the same rules")
+        .expect("every head form was just established to be Datalog on the same rules")
         .stratify()
         .expect("stratifiability was just established on the same rules")
         .plan()
@@ -2716,6 +2715,115 @@ where
 
 // ── Joining a rule body ─────────────────────────────────────────────────────────
 
+/// Indexed cardinality of a constant-key full pattern or a native delta pattern.
+/// A free-key full pattern returns `None` rather than sweeping historical partitions.
+/// Subject/object bounds use existing run lengths and the bounded mutable tail.
+fn constant_pattern_count<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
+    delta: Option<&DeltaRun<D::Id>>,
+) -> Result<Option<usize>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let constants = constant_positions(operator.shape(), rel)?;
+    if constants.contains(&Some(PositionValue::Missing)) {
+        return Ok(Some(0));
+    }
+    let positions = constants.map(|value| value.and_then(PositionValue::known));
+    if delta.is_none()
+        && !Arity::<N>::KEY_POSITIONS
+            .iter()
+            .all(|&position| positions[position].is_some())
+    {
+        return Ok(None);
+    }
+    let bound = match (positions[POSITION_SUBJECT], positions[POSITION_OBJECT]) {
+        (Some(subject), Some(object)) => Bound::Both(subject, object),
+        (Some(subject), None) => Bound::Subject(subject),
+        (None, Some(object)) => Bound::Object(object),
+        (None, None) => Bound::Any,
+    };
+    let mut count = 0usize;
+    for partition in rel.select_partitions(positions, delta) {
+        let selected = if delta.is_some() {
+            match bound {
+                Bound::Any => partition.row_count(),
+                _ => partition.select(bound).remaining_count(),
+            }
+        } else if let Some(selected) = partition.indexed_count(bound) {
+            selected
+        } else {
+            return Ok(None);
+        };
+        count = count.saturating_add(selected);
+    }
+    rel.interner().check_read()?;
+    Ok(Some(count))
+}
+
+/// Freeze metadata advice before any task can warm an access path. Empty means
+/// this all-row, single-atom or Base-reading join needs no adaptive advice.
+fn constant_pattern_counts<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    rel: &RelationStore<D, N>,
+    delta: Delta,
+) -> Result<Vec<Option<usize>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    rel.interner().check_read()?;
+    if delta == Delta::all(rel.row_count())
+        || plan.operators().len() <= 1
+        || plan
+            .operators()
+            .iter()
+            .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base)
+    {
+        return Ok(Vec::new());
+    }
+    let counts = plan
+        .operators()
+        .iter()
+        .map(|operator| constant_pattern_count(operator, rel, None))
+        .collect::<Result<_, _>>()?;
+    rel.interner().check_read()?;
+    Ok(counts)
+}
+
+/// Prefer an old indexed seed only when it is strictly smaller than the delta.
+/// This admits at most the delta's cardinality before probing the delta itself;
+/// a selective delta never pays for a large old prefix. Unknown/free-key full
+/// patterns cannot displace the delta. Counts read run metadata, not old tuples.
+fn decomposition_seed<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    anchor: usize,
+    full_counts: &[Option<usize>],
+) -> Result<usize, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let delta = snapshot
+        .indexes
+        .get(snapshot.delta, snapshot.rel.row_count());
+    let mut best = constant_pattern_count(&plan.operators()[anchor], snapshot.rel, delta)?
+        .expect("a partial delta has native indexed runs");
+    let mut seed = anchor;
+    for (position, count) in full_counts.iter().copied().enumerate() {
+        if position == anchor {
+            continue;
+        }
+        if let Some(count) = count
+            && count < best
+        {
+            seed = position;
+            best = count;
+        }
+    }
+    Ok(seed)
+}
+
 /// Which physical join the evaluator runs for a rule.
 ///
 /// Both strategies MUST produce the identical relation — that is the contract two
@@ -2743,11 +2851,20 @@ fn join_body<D: TermDictionary, const N: usize>(
     snapshot: JoinSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     governor: &mut StepGovernor,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
     snapshot.rel.interner().check_read()?;
+    let owned_counts = if full_counts.is_none() {
+        Some(constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?)
+    } else {
+        None
+    };
+    let full_counts = full_counts
+        .or(owned_counts.as_deref())
+        .expect("the join's metadata advice was prepared");
     let leapfrog = plan.has_cyclic_subplan()
         && matches!(strategy, JoinStrategy::Planned)
         && plan.operators().iter().all(|operator| {
@@ -2765,7 +2882,7 @@ where
     } else if leapfrog {
         join_positive_leapfrog(plan, snapshot, governor)
     } else {
-        join_positive_binary(plan, snapshot, governor)
+        join_positive_binary(plan, snapshot, governor, full_counts)
     }?;
     snapshot.rel.interner().check_read()?;
     Ok(joined)
@@ -2859,6 +2976,7 @@ fn join_positive_binary<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
+    full_counts: &[Option<usize>],
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2880,14 +2998,20 @@ where
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
-        for step in 0..operators.len() {
-            let position = if reordered && step == 0 {
-                delta_position
-            } else if reordered && step <= delta_position {
-                step - 1
-            } else {
-                step
-            };
+        let seed = if reordered {
+            decomposition_seed(plan, snapshot, delta_position, full_counts)?
+        } else {
+            delta_position
+        };
+        let order = [seed, delta_position]
+            .into_iter()
+            .enumerate()
+            .filter(|&(index, position)| reordered && (index == 0 || position != seed))
+            .map(|(_, position)| position)
+            .chain((0..operators.len()).filter(|&position| {
+                !reordered || (position != seed && position != delta_position)
+            }));
+        for position in order {
             let extend = if reordered {
                 extend_rebound_solutions
             } else {
@@ -2912,17 +3036,20 @@ where
         }
         if reordered {
             for solution in &mut partial {
-                solution.sources[..=delta_position].rotate_left(1);
+                solution
+                    .sources
+                    .sort_unstable_by_key(|source| source.body_index);
+            }
+        } else {
+            for solution in &mut partial {
+                for &(left, right) in plan.operator_source_order_swaps() {
+                    solution.sources.swap(left, right);
+                }
             }
         }
         all.extend(partial);
         if governor.spent() {
             break;
-        }
-    }
-    for solution in &mut all {
-        for &(left, right) in plan.operator_source_order_swaps() {
-            solution.sources.swap(left, right);
         }
     }
     snapshot.rel.interner().check_read()?;
@@ -3726,9 +3853,13 @@ where
             guard: call.guard.name().to_owned(),
             message,
         };
-        let rows = guards
-            .evaluate(call)
-            .map_err(|error| error.into_eval_error(refuse))?;
+        let rows = match call.guard.operation().filter(call.inputs) {
+            Some(true) => vec![Vec::new()],
+            Some(false) => Vec::new(),
+            None => guards
+                .evaluate(call)
+                .map_err(|error| error.into_eval_error(refuse))?,
+        };
         let width = call.guard.outputs().len();
         for row in &rows {
             if !governor.charge() {
@@ -3772,8 +3903,8 @@ where
     /// Independent positive components, certified without opaque callbacks.
     factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
-    /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
-    /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
+    /// order. A conjunctive head asserts every conjunct from one body solution under
+    /// both the stratified fixpoint and the ordered schedule ([`crate::schedule`]).
     head: Vec<[ArgShape; N]>,
     /// The rule's negated body atoms, in authored order.
     negated: Vec<NegatedAtom<N>>,
@@ -3936,6 +4067,8 @@ where
 {
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The authored head ordinal, also distinguishing repeated head atoms.
+    head: usize,
     /// The matched body rows, in authored body order.
     sources: Vec<SourceRow<I, N>>,
     /// `1 + max(source proof heights)`.
@@ -3970,7 +4103,8 @@ where
     /// Whether this candidate beats `other` for the same head fact.
     ///
     /// A TOTAL order over observable provenance:
-    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts)`,
+    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
+    /// head ordinal)`,
     /// smallest wins. Every component is content-derived — proof heights, lexical fact
     /// surfaces and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
@@ -3990,7 +4124,7 @@ where
             || source_preference(&self.sources, self.rule, &other.sources, other.rule, rel),
         )?;
         rel.interner().check_read()?;
-        Ok(order.is_lt())
+        Ok(order.then_with(|| self.head.cmp(&other.head)).is_lt())
     }
 }
 
@@ -4070,12 +4204,15 @@ where
             (other.derivation.proof_height, other.sum_source_height),
             (self.derivation.proof_height, self.sum_source_height),
             || {
-                Ok::<_, core::convert::Infallible>(fact_preference(
-                    &other.derivation.sources,
-                    other.derivation.rule,
-                    &self.derivation.sources,
-                    self.derivation.rule,
-                ))
+                Ok::<_, core::convert::Infallible>(
+                    fact_preference(
+                        &other.derivation.sources,
+                        other.derivation.rule,
+                        &self.derivation.sources,
+                        self.derivation.rule,
+                    )
+                    .then_with(|| other.derivation.head.cmp(&self.derivation.head)),
+                )
             },
         )
         .unwrap_or_else(|never| match never {})
@@ -4306,11 +4443,20 @@ fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
     strategy: JoinStrategy,
     governor: StepGovernor,
     guards: &dyn GuardEvaluator<D, N>,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
-    evaluate_rule_with_evidence(entry, snapshot, strategy, governor, guards, None)
+    evaluate_rule_with_evidence(
+        entry,
+        snapshot,
+        strategy,
+        governor,
+        guards,
+        None,
+        full_counts,
+    )
 }
 
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
@@ -4320,6 +4466,7 @@ fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     mut governor: StepGovernor,
     guards: &dyn GuardEvaluator<D, N>,
     mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
@@ -4333,6 +4480,17 @@ where
         delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
         ..snapshot
     };
+    let owned_counts = if full_counts.is_none() {
+        Some(
+            constant_pattern_counts(entry.plan, snapshot.rel, entry.delta)
+                .map_err(EvalError::Source)?,
+        )
+    } else {
+        None
+    };
+    let full_counts = full_counts
+        .or(owned_counts.as_deref())
+        .expect("the rule's metadata advice was prepared");
     snapshot
         .rel
         .interner()
@@ -4340,6 +4498,13 @@ where
         .map_err(EvalError::Source)?;
     let result = (|| {
         let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
+        if entry.delta != Delta::all(rel.row_count())
+            && plan.operators().len() > 1
+            && !entry.rule.reads_base()
+            && full_counts.contains(&Some(0))
+        {
+            return Ok(RoundBuffer::new());
+        }
         if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
         }
@@ -4354,6 +4519,7 @@ where
             },
             strategy,
             &mut governor,
+            Some(full_counts),
         )
         .map_err(EvalError::Source)?;
 
@@ -4465,6 +4631,7 @@ where
                     snapshot,
                     &mut evidence,
                     HeadEvidence {
+                        head: position,
                         witness: None,
                         uses_absence: !runtime.negated.is_empty() || !runtime.negations.is_empty(),
                     },
@@ -4485,6 +4652,7 @@ where
 /// The witness and absence dependency of one emitted head.
 #[derive(Clone, Copy)]
 struct HeadEvidence {
+    head: usize,
     witness: Option<purrdf_core::evidence::EvidenceId>,
     uses_absence: bool,
 }
@@ -4537,6 +4705,7 @@ where
                 derivation: Derivation {
                     fact: key.fact(rel).map_err(EvalError::Source)?,
                     rule,
+                    head: head_evidence.head,
                     sources: solution
                         .sources
                         .iter()
@@ -4561,6 +4730,7 @@ where
             key,
             Candidate {
                 rule,
+                head: head_evidence.head,
                 sources: solution.sources.clone(),
                 proof_height: proof_height.saturating_add(1),
                 sum_source_height,
@@ -4681,6 +4851,14 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    // Every task sees the same pre-task access-path state, including on the
+    // sequential policy. An earlier task's lazy index cannot change a later
+    // task's join order or candidate charges.
+    let full_counts: Vec<_> = entries
+        .iter()
+        .map(|entry| constant_pattern_counts(entry.plan, snapshot.rel, entry.delta))
+        .collect::<Result<_, _>>()
+        .map_err(EvalError::Source)?;
     let indexes = DeltaIndexes::build(snapshot.rel, entries.iter().map(|entry| entry.delta))?;
     let snapshot = RoundSnapshot {
         delta_indexes: Some(&indexes),
@@ -4696,7 +4874,7 @@ where
         let guarded = entries.iter().any(|entry| entry.rule.is_guarded());
         let mut round = RoundBuffer::new();
         if evidence.is_some() || guarded || !execution.should_parallelize(entries.len()) {
-            for &entry in entries {
+            for (position, &entry) in entries.iter().enumerate() {
                 let buffer = match evidence.as_mut() {
                     Some(owner) => evaluate_rule_with_evidence(
                         entry,
@@ -4705,8 +4883,16 @@ where
                         pool.task(),
                         guards,
                         Some(&mut **owner),
+                        Some(&full_counts[position]),
                     )?,
-                    None => evaluate_rule(entry, snapshot, strategy, pool.task(), guards)?,
+                    None => evaluate_rule(
+                        entry,
+                        snapshot,
+                        strategy,
+                        pool.task(),
+                        guards,
+                        Some(&full_counts[position]),
+                    )?,
                 };
                 round
                     .merge_from(buffer, snapshot.rel)
@@ -4727,7 +4913,17 @@ where
         // evaluator every task receives is the one that refuses every call.
         let buffers: Vec<_> = entries
             .par_iter()
-            .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
+            .enumerate()
+            .map(|(position, &entry)| {
+                evaluate_rule(
+                    entry,
+                    snapshot,
+                    strategy,
+                    pool.task(),
+                    &NoGuards,
+                    Some(&full_counts[position]),
+                )
+            })
             .collect();
 
         for buffer in buffers {
@@ -5375,6 +5571,7 @@ where
             state.derivations.push(Derivation {
                 fact,
                 rule: candidate.rule,
+                head: candidate.head,
                 sources,
                 proof_height: candidate.proof_height,
             });
@@ -5393,6 +5590,163 @@ mod tests {
     use crate::synth_corpus::{self, SynthWorkload};
     use crate::test_support::evidence_scope;
     use crate::test_support::permute;
+
+    #[test]
+    fn impossible_constant_patterns_refuse_before_broad_delta_seeding() {
+        let broad = ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::var("?p"),
+            ClauseTerm::var("?o"),
+        );
+        let declared = ClauseAtom::triple(
+            ClauseTerm::var("?p"),
+            ClauseTerm::literal("declared"),
+            ClauseTerm::literal("missing"),
+        );
+        let head = ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::literal("out"),
+            ClauseTerm::var("?o"),
+        );
+        let program = compile(vec![DlClause::datalog(head, vec![broad, declared])]).unwrap();
+        let (rule, plan) = program.rule_entry(0);
+        let runtime = RuleRuntime::new(rule, plan);
+        let mut store = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for row in [
+            ["p", "declared", "active"],
+            ["missing", "exists", "yes"],
+            ["a", "p", "b"],
+        ] {
+            store.insert_row(row).unwrap();
+        }
+        let depth = vec![0; store.row_count()];
+        let pool = StepGovernor::new(0);
+        let result = evaluate_rule(
+            RuleEntry {
+                index: 0,
+                rule,
+                plan,
+                runtime: &runtime,
+                delta: Delta { lo: 2, hi: 3 },
+            },
+            RoundSnapshot {
+                rel: &store,
+                depth: &depth,
+                assumed: &[],
+                delta_indexes: None,
+            },
+            JoinStrategy::Planned,
+            pool.task(),
+            &NoGuards,
+            None,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert_eq!(pool.observed(), 0);
+        assert!(
+            !pool.spent(),
+            "an impossible indexed pattern needs no candidate admission"
+        );
+    }
+
+    #[test]
+    fn round_work_does_not_depend_on_another_tasks_index_warming() {
+        let atom = |subject: &str, predicate: &str, object: &str| {
+            ClauseAtom::triple(
+                if subject.starts_with('?') {
+                    ClauseTerm::var(subject)
+                } else {
+                    ClauseTerm::literal(subject)
+                },
+                ClauseTerm::literal(predicate),
+                if object.starts_with('?') {
+                    ClauseTerm::var(object)
+                } else {
+                    ClauseTerm::literal(object)
+                },
+            )
+        };
+        let program = compile(vec![
+            DlClause::datalog(
+                atom("?s", "out", "?tag"),
+                vec![atom("?s", "p", "needle"), atom("?s", "q", "?tag")],
+            ),
+            DlClause::datalog(
+                atom("?s", "warmed", "needle"),
+                vec![atom("?s", "p", "needle")],
+            ),
+        ])
+        .unwrap();
+        let (target, target_plan) = program.rule_entry(0);
+        let (warmer, warmer_plan) = program.rule_entry(1);
+        let target_runtime = RuleRuntime::new(target, target_plan);
+        let warmer_runtime = RuleRuntime::new(warmer, warmer_plan);
+        let mut original =
+            RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for index in 0..1000 {
+            let subject = format!("s{index}");
+            let object = if index == 0 {
+                "needle".to_owned()
+            } else {
+                format!("other{index}")
+            };
+            original.insert_row([&subject, "p", &object]).unwrap();
+        }
+        let lo = original.row_count();
+        for index in 0..5 {
+            original
+                .insert_row([&format!("s{index}"), "q", "tag"])
+                .unwrap();
+        }
+        let mut observations = Vec::new();
+        for warm_first in [false, true] {
+            let store = original.clone();
+            let target = RuleEntry {
+                index: 0,
+                rule: target,
+                plan: target_plan,
+                runtime: &target_runtime,
+                delta: Delta {
+                    lo,
+                    hi: store.row_count(),
+                },
+            };
+            let warmer = RuleEntry {
+                index: 1,
+                rule: warmer,
+                plan: warmer_plan,
+                runtime: &warmer_runtime,
+                delta: Delta::all(store.row_count()),
+            };
+            let entries = if warm_first {
+                [warmer, target]
+            } else {
+                [target, warmer]
+            };
+            let round = evaluate_round(
+                &entries,
+                RoundSnapshot {
+                    rel: &store,
+                    depth: &vec![0; store.row_count()],
+                    assumed: &[],
+                    delta_indexes: None,
+                },
+                RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                u64::MAX,
+                &NoGuards,
+            )
+            .unwrap();
+            observations.push((
+                round.join_steps,
+                round.entries.keys().cloned().collect::<Vec<_>>(),
+            ));
+        }
+        assert_eq!(
+            observations[0], observations[1],
+            "task order must not select a different physical join"
+        );
+    }
 
     #[test]
     fn partial_delta_cursors_never_visit_the_old_label_history() {
@@ -5463,6 +5817,7 @@ mod tests {
                 },
                 JoinStrategy::Planned,
                 &mut governor,
+                None,
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
@@ -5532,6 +5887,7 @@ mod tests {
                     indexes: &indexes,
                 },
                 &mut governor,
+                &constant_pattern_counts(plan, &store, delta).unwrap(),
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
@@ -5616,6 +5972,7 @@ mod tests {
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
+            None,
         )
         .unwrap();
         assert_eq!(solutions.len(), 2);
@@ -5642,6 +5999,7 @@ mod tests {
                         key,
                         Candidate {
                             rule: 0,
+                            head: 0,
                             sources: solution.sources.clone(),
                             proof_height: 1,
                             sum_source_height: 0,
@@ -5737,6 +6095,7 @@ mod tests {
                 },
                 &mut Some(&mut capture),
                 HeadEvidence {
+                    head: 0,
                     witness: None,
                     uses_absence: false,
                 },
@@ -5855,6 +6214,7 @@ mod tests {
                 },
                 JoinStrategy::Planned,
                 &mut StepGovernor::new(u64::MAX),
+                None,
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
@@ -6156,13 +6516,20 @@ mod tests {
                 indexes: &indexes,
             };
             let mut planned_governor = StepGovernor::new(u64::MAX);
-            let planned =
-                join_body(plan, snapshot, JoinStrategy::Planned, &mut planned_governor).unwrap();
+            let planned = join_body(
+                plan,
+                snapshot,
+                JoinStrategy::Planned,
+                &mut planned_governor,
+                None,
+            )
+            .unwrap();
             let binary = join_body(
                 plan,
                 snapshot,
                 JoinStrategy::ForcedBinary,
                 &mut StepGovernor::new(u64::MAX),
+                None,
             )
             .unwrap();
             assert_eq!(planned, binary);
@@ -6196,7 +6563,8 @@ mod tests {
                     indexes: &DeltaIndexes { runs: Vec::new() },
                 },
                 JoinStrategy::Planned,
-                &mut StepGovernor::new(0)
+                &mut StepGovernor::new(0),
+                None,
             )
             .unwrap_err(),
             SourceLost(99)
@@ -7797,6 +8165,7 @@ mod tests {
                 Derivation {
                     fact: fact.clone(),
                     rule: 0,
+                    head: 0,
                     sources: vec![
                         seed_fact(
                             &root,
@@ -8442,16 +8811,9 @@ mod tests {
         assert!(error.to_string().contains("a disjunctive head"));
     }
 
-    /// A CONJUNCTIVE head is refused by a name that is TRUE.
-    ///
-    /// `q(?x, ?y) ∧ r(?x, ?y) :- p(?x, ?y)` is not a Datalog rule — a definite clause has
-    /// exactly one head atom — but it is not a disjunction either, and there is no witness
-    /// to mint. Reporting it as "disjunctive" or "existential" would name a property the
-    /// clause does not have, so the refusal carries its own form. The clause IS equivalent
-    /// to two Datalog rules, and the evaluator still refuses it rather than splitting it:
-    /// the split would renumber the program that a derivation's clause index names.
+    /// A conjunction preserves its authored clause index and checks every head's safety.
     #[test]
-    fn a_conjunctive_head_is_refused_by_its_own_name() {
+    fn a_conjunctive_head_checks_every_authored_atom() {
         let rules = vec![DlClause::new(
             vec![HeadDisjunct::new(vec![
                 atom("?x", Q, "?y"),
@@ -8460,25 +8822,19 @@ mod tests {
             Vec::new(),
             vec![atom("?x", P, "?y")],
         )];
-        let error = compile(rules).expect_err("a conjunctive head is not a Datalog rule");
-        assert_eq!(
-            error,
-            EvalError::NonDatalogHead {
-                rule: 0,
-                form: HeadForm::Conjunctive,
-            }
+        let executable = compile(rules).expect("ordinary conjunction is Datalog");
+        assert_eq!(executable.rule_count(), 1);
+        assert_eq!(executable.rule_entry(0).0.head_atoms().count(), 2);
+        let unsafe_rule = DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("?x", Q, "?y"),
+                atom("?x", R, "?unbound"),
+            ])],
+            Vec::new(),
+            vec![atom("?x", P, "?y")],
         );
-        let rendered = error.to_string();
-        assert!(rendered.contains("a conjunctive head"), "{rendered}");
         assert!(
-            !rendered.contains("disjunctive"),
-            "the refusal must not name a property the clause lacks: {rendered}"
-        );
-        // The trailing "(one head atom, no existential)" states what a Datalog clause IS,
-        // so only the phrase that NAMES this clause's form is asserted against.
-        assert!(
-            !rendered.contains("an existential head"),
-            "the refusal must not name a property the clause lacks: {rendered}"
+            matches!(compile(vec![unsafe_rule]), Err(EvalError::UnboundHeadVariable { rule: 0, variable }) if variable == "?unbound")
         );
     }
 

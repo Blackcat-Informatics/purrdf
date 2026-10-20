@@ -76,6 +76,7 @@ use std::fmt;
 use hashbrown::HashTable;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use crate::guard::GuardOperation;
 use crate::id::ProofId;
 use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::Evaluation;
@@ -90,8 +91,8 @@ pub use malformed::ProofMalformed;
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v1");
-const TRIPLE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-triple-proof-v1");
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v2");
+const TRIPLE_PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-triple-proof-v2");
 
 /// Wire kind byte: an axiom (assertion) leaf.
 const KIND_AXIOM: u8 = 0;
@@ -139,7 +140,16 @@ where
         /// The cited clause index.
         rule: usize,
     },
-    /// A rule application names a clause whose head is not a single unquantified atom, so
+    /// A rule application names a head ordinal outside the authored conjunction.
+    UnknownHead {
+        /// The cited clause index.
+        rule: usize,
+        /// The cited head ordinal.
+        head: usize,
+        /// Number of authored head atoms.
+        heads: usize,
+    },
+    /// A rule application names a clause whose head is not an unquantified conjunction, so
     /// it licenses no Datalog step at all.
     NonDatalogRule {
         /// The cited clause index.
@@ -185,8 +195,28 @@ where
         /// The unbound head variable, as authored.
         variable: String,
     },
-    /// A rule application names a clause carrying guard literals or negated conjunctions
-    /// ([`crate::guard`]). Their truth is caller code the checker has no evaluator for, so
+    /// A native guard reads a variable that its checked premises did not bind.
+    UnboundGuardVariable {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original variable name.
+        variable: String,
+    },
+    /// A native guard rejects the terms established by the checked premises.
+    GuardRejected {
+        /// The cited clause index.
+        rule: usize,
+        /// The guard's authored position.
+        guard: usize,
+        /// The original native operation.
+        operation: GuardOperation,
+        /// Original checked input terms, in declared order.
+        inputs: Box<[String]>,
+    },
+    /// A rule application names a clause carrying callbacks or negated conjunctions
+    /// ([`crate::guard`]). The checker has no interpretation for these, so
     /// it cannot re-derive the step — and it refuses rather than accept a step it did not
     /// check.
     GuardedRule {
@@ -235,6 +265,10 @@ where
                     "the proof cites clause {rule}, which the program has not"
                 )
             }
+            Self::UnknownHead { rule, head, heads } => write!(
+                f,
+                "clause {rule} has {heads} head atoms, so head ordinal {head} does not exist"
+            ),
             Self::NonDatalogRule { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head, so it licenses no Datalog step",
@@ -269,6 +303,18 @@ where
             Self::UnboundHeadVariable { rule, variable } => write!(
                 f,
                 "clause {rule} head variable {variable} is not bound by the checked premises"
+            ),
+            Self::UnboundGuardVariable {
+                rule,
+                guard,
+                variable,
+            } => write!(
+                f,
+                "clause {rule} guard {guard} variable {variable} is not bound by the checked premises"
+            ),
+            Self::GuardRejected { rule, guard, .. } => write!(
+                f,
+                "clause {rule} native guard {guard} rejects the checked input terms"
             ),
             Self::GuardedRule { rule } => write!(
                 f,
@@ -312,11 +358,14 @@ where
         Malformed { detail } => "datalog-proof-malformed" { "detail" => Cause(detail) },
         NotAsserted { goal } => "datalog-proof-not-asserted" { "goal" => Record(goal.as_ref()) },
         UnknownRule { rule } => "datalog-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
+        UnknownHead { rule, head, heads } => "datalog-proof-unknown-head" { "rule" => Unsigned(*rule as u128), "head" => Unsigned(*head as u128), "heads" => Unsigned(*heads as u128) },
         NonDatalogRule { rule, form } => "datalog-proof-non-datalog-rule" { "rule" => Unsigned(*rule as u128), "form" => Record(form) },
         PremiseCountMismatch { rule, body, premises } => "datalog-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
         PremiseMismatch { rule, body_position, proven } => "datalog-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128), "proven" => Record(proven.as_ref()) },
         NegatedPremiseSatisfied { rule, body_position } => "datalog-proof-negated-premise-satisfied" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128) },
         UnboundHeadVariable { rule, variable } => "datalog-proof-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
+        UnboundGuardVariable { rule, guard, variable } => "datalog-proof-unbound-guard-variable" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "variable" => Text(variable) },
+        GuardRejected { rule, guard, operation, inputs } => "datalog-proof-guard-rejected" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "operation" => Record(operation), "inputs" => List(inputs.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value.as_str()))) },
         GuardedRule { rule } => "datalog-proof-guarded-rule" { "rule" => Unsigned(*rule as u128) },
         GoalMismatch { rule, derived, stated } => "datalog-proof-goal-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Record(derived.as_ref()), "stated" => Record(stated.as_ref()) },
     }
@@ -348,6 +397,8 @@ where
         goal: ShapeFact<N>,
         /// The producing clause's index in authored program order.
         rule: usize,
+        /// The producing atom's ordinal in the authored head conjunction.
+        head: usize,
         /// One premise per POSITIVE body atom, in authored body order.
         premises: Vec<ProofId>,
     },
@@ -364,8 +415,9 @@ where
             Self::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
-            } => (goal, Some((*rule, premises))),
+            } => (goal, Some((*rule, *head, premises))),
         }
     }
 
@@ -378,7 +430,7 @@ where
 }
 
 /// An axiom or rule application, borrowing all lexical and premise payloads.
-type ProofIdentity<'a, const N: usize> = (&'a ShapeFact<N>, Option<(usize, &'a [ProofId])>);
+type ProofIdentity<'a, const N: usize> = (&'a ShapeFact<N>, Option<(usize, usize, &'a [ProofId])>);
 
 /// Fold `fact`'s four length-prefixed surfaces into `hasher`.
 fn hash_fact<const N: usize>(hasher: &mut impl Hasher, fact: &ShapeFact<N>)
@@ -408,10 +460,11 @@ where
             hasher.write_u8(KIND_AXIOM);
             hash_fact::<N>(&mut hasher, goal);
         }
-        Some((rule, premises)) => {
+        Some((rule, head, premises)) => {
             hasher.write_u8(KIND_BY_RULE);
             hash_fact::<N>(&mut hasher, goal);
             hasher.write_u64(rule as u64);
+            hasher.write_u64(head as u64);
             hasher.write_u64(premises.len() as u64);
             for premise in premises {
                 hasher.write_u64(premise.index());
@@ -537,7 +590,8 @@ where
     /// Intern a RULE APPLICATION: `goal` follows from `premises` by clause `rule`.
     ///
     /// `premises` are one per POSITIVE body atom of the clause, in authored body order. The
-    /// stated `goal` is recorded but is never an input to checking; it exists so that
+    /// selected head ordinal is zero; [`Self::by_rule_head`] selects another conjunct.
+    /// The stated `goal` is recorded but is never an input to checking; it exists so that
     /// [`check`](Self::check) has something to compare its own re-derivation against, and so
     /// that a tampered conclusion is a detectable forgery rather than an unrepresentable one.
     ///
@@ -553,13 +607,30 @@ where
         rule: usize,
         premises: &[ProofId],
     ) -> Result<ProofId, StorageError> {
+        self.by_rule_head(goal, rule, 0, premises)
+    }
+
+    /// Intern an application of one authored head atom, sharing its body's premises.
+    ///
+    /// # Errors
+    /// Returns the original storage refusal when the arena cannot admit the node.
+    ///
+    /// # Panics
+    /// Panics if a premise was not already interned in this arena.
+    pub fn by_rule_head(
+        &mut self,
+        goal: ShapeFact<N>,
+        rule: usize,
+        head: usize,
+        premises: &[ProofId],
+    ) -> Result<ProofId, StorageError> {
         for premise in premises {
             assert!(
                 premise.resident_index() < self.terms.len(),
                 "a premise must be interned in this arena before the step it justifies"
             );
         }
-        let identity = (&goal, Some((rule, premises)));
+        let identity = (&goal, Some((rule, head, premises)));
         let hash = term_hash::<N>(identity);
         if let Some(id) = self.find(identity, hash) {
             return Ok(id);
@@ -572,6 +643,7 @@ where
             ProofTerm::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
             },
             hash,
@@ -654,6 +726,17 @@ where
         match self.term(id) {
             ProofTerm::Axiom { .. } => None,
             ProofTerm::ByRule { rule, .. } => Some(*rule),
+        }
+    }
+
+    /// The authored head ordinal of a rule application, or `None` for an axiom.
+    ///
+    /// # Panics
+    /// Panics if `id` was not minted by this arena.
+    pub fn head(&self, id: ProofId) -> Option<usize> {
+        match self.term(id) {
+            ProofTerm::Axiom { .. } => None,
+            ProofTerm::ByRule { head, .. } => Some(*head),
         }
     }
 
@@ -774,8 +857,9 @@ where
             ProofTerm::ByRule {
                 goal,
                 rule,
+                head,
                 premises,
-            } => self.check_rule_step(index, *rule, premises, goal, proven, ctx),
+            } => self.check_rule_step(index, (*rule, *head), premises, goal, proven, ctx),
         }
     }
 
@@ -783,7 +867,7 @@ where
     fn check_rule_step(
         &self,
         index: usize,
-        rule: usize,
+        (rule, head): (usize, usize),
         premises: &[ProofId],
         stated: &ShapeFact<N>,
         proven: &BTreeMap<usize, ShapeFact<N>>,
@@ -795,13 +879,23 @@ where
             .ok_or(ProofError::UnknownRule { rule })?;
         // A clause with any other head form licenses no Datalog step, so there is no head
         // to instantiate and nothing to compare — that is a refusal, not a mismatch.
-        let head = clause
-            .datalog_head()
+        let heads = clause
+            .datalog_heads()
             .ok_or_else(|| ProofError::NonDatalogRule {
                 rule,
                 form: clause.head_form(),
             })?;
-        if clause.is_guarded() {
+        let head = heads.get(head).ok_or(ProofError::UnknownHead {
+            rule,
+            head,
+            heads: heads.len(),
+        })?;
+        if !clause.negations().is_empty()
+            || clause
+                .guards()
+                .iter()
+                .any(|guard| guard.operation() == GuardOperation::Callback)
+        {
             return Err(ProofError::GuardedRule { rule });
         }
 
@@ -845,6 +939,36 @@ where
                     body_position,
                     proven: Box::new(fact.clone()),
                 });
+            }
+        }
+
+        // Native filters are independently decided from the checked substitution.
+        // The guarded-fragment gate above has already refused caller callbacks.
+        for (position, guard) in clause.guards().iter().enumerate() {
+            let inputs = guard
+                .inputs()
+                .iter()
+                .map(|variable| {
+                    subst.get(variable.as_str()).copied().ok_or_else(|| {
+                        ProofError::UnboundGuardVariable {
+                            rule,
+                            guard: position,
+                            variable: variable.clone(),
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            match guard.operation().filter(&inputs) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(ProofError::GuardRejected {
+                        rule,
+                        guard: position,
+                        operation: guard.operation(),
+                        inputs: inputs.into_iter().map(str::to_owned).collect(),
+                    });
+                }
+                None => unreachable!("caller callbacks were refused before checking premises"),
             }
         }
 
@@ -905,9 +1029,10 @@ where
     /// u64 node_count
     /// node_count times, in emission order:
     ///     u8  kind                                -- 0 axiom, 1 by_rule
-    ///     u64 len + bytes, four times             -- subject, predicate, object, graph
+    ///     u64 len + bytes, N times                -- subject, predicate, object[, graph]
     ///     if kind == 1:
     ///         u64 rule
+    ///         u64 head                            -- ordinal in the authored head conjunction
     ///         u64 premise_count
     ///         u64 premise position, premise_count times   -- each < this node's position
     /// ```
@@ -939,11 +1064,13 @@ where
                 ProofTerm::ByRule {
                     goal,
                     rule,
+                    head,
                     premises,
                 } => {
                     out.push(KIND_BY_RULE);
                     frame_fact::<N>(&mut out, goal);
                     out.extend_from_slice(&(*rule as u64).to_le_bytes());
+                    out.extend_from_slice(&(*head as u64).to_le_bytes());
                     out.extend_from_slice(&(premises.len() as u64).to_le_bytes());
                     for premise in premises {
                         let back = position[&premise.resident_index()];
@@ -1047,6 +1174,7 @@ where
                 KIND_AXIOM => arena.axiom(goal)?,
                 KIND_BY_RULE => {
                     let rule = reader.length()?;
+                    let head = reader.length()?;
                     let premise_count = reader.length()?;
                     // Never sized from the stream: a forged count must not be able to ask
                     // for an allocation before its bytes have been shown to exist.
@@ -1061,7 +1189,7 @@ where
                         }
                         premises.push(ids[back]);
                     }
-                    arena.by_rule(goal, rule, &premises)?
+                    arena.by_rule_head(goal, rule, head, &premises)?
                 }
                 other => {
                     return Err(ProofError::Malformed {
@@ -1143,7 +1271,12 @@ where
                 };
                 premises.push(premise);
             }
-            let root = arena.by_rule(derivation.fact().clone(), derivation.rule(), &premises)?;
+            let root = arena.by_rule_head(
+                derivation.fact().clone(),
+                derivation.rule(),
+                derivation.head(),
+                &premises,
+            )?;
             built.insert(derivation.fact(), root);
         }
 
@@ -2183,7 +2316,7 @@ mod tests {
         let (arena, root) = chain_proof();
         assert_eq!(
             purrdf_hash::hex::Lower(&arena.digest(root)).to_string(),
-            "f0a9ff8c6ea22b070ff42b9cd0afbfb9517f4e88ad44913e1a093a51311642fb"
+            "387a8cd9cfd04190710eee298ba06761dcb85e521996c17d9f8c9c2bf8efc2ca"
         );
     }
 

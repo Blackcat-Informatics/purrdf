@@ -593,12 +593,14 @@ source on every run.
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-guarded-dl-clause-ir-v1"` | `GUARDED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-guarded-dl-clause-ir-v2"` | `NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-guarded-triple-clause-ir-v1"` | `GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-guarded-triple-clause-ir-v2"` | `NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-plan-identity-v1"` | `PLAN_IDENTITY_TAG` | `crates/datalog/src/cache.rs` |
-| `b"purrdf-datalog-proof-v1"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog-proof-v2"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-triple-clause-ir-v1"` | `TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
-| `b"purrdf-datalog-triple-proof-v1"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog-triple-proof-v2"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |

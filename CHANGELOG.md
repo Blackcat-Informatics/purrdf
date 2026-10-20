@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **SHACL SPARQL argument failures:** COALESCE, IF, boolean and membership forms can mask
+  catchable nested node-expression failures using SPARQL semantics, while
+  unmasked failures retain their original cause and empty results stay distinct.
+  Validation recursion refusals now carry typed
+  `ProcessorFailure::ValidationDepth` fields and cannot be caught as expression
+  errors. Processor, storage and stop failures always escape the call.
+
 - **Actionable SHACL arena refusals:** rule entry points retain the actual
   observed bytes and ceiling and advise reducing retained term sizes. Direct
   Datalog refusals continue to name their available `EvalOptions` setting.
@@ -18,10 +25,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the all-row seed borrows the accumulated store. Original row, partition and
   term IDs are retained, with no term rendering or whole-store delta scans.
 
-- **Delta-first rule joins:** partial Datalog rounds bind their new-row anchor
+- **Selective delta rule joins:** partial Datalog rounds bind their new-row anchor
   before visiting old join prefixes, including factored and cyclic bodies.
+  Binary joins may first use one strictly smaller indexed seed, then immediately
+  probe the delta. Cardinality advice reads existing runs and never constructs a
+  cold historical object index. Impossible constant patterns skip delta seeding.
+  Advice is frozen before rule tasks run, so a sibling warming a lazy index
+  cannot change the round's candidate work.
   Dynamic probes constrain every already-bound position and retain authored
-  proof order. Physical planner version 3 identifies the changed candidate
+  proof order. Physical planner version 5 identifies the changed candidate
   accounting; completed models and semantic fact counts retain their meaning.
 
 - **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
@@ -84,6 +96,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   admitted count from the first refused insertion. Semantic fact counts and
   versioned candidate work are available through `Evaluation::work`, and each
   call can select sequential rule execution without changing a global pool.
+
+- **Shared Datalog head conjunctions:** ordinary semi-naive evaluation admits
+  several unquantified head atoms over one shared body, including recursive
+  and stratified programs. Recorded derivations expose the authored head
+  ordinal. Independent proof encoding moves to version 2 and records that
+  ordinal; version 1 proof bytes require regeneration. Physical plans use
+  planner version 4, invalidating earlier cached plan identities.
+
+- **Native Datalog inequality:** `Guard::not_equal` filters exact bound terms
+  without a caller callback, including inside negated groups. Independent proofs
+  recheck native top-level filters. Programs with native filters use an
+  operation-tagged version 2 clause identity; unchanged callback-only identities
+  remain stable.
 
 - **One exact XSD numeric value API:** public `XsdValue::Integer` and
   `XsdValue::Decimal` carry the exact integer and decimal types at every size.

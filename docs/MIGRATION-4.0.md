@@ -6,6 +6,30 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## SHACL processor recursion failures
+
+Exhaustive matches on `ProcessorFailure` must handle
+`ValidationDepth { shape, depth, limit }`. Nested filter/exists validation that
+crosses its recursion bound now returns this typed processor failure instead
+of `ShapesError::Invalid`. Its human-readable message is unchanged. It remains
+a hard failure through SPARQL node-expression calls, including COALESCE and IF.
+
+## Datalog proofs and shared heads
+
+Ordinary head conjunctions now execute one shared body. Read `Derivation::head`
+alongside `Derivation::rule` to identify the producing atom. `ProofArena::by_rule`
+selects head zero; use `by_rule_head` to construct a proof for another head.
+The independent proof encoding is version 2 and explicitly includes this ordinal.
+Regenerate stored version 1 proof bytes from the original inputs and rule program;
+the decoder refuses their old tag. Planner version 5 also changes content-addressed
+plan identities, causing earlier cached plans to miss and be replanned.
+
+`Guard::not_equal` supplies native term inequality without a callback. Programs
+containing native filters use an operation-tagged version 2 clause identity.
+Unchanged callback-only programs retain their clause and reasoning-contract
+identities. A callback named `!=` keeps its caller-defined meaning and has a
+different identity.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`

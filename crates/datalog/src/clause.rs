@@ -18,7 +18,7 @@
 //! |---|---|---|
 //! | [`Atomic`](HeadForm::Atomic) | `m = 1`, `C₁` is one atom, `ȳ = ∅` | this crate's semi-naive evaluator ([`crate::seminaive`]) |
 //! | [`Existential`](HeadForm::Existential) | `ȳ ≠ ∅` | [`crate::chase`], a restricted chase with frontier-addressed Skolem witnesses |
-//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::chase`], which asserts a conjunction atomically |
+//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::seminaive`], sharing one body and retaining authored head ordinals; also [`crate::chase`] |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
 //! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **refused by name here**; case-split by `purrdf-entail`'s `SHOIQ(D)` hypertableau |
 //!
@@ -110,14 +110,14 @@
 //!
 //! # Why all five are representable now
 //!
-//! Only the atomic form has evaluation semantics in this crate. The other four are
-//! nonetheless *first-class values*: a Datalog-only IR that had to grow an existential
+//! Atomic and unquantified conjunctive heads have semi-naive evaluation semantics.
+//! The other forms are also *first-class values*: an IR that had to grow an existential
 //! quantifier or a head disjunction later would force every consumer — planner, evaluator,
 //! plan cache, content digest — to be rewritten around the new shape. Representing the
 //! whole target now costs one enum and three validation rules; retrofitting it costs a
 //! redesign.
 //!
-//! The evaluator does NOT silently ignore the other four and does not accept them as if
+//! The evaluator does NOT silently ignore the other forms and does not accept them as if
 //! they were atomic. [`Parsed::new`](crate::plan::Parsed::new) — the sole entrance to the
 //! `Parsed → Stratified → Planned → Executable` pipeline, and therefore the sole route to
 //! an executable program — refuses them with [`NonDatalogClause`], and
@@ -560,14 +560,10 @@ pub enum HeadForm {
     /// `→ p(x) ∧ q(x)`. There is no disjunction here and no witness to mint, so naming it
     /// [`Disjunctive`](Self::Disjunctive) would be a false diagnostic; it is its own form.
     ///
-    /// It is not a Datalog rule either: a Datalog clause is a DEFINITE clause, with
-    /// exactly one head atom. The conjunction is equivalent to one Datalog rule per
-    /// conjunct over the same body, but this crate does not perform that expansion,
-    /// because it would renumber the program — a
-    /// [`Derivation`](crate::seminaive::Derivation) names its producing clause by authored
-    /// index, so splitting one clause into several would silently move an observable. A
-    /// caller who wants the split performs it before construction; the evaluator refuses
-    /// the unsplit clause by this name.
+    /// Equivalent to one Datalog rule per conjunct over the same body. The semi-naive
+    /// evaluator shares that body and retains the authored clause index and head
+    /// ordinal in [`Derivation`](crate::seminaive::Derivation), without expanding or
+    /// renumbering the program.
     Conjunctive,
     /// `m = 0` — the head is `false`. The clause asserts that its body is unsatisfiable,
     /// so a body match is an inconsistency witness rather than a derivation.
@@ -588,7 +584,7 @@ impl purrdf_hash::error::StructuredError for HeadForm {
 impl HeadForm {
     /// Whether this is the Datalog form, and therefore evaluable by [`crate::seminaive`].
     pub fn is_datalog(self) -> bool {
-        matches!(self, Self::Atomic)
+        matches!(self, Self::Atomic | Self::Conjunctive)
     }
 
     /// The form's name, for a diagnostic.
@@ -623,8 +619,8 @@ impl fmt::Display for HeadForm {
 /// A clause whose head form the Datalog evaluator has no semantics for.
 ///
 /// This is a REFUSAL, not a deferral: a semi-naive least-fixpoint evaluator computes the
-/// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier — and
-/// an existential, a disjunction, a conjunction and `false` each fall outside that class
+/// least model of definite clauses, including shared head conjunctions. An existential,
+/// a disjunction and `false` fall outside that class
 /// by definition rather than by omission. Accepting one — or dropping it — would return
 /// an answer that is not the model of the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -709,7 +705,7 @@ impl std::error::Error for NonDatalogClause {}
 /// One DL-clause: `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, each `Cᵢ` a conjunction of atoms.
 ///
 /// See the [module docs](self) for the five head forms and for why all five are
-/// representable while only the atomic one is evaluable here.
+/// representable while atomic and unquantified conjunctive heads are evaluable here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlClause<const N: usize = 4> {
     /// An explicit operational no-output head; never inferred from an empty logical head.
@@ -997,11 +993,15 @@ impl<const N: usize> DlClause<N> {
         HeadForm::Atomic
     }
 
-    /// The single head atom of a DATALOG clause, or `None` for any other head form.
+    /// The authored head conjunction of an ordinary Datalog clause.
+    /// Existentials, disjunction, inconsistency and no-output clauses return `None`.
+    pub fn datalog_heads(&self) -> Option<&[ClauseAtom<N>]> {
+        self.head_form().is_datalog().then(|| self.head[0].atoms())
+    }
+
+    /// The single head atom of an atomic Datalog clause, or `None` for any other form.
     ///
-    /// This is the one accessor the semi-naive pipeline reads, so a non-Datalog clause
-    /// cannot be mistaken for an atomic one by a caller that simply forgot to check: there
-    /// is no "the head" to take.
+    /// A conjunction has no single head; use [`Self::datalog_heads`] to read it.
     pub fn datalog_head(&self) -> Option<&ClauseAtom<N>> {
         match self.head_form() {
             HeadForm::Atomic => self.head.first().and_then(HeadDisjunct::single_atom),
@@ -1133,8 +1133,8 @@ mod tests {
     }
 
     /// Form 4 — a CONJUNCTIVE head (`m = 1`, several conjuncts, no existential) is its own
-    /// form, because it is neither a disjunction nor a Datalog rule: calling it either
-    /// would be a false diagnostic.
+    /// form, distinct from an atomic head or a disjunction, while remaining evaluable
+    /// by the semi-naive Datalog engine.
     #[test]
     fn a_conjunctive_head_classifies_as_conjunctive() {
         let clause = DlClause::new(
@@ -1146,7 +1146,8 @@ mod tests {
             vec![atom("?X", P, "?Y")],
         );
         assert_eq!(clause.head_form(), HeadForm::Conjunctive);
-        assert!(!clause.head_form().is_datalog());
+        assert!(clause.head_form().is_datalog());
+        assert_eq!(clause.datalog_heads().unwrap().len(), 2);
         assert_eq!(clause.datalog_head(), None, "there is no single head atom");
         assert_eq!(clause.head_disjuncts().len(), 1, "no disjunction at all");
         assert_eq!(clause.head_disjuncts()[0].atoms().len(), 2);
