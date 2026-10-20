@@ -84,7 +84,10 @@ jobs:
           cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::hyper::tests::native_decision_refusal_keeps_the_executed_search_certificate
           cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
       - name: Execute public reasoning facade inspection
-        run: cargo test --locked -p purrdf --test reasoning_inspection
+        run: |
+          cargo test --locked -p purrdf --test reasoning_inspection
+          cargo test --locked -p purrdf-entail --test schema_cardinality_boundary
+          cargo test --locked -p purrdf-validate --test dl_proof_vectors
 
   wasm:
     name: WASM role refusal inspection
@@ -137,3 +140,4 @@ jobs:
           cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
             actual_query_and_entailment_failures_retain_their_original_owners \
             original_reader_failures_cross_both_generic_reasoning_boundaries
+          cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors
