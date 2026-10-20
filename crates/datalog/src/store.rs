@@ -575,13 +575,6 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
         self.both_pos(s, o).is_some()
     }
 
-    /// The batch positions whose object is `o`, via the lazily-built [`ObjectIndex`].
-    /// A subslice of the `(object, subject)`-sorted permutation.
-    pub(crate) fn object_positions(&self, o: I) -> &[usize] {
-        let (lo, hi) = self.object_run(o);
-        &self.object_order()[lo..hi]
-    }
-
     /// The selected range in the original object permutation, without borrowing
     /// its slice into a cursor's retained position.
     pub(crate) fn object_run(&self, o: I) -> (usize, usize) {
@@ -1157,7 +1150,8 @@ impl<I: TermIdentity> PartitionRef<'_, I, 4> {
 }
 
 /// How a [`Partitions`] sweep is being served.
-enum PartitionsCursor<'a, D: TermDictionary, const N: usize>
+#[derive(Debug, Clone, Copy)]
+enum PartitionMode<I: TermIdentity, const N: usize>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -1165,18 +1159,12 @@ where
     /// located by an ordered-map probe. This is the constant-predicate hot path: no
     /// sweep, no filter, straight to the same arrangement a predicate-keyed store would
     /// have handed back.
-    Single(Option<PartitionRef<'a, D::Id, N>>),
+    Single(Option<PartitionId>),
     /// At least one key position is free: walk the store's lexical partition order,
     /// keeping the partitions whose key agrees with the known positions.
     Sweep {
-        /// The store being swept.
-        store: &'a RelationStore<D, N>,
         /// Bound RDF positions; only the shape's key coordinates select partitions.
-        positions: [Option<D::Id>; N],
-        /// Only the matching predicate's partitions when the predicate is bound.
-        order: &'a [usize],
-        /// A round-owned arrangement containing only its original new rows.
-        delta: Option<&'a DeltaRun<D::Id>>,
+        positions: [Option<I>; N],
         /// The next index into the store's lexical partition order.
         next: usize,
     },
@@ -1187,12 +1175,26 @@ where
 ///
 /// Allocation-free in both modes, so an atom's partition resolution never materialises a
 /// `Vec` — see [`RelationStore::partitions`].
-pub struct Partitions<'a, D: TermDictionary = TermInterner, const N: usize = 4>(
-    PartitionsCursor<'a, D, N>,
-    #[cfg(test)] usize,
-)
+pub struct Partitions<'a, D: TermDictionary = TermInterner, const N: usize = 4>
 where
-    Arity<N>: StoreShape<N>;
+    Arity<N>: StoreShape<N>,
+{
+    store: &'a RelationStore<D, N>,
+    delta: Option<&'a DeltaRun<D::Id>>,
+    position: PartitionPosition<D::Id, N>,
+}
+
+/// Owned selection progress over the original store and optional delta run.
+/// The execution owner retains both unchanged; this is not a foreign-source token.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PartitionPosition<I: TermIdentity, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    mode: PartitionMode<I, N>,
+    #[cfg(test)]
+    visited: usize,
+}
 
 impl<D: TermDictionary, const N: usize> fmt::Debug for Partitions<'_, D, N>
 where
@@ -1200,13 +1202,13 @@ where
 {
     /// Prints the sweep's shape, never the borrowed store.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            PartitionsCursor::Single(found) => f
+        match &self.position.mode {
+            PartitionMode::Single(found) => f
                 .debug_struct("Partitions")
                 .field("mode", &"single")
                 .field("found", &found.is_some())
                 .finish(),
-            PartitionsCursor::Sweep {
+            PartitionMode::Sweep {
                 positions, next, ..
             } => f
                 .debug_struct("Partitions")
@@ -1226,20 +1228,53 @@ where
     type Item = PartitionRef<'a, D::Id, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.0 {
-            PartitionsCursor::Single(found) => found.take(),
-            PartitionsCursor::Sweep {
-                store,
-                positions,
-                order,
-                delta,
-                next,
-            } => {
+        self.position.next(self.store, self.delta)
+    }
+}
+
+impl<I: TermIdentity, const N: usize> PartitionPosition<I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Resolve a fixed key once; free keys retain their original selection bounds.
+    pub(crate) fn new<D: TermDictionary<Id = I>>(
+        store: &RelationStore<D, N>,
+        positions: [Option<I>; N],
+    ) -> Self {
+        let mode = if Arity::<N>::known_key(&positions).is_some() {
+            PartitionMode::Single(store.partition_for(&positions).map(PartitionRef::id))
+        } else {
+            PartitionMode::Sweep { positions, next: 0 }
+        };
+        Self {
+            mode,
+            #[cfg(test)]
+            visited: 0,
+        }
+    }
+
+    /// Continue without replaying previously visited partition keys.
+    pub(crate) fn next<'a, D: TermDictionary<Id = I>>(
+        &mut self,
+        store: &'a RelationStore<D, N>,
+        delta: Option<&'a DeltaRun<I>>,
+    ) -> Option<PartitionRef<'a, I, N>> {
+        match &mut self.mode {
+            PartitionMode::Single(found) => {
+                let partition = store.partition_at(found.take()?.resident_index());
+                delta.map_or(Some(partition), |run| run.project(partition))
+            }
+            PartitionMode::Sweep { positions, next } => {
+                let order = delta.map_or(store.order.as_slice(), |run| run.order.as_slice());
+                let predicates = delta.map_or(&store.by_predicate, |run| &run.by_predicate);
+                let order = positions[1].map_or(order, |predicate| {
+                    predicates.get(&predicate).map_or(&[], Vec::as_slice)
+                });
                 while let Some(&slot) = order.get(*next) {
                     *next += 1;
                     #[cfg(test)]
                     {
-                        self.1 += 1;
+                        self.visited += 1;
                     }
                     let (_, key) = store.keys[slot];
                     if Arity::<N>::KEY_POSITIONS.iter().enumerate().all(
@@ -1822,34 +1857,10 @@ where
         positions: [Option<D::Id>; N],
         delta: Option<&'a DeltaRun<D::Id>>,
     ) -> Partitions<'a, D, N> {
-        if Arity::<N>::known_key(&positions).is_some() {
-            let found = self
-                .partition_for(&positions)
-                .and_then(|partition| match delta {
-                    Some(run) => run.project(partition),
-                    None => Some(partition),
-                });
-            Partitions(
-                PartitionsCursor::Single(found),
-                #[cfg(test)]
-                0,
-            )
-        } else {
-            let order = delta.map_or(self.order.as_slice(), |run| run.order.as_slice());
-            let predicates = delta.map_or(&self.by_predicate, |run| &run.by_predicate);
-            Partitions(
-                PartitionsCursor::Sweep {
-                    store: self,
-                    positions,
-                    order: positions[1].map_or(order, |predicate| {
-                        predicates.get(&predicate).map_or(&[], Vec::as_slice)
-                    }),
-                    delta,
-                    next: 0,
-                },
-                #[cfg(test)]
-                0,
-            )
+        Partitions {
+            store: self,
+            delta,
+            position: PartitionPosition::new(self, positions),
         }
     }
 
@@ -2150,7 +2161,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(graphs, ["<a>", "<m>", "<z>"]);
             assert_eq!(
-                partitions.1, 3,
+                partitions.position.visited, 3,
                 "unrelated predicates must never be examined"
             );
             let rows = store.rows_for_predicate(predicate).collect::<Vec<_>>();
@@ -2159,7 +2170,7 @@ mod tests {
             let unknown = store.term_id("<s>").unwrap();
             let mut absent = store.partitions(Some(unknown), None);
             assert!(absent.next().is_none());
-            assert_eq!(absent.1, 0);
+            assert_eq!(absent.position.visited, 0);
             assert_eq!(
                 store
                     .clone()
@@ -2167,6 +2178,125 @@ mod tests {
                     .collect::<Vec<_>>(),
                 rows
             );
+        }
+    }
+
+    fn check_partition_position_cuts<const N: usize>(
+        store: &RelationStore<TermInterner, N>,
+        positions: [Option<TermId>; N],
+        delta: Option<&DeltaRun<TermId>>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        let mut reference = store.select_partitions(positions, delta);
+        let expected: Vec<_> = reference.by_ref().map(PartitionRef::id).collect();
+        let total_visits = reference.position.visited;
+        for cut in 0..=expected.len() {
+            let mut cursor = store.select_partitions(positions, delta);
+            let mut actual = Vec::new();
+            for _ in 0..cut {
+                actual.push(cursor.next().unwrap().id());
+            }
+            let prior_visits = cursor.position.visited;
+            let Partitions {
+                store,
+                delta,
+                position,
+            } = cursor;
+            let mut resumed = Partitions {
+                store,
+                delta,
+                position,
+            };
+            assert_eq!(resumed.position.visited, prior_visits);
+            actual.extend(resumed.by_ref().map(PartitionRef::id));
+            assert_eq!(
+                actual, expected,
+                "width {N}, bounds {positions:?}, cut {cut}"
+            );
+            assert_eq!(resumed.position.visited, total_visits);
+        }
+    }
+
+    #[test]
+    fn owned_partition_positions_resume_full_and_delta_quad_selections() {
+        let mut store = RelationStore::new();
+        for (predicate, graph) in [
+            ("<z>", "<g2>"),
+            ("<a>", "<g1>"),
+            ("<z>", "<g1>"),
+            ("<m>", "<g3>"),
+        ] {
+            store.insert("<s>", predicate, "<o>", graph).unwrap();
+        }
+        let delta = store.delta_run(1..store.row_count()).unwrap();
+        let z = store.term_id("<z>").unwrap();
+        let m = store.term_id("<m>").unwrap();
+        let g1 = store.term_id("<g1>").unwrap();
+        let g2 = store.term_id("<g2>").unwrap();
+        let g3 = store.term_id("<g3>").unwrap();
+        let absent = store.term_id("<s>").unwrap();
+        for (predicate, graph) in [
+            (None, None),
+            (Some(z), None),
+            (None, Some(g1)),
+            (Some(z), Some(g1)),
+            (Some(z), Some(g2)),
+            (Some(m), Some(g3)),
+            (Some(absent), None),
+            (Some(absent), Some(g1)),
+        ] {
+            for run in [None, Some(&delta)] {
+                check_partition_position_cuts(&store, [None, predicate, None, graph], run);
+            }
+        }
+        let full_keys: Vec<_> = store
+            .partitions(None, None)
+            .map(|partition| {
+                (
+                    store.interner().resolve(partition.predicate()),
+                    store.interner().resolve(partition.graph()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            full_keys,
+            [
+                ("<a>", "<g1>"),
+                ("<m>", "<g3>"),
+                ("<z>", "<g1>"),
+                ("<z>", "<g2>"),
+            ]
+        );
+        let delta_ids: Vec<_> = store
+            .select_partitions([None; 4], Some(&delta))
+            .map(PartitionRef::id)
+            .collect();
+        assert_eq!(
+            delta_ids,
+            [
+                store
+                    .partition(store.term_id("<a>").unwrap(), g1)
+                    .unwrap()
+                    .id(),
+                store.partition(z, g1).unwrap().id(),
+                store.partition(m, g3).unwrap().id(),
+            ]
+        );
+    }
+
+    #[test]
+    fn owned_partition_positions_resume_full_and_delta_triple_selections() {
+        let mut store = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for predicate in ["<z>", "<a>", "<m>"] {
+            store.insert_row(["<s>", predicate, "<o>"]).unwrap();
+        }
+        let delta = store.delta_run(1..store.row_count()).unwrap();
+        for predicate in [None, Some("<z>"), Some("<a>"), Some("<s>")] {
+            let predicate = predicate.map(|surface| store.term_id(surface).unwrap());
+            for run in [None, Some(&delta)] {
+                check_partition_position_cuts(&store, [None, predicate, None], run);
+            }
         }
     }
 
