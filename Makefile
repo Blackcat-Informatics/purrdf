@@ -1030,6 +1030,11 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				native_inequality_needs_no_callback_and_is_independently_checked \
+				native_inequality_in_a_negative_group_uses_the_same_filter \
+				conjunctive_heads_share_joins_and_check_the_authored_head \
+				conjunctive_heads_settle_at_each_predicates_actual_stratum \
+				conjunctive_recursion_and_factor_projection_match_split_programs \
 				predicate_rows_keep_native_identities_and_lexical_graph_order \
 				model_only_and_recorded_models_have_explicit_evidence_and_equal_counts \
 				interrupted_guarded_commit_counts_only_completed_generating_rounds \

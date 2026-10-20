@@ -1618,7 +1618,333 @@ fn predicate_rows_keep_native_identities_and_lexical_graph_order() {
     }
 }
 
+fn conjunctive_heads_share_joins_and_check_the_authored_head() {
+    use purrdf_datalog::clause::HeadDisjunct;
+    use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
+    use purrdf_datalog::store::TermInterner;
+
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+        )
+    };
+    let body = vec![atom("?s", "p", "?m"), atom("?m", "q", "?o")];
+    let heads = vec![
+        atom("?s", "a", "?o"),
+        atom("?s", "b", "?o"),
+        atom("?s", "c", "?o"),
+        atom("?s", "a", "?o"),
+    ];
+    let rules = vec![DlClause::new(
+        vec![HeadDisjunct::new(heads.clone())],
+        Vec::new(),
+        body.clone(),
+    )];
+    let shared = compile(rules.clone()).unwrap();
+    let split = compile(
+        heads
+            .into_iter()
+            .map(|head| DlClause::datalog(head, body.clone()))
+            .collect(),
+    )
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for index in 0..16 {
+        let s = format!("s{index}");
+        let m = format!("m{index}");
+        input.insert_row([&s, "p", &m]).unwrap();
+        input.insert_row([&m, "q", "o"]).unwrap();
+    }
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let result = evaluate_guarded(&shared, input.clone(), &NoGuards, &options, None).unwrap();
+    let reference = evaluate_guarded(&split, input.clone(), &NoGuards, &options, None).unwrap();
+    assert_eq!(
+        result.facts().facts_sorted(),
+        reference.facts().facts_sorted()
+    );
+    assert_eq!(result.work().committed_facts(), 48);
+    assert!(result.work().join_steps() < reference.work().join_steps());
+    let proofs = EvaluationProofs::of(&result).unwrap();
+    let context = ProofContext::new(&rules, &input, result.facts());
+    for derivation in result.derivations().unwrap() {
+        let head = derivation.head();
+        assert!(head < 3, "the first repeated head wins canonically");
+        let root = proofs.root_for(derivation.fact()).unwrap();
+        assert_eq!(proofs.arena().head(root), Some(head));
+        assert_eq!(
+            proofs.arena().check(root, &context).unwrap(),
+            *derivation.fact()
+        );
+        let bytes = proofs.arena().encode(root);
+        let (mut decoded, root) = ProofArena::<3>::decode(&bytes).unwrap();
+        assert_eq!(decoded.encode(root), bytes);
+        assert_eq!(decoded.head(root), Some(head));
+        let premises = decoded.premises(root).to_vec();
+        let wrong = decoded
+            .by_rule_head(derivation.fact().clone(), 0, (head + 1) % 3, &premises)
+            .unwrap();
+        assert!(matches!(
+            decoded.check(wrong, &context),
+            Err(ProofError::GoalMismatch { .. })
+        ));
+        let missing = decoded
+            .by_rule_head(derivation.fact().clone(), 0, 4, &premises)
+            .unwrap();
+        assert!(matches!(
+            decoded.check(missing, &context),
+            Err(ProofError::UnknownHead {
+                rule: 0,
+                head: 4,
+                heads: 4
+            })
+        ));
+    }
+    let refused = evaluate_guarded(
+        &shared,
+        input,
+        &NoGuards,
+        &options.with_max_stored_facts(79),
+        None,
+    )
+    .unwrap_err();
+    let seminaive::EvalError::BudgetExhausted { report, .. } = refused else {
+        panic!("expected exact per-head fact admission")
+    };
+    assert_eq!(report.stored_facts(), 79);
+    assert_eq!(report.observed_stored_facts(), 80);
+}
+
+fn conjunctive_recursion_and_factor_projection_match_split_programs() {
+    use purrdf_datalog::clause::HeadDisjunct;
+    use purrdf_datalog::proof::{EvaluationProofs, ProofContext};
+    use purrdf_datalog::store::TermInterner;
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+        )
+    };
+    let cases = [
+        (
+            vec![atom("?s", "path", "?o"), atom("?s", "mark", "?o")],
+            vec![atom("?s", "path", "?m"), atom("?m", "edge", "?o")],
+            vec![["a", "path", "b"], ["b", "edge", "c"], ["c", "edge", "d"]],
+        ),
+        (
+            vec![atom("?s", "left", "?s"), atom("?o", "right", "?o")],
+            vec![atom("?s", "p", "?x"), atom("?o", "q", "?y")],
+            vec![
+                ["a", "p", "b"],
+                ["c", "p", "d"],
+                ["x", "q", "y"],
+                ["z", "q", "w"],
+            ],
+        ),
+    ];
+    for (heads, body, rows) in cases {
+        let rules = vec![DlClause::new(
+            vec![HeadDisjunct::new(heads.clone())],
+            Vec::new(),
+            body.clone(),
+        )];
+        let program = compile(rules.clone()).unwrap();
+        let split = compile(
+            heads
+                .into_iter()
+                .map(|head| DlClause::datalog(head, body.clone()))
+                .collect(),
+        )
+        .unwrap();
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for row in rows {
+            input.insert_row(row).unwrap();
+        }
+        let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+        let actual = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+        let reference = evaluate_guarded(&split, input.clone(), &NoGuards, &options, None).unwrap();
+        assert_eq!(
+            actual.facts().facts_sorted(),
+            reference.facts().facts_sorted()
+        );
+        let proofs = EvaluationProofs::of(&actual).unwrap();
+        let context = ProofContext::new(&rules, &input, actual.facts());
+        for (fact, root) in proofs.roots() {
+            assert_eq!(proofs.arena().check(*root, &context).unwrap(), *fact);
+        }
+    }
+}
+
+fn conjunctive_heads_settle_at_each_predicates_actual_stratum() {
+    use purrdf_datalog::clause::HeadDisjunct;
+    use purrdf_datalog::store::TermInterner;
+
+    let atom = |p: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::literal(p),
+            ClauseTerm::var("?o"),
+        )
+    };
+    let conjunction = DlClause::new(
+        vec![HeadDisjunct::new(vec![atom("p"), atom("q")])],
+        Vec::new(),
+        vec![atom("seed")],
+    );
+    let rest = vec![
+        DlClause::datalog(atom("r"), vec![atom("p")]),
+        DlClause::datalog(atom("q"), vec![atom("seed"), atom("r").into_negated()]),
+        DlClause::datalog(atom("out"), vec![atom("seed"), atom("q").into_negated()]),
+    ];
+    let mut rules = vec![conjunction];
+    rules.extend(rest.clone());
+    let program = compile(rules).unwrap();
+    assert_eq!(
+        program.stratum_head_predicates(0).collect::<Vec<_>>(),
+        ["p", "r"]
+    );
+    assert_eq!(
+        program.stratum_head_predicates(1).collect::<Vec<_>>(),
+        ["q"]
+    );
+    assert_eq!(
+        program.stratum_head_predicates(2).collect::<Vec<_>>(),
+        ["out"]
+    );
+    let mut split = vec![
+        DlClause::datalog(atom("p"), vec![atom("seed")]),
+        DlClause::datalog(atom("q"), vec![atom("seed")]),
+    ];
+    split.extend(rest);
+    let split = compile(split).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["a", "seed", "b"]).unwrap();
+    let actual = seminaive::evaluate(&program, input.clone()).unwrap();
+    let reference = seminaive::evaluate(&split, input).unwrap();
+    assert_eq!(
+        actual.facts().facts_sorted(),
+        reference.facts().facts_sorted()
+    );
+    assert!(!actual.facts().contains_row(["a", "out", "b"]));
+}
+
+fn native_inequality_needs_no_callback_and_is_independently_checked() {
+    use purrdf_datalog::cache::canonical_rule_hash;
+    use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
+    use purrdf_datalog::store::TermInterner;
+    let atom = |p: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::literal(p),
+            ClauseTerm::var("?o"),
+        )
+    };
+    let rule = DlClause::datalog(atom("out"), vec![atom("p")]);
+    let rules = vec![rule.clone().with_guards(vec![Guard::not_equal("?s", "?o")])];
+    let callback =
+        vec![rule.with_guards(vec![Guard::filter("!=", vec!["?s".into(), "?o".into()])])];
+    assert_ne!(canonical_rule_hash(&rules), canonical_rule_hash(&callback));
+    // Both programs now contain a native guard and use the same identity domain.
+    // The second guard's operation still distinguishes identical names/arguments.
+    let mixed = |second| {
+        rules[0]
+            .clone()
+            .with_guards(vec![Guard::not_equal("?s", "?o"), second])
+    };
+    assert_ne!(
+        canonical_rule_hash(&[mixed(Guard::not_equal("?s", "?o"))]),
+        canonical_rule_hash(&[mixed(Guard::filter("!=", vec!["?s".into(), "?o".into()]))]),
+    );
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [["a", "p", "b"], ["a", "p", "a"], ["01", "p", "1"]] {
+        input.insert_row(row).unwrap();
+    }
+    let result = evaluate_guarded(
+        &compile(rules.clone()).unwrap(),
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.work().committed_facts(), 2);
+    assert!(result.facts().contains_row(["a", "out", "b"]));
+    assert!(result.facts().contains_row(["01", "out", "1"]));
+    assert!(!result.facts().contains_row(["a", "out", "a"]));
+    let context = ProofContext::new(&rules, &input, result.facts());
+    let proofs = EvaluationProofs::of(&result).unwrap();
+    for (fact, root) in proofs.roots() {
+        assert_eq!(proofs.arena().check(*root, &context).unwrap(), *fact);
+    }
+    let equal = input
+        .facts_sorted()
+        .into_iter()
+        .find(|fact| fact.subject == fact.object)
+        .unwrap();
+    let mut claimed = equal.clone();
+    claimed.predicate = "out".into();
+    let mut arena = ProofArena::<3>::default();
+    let premise = arena.axiom(equal).unwrap();
+    let invalid = arena.by_rule(claimed, 0, &[premise]).unwrap();
+    let error = arena.check(invalid, &context).unwrap_err();
+    assert!(
+        matches!(&error, ProofError::GuardRejected { rule: 0, guard: 0, operation: purrdf_datalog::guard::GuardOperation::NotEqual, inputs } if inputs.as_ref() == ["a", "a"])
+    );
+    let fields = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(fields.code, "datalog-proof-guard-rejected");
+    assert_eq!(fields.child("operation").code, "datalog-guard-not-equal");
+    assert!(matches!(
+        evaluate_guarded(
+            &compile(callback).unwrap(),
+            input,
+            &NoGuards,
+            &EvalOptions::default(),
+            None,
+        ),
+        Err(seminaive::EvalError::Guard { .. })
+    ));
+}
+
+fn native_inequality_in_a_negative_group_uses_the_same_filter() {
+    use purrdf_datalog::guard::Negation;
+    use purrdf_datalog::store::TermInterner;
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+        )
+    };
+    let rule = DlClause::datalog(atom("?s", "out", "?o"), vec![atom("?s", "seed", "?o")])
+        .with_negations(vec![Negation::new(
+            vec![atom("?s", "p", "?other")],
+            vec![Guard::not_equal("?other", "?o")],
+        )]);
+    let program = compile(vec![rule]).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["a", "seed", "a"],
+        ["x", "seed", "y"],
+        ["a", "p", "a"],
+        ["a", "p", "b"],
+        ["x", "p", "y"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    let result = seminaive::evaluate(&program, input).unwrap();
+    assert_eq!(result.work().committed_facts(), 1);
+    assert!(!result.facts().contains_row(["a", "out", "a"]));
+    assert!(result.facts().contains_row(["x", "out", "y"]));
+}
+
 purrdf_testkit::harness_main!(
+    native_inequality_needs_no_callback_and_is_independently_checked,
+    native_inequality_in_a_negative_group_uses_the_same_filter,
+    conjunctive_recursion_and_factor_projection_match_split_programs,
+    conjunctive_heads_share_joins_and_check_the_authored_head,
+    conjunctive_heads_settle_at_each_predicates_actual_stratum,
     predicate_rows_keep_native_identities_and_lexical_graph_order,
     interrupted_guarded_commit_counts_only_completed_generating_rounds,
     model_only_and_recorded_models_have_explicit_evidence_and_equal_counts,

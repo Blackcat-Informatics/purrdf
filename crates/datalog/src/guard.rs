@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Guard literals: the body literals whose meaning is CALLER CODE.
+//! Guard literals: native term filters and caller-defined computation.
 //!
 //! An atom is decided by the relation store; a guard is decided by a
-//! [`GuardEvaluator`] the caller supplies at evaluation time. That is the seam a rule
+//! [`GuardEvaluator`] the caller supplies at evaluation time, except for explicit native
+//! operations such as [`Guard::not_equal`]. That is the seam a rule
 //! language with an expression sublanguage needs and a pure Datalog does not have:
 //! SPARQL 1.2 RL's `FILTER` and `SET` elements, SHACL's node expressions and a SHACL
 //! SPARQL rule's `CONSTRUCT` query all compute values the clause IR cannot spell,
@@ -73,13 +74,45 @@ pub enum GuardReads {
     Model,
 }
 
-/// One guard literal: caller code over named input variables, binding named outputs.
+/// The implementation of a guard, independent of its caller-supplied name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GuardOperation {
+    /// Evaluate through the caller's [`GuardEvaluator`].
+    Callback,
+    /// Keep a row when its two bound term surfaces differ exactly.
+    NotEqual,
+}
+
+impl purrdf_hash::error::StructuredError for GuardOperation {
+    purrdf_hash::error_visit! {
+        Callback => "datalog-guard-callback" {},
+        NotEqual => "datalog-guard-not-equal" {},
+    }
+}
+
+impl GuardOperation {
+    /// Decide a native filter; callback guards have no built-in interpretation.
+    pub(crate) fn filter(self, inputs: &[&str]) -> Option<bool> {
+        match self {
+            Self::Callback => None,
+            Self::NotEqual => {
+                assert_eq!(inputs.len(), 2, "native inequality has two declared inputs");
+                Some(inputs[0] != inputs[1])
+            }
+        }
+    }
+}
+
+/// One guard literal: a native filter or caller code over named inputs and outputs.
 ///
 /// The `name` is the guard's CONTENT IDENTITY — typically the expression text it
 /// evaluates — and it is part of the clause digest, so two programs whose guards
 /// compute different things never share a cached plan or a contract hash.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Guard {
+    /// Native operation or explicit caller callback; names never select behavior.
+    operation: GuardOperation,
     /// The guard's content identity, as the caller names it.
     name: String,
     /// The variables read, in the order the evaluator receives them.
@@ -115,6 +148,7 @@ impl Guard {
             );
         }
         Self {
+            operation: GuardOperation::Callback,
             name: name.into(),
             inputs,
             outputs,
@@ -125,6 +159,20 @@ impl Guard {
     /// A pure filter over `inputs`: it keeps or drops a solution and binds nothing.
     pub fn filter(name: impl Into<String>, inputs: Vec<String>) -> Self {
         Self::new(name, inputs, Vec::new(), GuardReads::Bindings)
+    }
+
+    /// A native `!=` filter over two bound variables, with no callback required.
+    /// Equality is exact term identity, without numeric coercion or normalization.
+    pub fn not_equal(left: impl Into<String>, right: impl Into<String>) -> Self {
+        Self {
+            operation: GuardOperation::NotEqual,
+            ..Self::filter("!=", vec![left.into(), right.into()])
+        }
+    }
+
+    /// Whether this guard is a native operation or a caller callback.
+    pub fn operation(&self) -> GuardOperation {
+        self.operation
     }
 
     /// A pure assignment of one fresh `output` from `inputs`.

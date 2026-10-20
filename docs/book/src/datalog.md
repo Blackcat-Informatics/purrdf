@@ -37,8 +37,15 @@ disjunctive, conjunctive, and empty (`false`) — so an axiom like `A ⊑ ∃r.C
 which lowers to `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is one rule
 rather than two unrelated ones.
 
-The semi-naive evaluator runs the atomic form and refuses the other four **by
-name**. The existential form is not lost by that refusal: the restricted chase
+The semi-naive evaluator runs atomic and unquantified conjunctive heads. Several
+heads share one body evaluation; each recorded derivation names its authored
+clause index and head ordinal. Recursion, factor projection and stratified
+negation use the same evaluator. Predicate completion follows every producer,
+even when a shared rule emits a higher-stratum head early. Independent proofs
+check the selected head ordinal; their version 2 encoding carries it explicitly.
+
+Existential, disjunctive and false heads are refused **by name**. The existential
+form is not lost by that refusal: the restricted chase
 consumes it, minting frontier-addressed Skolem witnesses, which is how the four
 existential RDF/RDFS patterns fire and the rule inventory reads complete. What
 never happens is a surrogate leaking into an answer — the entailment layer above
@@ -47,6 +54,13 @@ boundary and reports the withholding, rather than inventing an answer the caller
 did not ask for.
 
 ## Determinism
+
+Use `Guard::not_equal("?left", "?right")` for native term inequality, without a
+callback. It compares exact bound term identity without numeric coercion.
+A caller-defined `Guard::filter("!=", ...)` remains a callback: operation kind,
+not its name, selects native behavior and participates in the clause digest.
+The independent proof checker re-evaluates native top-level filters from the
+checked premises.
 
 - Per-key rows keep insertion order; the arrangement is sorted; no map iteration
   order reaches an output path.
