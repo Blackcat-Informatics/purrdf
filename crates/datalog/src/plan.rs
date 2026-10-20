@@ -396,12 +396,12 @@ fn atom_priority<const N: usize>(
 ///
 /// The priority includes a unique authored coordinate as its last component. Each choice
 /// extends the binding frontier before the next choice; no store history participates.
-fn binding_aware_order<T>(
+fn binding_aware_order<T, P: Ord>(
     mut remaining: Vec<T>,
-    priority: impl Fn(&T, &BTreeSet<String>) -> (bool, usize, usize, usize, u64, usize),
+    mut bound: BTreeSet<String>,
+    priority: impl Fn(&T, &BTreeSet<String>) -> P,
     bind: impl Fn(&T, &mut BTreeSet<String>),
 ) -> Vec<T> {
-    let mut bound = BTreeSet::new();
     let mut order = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
         let slot = remaining
@@ -417,6 +417,28 @@ fn binding_aware_order<T>(
     order
 }
 
+/// Guard-produced variables cannot occur before their producer: scoping would reject
+/// the overwrite. They can therefore be marked known for planning when barriers keep
+/// every atom in its authored stage. Execution still checks the actual bound value.
+fn guard_bound_variables<const N: usize>(rule: &DlClause<N>) -> BTreeSet<String> {
+    if rule.guard_positions().is_some() {
+        rule.guards()
+            .iter()
+            .flat_map(crate::guard::Guard::outputs)
+            .cloned()
+            .collect()
+    } else {
+        BTreeSet::new()
+    }
+}
+
+/// The stage containing an authored atom; multiple guards may separate two atoms.
+fn body_stage<const N: usize>(rule: &DlClause<N>, body_index: usize) -> usize {
+    rule.guard_positions().map_or(0, |positions| {
+        positions.partition_point(|&after| after <= body_index)
+    })
+}
+
 /// Deterministic sideways-information-passing order for an acyclic positive body.
 ///
 /// Connected atoms run first; ties retain the known/constant/repeated-variable preference
@@ -429,10 +451,12 @@ fn sips_order<const N: usize>(
 ) -> Vec<usize> {
     binding_aware_order(
         (0..positive.len()).collect(),
+        guard_bound_variables(rule),
         |&position, bound| {
             let (connected, known, constants, repeated, statistical) =
                 atom_priority(&rule.body()[positive[position]], bound, estimate);
             (
+                std::cmp::Reverse(body_stage(rule, positive[position])),
                 connected,
                 known,
                 constants,
@@ -690,7 +714,7 @@ fn lower_operators<const N: usize>(
     execution_order: &[usize],
     slots: &BTreeMap<String, usize>,
 ) -> Vec<AtomOperator<N>> {
-    let mut bound = BTreeSet::new();
+    let mut bound = guard_bound_variables(rule);
     let mut operators = Vec::with_capacity(execution_order.len());
     for &positive_position in execution_order {
         let body_index = positive[positive_position];
@@ -812,6 +836,7 @@ fn sips_group_order<const N: usize>(
 ) -> Vec<JoinGroup> {
     binding_aware_order(
         groups,
+        guard_bound_variables(rule),
         |group, bound| {
             let atoms = group.atoms();
             let (connected, known, constants, repeated, statistical) = atoms
@@ -820,6 +845,7 @@ fn sips_group_order<const N: usize>(
                 .max()
                 .expect("a join group contains at least one atom");
             (
+                std::cmp::Reverse(body_stage(rule, atoms[0].body_index)),
                 connected,
                 known,
                 constants,
@@ -1205,6 +1231,24 @@ impl<const N: usize> RulePlan<N> {
         // graph and planned-atom scratch for the very common 0/1/2-atom rules.
         let cyclic = if positive.len() < 3 {
             Vec::new()
+        } else if let Some(barriers) = rule.guard_positions() {
+            let mut plans = Vec::new();
+            let mut start = 0;
+            for end in barriers
+                .iter()
+                .copied()
+                .chain(std::iter::once(positive.len()))
+            {
+                let mut segment = certified_cyclic_components(rule, &positive[start..end], &slots);
+                for plan in &mut segment {
+                    for atom in &mut plan.atoms {
+                        atom.positive_position += start;
+                    }
+                }
+                plans.extend(segment);
+                start = end;
+            }
+            plans
         } else {
             certified_cyclic_components(rule, &positive, &slots)
         };
@@ -1651,6 +1695,50 @@ mod tests {
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn guard_barriers_constrain_sips_and_bind_later_index_positions() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::Guard;
+        let rule = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            Atom(atom("?X", P, "?Y")),
+            Compute(Guard::assign("key", vec!["?Y".into()], "?K")),
+            Atom(atom("?K", Q, "?V")),
+        ]);
+        let plan = RulePlan::for_rule(&rule);
+        assert_eq!(
+            plan.operators()
+                .iter()
+                .map(AtomOperator::body_index)
+                .collect::<Vec<_>>(),
+            [0, 1],
+            "a selective later atom cannot cross its producing guard",
+        );
+        assert!(matches!(
+            plan.operator_at(1).shape().subject(),
+            PositionPlan::Bound(_)
+        ));
+    }
+
+    #[test]
+    fn cycles_are_certified_within_guard_segments_only() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::Guard;
+        let program = |crosses| {
+            let mut body = vec![Atom(atom("?X", P, "?Y"))];
+            if crosses {
+                body.push(Compute(Guard::filter("test", vec!["?X".into()])));
+            }
+            body.extend([Atom(atom("?Y", Q, "?Z")), Atom(atom("?Z", R, "?X"))]);
+            if !crosses {
+                body.push(Compute(Guard::filter("test", vec!["?X".into()])));
+                body.push(Atom(atom("?X", P, "?W")));
+            }
+            DlClause::datalog(atom("?X", R, "?Z"), Vec::new()).with_ordered_body(body)
+        };
+        assert!(!RulePlan::for_rule(&program(true)).has_cyclic_subplan());
+        assert!(RulePlan::for_rule(&program(false)).has_cyclic_subplan());
+    }
     const S: &str = "https://example.org/s";
 
     fn v(name: &str) -> ClauseTerm {

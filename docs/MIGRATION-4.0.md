@@ -21,7 +21,7 @@ alongside `Derivation::rule` to identify the producing atom. `ProofArena::by_rul
 selects head zero; use `by_rule_head` to construct a proof for another head.
 The independent proof encoding is version 2 and explicitly includes this ordinal.
 Regenerate stored version 1 proof bytes from the original inputs and rule program;
-the decoder refuses their old tag. Planner version 5 also changes content-addressed
+the decoder refuses their old tag. Planner version 6 also changes content-addressed
 plan identities, causing earlier cached plans to miss and be replanned.
 
 `Guard::not_equal` supplies native term inequality without a callback. Programs
@@ -29,6 +29,18 @@ containing native filters use an operation-tagged version 2 clause identity.
 Unchanged callback-only programs retain their clause and reasoning-contract
 identities. A callback named `!=` keeps its caller-defined meaning and has a
 different identity.
+
+Use `DlClause::with_ordered_body` with `clause::BodyLiteral::{Atom, Guard}` when
+a guard computes a key consumed by a later positive atom. Guard inputs must be
+bound at that point, and outputs must be fresh. The join planner may reorder atoms
+within each segment but never across a guard. Negated conjunctions remain attached
+with `with_negations` and run after the positive body and its guards.
+
+`with_guards` keeps its existing meaning: all guards follow the full positive
+join. Ordered bodies with an early guard use a version 3 clause identity that
+includes its position; an equivalent body with all guards at the end keeps its
+existing clause identity. Callback guards still require the caller's evaluator
+and remain outside the independent proof checker's supported fragment.
 
 ## Query-algebra projections
 

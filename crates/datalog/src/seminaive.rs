@@ -2207,9 +2207,11 @@ where
                 (PositionPlan::Bound(slot) | PositionPlan::Free(slot), _)
                     if INDEX == INDEX_REBOUND =>
                 {
-                    solution
-                        .get(*slot)
-                        .map_or(PositionValue::Free, PositionValue::Known)
+                    match solution.value(*slot) {
+                        SlotValue::Interned(id) => PositionValue::Known(id),
+                        SlotValue::Computed(_) => PositionValue::Missing,
+                        SlotValue::Unbound => PositionValue::Free,
+                    }
                 }
                 (PositionPlan::Bound(slot), _) => solution
                     .get(*slot)
@@ -2705,6 +2707,16 @@ where
     for solution in solutions {
         if governor.spent() {
             break;
+        }
+        if run
+            .cycle
+            .variable_slots()
+            .iter()
+            .any(|&slot| matches!(solution.value(slot), SlotValue::Computed(_)))
+        {
+            // A freshly computed term absent from the dictionary cannot occur in
+            // any stored edge. It must not be mistaken for an unbound cycle slot.
+            continue;
         }
         let mut working = solution.clone();
         run.recurse(0, &mut working, &mut out, governor)?;
@@ -4459,6 +4471,282 @@ where
     )
 }
 
+/// Apply an authored guard range through the one production callback/filter path.
+fn apply_body_guards<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    rel: &RelationStore<D, N>,
+    mut solutions: Vec<SlotSolution<D::Id, N>>,
+    positions: std::ops::Range<usize>,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    for position in positions {
+        let guard = &entry.runtime.guards[position];
+        let declared = &entry.rule.guards()[position];
+        let mut extended = Vec::with_capacity(solutions.len());
+        for solution in solutions {
+            if governor.spent() {
+                break;
+            }
+            let rows = {
+                let pinned = guard
+                    .inputs
+                    .iter()
+                    .map(|&slot| {
+                        Ok(solution
+                            .surface(slot, rel)?
+                            .expect("a guard input is bound before the guard (DlClause scoping)"))
+                    })
+                    .collect::<Result<Vec<_>, D::Error>>()
+                    .map_err(EvalError::Source)?;
+                let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
+                call_guard(
+                    guards,
+                    &GuardCall {
+                        rule: entry.index,
+                        site: GuardSite::Body(position),
+                        guard: declared,
+                        inputs: &inputs,
+                        model: rel,
+                    },
+                    governor,
+                )?
+            };
+            for row in rows {
+                let mut next = solution.clone();
+                for (&slot, surface) in guard.outputs.iter().zip(&row) {
+                    next.bind_surface(slot, surface, rel)
+                        .map_err(EvalError::Source)?;
+                }
+                extended.push(next);
+            }
+        }
+        solutions = extended;
+    }
+    Ok(solutions)
+}
+
+/// Extend one movable positive segment through the shared native join kernels.
+/// A partial delta can lead inside its segment, but cannot cross an authored
+/// guard barrier. The original scan ordinals and premise order remain logical.
+fn extend_ordered_segment<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    scan: JoinScan,
+    body: std::ops::Range<usize>,
+    mut partial: Vec<SlotSolution<D::Id, N>>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let cyclic = !matches!(scan, JoinScan::Uniform(_))
+        && plan.has_cyclic_subplan()
+        && matches!(strategy, JoinStrategy::Planned);
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor)
+            if snapshot.delta != Delta::all(snapshot.rel.row_count())
+                && body.contains(&plan.operator_at(anchor).body_index()) =>
+        {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    let seed_in_cycle = cyclic
+        && seed.is_some_and(|anchor| {
+            plan.join_groups().iter().any(|group| {
+                matches!(group, JoinGroup::Leapfrog(cycle)
+                if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+            })
+        });
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            plan.operator_at(anchor),
+            snapshot.rel,
+            snapshot.delta,
+            snapshot.indexes,
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
+    if cyclic {
+        for group in plan.join_groups().iter().filter(|group| {
+            let first = match group {
+                JoinGroup::Binary(atom) => atom.body_index(),
+                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].body_index(),
+            };
+            body.contains(&first)
+        }) {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
+            partial = match group {
+                JoinGroup::Binary(atom) => extend_rebound_solutions(
+                    plan.operator_at(atom.positive_position()),
+                    snapshot.rel,
+                    snapshot.delta,
+                    snapshot.indexes,
+                    scan.at(atom.positive_position()),
+                    &partial,
+                    governor,
+                ),
+                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
+                    &LeapfrogRun {
+                        plan,
+                        cycle,
+                        scan,
+                        rel: snapshot.rel,
+                        delta: snapshot.delta,
+                        indexes: snapshot.indexes,
+                    },
+                    &partial,
+                    governor,
+                ),
+            }
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    } else {
+        for operator in plan
+            .operators()
+            .iter()
+            .filter(|operator| body.contains(&operator.body_index()))
+        {
+            if seed == Some(operator.positive_position()) {
+                continue;
+            }
+            partial = extend_rebound_solutions(
+                operator,
+                snapshot.rel,
+                snapshot.delta,
+                snapshot.indexes,
+                scan.at(operator.positive_position()),
+                &partial,
+                governor,
+            )
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    }
+    if seed_in_cycle {
+        for solution in &mut partial {
+            solution.sources.remove(body.start);
+        }
+    }
+    Ok(partial)
+}
+
+/// Join authored positive segments, applying each guard before later probes.
+/// Binary and certified cyclic segments use the existing join kernels.
+fn join_ordered_body<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let barriers = entry
+        .rule
+        .guard_positions()
+        .expect("ordered execution has authored guard barriers");
+    let base = plan
+        .operators()
+        .iter()
+        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
+    if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
+        // No body relation changed: this round creates no new obligation to run
+        // guards. Test the whole body, because an empty later atom cannot erase
+        // a guard reached through a changed earlier prefix.
+        let mut changed = false;
+        for operator in plan.operators() {
+            if delta_can_match(operator, snapshot).map_err(EvalError::Source)? {
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            return Ok(Vec::new());
+        }
+    }
+    let anchors = if base {
+        0..1
+    } else {
+        snapshot.delta_positions(plan.positive().len())
+    };
+    let mut all = Vec::new();
+    for anchor in anchors {
+        // Even an empty later delta probe cannot suppress an earlier guard's
+        // failure. Only the segment reaching that probe may discover it is empty.
+        // A guard-first body consumes the empty conjunction's unit binding
+        // before invoking opaque code, even when that code returns no rows.
+        if barriers.first() == Some(&0) && !governor.charge() {
+            break;
+        }
+        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
+        let mut start = 0;
+        for (position, end) in barriers
+            .iter()
+            .copied()
+            .chain(std::iter::once(entry.rule.body().len()))
+            .enumerate()
+        {
+            partial = extend_ordered_segment(
+                entry,
+                snapshot,
+                strategy,
+                if base {
+                    JoinScan::Uniform(Scan::Full)
+                } else {
+                    JoinScan::DeltaPosition(anchor)
+                },
+                start..end,
+                partial,
+                governor,
+            )?;
+            if partial.is_empty() || governor.spent() {
+                partial.clear();
+                break;
+            }
+            if position < barriers.len() {
+                partial = apply_body_guards(
+                    entry,
+                    snapshot.rel,
+                    partial,
+                    position..position + 1,
+                    guards,
+                    governor,
+                )?;
+            }
+            start = end;
+        }
+        for solution in &mut partial {
+            solution
+                .sources
+                .sort_unstable_by_key(|source| source.body_index);
+        }
+        all.extend(partial);
+        if governor.spent() {
+            break;
+        }
+    }
+    Ok(all)
+}
+
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -4499,72 +4787,44 @@ where
     let result = (|| {
         let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
         if entry.delta != Delta::all(rel.row_count())
+            && entry.rule.guard_positions().is_none()
             && plan.operators().len() > 1
             && !entry.rule.reads_base()
             && full_counts.contains(&Some(0))
         {
             return Ok(RoundBuffer::new());
         }
-        if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
+        if entry.rule.guard_positions().is_none()
+            && runtime.factors.len() > 1
+            && matches!(strategy, JoinStrategy::Planned)
+        {
             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
         }
-        let mut solutions = join_body(
-            plan,
-            JoinSnapshot {
+        let join_snapshot = JoinSnapshot {
+            rel,
+            delta: entry.delta,
+            indexes: snapshot.delta_indexes.expect("delta indexes were prepared"),
+        };
+        let mut solutions = if entry.rule.guard_positions().is_some() {
+            join_ordered_body(entry, join_snapshot, strategy, guards, &mut governor)?
+        } else {
+            let solutions = join_body(
+                plan,
+                join_snapshot,
+                strategy,
+                &mut governor,
+                Some(full_counts),
+            )
+            .map_err(EvalError::Source)?;
+            apply_body_guards(
+                entry,
                 rel,
-                delta: entry.delta,
-                indexes: snapshot
-                    .delta_indexes
-                    .expect("the rule's delta indexes were prepared"),
-            },
-            strategy,
-            &mut governor,
-            Some(full_counts),
-        )
-        .map_err(EvalError::Source)?;
-
-        for (position, guard) in runtime.guards.iter().enumerate() {
-            let declared = &entry.rule.guards()[position];
-            let mut extended = Vec::with_capacity(solutions.len());
-            for solution in solutions {
-                if governor.spent() {
-                    break;
-                }
-                let rows = {
-                    let pinned = guard
-                        .inputs
-                        .iter()
-                        .map(|&slot| {
-                            Ok(solution.surface(slot, rel)?.expect(
-                                "a guard input is bound before the guard (DlClause scoping)",
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, D::Error>>()
-                        .map_err(EvalError::Source)?;
-                    let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
-                    call_guard(
-                        guards,
-                        &GuardCall {
-                            rule: entry.index,
-                            site: GuardSite::Body(position),
-                            guard: declared,
-                            inputs: &inputs,
-                            model: rel,
-                        },
-                        &mut governor,
-                    )?
-                };
-                for row in rows {
-                    let mut next = solution.clone();
-                    for (&slot, surface) in guard.outputs.iter().zip(&row) {
-                        next.bind_surface(slot, surface, rel)
-                            .map_err(EvalError::Source)?;
-                    }
-                    extended.push(next);
-                }
-            }
-            solutions = extended;
-        }
+                solutions,
+                0..runtime.guards.len(),
+                guards,
+                &mut governor,
+            )?
+        };
 
         if !runtime.negated.is_empty() || !runtime.negations.is_empty() {
             let mut kept = Vec::with_capacity(solutions.len());
@@ -8570,6 +8830,133 @@ mod tests {
                 assert_eq!(report.stored_facts(), 1001);
             }
         }
+    }
+
+    #[test]
+    fn guard_first_empty_output_requires_unit_binding_credit() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        struct DropAll(std::cell::Cell<usize>);
+        impl GuardEvaluator for DropAll {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+                self.0.set(self.0.get() + 1);
+                Ok(Vec::new())
+            }
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Compute(Guard::assign("drop", Vec::new(), "?s")),
+                Atom(atom("?s", P, "?o")),
+            ]),
+        ])
+        .unwrap();
+        for ceiling in [0, 1] {
+            let callback = DropAll(std::cell::Cell::new(0));
+            let result = evaluate_guarded(
+                &program,
+                store_of(&[("a", P, "b")]),
+                &callback,
+                &EvalOptions::default().with_max_join_steps(ceiling),
+                None,
+            );
+            assert_eq!(callback.0.get(), usize::from(ceiling != 0));
+            if ceiling == 0 {
+                assert!(matches!(result, Err(EvalError::BudgetExhausted { .. })));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.work().join_steps(), 1);
+                assert_eq!(result.work().committed_facts(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_guard_outputs_select_quad_predicate_and_graph_keys() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::GuardReads;
+        const GRAPH: &str = "https://example.org/selected-graph";
+        const MISSING_PREDICATE: &str = "https://example.org/absent-guard-predicate";
+        const MISSING_GRAPH: &str = "https://example.org/absent-guard-graph";
+        struct Partition;
+        impl GuardEvaluator for Partition {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+                Ok(vec![
+                    vec![surface(R), surface(GRAPH)],
+                    vec![surface(MISSING_PREDICATE), surface(GRAPH)],
+                    vec![surface(R), surface(MISSING_GRAPH)],
+                ])
+            }
+        }
+        let subject = "https://example.org/subject";
+        let winner = "https://example.org/selected-value";
+        let mut input = store_of(&[(subject, P, "https://example.org/seed")]);
+        for (predicate, object, graph) in [
+            (R, winner, GRAPH),
+            (
+                R,
+                "https://example.org/wrong-graph-value",
+                "https://example.org/other-graph",
+            ),
+            (
+                "https://example.org/other-predicate",
+                "https://example.org/wrong-predicate-value",
+                GRAPH,
+            ),
+        ] {
+            input
+                .insert(
+                    &surface(subject),
+                    &surface(predicate),
+                    &surface(object),
+                    &surface(graph),
+                )
+                .unwrap();
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Atom(atom("?s", P, "?seed")),
+                Compute(Guard::new(
+                    "partition",
+                    Vec::new(),
+                    vec!["?p".into(), "?g".into()],
+                    GuardReads::Bindings,
+                )),
+                Atom(ClauseAtom::quad(v("?s"), v("?p"), v("?o"), v("?g"))),
+            ]),
+        ])
+        .unwrap();
+        let result = evaluate_guarded(
+            &program,
+            input,
+            &Partition,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.work().committed_facts(), 1);
+        assert!(result.facts().contains_row([
+            &surface(subject),
+            &surface(Q),
+            &surface(winner),
+            RelationStore::DEFAULT_GRAPH
+        ]));
+        assert!(
+            result
+                .facts()
+                .term_id(&surface(MISSING_PREDICATE))
+                .is_none()
+        );
+        assert!(result.facts().term_id(&surface(MISSING_GRAPH)).is_none());
+        let derivations = result.derivations().unwrap();
+        assert_eq!(derivations.len(), 1);
+        assert_eq!(derivations[0].sources()[0].predicate, surface(P));
+        assert_eq!(derivations[0].sources()[1].predicate, surface(R));
+        assert_eq!(derivations[0].sources()[1].graph, surface(GRAPH));
     }
 
     /// Consumer admission bounds a large callback Vec before cloning bindings and

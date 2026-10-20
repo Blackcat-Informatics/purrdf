@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Guard-computed join keys:** `DlClause::with_ordered_body` interleaves positive
+  atoms and guards through `clause::BodyLiteral`. Fresh guard outputs can bind
+  subsequent binary and cyclic probes. Guards are evaluation barriers; absent
+  computed keys match no row. Early guards enter a position-aware version 3
+  clause identity, and physical planner version 6 invalidates cached plans.
+
 - **SHACL SPARQL argument failures:** COALESCE, IF, boolean and membership forms can mask
   catchable nested node-expression failures using SPARQL semantics, while
   unmasked failures retain their original cause and empty results stay distinct.

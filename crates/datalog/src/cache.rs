@@ -68,7 +68,7 @@ use crate::seminaive::{EvalError, EvalOptions, compile};
 /// Deliberately independent of the clause digest and the caller's contract hash: a change
 /// to index selection, to the sideways-information-passing order or to the cyclic
 /// certification invalidates every cached plan even though its logical input is unchanged.
-pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v5";
+pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v6";
 
 /// Domain-separation tag for [`canonical_rule_hash`].
 ///
@@ -105,6 +105,12 @@ const GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
 /// The operation-tagged graph-free encoding for programs containing native filters.
 const NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
     Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v2");
+
+/// Programs with guard barriers encode the authored atom prefix of every guard.
+const ORDERED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-ordered-dl-clause-ir-v3");
+/// Graph-free programs with authored guard barriers.
+const ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-ordered-triple-clause-ir-v3");
 
 /// Domain-separation tag for [`scheduled_contract_hash`].
 const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-scheduled-contract-v1");
@@ -199,6 +205,7 @@ fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &Cl
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
     let guarded = rules.iter().any(DlClause::is_guarded);
+    let ordered = rules.iter().any(|rule| rule.guard_positions().is_some());
     let native = rules.iter().any(|rule| {
         rule.guards()
             .iter()
@@ -210,13 +217,15 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
             .any(|guard| guard.operation() != GuardOperation::Callback)
     });
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let domain = match (N, guarded, native) {
-        (3, _, true) => NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (_, _, true) => NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG,
-        (3, false, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (3, true, false) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (_, true, false) => GUARDED_CLAUSE_IR_DIGEST_TAG,
-        (_, false, false) => CLAUSE_IR_DIGEST_TAG,
+    let domain = match (N, guarded, native, ordered) {
+        (3, _, _, true) => ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, _, _, true) => ORDERED_CLAUSE_IR_DIGEST_TAG,
+        (3, _, true, false) => NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, _, true, false) => NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (3, false, false, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (3, true, false, false) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, true, false, false) => GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (_, false, false, false) => CLAUSE_IR_DIGEST_TAG,
     };
     frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
@@ -242,14 +251,22 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
             }
         }
         if guarded {
-            hash_guards(&mut hasher, rule.guards(), native);
+            hash_guards(&mut hasher, rule.guards(), native || ordered);
+            if ordered {
+                for position in 0..rule.guards().len() {
+                    let after = rule
+                        .guard_positions()
+                        .map_or_else(|| rule.body().len(), |positions| positions[position]);
+                    hasher.update(&(after as u64).to_le_bytes());
+                }
+            }
             hasher.update(&(rule.negations().len() as u64).to_le_bytes());
             for negation in rule.negations() {
                 hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
                 for atom in negation.atoms() {
                     hash_atom(&mut hasher, atom);
                 }
-                hash_guards(&mut hasher, negation.guards(), native);
+                hash_guards(&mut hasher, negation.guards(), native || ordered);
             }
         }
     }
@@ -819,6 +836,35 @@ mod tests {
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn guard_barriers_participate_in_clause_identity() {
+        use crate::clause::BodyLiteral;
+        let head = atom("?X", R, "?Z");
+        let first = atom("?X", P, "?Y");
+        let second = atom("?Y", Q, "?Z");
+        let guard = Guard::filter("test", vec!["?X".into()]);
+        let early = DlClause::datalog(head.clone(), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(first.clone()),
+            BodyLiteral::Guard(guard.clone()),
+            BodyLiteral::Atom(second.clone()),
+        ]);
+        let late = DlClause::datalog(head.clone(), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(first.clone()),
+            BodyLiteral::Atom(second.clone()),
+            BodyLiteral::Guard(guard.clone()),
+        ]);
+        let legacy = DlClause::datalog(head, vec![first, second]).with_guards(vec![guard]);
+        assert_ne!(
+            canonical_rule_hash(&[early]),
+            canonical_rule_hash(std::slice::from_ref(&late)),
+        );
+        assert_eq!(
+            canonical_rule_hash(&[late]),
+            canonical_rule_hash(&[legacy]),
+            "an end-of-body barrier preserves the existing interpretation",
+        );
+    }
     const CONTRACT: &str = "contract-a";
 
     fn v(name: &str) -> ClauseTerm {
@@ -1579,7 +1625,7 @@ mod tests {
         );
         assert_eq!(
             hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
-            "cb47ea218521507c99218f5654cc9788e61c3374c082281f786ff83db0a27df2",
+            "d74e5318609fd61d6e78ac8910ee6fb2386a1d3b7ec711b88638a06ed8e24163",
             "the plan identity moved"
         );
     }
