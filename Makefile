@@ -1029,6 +1029,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
 				model_only_and_recorded_models_have_explicit_evidence_and_equal_counts \
+				interrupted_guarded_commit_counts_only_completed_generating_rounds \
 				term_arena_limits_are_caller_selected_and_reach_contracts \
 				stored_fact_admission_refuses_the_first_extra_fact_in_both_engines \
 				public_sequential_execution_preserves_models_proofs_and_counters \

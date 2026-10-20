@@ -1466,6 +1466,68 @@ fn stored_fact_admission_refuses_the_first_extra_fact_in_both_engines() {
     );
 }
 
+fn interrupted_guarded_commit_counts_only_completed_generating_rounds() {
+    struct Mint;
+    impl GuardEvaluator for Mint {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_>,
+        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+            Ok(vec![vec![format!("minted-{}", call.inputs[0])]])
+        }
+    }
+    let program = compile(vec![
+        DlClause::datalog(
+            ClauseAtom::positive(
+                ClauseTerm::var("?s"),
+                "https://example.org/q",
+                ClauseTerm::var("?minted"),
+            ),
+            vec![ClauseAtom::positive(
+                ClauseTerm::var("?s"),
+                "https://example.org/p",
+                ClauseTerm::var("?o"),
+            )],
+        )
+        .with_guards(vec![Guard::assign("mint", vec!["?s".into()], "?minted")]),
+    ])
+    .unwrap();
+    let mut input = RelationStore::new();
+    for subject in ["a", "b", "c"] {
+        input
+            .insert(
+                subject,
+                "<https://example.org/p>",
+                "o",
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
+    }
+    let error = evaluate_guarded(
+        &program,
+        input,
+        &Mint,
+        &EvalOptions::default().with_max_stored_facts(4),
+        None,
+    )
+    .unwrap_err();
+    let seminaive::EvalError::BudgetExhausted { resource, report } = error else {
+        panic!("fact admission refusal")
+    };
+    assert_eq!(resource, seminaive::BudgetResource::StoredFacts);
+    assert_eq!(report.stored_facts(), 4);
+    assert_eq!(report.observed_stored_facts(), 5);
+    assert_eq!(
+        report.term_generating_rounds(),
+        0,
+        "the interrupted round did not complete"
+    );
+    assert!(
+        report.generated_terms() > 0,
+        "the admitted prefix minted terms"
+    );
+}
+
 fn public_sequential_execution_preserves_models_proofs_and_counters() {
     use purrdf_datalog::seminaive::RoundExecution;
 
@@ -1512,6 +1574,7 @@ fn public_sequential_execution_preserves_models_proofs_and_counters() {
 }
 
 purrdf_testkit::harness_main!(
+    interrupted_guarded_commit_counts_only_completed_generating_rounds,
     model_only_and_recorded_models_have_explicit_evidence_and_equal_counts,
     term_arena_limits_are_caller_selected_and_reach_contracts,
     stored_fact_admission_refuses_the_first_extra_fact_in_both_engines,

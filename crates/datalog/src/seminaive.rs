@@ -700,7 +700,7 @@ impl BudgetReport {
         self.term_arena_bytes
     }
 
-    /// Term-generating rounds run ([`EvalOptions`]). Always zero for a guard-free
+    /// Completed term-generating rounds ([`EvalOptions`]). Always zero for a guard-free
     /// program, which has no guard to compute a term.
     pub fn term_generating_rounds(self) -> u64 {
         self.term_generating_rounds
@@ -4606,7 +4606,7 @@ where
     /// passes a ceiling. Facts already admitted remain within the stated limit.
     pub(crate) fn absorb(
         &mut self,
-        round: RoundBuffer<'_, D::Id, N>,
+        mut round: RoundBuffer<'_, D::Id, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
@@ -4614,11 +4614,16 @@ where
         if round.entries.is_empty() {
             return Ok(());
         }
-        if round.generates_terms {
-            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
-            self.generating_rules.clone_from(&round.generating_rules);
-        }
+        let generates_terms = round.generates_terms;
+        let generating_rules = std::mem::take(&mut round.generating_rules);
         commit_round(round, self)?;
+        // A fact-limit refusal may commit only a prefix. Count a generating
+        // round only once its whole commit completes; retained term bytes and
+        // generated terms already report the exact admitted prefix.
+        if generates_terms {
+            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
+            self.generating_rules = generating_rules;
+        }
         check_budget(self)
     }
 }
