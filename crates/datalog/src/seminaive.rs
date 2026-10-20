@@ -100,6 +100,7 @@ use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuar
 use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
+use purrdf_lex::allocation::StorageError;
 
 pub use crate::plan::Executable;
 use crate::plan::{
@@ -108,7 +109,7 @@ use crate::plan::{
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
-    Arity, Bound, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
+    Arity, Bound, DeltaRun, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
 };
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
@@ -816,6 +817,9 @@ struct StepGovernor {
     allowance: u64,
     /// Candidates enumerated so far.
     consumed: u64,
+    /// Actual binary cursor rows, before semi-naive filtering, for complexity checks.
+    #[cfg(test)]
+    row_visits: u64,
     /// One shared round-wide credit pool.
     pool: Arc<StepPool>,
 }
@@ -834,6 +838,8 @@ impl StepGovernor {
         Self {
             allowance,
             consumed: 0,
+            #[cfg(test)]
+            row_visits: 0,
             pool: Arc::new(StepPool {
                 used: AtomicU64::new(0),
                 refused: AtomicBool::new(false),
@@ -880,6 +886,8 @@ impl StepGovernor {
         Self {
             allowance: self.allowance,
             consumed: 0,
+            #[cfg(test)]
+            row_visits: 0,
             pool: Arc::clone(&self.pool),
         }
     }
@@ -907,7 +915,7 @@ pub enum EvalError<E = core::convert::Infallible> {
         rule: usize,
     },
     /// The original logical capacity or physical storage refusal.
-    Storage(purrdf_lex::allocation::StorageError),
+    Storage(StorageError),
     /// The original row-evidence account refused or encountered a broken invariant.
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
     /// The full rule bundle violates an assessor-only declaration.
@@ -1314,7 +1322,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EvalError<E> {
 }
 
 purrdf_lex::variant_from!(impl<E> EvalError<E> {
-    Storage(purrdf_lex::allocation::StorageError),
+    Storage(StorageError),
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
 });
 
@@ -1659,6 +1667,58 @@ impl Delta {
     fn contains(self, row: RowId) -> bool {
         let index = row.resident_index();
         self.lo <= index && index < self.hi
+    }
+}
+
+/// One native arrangement per distinct partial delta, shared by every rule task.
+/// An all-row seed borrows the accumulated arrangements instead of copying them.
+#[derive(Debug)]
+pub(crate) struct DeltaIndexes<I: TermIdentity> {
+    runs: Vec<((usize, usize), DeltaRun<I>)>,
+}
+
+impl<I: TermIdentity> DeltaIndexes<I> {
+    fn build<D: TermDictionary<Id = I>, const N: usize>(
+        rel: &RelationStore<D, N>,
+        deltas: impl IntoIterator<Item = Delta>,
+    ) -> Result<Self, EvalError<D::Error>>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        rel.interner().check_read().map_err(EvalError::Source)?;
+        let mut ranges = Vec::new();
+        for delta in deltas {
+            if delta != Delta::all(rel.row_count()) {
+                ranges
+                    .try_reserve(1)
+                    .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+                ranges.push((delta.lo, delta.hi));
+            }
+        }
+        ranges.sort_unstable();
+        ranges.dedup();
+        let mut runs = Vec::new();
+        runs.try_reserve(ranges.len())
+            .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+        for (lo, hi) in ranges {
+            let run = rel.delta_run(lo..hi).map_err(|error| match error {
+                DictionaryError::Storage(error) => EvalError::Storage(error),
+                DictionaryError::Source(error) => EvalError::Source(error),
+            })?;
+            runs.push(((lo, hi), run));
+        }
+        Ok(Self { runs })
+    }
+
+    fn get(&self, delta: Delta, row_count: usize) -> Option<&DeltaRun<I>> {
+        if delta == Delta::all(row_count) {
+            return None;
+        }
+        let position = self
+            .runs
+            .binary_search_by_key(&(delta.lo, delta.hi), |&(range, _)| range)
+            .expect("every scheduled partial delta has an admitted arrangement");
+        Some(&self.runs[position].1)
     }
 }
 
@@ -2009,6 +2069,7 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
@@ -2017,15 +2078,15 @@ where
     Arity<N>: StoreShape<N>,
 {
     match scan {
-        Scan::Delta => {
-            extend_slot_operator::<SCAN_DELTA, D, N>(operator, rel, delta, solutions, governor)
-        }
-        Scan::Full => {
-            extend_slot_operator::<SCAN_FULL, D, N>(operator, rel, delta, solutions, governor)
-        }
-        Scan::OldOnly => {
-            extend_slot_operator::<SCAN_OLD_ONLY, D, N>(operator, rel, delta, solutions, governor)
-        }
+        Scan::Delta => extend_slot_operator::<SCAN_DELTA, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::Full => extend_slot_operator::<SCAN_FULL, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::OldOnly => extend_slot_operator::<SCAN_OLD_ONLY, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
     }
 }
 
@@ -2034,6 +2095,7 @@ fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -2042,17 +2104,17 @@ where
 {
     match operator.index() {
         IndexChoice::Any => {
-            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, indexes, solutions, governor)
         }
-        IndexChoice::Subject => {
-            extend_atom::<SCAN, INDEX_SUBJECT, D, N>(operator, rel, delta, solutions, governor)
-        }
-        IndexChoice::Object => {
-            extend_atom::<SCAN, INDEX_OBJECT, D, N>(operator, rel, delta, solutions, governor)
-        }
-        IndexChoice::Both => {
-            extend_atom::<SCAN, INDEX_BOTH, D, N>(operator, rel, delta, solutions, governor)
-        }
+        IndexChoice::Subject => extend_atom::<SCAN, INDEX_SUBJECT, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        IndexChoice::Object => extend_atom::<SCAN, INDEX_OBJECT, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        IndexChoice::Both => extend_atom::<SCAN, INDEX_BOTH, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
     }
 }
 
@@ -2061,6 +2123,7 @@ fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
@@ -2070,13 +2133,13 @@ where
 {
     match scan {
         Scan::Delta => extend_atom::<SCAN_DELTA, INDEX_REBOUND, D, N>(
-            operator, rel, delta, solutions, governor,
+            operator, rel, delta, indexes, solutions, governor,
         ),
-        Scan::Full => {
-            extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(operator, rel, delta, solutions, governor)
-        }
+        Scan::Full => extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
         Scan::OldOnly => extend_atom::<SCAN_OLD_ONLY, INDEX_REBOUND, D, N>(
-            operator, rel, delta, solutions, governor,
+            operator, rel, delta, indexes, solutions, governor,
         ),
     }
 }
@@ -2097,6 +2160,7 @@ fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usiz
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -2107,6 +2171,11 @@ where
     let shape = operator.shape();
     let body_index = operator.body_index();
     let constants = constant_positions(shape, rel)?;
+    let delta_run = if SCAN == SCAN_DELTA {
+        indexes.get(delta, rel.row_count())
+    } else {
+        None
+    };
     let mut next = Vec::new();
 
     'solutions: for solution in solutions {
@@ -2171,9 +2240,13 @@ where
             _ => unreachable!("INDEX is a planned index code"),
         };
 
-        for partition in rel.partitions_for(values.map(PositionValue::known)) {
+        for partition in rel.select_partitions(values.map(PositionValue::known), delta_run) {
             let mut cursor = partition.select(bound);
             while let Some((subject, object, row)) = cursor.next() {
+                #[cfg(test)]
+                {
+                    governor.row_visits += 1;
+                }
                 if !keep_row::<SCAN>(delta, row) {
                     continue;
                 }
@@ -2402,13 +2475,19 @@ impl<'a, I: TermIdentity> LeapfrogIntersection<'a, I> {
 fn cycle_atom_partition<'a, D: TermDictionary, const N: usize>(
     shape: &AtomShape<N>,
     rel: &'a RelationStore<D, N>,
+    delta_run: Option<&'a DeltaRun<D::Id>>,
 ) -> Result<Option<PartitionRef<'a, D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
     let constants = constant_positions(shape, rel)?;
     let known = constants.map(|value| value.and_then(PositionValue::known));
-    Ok(rel.partition_for(&known))
+    Ok(rel
+        .partition_for(&known)
+        .and_then(|partition| match delta_run {
+            Some(run) => run.project(partition),
+            None => Some(partition),
+        }))
 }
 
 /// The subject and object frame slots of a certified cycle atom.
@@ -2472,12 +2551,21 @@ where
     rel: &'a RelationStore<D, N>,
     /// The round's delta span.
     delta: Delta,
+    /// Shared native new-row arrangements, selected only for delta atoms.
+    indexes: &'a DeltaIndexes<D::Id>,
 }
 
 impl<D: TermDictionary, const N: usize> LeapfrogRun<'_, D, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    fn delta_run(&self, position: usize) -> Option<&DeltaRun<D::Id>> {
+        if matches!(self.scan.at(position), Scan::Delta) {
+            self.indexes.get(self.delta, self.rel.row_count())
+        } else {
+            None
+        }
+    }
     /// Capture the unique fully-ground row for every cycle atom, in the component's
     /// authored atom order.
     ///
@@ -2492,7 +2580,7 @@ where
             let (Some(subject), Some(object), Some(partition)) = (
                 solution.get(subject_slot),
                 solution.get(object_slot),
-                cycle_atom_partition(shape, self.rel)?,
+                cycle_atom_partition(shape, self.rel, self.delta_run(planned.positive_position()))?,
             ) else {
                 solution.sources.truncate(original);
                 return Ok(false);
@@ -2552,7 +2640,9 @@ where
                 continue;
             }
             let scan = self.scan.at(planned.positive_position());
-            let Some(partition) = cycle_atom_partition(shape, self.rel)? else {
+            let Some(partition) =
+                cycle_atom_partition(shape, self.rel, self.delta_run(planned.positive_position()))?
+            else {
                 return Ok(());
             };
             let Some(cursor) =
@@ -2677,6 +2767,8 @@ where
     rel: &'a RelationStore<D, N>,
     /// The rows this evaluation treats as new.
     delta: Delta,
+    /// The round's shared arrangements, including this delta when it is partial.
+    indexes: &'a DeltaIndexes<D::Id>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for JoinSnapshot<'_, D, N> where Arity<N>: StoreShape<N>
@@ -2737,10 +2829,14 @@ where
             Some(PositionValue::Free) | None => None,
         };
     }
+    let run = snapshot
+        .indexes
+        .get(snapshot.delta, snapshot.rel.row_count());
     Ok(snapshot
         .rel
-        .partitions_for(positions)
-        .any(|partition| partition.has_row_from(snapshot.delta.lo)))
+        .select_partitions(positions, run)
+        .next()
+        .is_some())
 }
 
 /// The indexed binary positive join. Partial deltas seed each decomposition
@@ -2787,6 +2883,7 @@ where
                 &operators[position],
                 snapshot.rel,
                 snapshot.delta,
+                snapshot.indexes,
                 if base {
                     Scan::Full
                 } else {
@@ -2844,6 +2941,7 @@ where
                 plan.operator_at(delta_position),
                 snapshot.rel,
                 snapshot.delta,
+                snapshot.indexes,
                 Scan::Delta,
                 &partial,
                 governor,
@@ -2871,6 +2969,7 @@ where
                         operator,
                         snapshot.rel,
                         snapshot.delta,
+                        snapshot.indexes,
                         scan_for(planned.positive_position(), delta_position),
                         &partial,
                         governor,
@@ -2883,6 +2982,7 @@ where
                         scan: JoinScan::DeltaPosition(delta_position),
                         rel: snapshot.rel,
                         delta: snapshot.delta,
+                        indexes: snapshot.indexes,
                     },
                     &partial,
                     governor,
@@ -4113,6 +4213,8 @@ where
     /// ([`crate::schedule::LayerHooks`]) and will retract at its end unless a rule derives
     /// it too; a rule that re-derives one is recorded in [`RoundBuffer::confirmed`].
     pub(crate) assumed: &'a [bool],
+    /// Shared physical runs; direct rule probes prepare their own owner.
+    pub(crate) delta_indexes: Option<&'a DeltaIndexes<D::Id>>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for RoundSnapshot<'_, D, N> where
@@ -4208,6 +4310,15 @@ fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -4223,6 +4334,9 @@ where
             JoinSnapshot {
                 rel,
                 delta: entry.delta,
+                indexes: snapshot
+                    .delta_indexes
+                    .expect("the rule's delta indexes were prepared"),
             },
             strategy,
             &mut governor,
@@ -4553,6 +4667,11 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let indexes = DeltaIndexes::build(snapshot.rel, entries.iter().map(|entry| entry.delta))?;
+    let snapshot = RoundSnapshot {
+        delta_indexes: Some(&indexes),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -5143,6 +5262,7 @@ where
                 rel: &state.rel,
                 depth: &state.depth,
                 assumed: &[],
+                delta_indexes: None,
             },
             run.execution,
             run.strategy,
@@ -5261,6 +5381,93 @@ mod tests {
     use crate::test_support::permute;
 
     #[test]
+    fn partial_delta_cursors_never_visit_the_old_label_history() {
+        const LABEL: &str = "https://example.org/label";
+        const EDGE: &str = "https://example.org/edge";
+        let label = |subject: &str| {
+            ClauseAtom::positive(
+                ClauseTerm::var(subject),
+                LABEL,
+                ClauseTerm::iri("https://example.org/marked"),
+            )
+        };
+        let program = compile(vec![DlClause::datalog(
+            label("?y"),
+            vec![
+                label("?x"),
+                ClauseAtom::positive(ClauseTerm::var("?x"), EDGE, ClauseTerm::var("?y")),
+            ],
+        )])
+        .unwrap();
+        let (_, plan) = program.rule_entry(0);
+        for count in [100, 1000, 10_000] {
+            let mut store = RelationStore::default();
+            for index in 0..count {
+                store
+                    .insert(
+                        &format!("old{index}"),
+                        &format!("<{LABEL}>"),
+                        "<https://example.org/marked>",
+                        "",
+                    )
+                    .unwrap();
+            }
+            let edge = store
+                .insert("frontier", &format!("<{EDGE}>"), "end", "")
+                .unwrap()
+                .unwrap()
+                .2;
+            let lo = store.row_count();
+            let fresh = store
+                .insert(
+                    "frontier",
+                    &format!("<{LABEL}>"),
+                    "<https://example.org/marked>",
+                    "",
+                )
+                .unwrap()
+                .unwrap()
+                .2;
+            let delta = Delta {
+                lo,
+                hi: store.row_count(),
+            };
+            let indexes =
+                DeltaIndexes::build(&store, [delta, delta, Delta::all(store.row_count())]).unwrap();
+            assert_eq!(
+                indexes.runs.len(),
+                1,
+                "rules share each partial run and borrow the all-row seed"
+            );
+            let mut governor = StepGovernor::new(10);
+            let solutions = join_body(
+                plan,
+                JoinSnapshot {
+                    rel: &store,
+                    delta,
+                    indexes: &indexes,
+                },
+                JoinStrategy::Planned,
+                &mut governor,
+            )
+            .unwrap();
+            assert_eq!(solutions.len(), 1);
+            assert_eq!(
+                governor.row_visits, 2,
+                "cursor work must exclude old label rows"
+            );
+            assert_eq!(
+                solutions[0]
+                    .sources
+                    .iter()
+                    .map(|source| source.row)
+                    .collect::<Vec<_>>(),
+                [fresh, edge]
+            );
+        }
+    }
+
+    #[test]
     fn late_delta_anchor_binds_before_a_large_old_prefix() {
         for count in [100, 1000] {
             let mut store = RelationStore::default();
@@ -5298,14 +5505,17 @@ mod tests {
                 [0, 1]
             );
             let mut governor = StepGovernor::new(10);
+            let delta = Delta {
+                lo,
+                hi: store.row_count(),
+            };
+            let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
             let solutions = join_positive_binary(
                 plan,
                 JoinSnapshot {
                     rel: &store,
-                    delta: Delta {
-                        lo,
-                        hi: store.row_count(),
-                    },
+                    delta,
+                    indexes: &indexes,
                 },
                 &mut governor,
             )
@@ -5388,6 +5598,7 @@ mod tests {
             JoinSnapshot {
                 rel: &store,
                 delta: Delta::all(2),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
@@ -5508,6 +5719,7 @@ mod tests {
                     rel: &store,
                     depth: &[0, 0],
                     assumed: &[],
+                    delta_indexes: None,
                 },
                 &mut Some(&mut capture),
                 HeadEvidence {
@@ -5625,6 +5837,7 @@ mod tests {
                 JoinSnapshot {
                     rel: &store,
                     delta: Delta::all(3),
+                    indexes: &DeltaIndexes { runs: Vec::new() },
                 },
                 JoinStrategy::Planned,
                 &mut StepGovernor::new(u64::MAX),
@@ -5922,7 +6135,12 @@ mod tests {
             Delta { lo: 1, hi: 2 },
             Delta { lo: 2, hi: 3 },
         ] {
-            let snapshot = JoinSnapshot { rel: &store, delta };
+            let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
+            let snapshot = JoinSnapshot {
+                rel: &store,
+                delta,
+                indexes: &indexes,
+            };
             let mut planned_governor = StepGovernor::new(u64::MAX);
             let planned =
                 join_body(plan, snapshot, JoinStrategy::Planned, &mut planned_governor).unwrap();
@@ -5960,7 +6178,8 @@ mod tests {
                 plan,
                 JoinSnapshot {
                     rel: &store,
-                    delta: Delta::all(0)
+                    delta: Delta::all(0),
+                    indexes: &DeltaIndexes { runs: Vec::new() },
                 },
                 JoinStrategy::Planned,
                 &mut StepGovernor::new(0)
@@ -5988,6 +6207,7 @@ mod tests {
                 scan: JoinScan::Uniform(Scan::Full),
                 rel: &store,
                 delta: Delta::all(3),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             &[SlotSolution::empty(plan.variables().len())],
             &mut StepGovernor::new(u64::MAX),
@@ -6006,10 +6226,7 @@ mod tests {
             Some(&SourceLost(99))
         );
         assert_eq!(cause.to_string(), "source lost: 99");
-        assert_ne!(
-            cause,
-            EvalError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
-        );
+        assert_ne!(cause, EvalError::Storage(StorageError::AllocationFailed));
     }
 
     #[test]
@@ -6051,6 +6268,7 @@ mod tests {
                 operator,
                 &store,
                 Delta::all(store.row_count()),
+                &DeltaIndexes { runs: Vec::new() },
                 Scan::Full,
                 &partial,
                 &mut governor,
@@ -6078,6 +6296,7 @@ mod tests {
             &plan.operators()[0],
             &store,
             Delta::all(0),
+            &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
             &[],
             &mut governor,
@@ -6097,6 +6316,7 @@ mod tests {
             &plan.operators()[0],
             &store,
             Delta::all(store.row_count()),
+            &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
             &[SlotSolution::empty(plan.variables().len())],
             &mut governor,
@@ -7802,6 +8022,7 @@ mod tests {
                 rel: &state.rel,
                 depth: &state.depth,
                 assumed: &[],
+                delta_indexes: None,
             },
             RoundExecution::Parallel,
             JoinStrategy::Planned,
@@ -8885,7 +9106,15 @@ mod tests {
     #[test]
     fn only_a_delta_covering_the_whole_snapshot_eliminates_old_suffixes() {
         let rel = store_of(&[("a", P, "b"), ("b", Q, "c"), ("c", R, "d")]);
-        let positions = |delta| JoinSnapshot { rel: &rel, delta }.delta_positions(3);
+        let indexes = DeltaIndexes { runs: Vec::new() };
+        let positions = |delta| {
+            JoinSnapshot {
+                rel: &rel,
+                delta,
+                indexes: &indexes,
+            }
+            .delta_positions(3)
+        };
         assert_eq!(positions(Delta::all(3)), 2..3);
         // Later rounds keep the first and middle anchors, whose OldOnly suffixes
         // can match older facts. A prefix delta is not the whole frozen store.
@@ -8895,7 +9124,8 @@ mod tests {
         assert_eq!(
             JoinSnapshot {
                 rel: &rel,
-                delta: Delta::all(3)
+                delta: Delta::all(3),
+                indexes: &indexes,
             }
             .delta_positions(0),
             0..0

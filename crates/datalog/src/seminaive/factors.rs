@@ -13,11 +13,12 @@
 use crate::store::{Arity, StoreShape};
 
 use super::{
-    ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence, JoinGroup,
-    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
-    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_rebound_solutions,
-    extend_slot_solutions, extend_solutions_leapfrog, source_heights, source_preference,
+    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, GroupProbe,
+    HeadEvidence, JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan,
+    RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan,
+    SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, delta_can_match,
+    emit_solution, extend_rebound_solutions, extend_slot_solutions, extend_solutions_leapfrog,
+    source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -219,6 +220,9 @@ where
             entry.plan.operator_at(anchor),
             snapshot.rel,
             entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
             Scan::Delta,
             &partial,
             governor,
@@ -235,6 +239,9 @@ where
             entry.plan.operator_at(position),
             snapshot.rel,
             entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
             scan.at(position),
             partial,
             governor,
@@ -272,6 +279,9 @@ where
                         scan,
                         rel: snapshot.rel,
                         delta: entry.delta,
+                        indexes: snapshot
+                            .delta_indexes
+                            .expect("the factor's delta indexes were prepared"),
                     },
                     &partial,
                     governor,
@@ -364,6 +374,9 @@ where
     let join = JoinSnapshot {
         rel: snapshot.rel,
         delta: entry.delta,
+        indexes: snapshot
+            .delta_indexes
+            .expect("the factor's delta indexes were prepared"),
     };
     let mut matches = Vec::new();
     for &position in &factor.positions {
@@ -759,6 +772,15 @@ pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -769,6 +791,9 @@ where
         let join = JoinSnapshot {
             rel: snapshot.rel,
             delta: entry.delta,
+            indexes: snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
         };
         let mut can_match = false;
         for operator in entry.plan.operators() {
@@ -938,8 +963,8 @@ mod tests {
     use crate::guard::{Guard, Negation, NoGuards};
     use crate::plan::RulePlan;
     use crate::seminaive::{
-        Delta, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry, RuleRuntime,
-        SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
+        Delta, DeltaIndexes, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry,
+        RuleRuntime, SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
         source_heights, source_preference,
     };
     use crate::store::RelationStore;
@@ -1026,6 +1051,7 @@ mod tests {
             JoinSnapshot {
                 rel: &rel,
                 delta: Delta::all(2),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
@@ -1035,6 +1061,7 @@ mod tests {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         let delta = Delta { lo: 1, hi: 2 };
         let projection = project(&matches, &[], snapshot, delta, true).unwrap();
@@ -1166,6 +1193,7 @@ mod tests {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         assert!(matches!(
             project(&missing, &[], snapshot, delta, true),
@@ -1503,6 +1531,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 let entry = RuleEntry {
                     index: 0,
@@ -1570,6 +1599,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let entry = RuleEntry {
                 index: 0,
@@ -1645,6 +1675,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let planned = evaluate_rule(
                 entry,
@@ -1714,6 +1745,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             for lo in 0..=input.len() {
                 for hi in lo..=input.len() {
@@ -1787,6 +1819,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -2005,6 +2038,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=shuffled.len() {
                     for hi in lo..=shuffled.len() {
@@ -2115,6 +2149,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -2435,6 +2470,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=input.len() {
                     for hi in lo..=input.len() {

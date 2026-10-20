@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Indexed round deltas:** Datalog builds native arrangements from each distinct
+  new-row span once per round and shares them across rule tasks. Binary probes,
+  cyclic leapfrog cursors and productive-anchor checks read those arrangements;
+  the all-row seed borrows the accumulated store. Original row, partition and
+  term IDs are retained, with no term rendering or whole-store delta scans.
+
 - **Delta-first rule joins:** partial Datalog rounds bind their new-row anchor
   before visiting old join prefixes, including factored and cyclic bodies.
   Dynamic probes constrain every already-bound position and retain authored

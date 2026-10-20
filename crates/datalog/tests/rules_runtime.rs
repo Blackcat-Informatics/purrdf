@@ -1665,7 +1665,79 @@ fn late_delta_seed_completes_under_a_prefix_independent_work_limit() {
     }
 }
 
+fn narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work() {
+    use purrdf_datalog::store::TermInterner;
+    const LABEL: &str = "https://example.org/label";
+    const EDGE: &str = "https://example.org/edge";
+    let label = |subject: &str| {
+        ClauseAtom::<3>::triple(
+            ClauseTerm::var(subject),
+            ClauseTerm::iri(LABEL),
+            ClauseTerm::iri("https://example.org/marked"),
+        )
+    };
+    let program = compile(vec![DlClause::datalog(
+        label("?y"),
+        vec![
+            label("?x"),
+            ClauseAtom::<3>::triple(
+                ClauseTerm::var("?x"),
+                ClauseTerm::iri(EDGE),
+                ClauseTerm::var("?y"),
+            ),
+        ],
+    )])
+    .unwrap();
+    for depth in [32, 64, 128] {
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        input
+            .insert_row(["n0", &format!("<{LABEL}>"), "<https://example.org/marked>"])
+            .unwrap();
+        for index in 0..depth {
+            input
+                .insert_row([
+                    &format!("n{index}"),
+                    &format!("<{EDGE}>"),
+                    &format!("n{}", index + 1),
+                ])
+                .unwrap();
+        }
+        let recorded = evaluate_guarded(
+            &program,
+            input.clone(),
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        let model =
+            evaluate_guarded(&program, input, &NoGuards, &EvalOptions::default(), None).unwrap();
+        assert_eq!(
+            model.facts().facts_sorted(),
+            recorded.facts().facts_sorted()
+        );
+        assert_eq!(model.work(), recorded.work());
+        assert_eq!(model.facts().row_count(), 2 * depth + 1);
+        assert_eq!(model.work().join_steps(), (2 * depth + 1) as u64);
+        assert!(model.derivations().is_none());
+        assert_eq!(recorded.derivations().unwrap().len(), depth);
+        let predicate = model.facts().term_id(&format!("<{LABEL}>")).unwrap();
+        assert_eq!(
+            model.facts().rows_for_predicate(predicate).count(),
+            depth + 1
+        );
+        assert!(
+            recorded
+                .derivations()
+                .unwrap()
+                .iter()
+                .all(|derivation| derivation.sources().len() == 2)
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
+    narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,
     late_delta_seed_completes_under_a_prefix_independent_work_limit,
     predicate_rows_keep_native_identities_and_lexical_graph_order,
     interrupted_guarded_commit_counts_only_completed_generating_rounds,
