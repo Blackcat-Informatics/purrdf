@@ -705,7 +705,7 @@ impl std::error::Error for NonDatalogClause {}
 /// One DL-clause: `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, each `Cᵢ` a conjunction of atoms.
 ///
 /// See the [module docs](self) for the five head forms and for why all five are
-/// representable while only the atomic one is evaluable here.
+/// representable while atomic and unquantified conjunctive heads are evaluable here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlClause<const N: usize = 4> {
     /// An explicit operational no-output head; never inferred from an empty logical head.
@@ -1133,8 +1133,8 @@ mod tests {
     }
 
     /// Form 4 — a CONJUNCTIVE head (`m = 1`, several conjuncts, no existential) is its own
-    /// form, because it is neither a disjunction nor a Datalog rule: calling it either
-    /// would be a false diagnostic.
+    /// form, distinct from an atomic head or a disjunction, while remaining evaluable
+    /// by the semi-naive Datalog engine.
     #[test]
     fn a_conjunctive_head_classifies_as_conjunctive() {
         let clause = DlClause::new(
