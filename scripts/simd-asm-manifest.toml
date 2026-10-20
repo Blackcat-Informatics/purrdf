@@ -3035,7 +3035,7 @@ summary = "`Relation::contains`, the galloping batch probe plus the tail's dupli
 
 [[site]]
 id = "datalog.gallop-leapfrog"
-summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCursor::seek`"
+summary = "`gallop_lower_bound` (in `Batch::subject_run`) and the owned `cycle::Cursor::seek`"
 
   [[site.measure]]
   label = "gallop"
@@ -3050,7 +3050,10 @@ summary = "`gallop_lower_bound` (in `Batch::subject_run`) and `LeapfrogValueCurs
   label = "leapfrog"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "<purrdf_datalog::seminaive::LeapfrogValueCursor>::seek"
+  # The owned cursor has an explicit identity parameter rather than a default.
+  # Name its native TermId instantiation exactly; this one seek dispatches the
+  # same six scan/orientation cases the original default-ID cursor covered.
+  symbol = "<purrdf_datalog::seminaive::cycle::Cursor<purrdf_datalog::id::Id<purrdf_datalog::id::Term>>>::seek"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
