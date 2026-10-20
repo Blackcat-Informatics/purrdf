@@ -205,6 +205,15 @@ fn factor_matches<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
     let seed = match scan {
         JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_count()) => {
