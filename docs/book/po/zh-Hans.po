@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-18T16:58:10-06:00\n"
+"POT-Creation-Date: 2026-10-19T22:46:41-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1077,6 +1077,10 @@ msgstr "本包附带一个 rdflib 兼容层："
 #: src/getting-started/python.md:91
 msgid "For a literal, zero-change `import rdflib`, there is an opt-in extra:"
 msgstr "若需要逐字不改的 `import rdflib`，可选装一个 extra："
+
+#: src/getting-started/python.md:94 src/interop/rdflib.md:41
+msgid "\"purrdf[rdflib]\""
+msgstr "\"purrdf[rdflib]\""
 
 #: src/getting-started/python.md:97 src/interop/rdflib.md:44
 msgid ""
@@ -2823,11 +2827,11 @@ msgid "\"quick fox\""
 msgstr "\"quick fox\""
 
 #: src/reference/python-api.md:690 src/reference/python-api.md:694
-#: src/sparql/full-text.md:79
+#: src/sparql/full-text.md:80
 msgid "\"https://example.org/note\""
 msgstr "\"https://example.org/note\""
 
-#: src/reference/python-api.md:692 src/sparql/full-text.md:88
+#: src/reference/python-api.md:692 src/sparql/full-text.md:89
 msgid "\"https://example.org/pf/search\""
 msgstr "\"https://example.org/pf/search\""
 
@@ -3264,7 +3268,7 @@ msgstr "'tsv'"
 msgid "'text/tab-separated-values'"
 msgstr "'text/tab-separated-values'"
 
-#: src/reference/python-api-signatures.md:1018
+#: src/reference/python-api-signatures.md:1017
 msgid ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
@@ -3272,15 +3276,15 @@ msgstr ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1035
+#: src/reference/python-api-signatures.md:1034
 msgid "\"\"\"A SHACL validation report.\"\"\""
 msgstr "\"\"\"A SHACL validation report.\"\"\""
 
-#: src/reference/python-api-signatures.md:1060
+#: src/reference/python-api-signatures.md:1059
 msgid "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 msgstr "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 
-#: src/reference/python-api-signatures.md:1078
+#: src/reference/python-api-signatures.md:1077
 msgid ""
 "\"\"\"A refusal from the prepared-shapes-product admission boundary.\n"
 "\n"
@@ -3300,7 +3304,7 @@ msgstr ""
 "    not parse was never admitted). Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1087
+#: src/reference/python-api-signatures.md:1086
 msgid ""
 "\"\"\"A shapes graph's `owl:imports` closure is not in hand, or the "
 "`imports` table\n"
@@ -3370,7 +3374,7 @@ msgstr ""
 "    `unheld-shapes-graph-link`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1113
+#: src/reference/python-api-signatures.md:1112
 msgid ""
 "\"\"\"An immutable shape preparation, reusable across data graphs and "
 "writable as\n"
@@ -3380,7 +3384,7 @@ msgstr ""
 "writable as\n"
 "    a prepared product.\"\"\""
 
-#: src/reference/python-api-signatures.md:1129
+#: src/reference/python-api-signatures.md:1128
 msgid ""
 "\"\"\"The outcome of `PreparedShapes.validate_store_changes`: the report, "
 "plus the\n"
@@ -3400,7 +3404,7 @@ msgstr ""
 "    question it answered. Read `bounded` first.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1153
+#: src/reference/python-api-signatures.md:1152
 msgid ""
 "\"\"\"A prepared product whose envelope is verified and whose self-"
 "description is\n"
@@ -3410,84 +3414,84 @@ msgstr ""
 "description is\n"
 "    decoded — but which has NOT been admitted.\"\"\""
 
-#: src/reference/python-api-signatures.md:1235
+#: src/reference/python-api-signatures.md:1234
 msgid "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 msgstr ""
 "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 
-#: src/reference/python-api-signatures.md:1566
+#: src/reference/python-api-signatures.md:1565
 msgid "'empty'"
 msgstr "'empty'"
 
-#: src/reference/python-api-signatures.md:1566
+#: src/reference/python-api-signatures.md:1565
 msgid "'baseline'"
 msgstr "'baseline'"
 
-#: src/reference/python-api-signatures.md:1566
+#: src/reference/python-api-signatures.md:1565
 msgid "'dictionary'"
 msgstr "'dictionary'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'preserve'"
 msgstr "'preserve'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'latin-greek-cyrillic'"
 msgstr "'latin-greek-cyrillic'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'latin-greek-cyrillic-arabic-hebrew'"
 msgstr "'latin-greek-cyrillic-arabic-hebrew'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'latin'"
 msgstr "'latin'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'greek'"
 msgstr "'greek'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'cyrillic'"
 msgstr "'cyrillic'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'hebrew'"
 msgstr "'hebrew'"
 
-#: src/reference/python-api-signatures.md:1570
+#: src/reference/python-api-signatures.md:1569
 msgid "'arabic'"
 msgstr "'arabic'"
 
-#: src/reference/python-api-signatures.md:1571
+#: src/reference/python-api-signatures.md:1570
 msgid "'none'"
 msgstr "'none'"
 
-#: src/reference/python-api-signatures.md:1571
+#: src/reference/python-api-signatures.md:1570
 msgid "'english'"
 msgstr "'english'"
 
-#: src/reference/python-api-signatures.md:1572
+#: src/reference/python-api-signatures.md:1571
 msgid "'plain'"
 msgstr "'plain'"
 
-#: src/reference/python-api-signatures.md:1572
+#: src/reference/python-api-signatures.md:1571
 msgid "'html-text'"
 msgstr "'html-text'"
 
-#: src/reference/python-api-signatures.md:1572
+#: src/reference/python-api-signatures.md:1571
 msgid "'html-attribute'"
 msgstr "'html-attribute'"
 
-#: src/reference/python-api-signatures.md:1575
+#: src/reference/python-api-signatures.md:1574
 msgid "'lexical'"
 msgstr "'lexical'"
 
-#: src/reference/python-api-signatures.md:1575
+#: src/reference/python-api-signatures.md:1574
 msgid "'han'"
 msgstr "'han'"
 
-#: src/reference/python-api-signatures.md:1587
+#: src/reference/python-api-signatures.md:1586
 msgid ""
 "\"\"\"A refusal from the plan-document boundary: `certify_plan`, "
 "`explain_depth`.\n"
@@ -3523,17 +3527,17 @@ msgstr ""
 "    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1607
-#: src/reference/python-api-signatures.md:1619
-#: src/reference/python-api-signatures.md:1623
+#: src/reference/python-api-signatures.md:1606
+#: src/reference/python-api-signatures.md:1618
+#: src/reference/python-api-signatures.md:1622
 msgid "'turtle'"
 msgstr "'turtle'"
 
-#: src/reference/python-api-signatures.md:1643
+#: src/reference/python-api-signatures.md:1642
 msgid "`geo.pyi`"
 msgstr "`geo.pyi`"
 
-#: src/reference/python-api-signatures.md:1650
+#: src/reference/python-api-signatures.md:1649
 msgid ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
@@ -3541,13 +3545,13 @@ msgstr ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
 
-#: src/reference/python-api-signatures.md:1659
+#: src/reference/python-api-signatures.md:1658
 msgid ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 msgstr ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 
-#: src/reference/python-api-signatures.md:1665
+#: src/reference/python-api-signatures.md:1664
 msgid ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
@@ -3555,7 +3559,7 @@ msgstr ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
 
-#: src/reference/python-api-signatures.md:1675
+#: src/reference/python-api-signatures.md:1674
 msgid ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
@@ -3563,7 +3567,7 @@ msgstr ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1678
+#: src/reference/python-api-signatures.md:1677
 msgid ""
 "\"\"\"Search through the same native comparison law and refusal channel."
 "\"\"\""
@@ -13141,8 +13145,8 @@ msgid ""
 "nowhere to look."
 msgstr ""
 "核心语法的属性路径回答的是**可达性**问题。`?s ex:p+ ?o` 表示存在某个由 "
-"`ex:p` 边构成的序列从 `?s` 通往 `?o`，答案是端点对；<em>哪些</em>边则无法表达，因此"
-"需要解释、加权、过滤或重新连接该路线的查询无处可查。"
+"`ex:p` 边构成的序列从 `?s` 通往 `?o`，答案是端点对；<em>哪些</em>边则无法表"
+"达，因此需要解释、加权、过滤或重新连接该路线的查询无处可查。"
 
 #: src/sparql/querying.md:1974
 msgid ""
@@ -13231,12 +13235,13 @@ msgid ""
 "`GROUP BY ?pathId` is how the hop rows become walks again. The identifier is "
 "constant across one walk's rows and distinct between walks, so each group IS "
 "one walk; `?start`, `?end` and `?len` are constant within a group, so "
-"grouping by them alongside preserves the same groups and lets them be projected:"
+"grouping by them alongside preserves the same groups and lets them be "
+"projected:"
 msgstr ""
 "`GROUP BY ?pathId` 正是把各跳的行重新组成游走的方式。该标识符在一次游走的各行"
 "中保持不变，在不同游走之间互不相同，因此每个分组就是（IS）一次游走；`?"
-"start`、`?end` 与 `?len` 在分组内保持不变，因此同时按它们分组仍保持相同的分组，"
-"并使它们能够被投影出来："
+"start`、`?end` 与 `?len` 在分组内保持不变，因此同时按它们分组仍保持相同的分"
+"组，并使它们能够被投影出来："
 
 #: src/sparql/querying.md:2040
 msgid ""
@@ -13317,10 +13322,11 @@ msgid ""
 "the step's predicate widens the walk exactly as it widens a `p+` written "
 "beside it. Over"
 msgstr ""
-"路径关系是步骤所含边的快照，而它必须据以建立快照的数据集，是查询<em>所依据作答</em>"
-"的那个数据集。在 `--entailment`（或 Python 的 `query_entailment_governed`）"
-"下，那就是**推理闭包**，而不是源图——因此，在步骤谓语下推导出四元组的蕴涵机"
-"制，会拓宽游走，与它拓宽写在旁边的 `p+` 完全一样。以如下数据为例："
+"路径关系是步骤所含边的快照，而它必须据以建立快照的数据集，是查询<em>所依据作"
+"答</em>的那个数据集。在 `--entailment`（或 Python 的 "
+"`query_entailment_governed`）下，那就是**推理闭包**，而不是源图——因此，在步骤"
+"谓语下推导出四元组的蕴涵机制，会拓宽游走，与它拓宽写在旁边的 `p+` 完全一样。"
+"以如下数据为例："
 
 #: src/sparql/querying.md:2083
 msgid ""
@@ -14172,17 +14178,16 @@ msgid ""
 "**Ranked retrieval** (`TextSearchRelation`) emits one row per matching "
 "document. `?score` is an `xsd:decimal` carrying the exact BM25 value, `?"
 "rank` is the document's 1-based position **within its corpus partition** "
-"(`(graph, language)` for the default `GraphLanguage` profile), "
-"`?lang` is the partition's language tag, and `?matched` counts "
-"how many distinct needle terms the document holds."
+"(`(graph, language)` for the default `GraphLanguage` profile), `?lang` is "
+"the partition's language tag, and `?matched` counts how many distinct needle "
+"terms the document holds."
 msgstr ""
 "**带排名的检索**（`TextSearchRelation`）对每个匹配的文档输出一行。`?score` 是"
-"携带精确 BM25 值的 `xsd:decimal`，`?rank` 是文档**在其语料分区内**从 1 开始的位置"
-"（默认 `GraphLanguage` profile 使用 `(graph, language)` 分区），"
-"`?lang` 是该分区的语言标签，`?matched` 统计该文档包含"
-"多少个不同的检索词。"
+"携带精确 BM25 值的 `xsd:decimal`，`?rank` 是文档**在其语料分区内**从 1 开始的"
+"位置（默认 `GraphLanguage` profile 使用 `(graph, language)` 分区），`?lang` "
+"是该分区的语言标签，`?matched` 统计该文档包含多少个不同的检索词。"
 
-#: src/sparql/full-text.md:43
+#: src/sparql/full-text.md:44
 msgid ""
 "**Term occurrence** (`TermOccurrenceRelation`) emits one row per occurrence "
 "of a single term, with its token `?position`."
@@ -14190,7 +14195,7 @@ msgstr ""
 "**词项出现**（`TermOccurrenceRelation`）对单个词项的每次出现输出一行，并给出"
 "其 token 位置 `?position`。"
 
-#: src/sparql/full-text.md:46
+#: src/sparql/full-text.md:47
 msgid ""
 "Phrase and proximity search are delivered by composition in SPARQL rather "
 "than by an embedded query dialect — an embedded syntax would have minted one "
@@ -14200,7 +14205,7 @@ msgstr ""
 "短语与邻近检索通过在 SPARQL 中组合来实现，而不是通过内嵌的查询方言——内嵌语法"
 "会再造出一种互不兼容的厂商语言，而这恰恰是载体不应做的："
 
-#: src/sparql/full-text.md:50
+#: src/sparql/full-text.md:51
 msgid ""
 "```sparql\n"
 "# \"quick\" immediately followed by \"brown\"\n"
@@ -14220,7 +14225,7 @@ msgstr ""
 "}\n"
 "```"
 
-#: src/sparql/full-text.md:59
+#: src/sparql/full-text.md:60
 msgid ""
 "`FILTER(ABS(?p2 - ?p1) <= 3)` is proximity; `FILTER(?matched = 2)` on the "
 "ranked relation is conjunctive retrieval."
@@ -14228,11 +14233,11 @@ msgstr ""
 "`FILTER(ABS(?p2 - ?p1) <= 3)` 即邻近检索；在带排名的关系上使用 `FILTER(?"
 "matched = 2)` 即合取检索。"
 
-#: src/sparql/full-text.md:62
+#: src/sparql/full-text.md:63
 msgid "Wiring it from Rust"
 msgstr "从 Rust 接入"
 
-#: src/sparql/full-text.md:64
+#: src/sparql/full-text.md:65
 msgid ""
 "The index takes the predicates whose literals it should read and a graph "
 "selector — `GraphSelector::Any`, `Default`, or `Named(iri)` — and PurRDF "
@@ -14243,23 +14248,23 @@ msgstr ""
 "`Default` 或 `Named(iri)`——PurRDF 对两者都不提供默认值。未指名任何谓词的配置"
 "是一个带类型的 `TextError::Config`，而不是一次猜测。"
 
-#: src/sparql/full-text.md:76
+#: src/sparql/full-text.md:77
 msgid "// Which literals to index: the caller names the predicates.\n"
 msgstr "// 索引哪些字面量：由调用方指名谓词。\n"
 
-#: src/sparql/full-text.md:81
+#: src/sparql/full-text.md:82
 msgid "// Explicitly choose grapheme fallback.\n"
 msgstr "// 显式选择字素回退。\n"
 
-#: src/sparql/full-text.md:84
+#: src/sparql/full-text.md:85
 msgid "// Which IRIs a query calls the index by: the caller names those too.\n"
 msgstr "// 查询通过哪些 IRI 调用索引：同样由调用方指名。\n"
 
-#: src/sparql/full-text.md:92
+#: src/sparql/full-text.md:93
 msgid "\"https://example.org/pf/occurs\""
 msgstr "\"https://example.org/pf/occurs\""
 
-#: src/sparql/full-text.md:94
+#: src/sparql/full-text.md:95
 msgid ""
 "// The environment a query text is read in: every registered IRI is claimed "
 "in\n"
@@ -14268,7 +14273,7 @@ msgstr ""
 "// 读取查询文本所处的环境：每个已注册的 IRI 都在谓语位置\n"
 "// 被认领，并依据这个注册表解析。\n"
 
-#: src/sparql/full-text.md:102
+#: src/sparql/full-text.md:103
 msgid ""
 "r#\"SELECT ?doc ?score ?rank WHERE {\n"
 "                    ?doc <https://example.org/pf/search> ( \"quick brown\" ?"
@@ -14280,7 +14285,7 @@ msgstr ""
 "score ?rank ?lang ?matched )\n"
 "                  } LIMIT 3\"#"
 
-#: src/sparql/full-text.md:112
+#: src/sparql/full-text.md:113
 msgid ""
 "A registered IRI is recognized in predicate position exactly, so no parser "
 "option is needed to reach it. An IRI a query names that is declared through "
@@ -14291,7 +14296,7 @@ msgstr ""
 "指名的某个 IRI 已通过 `ParserOptions` 声明但未注册，则会以点名该 IRI 的方式硬"
 "失败；两者皆非的 IRI 仍是普通的三元组模式。"
 
-#: src/sparql/full-text.md:117
+#: src/sparql/full-text.md:118
 msgid ""
 "This is a Rust-host seam. The index and its relations are host closures, so "
 "they do not cross the Python, WebAssembly or C boundary — only the data-"
@@ -14303,11 +14308,11 @@ msgstr ""
 "WebAssembly 或 C 边界——只有数据形态的属性函数（冻结表、以图为后端的表以及路径"
 "见证）才会。参见[从其他宿主到达扩展](querying.md#从其他宿主到达扩展)。"
 
-#: src/sparql/full-text.md:122
+#: src/sparql/full-text.md:123
 msgid "Every score is exact, and identical on every target"
 msgstr "每个分数都是精确的，且在每个目标上都相同"
 
-#: src/sparql/full-text.md:124
+#: src/sparql/full-text.md:125
 msgid ""
 "Scores use a base-10 fixed-point integer representation (`i128`, twelve "
 "fractional digits). Scoring and ranking use no floating-point arithmetic; "
@@ -14316,7 +14321,7 @@ msgstr ""
 "分数以十进制定点整数表示（`i128`，十二位小数）。评分和排序不使用浮点运算；"
 "crate 根模块声明 `#![deny(clippy::float_arithmetic)]`。"
 
-#: src/sparql/full-text.md:128
+#: src/sparql/full-text.md:129
 msgid ""
 "That is a correctness requirement, not a preference. BM25 needs a natural "
 "logarithm, and a libm `ln` may differ by a unit in the last place between "
@@ -14339,7 +14344,7 @@ msgstr ""
 "果固定。`make wasm` 单独为 WASM 构建 crate；WASM 执行只覆盖实际目标路径与宿主"
 "接口。"
 
-#: src/sparql/full-text.md:140
+#: src/sparql/full-text.md:141
 msgid ""
 "`k1 = 1.2` is fixed. `RankingProfile::single_field()` selects one field with "
 "weight one and `b = 0.75`; an explicit `RankingProfile` declares each "
@@ -14352,37 +14357,38 @@ msgstr ""
 "定在不可变 profile 的指纹中。同一个已标识的 profile、索引与查询，在每个目标上"
 "都产生相同的排名与分数词法形式。"
 
-#: src/sparql/full-text.md:146
+#: src/sparql/full-text.md:147
 msgid "Ordering, and the idioms that reproduce it"
 msgstr "排序，以及复现它的惯用写法"
 
-#: src/sparql/full-text.md:148
+#: src/sparql/full-text.md:149
 msgid ""
 "For the default `GraphLanguage` profile, corpus statistics are computed per "
-"`(graph, language)` partition, so a score "
-"is a number relative to one corpus and `?rank` is a position within that "
-"partition, never a global one. Rows are emitted in `(partition key ASC, rank "
-"ASC)` order; within a partition the order is `(score DESC, document id "
-"ASC)`, and document ids are assigned after sorting on `(graph, subject, "
-"language)`, so the tie-break is reproducible across independently built "
-"indexes. `GraphFree` instead uses `(subject, language)` document order and "
-"language-only partitions. To obtain one ranked list with `GraphLanguage`, bind "
-"`?lang` and restrict `?graph` through the selector; with `GraphFree`, bind only "
-"`?lang`. A single-partition index also gives one ranked list."
+"`(graph, language)` partition, so a score is a number relative to one corpus "
+"and `?rank` is a position within that partition, never a global one. Rows "
+"are emitted in `(partition key ASC, rank ASC)` order; within a partition the "
+"order is `(score DESC, document id ASC)`, and document ids are assigned "
+"after sorting on `(graph, subject, language)`, so the tie-break is "
+"reproducible across independently built indexes. `GraphFree` instead uses "
+"`(subject, language)` document order and language-only partitions. To obtain "
+"one ranked list with `GraphLanguage`, bind `?lang` and restrict `?graph` "
+"through the selector; with `GraphFree`, bind only `?lang`. A single-"
+"partition index also gives one ranked list."
 msgstr ""
-"默认的 `GraphLanguage` profile 按 `(graph, language)` 分区计算语料统计，因此分数是相对于某个语料的数值，`?"
-"rank` 是该分区内的位置，绝不是全局位置。行按 `(partition key ASC, rank ASC)` "
-"顺序输出；在一个分区内，顺序为 `(score DESC, document id ASC)`，而文档 id 是"
-"在按 `(graph, subject, language)` 排序之后分配的，因此平局决胜在各自独立构建"
-"的索引之间可复现。`GraphFree` 则按 `(subject, language)` 排列文档，并仅按语言分区。"
-"要在 `GraphLanguage` 中取得一个统一排名列表，应绑定 `?lang` 并通过选择器限制 `?graph`；"
-"在 `GraphFree` 中则只需绑定 `?lang`。单分区索引也能给出一个统一排名列表。"
+"默认的 `GraphLanguage` profile 按 `(graph, language)` 分区计算语料统计，因此"
+"分数是相对于某个语料的数值，`?rank` 是该分区内的位置，绝不是全局位置。行按 "
+"`(partition key ASC, rank ASC)` 顺序输出；在一个分区内，顺序为 `(score DESC, "
+"document id ASC)`，而文档 id 是在按 `(graph, subject, language)` 排序之后分配"
+"的，因此平局决胜在各自独立构建的索引之间可复现。`GraphFree` 则按 `(subject, "
+"language)` 排列文档，并仅按语言分区。要在 `GraphLanguage` 中取得一个统一排名"
+"列表，应绑定 `?lang` 并通过选择器限制 `?graph`；在 `GraphFree` 中则只需绑定 "
+"`?lang`。单分区索引也能给出一个统一排名列表。"
 
-#: src/sparql/full-text.md:157
+#: src/sparql/full-text.md:161
 msgid "Within one selected partition, two consequences are worth knowing:"
 msgstr "在选定的同一分区内，有两个值得了解的推论："
 
-#: src/sparql/full-text.md:159
+#: src/sparql/full-text.md:163
 msgid ""
 "**Bare `LIMIT k` is top-k.** Emission order _is_ rank order, so the "
 "evaluator's row-ceiling licence applies and the relation stops after `k` "
@@ -14395,7 +14401,7 @@ msgstr ""
 "`ORDER BY` 加 `LIMIT` 没有 governor（执行调控器）可以许可的、经认证的下界——而"
 "且这里的 `ORDER BY` 本来就是多余的。"
 
-#: src/sparql/full-text.md:164
+#: src/sparql/full-text.md:168
 msgid ""
 "**`ORDER BY ?rank` is the reproducing idiom.** A score reaches the consumer "
 "as a decimal of fixed width, so two rows can report the same `?score` while "
@@ -14406,11 +14412,11 @@ msgstr ""
 "方，因此两行可能报告相同的 `?score`，却带有不同的 `?rank`；所以 `ORDER BY "
 "DESC(?score)` 可能与精确的内部顺序不一致，而 `?rank` 不会。"
 
-#: src/sparql/full-text.md:169
+#: src/sparql/full-text.md:173
 msgid "RDF 1.2 first class"
 msgstr "RDF 1.2 一等支持"
 
-#: src/sparql/full-text.md:171
+#: src/sparql/full-text.md:175
 msgid ""
 "`RdfDataset::quads()` returns only the asserted triple table; annotations "
 "live in a separate side table. The index reads both layers, so text carried "
@@ -14424,11 +14430,11 @@ msgstr ""
 "体化节点作为文档主语。只读取已断言层的索引将索引零个注解字面量，并且什么也不"
 "报告——该 crate 的测试恰恰防范这一点。"
 
-#: src/sparql/full-text.md:177
+#: src/sparql/full-text.md:181
 msgid "Stated limits"
 msgstr "明确的限制"
 
-#: src/sparql/full-text.md:179
+#: src/sparql/full-text.md:183
 msgid ""
 "Document ids are a function of content _except_ through blank-node labels, "
 "which are a parsing artifact: two isomorphic datasets with different labels "
@@ -14437,7 +14443,7 @@ msgstr ""
 "文档 id 是内容的函数，*但*空节点标签*除外*——标签是解析的产物：两个同构但标签"
 "不同的数据集会产生不同的索引指纹。"
 
-#: src/sparql/full-text.md:182
+#: src/sparql/full-text.md:186
 msgid ""
 "The index is in-memory and built over a frozen dataset. `verify_binding` "
 "checks that the index a query runs against was built over the dataset in "
@@ -14448,7 +14454,7 @@ msgstr ""
 "于眼前这个数据集构建，从而堵住一个静默通道：过时的索引输出的文档在连接回数据"
 "时得到零行。"
 
-#: src/sparql/full-text.md:187
+#: src/sparql/full-text.md:191
 msgid ""
 "The scoring design record — including the fixed-point logarithm and the "
 "Unicode table versions folded into the index fingerprint — is [`docs/design/"
@@ -14837,22 +14843,22 @@ msgid ""
 "not an abort — otherwise every query ranging a seed over partly-embedded "
 "terms would die. A second mode, `bbff`, binds the neighbour and seed while "
 "leaving `k` free: it asks whether the space holds that neighbour, without "
-"ranking it. Binding `k` always selects ranked search, even when the neighbour "
-"is bound."
+"ranking it. Binding `k` always selects ranked search, even when the "
+"neighbour is bound."
 msgstr ""
-"排名搜索模式是 `fbbf`：种子与 `k` 是该关系无法枚举的输入，而 `?neighbour` "
-"与 `?distance` 各自可以是已绑定或自由的。`k` 接受任何由整数派生的数据类型"
+"排名搜索模式是 `fbbf`：种子与 `k` 是该关系无法枚举的输入，而 `?neighbour` 与 "
+"`?distance` 各自可以是已绑定或自由的。`k` 接受任何由整数派生的数据类型"
 "（`xsd:integer`、`xsd:int`、`xsd:long`、`xsd:nonNegativeInteger`……）；`k = "
 "0` 是请求零个近邻的有效请求。在该空间中没有向量的种子得到的是**空答案**，而不"
 "是中止——否则，每个让种子遍历部分已嵌入项的查询都会失败终止。第二种模式 "
-"`bbff` 绑定近邻与种子，而让 `k` 保持自由：它询问空间是否持有该近邻，不对其排名。"
-"绑定 `k` 总是选择排名搜索，即使近邻也已绑定。"
+"`bbff` 绑定近邻与种子，而让 `k` 保持自由：它询问空间是否持有该近邻，不对其排"
+"名。绑定 `k` 总是选择排名搜索，即使近邻也已绑定。"
 
-#: src/sparql/embedding-knn.md:59
+#: src/sparql/embedding-knn.md:61
 msgid "PurRDF mints no IRI for this"
 msgstr "PurRDF 不为此生成任何 IRI"
 
-#: src/sparql/embedding-knn.md:61
+#: src/sparql/embedding-knn.md:63
 msgid ""
 "The predicate is the caller's, and it is how a query names a space: a host "
 "builds one `EmbeddingSpace` per `(artifact, target set, vector space)` "
@@ -14868,7 +14874,7 @@ msgstr ""
 "后备空间。每个空间注册一个关系——而不是用一个关系把空间 IRI 作为参数——正是这一"
 "点让规划器能从实际将被搜索的空间读出一个如实的行数上界。"
 
-#: src/sparql/embedding-knn.md:72
+#: src/sparql/embedding-knn.md:74
 msgid ""
 "// The guard is caller-supplied configuration with no default: the largest\n"
 "// space one invocation may scan, and the largest `k` it may request.\n"
@@ -14876,15 +14882,15 @@ msgstr ""
 "// 守卫是调用方提供的配置，没有默认值：一次调用可扫描的\n"
 "// 最大空间，以及它可请求的最大 `k`。\n"
 
-#: src/sparql/embedding-knn.md:75
+#: src/sparql/embedding-knn.md:77
 msgid "/* max_candidates */"
 msgstr "/* max_candidates */"
 
-#: src/sparql/embedding-knn.md:75
+#: src/sparql/embedding-knn.md:77
 msgid "/* max_neighbours */"
 msgstr "/* max_neighbours */"
 
-#: src/sparql/embedding-knn.md:76
+#: src/sparql/embedding-knn.md:78
 msgid ""
 "// `bindings` names the RDF term each PURREMB row stands for. A row with no\n"
 "// term is a construction-time refusal, not a skipped row — a top-k over a\n"
@@ -14894,11 +14900,11 @@ msgstr ""
 "// 会在构造时被拒绝，而不是被跳过——在一个被静默缩小的候选集上\n"
 "// 求 top-k，得到的只是某个子集的 top-k。\n"
 
-#: src/sparql/embedding-knn.md:86
+#: src/sparql/embedding-knn.md:88
 msgid "\"https://example.org/space/points\""
 msgstr "\"https://example.org/space/points\""
 
-#: src/sparql/embedding-knn.md:91
+#: src/sparql/embedding-knn.md:93
 msgid ""
 "The registry then reaches the engine through an `ExtensionEnv` "
 "(`ExtensionEnv::over_relations`, handed to the query with "
@@ -14909,11 +14915,11 @@ msgstr ""
 "`QueryOptions::with_env` 交给查询）到达引擎，与[全文检索](full-text.md)一页中"
 "的做法完全相同。这是一个 Rust 宿主扩展点。"
 
-#: src/sparql/embedding-knn.md:96
+#: src/sparql/embedding-knn.md:98
 msgid "Exact search, ordered under the declared metric"
 msgstr "精确搜索，按所声明的度量排序"
 
-#: src/sparql/embedding-knn.md:98
+#: src/sparql/embedding-knn.md:100
 msgid ""
 "The search is **exact**: every candidate row is scored under the metric the "
 "space's family contract declares (`FamilyView::metric()` — cosine or squared "
@@ -14933,7 +14939,7 @@ msgstr ""
 "个——也正因如此，「排序正确」是本模块经过测试的属性，而不是某个调优参数的属"
 "性。"
 
-#: src/sparql/embedding-knn.md:108
+#: src/sparql/embedding-knn.md:110
 msgid ""
 "Rank order is `(distance ASC, row ASC)`. Row numbers are distinct, so the "
 "order is strict and total, and the tie-break is meaningful: a PURREMB target "
@@ -14947,33 +14953,33 @@ msgstr ""
 "因此行号升序*就是*规范内容的升序。以相反插入顺序、由相同内容构建出的两个工"
 "件，作答逐字节相同，包括序列化后的 JSON。"
 
-#: src/sparql/embedding-knn.md:115
+#: src/sparql/embedding-knn.md:117
 msgid "Binary64, in a pinned order"
 msgstr "binary64，按固定顺序"
 
-#: src/sparql/embedding-knn.md:117
+#: src/sparql/embedding-knn.md:119
 msgid ""
 "The workspace's full-text ranked-retrieval surface uses no floating-point "
-"arithmetic, because BM25 needs a logarithm and IEEE-754 does not require `ln` "
-"to be correctly rounded. That reason does not transfer. A kNN kernel needs "
-"no transcendental — subtraction, multiplication, addition, division and "
-"square root are all correctly rounded — so binary64 gives the _same_ cross-"
-"target guarantee here. `docs/PURREMB.md` fixes the artifact's own folds "
-"normatively (\"binary64, round-to-nearest ties-to-even, in the written "
+"arithmetic, because BM25 needs a logarithm and IEEE-754 does not require "
+"`ln` to be correctly rounded. That reason does not transfer. A kNN kernel "
+"needs no transcendental — subtraction, multiplication, addition, division "
+"and square root are all correctly rounded — so binary64 gives the _same_ "
+"cross-target guarantee here. `docs/PURREMB.md` fixes the artifact's own "
+"folds normatively (\"binary64, round-to-nearest ties-to-even, in the written "
 "order, without a fused multiply-add\"), and the L2 norm is one of them, so "
 "the kNN surface uses `purrdf_core`'s normative norm fold rather than a copy "
 "of it. Fixed point would have introduced a quantization step the format does "
 "not have."
 msgstr ""
-"工作区中的全文排名检索接口不使用浮点运算，因为 BM25 需要对数，而 "
-"IEEE-754 并不要求 `ln` 正确舍入。这一理由在此并不适用。k 近邻内核不需要任何超"
-"越函数——减法、乘法、加法、除法与平方根都是正确舍入的——因此 binary64 在这里给"
-"出*同样的*跨目标保证。`docs/PURREMB.md` 以规范性条文固定了工件自身的归约"
-"（「binary64，就近舍入、平局取偶，按书写顺序，不使用融合乘加」），L2 范数就是"
-"其中之一，因此 k 近邻接口使用 `purrdf_core` 中规范性的范数归约，而不是它的一"
-"份副本。定点数会引入一个该格式本身并不具有的量化步骤。"
+"工作区中的全文排名检索接口不使用浮点运算，因为 BM25 需要对数，而 IEEE-754 并"
+"不要求 `ln` 正确舍入。这一理由在此并不适用。k 近邻内核不需要任何超越函数——减"
+"法、乘法、加法、除法与平方根都是正确舍入的——因此 binary64 在这里给出*同样的*"
+"跨目标保证。`docs/PURREMB.md` 以规范性条文固定了工件自身的归约（「binary64，"
+"就近舍入、平局取偶，按书写顺序，不使用融合乘加」），L2 范数就是其中之一，因"
+"此 k 近邻接口使用 `purrdf_core` 中规范性的范数归约，而不是它的一份副本。定点"
+"数会引入一个该格式本身并不具有的量化步骤。"
 
-#: src/sparql/embedding-knn.md:128
+#: src/sparql/embedding-knn.md:130
 msgid ""
 "The two residual hazards are closed structurally. Every dot product and "
 "squared Euclidean sum follows one pinned law, `purrdf_core::distance::Exact` "
@@ -15000,22 +15006,22 @@ msgstr ""
 "`xsd:double` 输出，其规范词法形式能往返还原精确的比特——舍入后的十进制表示会把"
 "两个相邻的 double 打印成同一个值，恰好掩盖本节所讨论的那种分歧。"
 
-#: src/sparql/embedding-knn.md:141
+#: src/sparql/embedding-knn.md:143
 msgid ""
-"One limit, stated rather than hidden: cosine self-distance need not be exactly "
-"zero (`dot(v, v)` and `|v|·|v|` are two roundings of one real number). Do not "
-"assume zero self-distance; ranking follows the computed distance and the "
-"canonical row tie-break."
+"One limit, stated rather than hidden: cosine self-distance need not be "
+"exactly zero (`dot(v, v)` and `|v|·|v|` are two roundings of one real "
+"number). Do not assume zero self-distance; ranking follows the computed "
+"distance and the canonical row tie-break."
 msgstr ""
-"有一个限制在此明说而不隐藏：余弦自距离不一定恰好为零（`dot(v, v)` 与 `|v|·|v|` "
-"是对同一个实数的两次舍入）。不要假定自距离为零；排名遵循算出的距离，并按规范"
-"行号裁决平局。"
+"有一个限制在此明说而不隐藏：余弦自距离不一定恰好为零（`dot(v, v)` 与 `|v|·|v|"
+"` 是对同一个实数的两次舍入）。不要假定自距离为零；排名遵循算出的距离，并按规"
+"范行号裁决平局。"
 
-#: src/sparql/embedding-knn.md:146
+#: src/sparql/embedding-knn.md:148
 msgid "What a search costs"
 msgstr "一次搜索的代价"
 
-#: src/sparql/embedding-knn.md:148
+#: src/sparql/embedding-knn.md:150
 msgid ""
 "The governor's earlier charge points priced a host relation by invocations "
 "driven and rows accepted. For a generator, neither is where the cost is: a "
@@ -15033,7 +15039,7 @@ msgstr ""
 "随空间大小而变化，而不是随返回的行数，而 `KnnGuard` 正是让计费与规划器的行数"
 "上界都保持如实的东西。"
 
-#: src/sparql/embedding-knn.md:157
+#: src/sparql/embedding-knn.md:159
 msgid ""
 "The design record — the four decisions that were not obvious and what fixed "
 "each — is [`docs/design/purrdf-embedding-knn.md`](https://github.com/"
@@ -23323,12 +23329,11 @@ msgstr "上限只会拒绝，从不截断"
 
 #: src/datalog.md:65
 msgid ""
-"Three limits bound what every run holds and enumerates. Two are the "
-"caller's, on `EvalOptions`, with a default sized for the target; the third "
-"is a constant:"
+"Three limits bound what every run holds and enumerates. All are caller-"
+"selected through `EvalOptions`, with explicit defaults:"
 msgstr ""
-"三个上限约束每一次运行所持有与枚举的内容。其中两个属于调用方，位于 "
-"`EvalOptions` 上，默认值按目标平台确定；第三个是常量："
+"三个上限约束每一次运行所持有与枚举的内容。调用方通过 `EvalOptions` 选择所有上"
+"限，每项都有明确的默认值："
 
 #: src/datalog.md:68
 msgid "Limit"
@@ -23395,14 +23400,31 @@ msgid "interned term surface bytes"
 msgstr "驻留项的词法形式字节数"
 
 #: src/datalog.md:72
-msgid "`MAX_TERM_ARENA_BYTES` (fixed)"
-msgstr "`MAX_TERM_ARENA_BYTES`（固定）"
+msgid "`EvalOptions::with_max_term_arena_bytes`"
+msgstr "`EvalOptions::with_max_term_arena_bytes`"
 
 #: src/datalog.md:72
 msgid "16,777,216"
 msgstr "16,777,216"
 
 #: src/datalog.md:74
+msgid ""
+"`EvalOptions::without_term_arena_limit` removes the logical surface-byte "
+"ceiling. Actual storage admission still applies. The effective ceiling is "
+"available in the budget report and participates in the contract hash."
+msgstr ""
+"`EvalOptions::without_term_arena_limit` 移除词法形式字节数的逻辑上限。实际存储准入仍然适用。预算报告提供有效上限，该值也参与契约哈希。"
+
+#: src/datalog.md:78
+msgid ""
+"Stored-fact admission checks each unique insertion before changing the "
+"store. On refusal, `BudgetReport::stored_facts` reports the admitted count "
+"and `observed_stored_facts` reports the first refused insertion, exactly one "
+"higher. Duplicate candidates do not consume another stored-fact allowance."
+msgstr ""
+"存储事实准入在改变存储前检查每一次唯一插入。拒绝时，`BudgetReport::stored_facts` 报告已准入的数量，`observed_stored_facts` 报告第一次被拒绝的插入，恰好多一个。重复候选不再消耗存储事实额度。"
+
+#: src/datalog.md:83
 msgid ""
 "The stored-fact defaults differ because the memory the store lives in does: "
 "a `wasm32` evaluation shares one linear memory with the rest of its page, "
@@ -23418,7 +23440,7 @@ msgstr ""
 "那里拒绝普通的、会终止的规则集——仅仅是一条把 70,000 条 `ex:p` 三元组逐条复制"
 "到 `ex:q` 的规则。默认值在编译时依据目标架构选定，绝不经由 Cargo feature。"
 
-#: src/datalog.md:82
+#: src/datalog.md:91
 msgid ""
 "The join-step default is the same on every target. Evaluation reserves a "
 "candidate's credit before expanding it, using one round-wide pool; an "
@@ -23434,7 +23456,7 @@ msgstr ""
 "若需要更多候选工作量，调用方必须显式声明该额度（命令行上为 `--max-join-"
 "steps`）。"
 
-#: src/datalog.md:90
+#: src/datalog.md:99
 msgid ""
 "The join-step limit is not what stops a divergent rule. A SHACL shape rule "
 "minting a new focus node every round is re-executed only for the focus nodes "
@@ -23447,7 +23469,7 @@ msgstr ""
 "项生成有独立的防护：新项长度有界时，由生成新项的轮数上限约束；保留的词法形式"
 "增长时，由项存储区上限约束。"
 
-#: src/datalog.md:96
+#: src/datalog.md:105
 msgid ""
 "A limit can only refuse. A run inside its limits returns the program's least "
 "model, the same model under every limit that admits it; a run past one "
@@ -23466,13 +23488,49 @@ msgstr ""
 "决于求值器的计划，因此针对某个版本收得过紧的上限，可能会在下一个版本中拒绝；"
 "留有余量的上限则不会改变一个已完成的答案。"
 
-#: src/datalog.md:106
+#: src/datalog.md:115
 msgid ""
 "There is deliberately no wall-clock budget: it would break both `wasm32` and "
 "reproducibility."
 msgstr "这里刻意没有挂钟时间预算：它会同时破坏 `wasm32` 兼容性与可复现性。"
 
-#: src/datalog.md:109
+#: src/datalog.md:118
+msgid "Model output, proofs and measured work"
+msgstr "模型输出、证明与工作量计数"
+
+#: src/datalog.md:120
+msgid ""
+"Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set "
+"`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported "
+"derivations are needed. `Evaluation::derivations` returns `None` when "
+"recording was disabled and `Some([])` when recording was enabled but derived "
+"nothing. Proof construction refuses a model-only result with "
+"`ProofError::DerivationsNotRecorded`. Recording does not change the least "
+"model, internal canonical witness preference or candidate accounting."
+msgstr ""
+"普通求值默认使用 `DerivationMode::ModelOnly`。需要导出推导时，设置 `EvalOptions::with_derivation_mode(DerivationMode::Record)`。禁用记录时，`Evaluation::derivations` 返回 `None`；启用记录但没有推导出任何内容时，返回 `Some([])`。证明构造以 `ProofError::DerivationsNotRecorded` 拒绝仅有模型的结果。记录不会改变最小模型、内部规范见证的优先选择或候选计数。"
+
+#: src/datalog.md:128
+msgid ""
+"`Evaluation::work` separates unique input facts and committed fact "
+"insertions from physical candidate admissions. For an ordinary completed "
+"stratified run, the fact counts are independent of the join plan. Candidate "
+"counts can change with the planner; the report names its version, and "
+"callers can compare candidates per committed fact. Scheduled withdrawals can "
+"cause a later commit of the same fact and therefore another commit event."
+msgstr ""
+"`Evaluation::work` 将唯一输入事实和已提交的事实插入与物理候选准入分开计数。对于普通且已完成的分层运行，事实计数与连接计划无关。候选计数可能随规划器变化；报告给出规划器版本，调用方可以比较每个已提交事实对应的候选数。调度撤回可能导致稍后再次提交同一事实，因此产生另一次提交事件。"
+
+#: src/datalog.md:135
+msgid ""
+"`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the "
+"direct execution path for one call, without changing a global thread pool. "
+"Both scheduling policies use the same evaluator, program-order merge and "
+"sorted commit, and preserve the same model and recorded derivations."
+msgstr ""
+"`EvalOptions::with_round_execution(RoundExecution::Sequential)` 为一次调用选择直接执行路径，不改变全局线程池。两种调度策略使用同一个求值器、按程序顺序归并并排序提交，保持相同的模型和已记录推导。"
+
+#: src/datalog.md:140
 msgid ""
 "Passing a limit is a **total** refusal, not a truncation. There is no "
 "partial fixpoint to hand back with a note attached, and a truncated closure "
@@ -24032,10 +24090,6 @@ msgstr "第 2 层：`purrdf[rdflib]` 影子发行包"
 msgid "For a literal, zero-change `import rdflib`, install the opt-in extra:"
 msgstr ""
 "若要让 `import rdflib` 字面上零改动即可使用，请安装这个需主动启用的 extra："
-
-#: src/interop/rdflib.md:41
-msgid "\"purrdf[rdflib]\""
-msgstr "\"purrdf[rdflib]\""
 
 #: src/interop/rdflib.md:54
 msgid "How compatibility is kept honest"

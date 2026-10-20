@@ -47,19 +47,15 @@ from its workspace. Integrated on the PurRDF side of the line:
    row below requires a purrdf version that carries `purrdf-datalog`,
    `purrdf-entail`'s reasoning surface, and `purrdf-xsd::{range,rational}`.
 3. **Budget ceilings are sized before the first large closure.**
-   `purrdf-datalog` enforces fixed evaluation ceilings (`MAX_JOIN_STEPS`,
-   `MAX_STORED_FACTS`, `MAX_TERM_ARENA_BYTES`) — deliberately constants, never
-   caller knobs, because a caller-supplied budget is semantic optionality (two
-   callers, same input, different answers). `MAX_STORED_FACTS` is calibrated for
-   a browser's linear memory and **caps ontology-scale closure**; a corpus the
-   size gmeow reasons over exceeds it. The remedy is the documented
-   constant-raise procedure, not a parameter: raise the constants with a measured
-   justification (the calibration discipline in the Makefile's wasm-budget
-   comment is the template — a measured figure, a stated capability, and a cheap
-   blow-up test program per ceiling so the suite stays fast). If one value cannot
-   serve both native ontology-scale and wasm's linear memory, target-gated
-   constants are platform capability, not optionality — the precedent is
-   `purrdf-sparql-eval`'s target-gated dependencies.
+   `purrdf-datalog` accepts caller-selected limits through `EvalOptions` for
+   stored facts, join steps, generated terms, generating rounds and term-arena
+   bytes. The stored-fact default is 131,072 on wasm and 4,194,304 natively;
+   the term-arena default is 16 MiB. Measure the intended closure and set its
+   limits explicitly. `without_term_arena_limit` removes the logical arena
+   ceiling while preserving physical storage admission. Limits refuse with
+   typed evidence and never truncate a successful model; every admitted run
+   computes the same least model. Effective limits participate in the contract
+   hash, and physical candidate counts also identify the planner version.
 
 ## The port order (reasoning substrate)
 

@@ -7432,9 +7432,9 @@ mod tests {
     /// not the budget report.
     ///
     /// This is the property that admits a stop signal into a crate whose budgets are
-    /// deliberately constants: attaching one is observationally nothing until it fires.
+    /// deterministic: attaching one is observationally nothing until it fires.
     /// Asserted over the whole synthetic corpus rather than over one program, and against
-    /// the ungoverned [`evaluate`] rather than against itself.
+    /// the same execution without a stop signal rather than against itself.
     #[test]
     fn an_unfired_stop_signal_changes_no_answer() {
         let never = StopsAfter {
