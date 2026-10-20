@@ -2447,15 +2447,22 @@ mod tests {
     struct ProbeFault(&'static str);
 
     impl std::fmt::Display for ProbeFault {
-        /// Render the fault message verbatim — `ProbeFault` exists only to be
-        /// printed inside a [`DrainFailure`], so there is no format to preserve
-        /// beyond the message itself.
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.0)
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("native read propagation must not render its original cause")
         }
     }
 
     impl std::error::Error for ProbeFault {}
+
+    impl purrdf_hash::error::StructuredError for ProbeFault {
+        fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+            visitor.variant("test-probe-read");
+            visitor.value(
+                Some("message"),
+                purrdf_hash::error::ErrorValue::Text(self.0),
+            );
+        }
+    }
 
     /// A [`FallibleDatasetView`] whose [`operation_status`](FallibleDatasetView::operation_status)
     /// is driven directly by the test rather than by how many rows have actually been
@@ -2470,7 +2477,8 @@ mod tests {
     }
 
     impl ProbeView {
-        /// `0` = Ready, `1` = Failed. A `Cell<u8>` rather than a
+        /// `0` = Ready, `1` = Failed; the native import control uses `2` to
+        /// become Failed when quad draining begins. A `Cell<u8>` rather than a
         /// `Cell<ViewOperationStatus<..>>` because the status carries a
         /// non-`Copy` payload (the fault); the discriminant alone is all
         /// `operation_status` needs to reconstruct it.
@@ -2505,6 +2513,9 @@ mod tests {
         }
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            if self.status.get() == 2 {
+                self.fault_now();
+            }
             self.inner.quads()
         }
 
@@ -2547,7 +2558,7 @@ mod tests {
         /// thereafter — the whole point of `ProbeView` is that this is the
         /// ONLY thing that determines the status a checkpoint observes.
         fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
-            if self.status.get() == 0 {
+            if self.status.get() != 1 {
                 ViewOperationStatus::Ready { evidence: 0 }
             } else {
                 ViewOperationStatus::Failed {
@@ -2556,6 +2567,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn materialization_preserves_native_read_failure_before_and_after_drain() {
+        use crate::ir::import::DatasetImportError;
+        use crate::{DatasetMaterializationError, dataset_from_view};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        for status in [1, 2] {
+            let view = ProbeView::new(false);
+            view.status.set(status);
+            let error = dataset_from_view(&view).unwrap_err();
+            drop(view);
+            let expected = ProbeFault("the probe view was told to fault");
+            assert!(matches!(
+                &error,
+                DatasetMaterializationError::Import(DatasetImportError::Read(cause))
+                    if cause == &expected
+            ));
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<ProbeFault>(),
+                Some(&expected)
+            );
+            let captured = Capture::read(&error);
+            assert_eq!(captured.code, "dataset-materialization-import");
+            let imported = captured.child("cause");
+            assert_eq!(imported.code, "dataset-import-read");
+            let native = imported.child("cause");
+            assert_eq!(native.code, "test-probe-read");
+            assert!(
+                matches!(native.field("message"), ErrorValue::Text(value) if value == expected.0)
+            );
+        }
+        assert!(dataset_from_view(&ProbeView::new(false)).is_ok());
     }
 
     /// An always-`Ready` view publishes: both checkpoints observe `Ready`, so

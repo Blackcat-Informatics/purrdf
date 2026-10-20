@@ -45,10 +45,69 @@ use purrdf_hash::hex::Digest32;
 use sha2::{Digest, Sha256};
 
 use crate::dataset_view::DatasetView;
-use crate::ir::import::DatasetImporter;
+use crate::ir::import::{DatasetImportError, DatasetImporter};
 use crate::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
 
 use super::container::{PackError, PackView};
+
+/// The original failure while importing and freezing a caller-owned RDF view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DatasetMaterializationError<E = core::convert::Infallible> {
+    /// The native import stopped before a complete dataset was available.
+    Import(DatasetImportError<E>),
+    /// The imported RDF surface failed structural validation.
+    Freeze(RdfDiagnostic),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for DatasetMaterializationError<E>
+{
+    purrdf_hash::error_visit! {
+        Import(cause) => "dataset-materialization-import" { "cause" => Cause(cause) },
+        Freeze(cause) => "dataset-materialization-freeze" { "cause" => Cause(cause) },
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for DatasetMaterializationError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Import(cause) => cause.fmt(f),
+            Self::Freeze(cause) => cause.fmt(f),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for DatasetMaterializationError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Import(cause) => Some(cause),
+            Self::Freeze(cause) => Some(cause),
+        }
+    }
+}
+
+impl DatasetMaterializationError {
+    /// Preserve a resident failure at a caller-owned reader boundary.
+    #[must_use]
+    pub fn with_read_error<E>(self) -> DatasetMaterializationError<E> {
+        match self {
+            Self::Import(DatasetImportError::Read(cause)) => match cause {},
+            Self::Import(DatasetImportError::Capacity(cause)) => {
+                DatasetMaterializationError::Import(DatasetImportError::Capacity(cause))
+            }
+            Self::Import(DatasetImportError::Storage(cause)) => {
+                DatasetMaterializationError::Import(DatasetImportError::Storage(cause))
+            }
+            Self::Freeze(cause) => DatasetMaterializationError::Freeze(cause),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(impl<E> DatasetMaterializationError<E> {
+    Import(DatasetImportError<E>),
+    Freeze(RdfDiagnostic),
+});
 
 // ---------------------------------------------------------------------------
 // PackDigest
@@ -103,7 +162,9 @@ impl std::fmt::Display for PackDigest {
 /// Reconstruct the RDF surface through the shared typed import. Each source
 /// term is transferred once, without an intermediate owned term tree. The
 /// source view is independent of the claimed certificate being checked.
-fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
+fn reconstruct<D: DatasetView>(
+    view: &D,
+) -> Result<RdfDatasetBuilder, DatasetImportError<D::ReadError>> {
     reconstruct_into(view, RdfDatasetBuilder::new())
 }
 
@@ -111,10 +172,8 @@ fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnos
 fn reconstruct_into<D: DatasetView>(
     view: &D,
     mut builder: RdfDatasetBuilder,
-) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
-    DatasetImporter::try_new(&mut builder, view)
-        .and_then(|mut importer| importer.try_append())
-        .map_err(|error| RdfDiagnostic::error("source-read", error.to_string()))?;
+) -> Result<RdfDatasetBuilder, DatasetImportError<D::ReadError>> {
+    DatasetImporter::try_new(&mut builder, view).and_then(|mut importer| importer.try_append())?;
     Ok(builder)
 }
 
@@ -146,13 +205,19 @@ fn reconstruct_into<D: DatasetView>(
 ///
 /// # Errors
 ///
-/// [`RdfDiagnostic`] if the reconstructed rows fail [`RdfDatasetBuilder::freeze`]'s
+/// The original source-read or admission refusal from the shared importer, or
+/// [`DatasetMaterializationError::Freeze`] with its original [`RdfDiagnostic`]
+/// if the reconstructed rows fail [`RdfDatasetBuilder::freeze`]'s
 /// structural validation (C0 positional constraints, id-reference validity,
 /// triple-term acyclicity) — the same fail-closed contract every builder freeze
 /// carries. For a well-formed source view this cannot trip; the `Result` exists so
 /// an untrusted or hand-assembled view fails closed rather than panicking.
-pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    reconstruct(view)?.freeze()
+pub fn dataset_from_view<D: DatasetView>(
+    view: &D,
+) -> Result<Arc<RdfDataset>, DatasetMaterializationError<D::ReadError>> {
+    reconstruct(view)?
+        .freeze()
+        .map_err(DatasetMaterializationError::Freeze)
 }
 
 /// [`dataset_from_view`] into a caller-configured `builder`: a view that knows the
@@ -161,8 +226,10 @@ pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, Rd
 pub(crate) fn dataset_from_view_into<D: DatasetView>(
     view: &D,
     builder: RdfDatasetBuilder,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    reconstruct_into(view, builder)?.freeze()
+) -> Result<Arc<RdfDataset>, DatasetMaterializationError<D::ReadError>> {
+    reconstruct_into(view, builder)?
+        .freeze()
+        .map_err(DatasetMaterializationError::Freeze)
 }
 
 /// Open a succinct dataset pack and restore its complete RDF 1.2 value into a
@@ -183,14 +250,15 @@ pub(crate) fn dataset_from_view_into<D: DatasetView>(
 ///
 /// # Errors
 ///
+/// Preserves the shared importer's original source-read or admission failure,
+/// or the original freeze diagnostic. No partial dataset is published.
+///
 /// Returns any [`PackError`] produced while opening the container. A
 /// cross-section role error discovered while freezing the reconstruction is
-/// reported as [`PackError::Malformed`].
+/// reported with its original [`DatasetMaterializationError`].
 pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
     let view = PackView::from_bytes(bytes)?;
-    dataset_from_view(&view).map_err(|_| {
-        PackError::Malformed("restore_pack: reconstructed dataset failed structural validation")
-    })
+    dataset_from_view(&view).map_err(PackError::Materialization)
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +281,7 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 /// - Any [`PackError`] [`PackView::from_bytes`] can return (bad magic, unsupported
 ///   version, truncation, a section's SHA-256 failing its stored digest, or a
 ///   submodule's own structural validation failing).
-/// - [`PackError::Malformed`] if the independent reconstruction — replaying the
+/// - [`PackError::Materialization`] if the independent reconstruction — replaying the
 ///   pack's own decoded quads/reifiers/annotations into a fresh
 ///   [`RdfDatasetBuilder`] — fails [`RdfDatasetBuilder::freeze`]'s structural
 ///   validation (C0 positional constraints, id-reference validity, triple-term
@@ -234,11 +302,7 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
     let view = PackView::from_bytes(bytes)?;
 
-    let builder =
-        reconstruct(&view).map_err(|_| PackError::Malformed("pack reconstruction failed"))?;
-    let reconstructed = builder.freeze().map_err(|_| {
-        PackError::Malformed("verify_pack: reconstructed dataset failed structural validation")
-    })?;
+    let reconstructed = dataset_from_view(&view).map_err(PackError::Materialization)?;
 
     let canonicalized = crate::try_canonicalize_with(&reconstructed, CanonHash::Sha256)
         .map_err(PackError::CanonRefused)?;

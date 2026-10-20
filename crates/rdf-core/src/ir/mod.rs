@@ -105,8 +105,8 @@ pub use mutable::{
     RecordValues,
 };
 pub use pack::{
-    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
-    pack_digest, restore_pack, verify_pack,
+    DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
+    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
 };
 pub use paged::{
     CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,

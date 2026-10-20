@@ -310,6 +310,8 @@ pub enum PackError<E = core::convert::Infallible> {
     /// acceptance would have let a different dataset forge this pack's identity.
     /// Collapsing them into one variant would have made the second unreportable.
     CanonRefused(CanonError<E>),
+    /// Importing or freezing the decoded RDF surface failed with its native cause.
+    Materialization(super::certify::DatasetMaterializationError<E>),
     /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
     /// pack's own decoded contents disagreed with the header's stored
     /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
@@ -359,6 +361,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
             "kind" => Unsigned(u128::from(*kind)),
         },
         CanonRefused(cause) => "pack-canonical-refusal" { "cause" => Cause(cause) },
+        Materialization(cause) => "pack-materialization" { "cause" => Cause(cause) },
         RdfcDigestMismatch { expected, computed } => "pack-rdfc-digest-mismatch" {
             "expected" => Bytes(expected),
             "computed" => Bytes(computed),
@@ -389,6 +392,9 @@ impl<E: std::fmt::Display> std::fmt::Display for PackError<E> {
             Self::CanonRefused(err) => {
                 write!(f, "pack-container: canonicalization refused: {err}")
             }
+            Self::Materialization(cause) => {
+                write!(f, "pack-container: materialization refused: {cause}")
+            }
             Self::RdfcDigestMismatch { expected, computed } => {
                 write!(
                     f,
@@ -409,18 +415,9 @@ impl<E: std::fmt::Display> std::fmt::Display for PackError<E> {
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for PackError<E> {
-    /// The wrapped section error, for the three variants that delegate to one.
-    ///
-    /// A pack is read section by section, and `Dict`, `Triples` and `Side` exist to say
-    /// WHICH section refused while the section's own error says why. Without this the
-    /// two halves were split: the standard chain reported the section and stopped, and
-    /// the reason — which byte, which bound, which digest — was reachable only by
-    /// matching this enum.
-    ///
-    /// The rest return `None` because they are container-level facts with nothing
-    /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
-    /// did not match, or a canonicalization budget spent are each complete as stated.
-    /// [`Self::ViewNotReady`] retains and chains the original caller-owned cause.
+    /// The original section, reader, materialization or canonicalization cause.
+    /// Container-level facts such as a bad magic or mismatched digest have no
+    /// underlying error and remain terminal in the standard source chain.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Dict(inner) => Some(inner),
@@ -433,6 +430,7 @@ impl<E: std::error::Error + 'static> std::error::Error for PackError<E> {
             | Self::SectionDigestMismatch { .. }
             | Self::RdfcDigestMismatch { .. } => None,
             Self::CanonRefused(inner) => Some(inner),
+            Self::Materialization(cause) => Some(cause),
             Self::ViewNotReady { cause, .. } => Some(cause),
         }
     }

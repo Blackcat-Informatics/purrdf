@@ -84,7 +84,10 @@ pub mod triples;
 pub mod view;
 
 #[doc(hidden)]
-pub use certify::{PackDigest, dataset_from_view, pack_digest, restore_pack, verify_pack};
+pub use certify::{
+    DatasetMaterializationError, PackDigest, dataset_from_view, pack_digest, restore_pack,
+    verify_pack,
+};
 #[doc(hidden)]
 pub use container::{PackBuilder, PackCheckpoint, PackError, PackView};
 #[doc(hidden)]

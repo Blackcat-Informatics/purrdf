@@ -747,12 +747,21 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test structured_inspection -- --exact \
+				embedding_attachment_failures_keep_original_pack_causes_after_input_drop \
 				byte_cover_refusals_keep_original_ranges_and_nested_digest_finding \
 				event_ingestion_retains_original_freeze_causes_and_cancellation \
 				graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields \
 				native_evidence_alignment_and_answer_state_failures_remain_structured \
 				xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts \
 				graph_refusal_keeps_original_invalid_edge_without_rendering \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test pack_certify -- --exact \
+				verify_pack_certifies_a_round_tripped_pack_against_the_source_digest \
+				verify_pack_rejects_a_tampered_digest_header_field \
+				verify_pack_defers_to_section_integrity_for_body_corruption \
+				verify_pack_is_deterministic_across_two_builds \
+				verify_pack_returns_err_when_reconstruction_fails_structural_validation \
+				pack_digest_to_hex_is_64_lowercase_hex_chars \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-algebra --test lexer_owned_admission -- --exact \
 				escaped_tokens_keep_exact_original_storage_and_scanner_values \
@@ -884,6 +893,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				role_refusals_keep_native_fields_after_the_source_drops \
+				entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run \
+				import_conflict_inspection_keeps_original_versions_and_default_graph \
+				actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
+				empty_collection_admission_checks_nil_structure \
+				dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
 				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
@@ -901,6 +916,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				nominal_merges_and_simple_functionality_preserve_role_obligations \
 				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
 				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
+				actual_query_and_entailment_failures_retain_their_original_owners \
+				original_reader_failures_cross_both_generic_reasoning_boundaries \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \

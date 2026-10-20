@@ -154,6 +154,23 @@ pub enum ReasoningError<E = std::convert::Infallible> {
     Query(RdfDiagnostic),
     /// Entailment or rule materialization failed.
     Entailment(EntailError<E>),
+    /// The caller-owned RDF view could not be imported and frozen completely.
+    Materialization(purrdf_rdf::DatasetMaterializationError<E>),
+}
+
+impl<E: purrdf_lex::error::StructuredError> purrdf_lex::error::StructuredError
+    for ReasoningError<E>
+{
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_lex::error::ErrorVisitor<'error>) {
+        use purrdf_lex::error::{ErrorValue, StructuredError};
+        let (code, cause): (&'static str, &dyn StructuredError) = match self {
+            Self::Query(cause) => ("reasoning-query", cause),
+            Self::Entailment(cause) => ("reasoning-entailment", cause),
+            Self::Materialization(cause) => ("reasoning-materialization", cause),
+        };
+        visitor.variant(code);
+        visitor.value(Some("cause"), ErrorValue::Cause(cause));
+    }
 }
 
 impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
@@ -161,6 +178,7 @@ impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
         match self {
             Self::Query(error) => write!(f, "SPARQL query failed: {error}"),
             Self::Entailment(error) => write!(f, "entailment failed: {error}"),
+            Self::Materialization(cause) => write!(f, "RDF materialization failed: {cause}"),
         }
     }
 }
@@ -168,7 +186,7 @@ impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
 impl<E: std::error::Error + 'static> std::error::Error for ReasoningError<E> {
     /// The wrapped cause — always present, because every variant is one.
     ///
-    /// This type exists ONLY to say which of two subsystems failed; it adds no failure
+    /// This type identifies the failed subsystem; it adds no failure
     /// of its own. Returning `None` therefore hid the entire diagnostic behind a value
     /// whose whole content was the choice between two wrappers, and a caller walking
     /// `Error::source` reached the fork and then nothing.
@@ -176,6 +194,7 @@ impl<E: std::error::Error + 'static> std::error::Error for ReasoningError<E> {
         match self {
             Self::Query(inner) => Some(inner),
             Self::Entailment(inner) => Some(inner),
+            Self::Materialization(cause) => Some(cause),
         }
     }
 }
@@ -186,6 +205,9 @@ impl ReasoningError {
         match self {
             Self::Query(cause) => ReasoningError::Query(cause),
             Self::Entailment(cause) => ReasoningError::Entailment(cause.with_read_error()),
+            Self::Materialization(cause) => {
+                ReasoningError::Materialization(cause.with_read_error())
+            }
         }
     }
 }
@@ -193,6 +215,7 @@ impl ReasoningError {
 purrdf_lex::variant_from!(impl<E> ReasoningError<E> {
     Query(RdfDiagnostic),
     Entailment(EntailError<E>),
+    Materialization(purrdf_rdf::DatasetMaterializationError<E>),
 });
 
 /// How a caller's **dataset-derived** property-function relations are re-derived over the

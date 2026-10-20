@@ -431,6 +431,9 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// existential edge in a cycle is named rather than looped on. Neither declared lane
     /// is such a program, which is a CHECKED fact rather than a hope.
     Chase(purrdf_datalog::chase::ChaseError),
+    /// A caller-supplied collection diagnostic message.
+    /// Native OWL collection producers return [`Self::Collection`].
+    MalformedList(String),
     /// An RDF collection an OWL 2 axiom points at is not a well-formed collection.
     ///
     /// `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:members`,
@@ -441,10 +444,8 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// edge, or a cycle is a refusal
     /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
     /// collection would answer a question the caller did not ask, and it would do so
-    /// silently. The message names the collection's head, the cell the walk stopped at,
-    /// and the fault.
-    MalformedList(String),
-    /// An original strict collection failure, retaining source-independent RDF terms.
+    /// silently. The native payload retains the original head, failed cell,
+    /// ordered members and fault in source-independent RDF term coordinates.
     Collection(Box<CollectionError>),
     /// A term id of the input view did not resolve to a value: the view handed back a
     /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is

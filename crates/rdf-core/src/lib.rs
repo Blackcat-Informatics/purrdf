@@ -235,8 +235,8 @@ pub use ir::{
     try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
-    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
-    pack_digest, restore_pack, verify_pack,
+    DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
+    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

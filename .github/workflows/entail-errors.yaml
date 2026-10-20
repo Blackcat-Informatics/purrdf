@@ -12,7 +12,13 @@ on:
       - Cargo.toml
       - Cargo.lock
       - crates/entail/**
+      - crates/purrdf/Cargo.toml
+      - crates/purrdf/src/reasoning.rs
+      - crates/purrdf/tests/reasoning_inspection.rs
       - crates/rdf-core/src/collections.rs
+      - crates/rdf-core/src/imports.rs
+      - crates/rdf-core/src/ir/import.rs
+      - crates/rdf-core/src/ir/pack/certify.rs
       - crates/hash/src/error.rs
       - crates/lex/src/diagnostic.rs
 
@@ -63,6 +69,8 @@ jobs:
           grep -Fq lists::tests:: target/collection-unit-test-inventory.txt
           cargo test --locked -p purrdf-entail --lib lists::tests::
           cargo test --locked -p purrdf-entail --test reasoner -- --exact malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals
+      - name: Execute public reasoning facade inspection
+        run: cargo test --locked -p purrdf --test reasoning_inspection
 
   wasm:
     name: WASM role refusal inspection
@@ -110,3 +118,6 @@ jobs:
             dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
             non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
             class_expression_role_refusals_retain_original_source_terms
+          cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
+            actual_query_and_entailment_failures_retain_their_original_owners \
+            original_reader_failures_cross_both_generic_reasoning_boundaries
