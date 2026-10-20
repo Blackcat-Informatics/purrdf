@@ -16,12 +16,96 @@ pub trait TermIdentity: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'sta
 impl<T: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'static> TermIdentity for T {}
 
 /// One original identity or a genuinely fresh lexical term at row publication.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DictionaryTerm<'a, I: TermIdentity> {
     /// Identity already owned by the supplied dictionary; never remapped.
     Id(I),
     /// Lexical term to look up or mint in that same dictionary.
     Surface(&'a str),
+}
+
+impl<'a, I: TermIdentity> DictionaryTerm<'a, I> {
+    /// Pin an original dictionary spelling at an explicit lexical boundary.
+    ///
+    /// # Errors
+    ///
+    /// Preserves the original dictionary read or resolution failure.
+    pub fn lexical<'d, D: TermDictionary<Id = I>>(
+        self,
+        dictionary: &'d D,
+    ) -> Result<LexicalTerm<'a, D::Lexical<'d>>, D::Error> {
+        dictionary.check_read()?;
+        let value = match self {
+            Self::Id(id) => LexicalTerm::Pinned(dictionary.resolve_term(id)?),
+            Self::Surface(surface) => LexicalTerm::Computed(surface),
+        };
+        dictionary.check_read()?;
+        Ok(value)
+    }
+
+    /// Reuse an existing identity for a spelling, preserving the original borrow
+    /// when the spelling is fresh. Original identities require no lexical lookup.
+    ///
+    /// # Errors
+    ///
+    /// Preserves the dictionary's original read or lookup failure.
+    pub fn canonicalize<D: TermDictionary<Id = I>>(self, dictionary: &D) -> Result<Self, D::Error> {
+        dictionary.check_read()?;
+        let value = match self {
+            Self::Id(id) => Self::Id(id),
+            Self::Surface(surface) => match dictionary.lookup_term(surface)? {
+                Some(id) => Self::Id(id),
+                None => Self::Surface(surface),
+            },
+        };
+        dictionary.check_read()?;
+        Ok(value)
+    }
+}
+
+/// An original caller identity or an owned lexical value produced by a guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DictionaryValue<I: TermIdentity> {
+    /// Identity already owned by the supplied dictionary; never remapped.
+    Id(I),
+    /// Lexical value to look up or mint in that same dictionary.
+    Surface(String),
+}
+
+purrdf_lex::variant_from!(impl [I] DictionaryValue<I> where [I: TermIdentity] {
+    Surface(String)
+});
+purrdf_lex::variant_from!(impl [I] DictionaryValue<I> where [I: TermIdentity] {
+    Surface(&str) as ToString::to_string
+});
+
+impl<I: TermIdentity> DictionaryValue<I> {
+    /// Borrow the original identity or owned spelling.
+    pub fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
+            Self::Id(id) => DictionaryTerm::Id(*id),
+            Self::Surface(surface) => DictionaryTerm::Surface(surface),
+        }
+    }
+}
+
+/// A pinned dictionary spelling or a borrowed, newly computed spelling.
+/// The original dictionary pin stays alive while a lexical guard reads it.
+#[derive(Debug)]
+pub enum LexicalTerm<'a, L: AsRef<str>> {
+    /// Original dictionary pin or borrow.
+    Pinned(L),
+    /// A computed spelling borrowed from the current binding frame.
+    Computed(&'a str),
+}
+
+impl<L: AsRef<str>> AsRef<str> for LexicalTerm<'_, L> {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Pinned(pin) => pin.as_ref(),
+            Self::Computed(surface) => surface,
+        }
+    }
 }
 
 /// Transform the fixed row in position order, stopping at its first refusal.

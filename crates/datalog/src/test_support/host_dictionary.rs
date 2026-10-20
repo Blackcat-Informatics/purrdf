@@ -17,6 +17,7 @@ impl fmt::Display for SourceLost {
 }
 impl std::error::Error for SourceLost {}
 
+#[derive(Default)]
 pub(crate) struct HostDictionary {
     pub(crate) surfaces: BTreeMap<u64, String>,
     pub(crate) extra_terms: u64,

@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Datalog guard values (breaking):** guard calls carry original identities or
+  fresh spellings, and `GuardRows` returns typed identity/surface cells. Native
+  callbacks and native inequality avoid lexical round trips. Lexical callbacks
+  opt into `GuardCall::evaluate_lexical`, which retains original dictionary pins
+  and preserves source refusals. The SHACL rule engine uses this shared boundary.
+
 - **Native integer row storage:** `store::RowColumns<I, N, R>` retains arbitrary-width
   rows and original handles without interning or rendering. `store::RowIndex`
   indexes caller-selected columns and returns matching key-prefix rows without

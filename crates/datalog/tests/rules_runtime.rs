@@ -4,7 +4,7 @@
 //! Native/wasm execution of connected and genuinely independent production rules.
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
-use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator, NoGuards};
+use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator, GuardRows, NoGuards};
 use purrdf_datalog::seminaive::compile;
 use purrdf_datalog::seminaive::{DerivationMode, EvalOptions, evaluate_guarded};
 use purrdf_datalog::store::RelationStore;
@@ -19,7 +19,7 @@ impl GuardEvaluator for Distinct {
     fn evaluate(
         &self,
         call: &GuardCall<'_>,
-    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+    ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
         assert_eq!(call.inputs.len(), 2);
         Ok(if call.inputs[0] == call.inputs[1] {
             Vec::new()
@@ -530,15 +530,17 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
         fn evaluate(
             &self,
             call: &GuardCall<'_, HostDictionary>,
-        ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            assert_eq!(call.inputs, ["triple", "value"]);
-            assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
-            if self.fail {
-                call.model.interner().lost.store(true, Ordering::Relaxed);
-                return Err(CallbackError::Source(SourceLost(17)));
-            }
-            Ok(vec![vec!["output".into()]])
+        ) -> Result<GuardRows<u64>, CallbackError<SourceLost>> {
+            call.evaluate_lexical(|inputs| {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(inputs, ["triple", "value"]);
+                assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
+                if self.fail {
+                    call.model.interner().lost.store(true, Ordering::Relaxed);
+                    return Err(CallbackError::Source(SourceLost(17)));
+                }
+                Ok(vec![vec!["output".into()]])
+            })
         }
     }
     let exe = compile(vec![
@@ -1478,8 +1480,8 @@ fn interrupted_guarded_commit_counts_only_completed_generating_rounds() {
         fn evaluate(
             &self,
             call: &GuardCall<'_>,
-        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
-            Ok(vec![vec![format!("minted-{}", call.inputs[0])]])
+        ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
+            call.evaluate_lexical(|inputs| Ok(vec![vec![format!("minted-{}", inputs[0]).into()]]))
         }
     }
     let program = compile(vec![
@@ -1961,6 +1963,112 @@ fn triple_pattern(subject: &str, predicate: &str, object: &str) -> ClauseAtom<3>
     )
 }
 
+fn native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier() {
+    use purrdf_datalog::clause::BodyLiteral::{Atom, Guard as Compute};
+    use purrdf_datalog::dictionary::DictionaryValue;
+    use purrdf_datalog::id::TermId;
+    use purrdf_datalog::store::TermInterner;
+    struct Choose(TermId);
+    impl GuardEvaluator<TermInterner, 3> for Choose {
+        fn evaluate(
+            &self,
+            _: &GuardCall<'_, TermInterner, 3>,
+        ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
+            Ok(vec![
+                vec![DictionaryValue::Id(self.0)],
+                vec!["absent-key".into()],
+            ])
+        }
+    }
+    for prefix in [0, 1, 3] {
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        let mut body = Vec::new();
+        let mut expected = Vec::new();
+        match prefix {
+            0 => {}
+            1 => {
+                input.insert_row(["a", "seed", "a"]).unwrap();
+                body.push(Atom(triple_pattern("?s", "seed", "?x")));
+                expected.push("seed");
+            }
+            3 => {
+                for row in [["a", "f", "m"], ["m", "g", "n"], ["n", "h", "a"]] {
+                    input.insert_row(row).unwrap();
+                }
+                body.extend([
+                    Atom(triple_pattern("?s", "f", "?m")),
+                    Atom(triple_pattern("?m", "g", "?n")),
+                    Atom(triple_pattern("?n", "h", "?s")),
+                ]);
+                expected.extend(["f", "g", "h"]);
+            }
+            _ => unreachable!(),
+        }
+        body.push(Compute(Guard::assign("choose", Vec::new(), "?k")));
+        body.extend([
+            Atom(triple_pattern("?k", "out", "?y")),
+            Atom(triple_pattern("?y", "q", "?z")),
+            Atom(triple_pattern("?z", "r", "?k")),
+        ]);
+        expected.extend(["out", "q", "r"]);
+        for row in [
+            ["a", "out", "b"],
+            ["b", "q", "c"],
+            ["c", "q", "d"],
+            ["d", "q", "e"],
+            ["c", "r", "a"],
+            ["d", "r", "a"],
+            ["e", "r", "a"],
+        ] {
+            input.insert_row(row).unwrap();
+        }
+        let choose = Choose(input.interner().lookup("a").unwrap());
+        let head = triple_pattern(if prefix == 0 { "?k" } else { "?s" }, "out", "?z");
+        let program = compile(vec![
+            DlClause::datalog(head, Vec::new()).with_ordered_body(body),
+        ])
+        .unwrap();
+        assert!(program.rule_entry(0).1.has_cyclic_subplan());
+        let result = evaluate_guarded(
+            &program,
+            input,
+            &choose,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.work().committed_facts(), 3, "prefix {prefix}");
+        for value in ["b", "c", "d", "e"] {
+            assert!(
+                result.facts().contains_row(["a", "out", value]),
+                "prefix {prefix}: {value}"
+            );
+        }
+        assert!(result.facts().interner().lookup("absent-key").is_none());
+        let derivations = result.derivations().unwrap();
+        assert_eq!(derivations.len(), 3);
+        for derivation in derivations {
+            assert_eq!(derivation.head(), 0);
+            assert_eq!(
+                derivation
+                    .sources()
+                    .iter()
+                    .map(|fact| fact.predicate.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(derivation.sources()[prefix].subject, "a");
+            let previous = match derivation.fact().object.as_str() {
+                "c" => "b",
+                "d" => "c",
+                "e" => "d",
+                value => panic!("unexpected {value}"),
+            };
+            assert_eq!(derivation.sources()[prefix].object, previous);
+        }
+    }
+}
+
 fn native_integer_columns_and_indexes_preserve_wide_original_handles() {
     use purrdf_datalog::store::{RowColumns, RowIndex, RowIndexError};
     let mut rows = RowColumns::<u32, 6, u64>::default();
@@ -2015,19 +2123,19 @@ fn ordered_guard_outputs_probe_later_atoms_without_intermediate_relations() {
         fn evaluate(
             &self,
             call: &GuardCall<'_, TermInterner, 3>,
-        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
-            match call.guard.name() {
+        ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
+            call.evaluate_lexical(|inputs| match call.guard.name() {
                 "place" => {
                     self.keys.fetch_add(1, Ordering::Relaxed);
-                    assert_eq!(call.inputs, ["module", "name"]);
+                    assert_eq!(inputs, ["module", "name"]);
                     Ok(vec![vec!["module/name".into()], vec!["missing".into()]])
                 }
                 "label" => {
                     self.labels.fetch_add(1, Ordering::Relaxed);
-                    Ok(vec![vec![format!("label:{}", call.inputs[0])]])
+                    Ok(vec![vec![format!("label:{}", inputs[0]).into()]])
                 }
                 name => panic!("unexpected guard {name}"),
-            }
+            })
         }
     }
     let program = compile(vec![
@@ -2107,8 +2215,15 @@ fn ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms() {
         fn evaluate(
             &self,
             call: &GuardCall<'_, TermInterner, 3>,
-        ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
-            Ok(vec![vec![call.inputs[0].into()], vec!["absent-key".into()]])
+        ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
+            use purrdf_datalog::dictionary::{DictionaryTerm, DictionaryValue};
+            let DictionaryTerm::Id(id) = call.inputs[0] else {
+                panic!("a stored binding must reach the guard as its original identity");
+            };
+            Ok(vec![
+                vec![DictionaryValue::Id(id)],
+                vec!["absent-key".into()],
+            ])
         }
     }
     let program = compile(vec![
@@ -2255,6 +2370,7 @@ fn native_inequality_in_a_negative_group_uses_the_same_filter() {
 }
 
 purrdf_testkit::harness_main!(
+    native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier,
     native_integer_columns_and_indexes_preserve_wide_original_handles,
     narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,
     late_delta_seed_completes_under_a_prefix_independent_work_limit,

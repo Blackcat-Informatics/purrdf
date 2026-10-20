@@ -1008,61 +1008,66 @@ mod tests {
         fn evaluate(
             &self,
             call: &GuardCall<'_>,
-        ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-            let name = call.guard.name();
-            if let Some(bound) = name.strip_prefix("gt:") {
-                let bound: i64 = bound.parse().map_err(|_| "bad bound".to_owned())?;
-                let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                return Ok(if value > bound {
-                    vec![Vec::new()]
-                } else {
-                    Vec::new()
-                });
-            }
-            if let Some(fork) = name.strip_prefix("fork") {
-                let inner = call.inputs[0].trim_matches('"');
-                if let Some(limit) = fork.strip_prefix("-below:") {
-                    let limit: usize = limit.parse().map_err(|_| "bad limit".to_owned())?;
-                    if inner.len() >= limit {
-                        return Ok(Vec::new());
+        ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+            call.evaluate_lexical(|inputs| {
+                let name = call.guard.name();
+                if let Some(bound) = name.strip_prefix("gt:") {
+                    let bound: i64 = bound.parse().map_err(|_| "bad bound".to_owned())?;
+                    let value = int_of(inputs[0]).ok_or("not an integer")?;
+                    return Ok(if value > bound {
+                        vec![Vec::new()]
+                    } else {
+                        Vec::new()
+                    });
+                }
+                if let Some(fork) = name.strip_prefix("fork") {
+                    let inner = inputs[0].trim_matches('"');
+                    if let Some(limit) = fork.strip_prefix("-below:") {
+                        let limit: usize = limit.parse().map_err(|_| "bad limit".to_owned())?;
+                        if inner.len() >= limit {
+                            return Ok(Vec::new());
+                        }
                     }
+                    return Ok(vec![
+                        vec![format!("\"{inner}a\"").into()],
+                        vec![format!("\"{inner}b\"").into()],
+                    ]);
                 }
-                return Ok(vec![
-                    vec![format!("\"{inner}a\"")],
-                    vec![format!("\"{inner}b\"")],
-                ]);
-            }
-            if let Some(limit) = name.strip_prefix("succ-below:") {
-                let limit: i64 = limit.parse().map_err(|_| "bad limit".to_owned())?;
-                let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                return Ok(if value + 1 < limit {
-                    vec![vec![format!("\"{}\"", value + 1)]]
-                } else {
-                    Vec::new()
-                });
-            }
-            match name {
-                "succ" => {
-                    let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                    Ok(vec![vec![format!("\"{}\"", value + 1)]])
+                if let Some(limit) = name.strip_prefix("succ-below:") {
+                    let limit: i64 = limit.parse().map_err(|_| "bad limit".to_owned())?;
+                    let value = int_of(inputs[0]).ok_or("not an integer")?;
+                    return Ok(if value + 1 < limit {
+                        vec![vec![format!("\"{}\"", value + 1).into()]]
+                    } else {
+                        Vec::new()
+                    });
                 }
-                "cat" => {
-                    let inner = call.inputs[0].trim_matches('"');
-                    Ok(vec![vec![format!("\"{inner}x\"")]])
+                match name {
+                    "succ" => {
+                        let value = int_of(inputs[0]).ok_or("not an integer")?;
+                        Ok(vec![vec![format!("\"{}\"", value + 1).into()]])
+                    }
+                    "cat" => {
+                        let inner = inputs[0].trim_matches('"');
+                        Ok(vec![vec![format!("\"{inner}x\"").into()]])
+                    }
+                    "fresh" => {
+                        self.minted.set(self.minted.get() + 1);
+                        Ok(vec![vec![format!("_:m{}", self.minted.get()).into()]])
+                    }
+                    "fail" => Err("the guard could not decide".into()),
+                    "count-p" => {
+                        let count = call
+                            .model
+                            .len_for(&surface("p"), RelationStore::DEFAULT_GRAPH);
+                        Ok(vec![vec![
+                            surface("a").into(),
+                            format!("\"{count}\"").into(),
+                        ]])
+                    }
+                    other => Err(format!("unknown guard {other}").into()),
                 }
-                "fresh" => {
-                    self.minted.set(self.minted.get() + 1);
-                    Ok(vec![vec![format!("_:m{}", self.minted.get())]])
-                }
-                "fail" => Err("the guard could not decide".into()),
-                "count-p" => {
-                    let count = call
-                        .model
-                        .len_for(&surface("p"), RelationStore::DEFAULT_GRAPH);
-                    Ok(vec![vec![surface("a"), format!("\"{count}\"")]])
-                }
-                other => Err(format!("unknown guard {other}").into()),
-            }
+            })
         }
     }
 
@@ -1127,15 +1132,17 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-                assert_eq!(std::thread::current().id(), self.caller);
-                assert_eq!(call.rule, 0);
-                self.calls.borrow_mut().push((
-                    call.site,
-                    call.inputs[0].to_owned(),
-                    call.inputs[1].to_owned(),
-                ));
-                Ok(vec![Vec::new()])
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                call.evaluate_lexical(|inputs| {
+                    assert_eq!(std::thread::current().id(), self.caller);
+                    assert_eq!(call.rule, 0);
+                    self.calls.borrow_mut().push((
+                        call.site,
+                        inputs[0].to_owned(),
+                        inputs[1].to_owned(),
+                    ));
+                    Ok(vec![Vec::new()])
+                })
             }
         }
 
@@ -2073,22 +2080,24 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-                if call.guard.name() == "first" && call.inputs[0] == surface("b") {
-                    if self.storage {
-                        crate::id::TermId::from_index(u64::MAX)
-                            .map_err(purrdf_lex::allocation::StorageError::from)?;
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                call.evaluate_lexical(|inputs| {
+                    if call.guard.name() == "first" && inputs[0] == surface("b") {
+                        if self.storage {
+                            crate::id::TermId::from_index(u64::MAX)
+                                .map_err(purrdf_lex::allocation::StorageError::from)?;
+                        }
+                        return if self.malformed {
+                            Ok(vec![vec!["unexpected".into()]])
+                        } else {
+                            Err("first-later-row".into())
+                        };
                     }
-                    return if self.malformed {
-                        Ok(vec![vec!["unexpected".to_owned()]])
-                    } else {
-                        Err("first-later-row".into())
-                    };
-                }
-                if call.guard.name() == "second" {
-                    return Err("second-earlier-row".into());
-                }
-                Ok(vec![Vec::new()])
+                    if call.guard.name() == "second" {
+                        return Err("second-earlier-row".into());
+                    }
+                    Ok(vec![Vec::new()])
+                })
             }
         }
         let rule = DlClause::datalog(

@@ -42,6 +42,21 @@ includes its position; an equivalent body with all guards at the end keeps its
 existing clause identity. Callback guards still require the caller's evaluator
 and remain outside the independent proof checker's supported fragment.
 
+## Datalog guard values
+
+`GuardCall::inputs` now borrows `DictionaryTerm<Id>` values: original `Id` handles
+or newly computed `Surface` spellings. `GuardEvaluator::evaluate` returns
+`GuardRows<Id>`, whose cells are `DictionaryValue::Id` or owned
+`DictionaryValue::Surface`. A native callback can retain and return original
+identities directly, without rendering them or looking up a spelling.
+
+A callback that needs lexical values calls `call.evaluate_lexical(|inputs| ...)`.
+The helper pins the original dictionary owners throughout that callback and
+preserves typed source failures. Emit an owned string with `.into()` or an
+explicit `DictionaryValue::Surface`; the engine reuses an existing identity when
+the spelling is already known. Native inequality compares the original bindings.
+Guard declarations and clause identities retain their existing meaning.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`
