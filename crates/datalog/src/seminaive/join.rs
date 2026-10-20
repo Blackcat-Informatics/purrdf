@@ -4,8 +4,8 @@
 //! Owned operator and semi-naive anchor progress through the native join kernels.
 
 use super::{
-    Delta, JoinGroup, JoinScan, JoinSnapshot, JoinStrategy, LeapfrogRun, RulePlan, Scan,
-    SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, atom,
+    AtomOperator, Delta, JoinGroup, JoinScan, JoinSnapshot, JoinStrategy, LeapfrogRun, RulePlan,
+    Scan, SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, atom,
     constant_pattern_counts, cycle, decomposition_seed, delta_can_match, scan_for,
 };
 use crate::store::{Arity, StoreShape};
@@ -39,6 +39,81 @@ impl Step {
             access,
         }
     }
+}
+
+/// The original scan, seed and binding law of a selected positive region.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Selection {
+    pub(super) scan: JoinScan,
+    pub(super) seed: Option<usize>,
+    pub(super) cyclic: bool,
+    pub(super) rebound: bool,
+}
+
+/// Prepare the same physical groups for whole bodies, guard segments and factors.
+/// The boolean records the extra seed source a certified cycle captures again.
+pub(super) fn selected_steps<const N: usize>(
+    plan: &RulePlan<N>,
+    selection: Selection,
+    includes: impl Fn(&AtomOperator<N>) -> bool,
+) -> (Vec<Step>, bool) {
+    let mut steps = Vec::new();
+    let seed_in_cycle = selection.cyclic
+        && selection.seed.is_some_and(|seed| {
+            plan.join_groups().iter().any(|group| {
+                matches!(group, JoinGroup::Leapfrog(cycle)
+            if cycle.atoms().iter().any(|atom| atom.positive_position() == seed))
+            })
+        });
+    let access = |positive| {
+        let scan = selection.scan.at(positive);
+        if selection.rebound {
+            atom::Access::Rebound(scan)
+        } else {
+            atom::Access::Planned(scan)
+        }
+    };
+    if let Some(seed) = selection.seed {
+        steps.push(Step::authored_atom(
+            plan,
+            seed,
+            atom::Access::Rebound(Scan::Delta),
+        ));
+    }
+    if selection.cyclic {
+        for (index, group) in plan.join_groups().iter().enumerate() {
+            let first = match group {
+                JoinGroup::Binary(atom) => atom.positive_position(),
+                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].positive_position(),
+            };
+            if !includes(plan.operator_at(first)) {
+                continue;
+            }
+            match group {
+                JoinGroup::Binary(atom) => {
+                    let positive = atom.positive_position();
+                    if selection.seed != Some(positive) {
+                        steps.push(Step::authored_atom(plan, positive, access(positive)));
+                    }
+                }
+                JoinGroup::Leapfrog(_) => steps.push(Step::Cycle {
+                    group: index,
+                    scan: selection.scan,
+                }),
+            }
+        }
+    } else {
+        for (index, operator) in plan.operators().iter().enumerate() {
+            let positive = operator.positive_position();
+            if includes(operator) && selection.seed != Some(positive) {
+                steps.push(Step::Atom {
+                    operator: index,
+                    access: access(positive),
+                });
+            }
+        }
+    }
+    (steps, seed_in_cycle)
 }
 
 #[derive(Debug)]
@@ -369,42 +444,14 @@ where
             }
             Mode::Hybrid => {
                 let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
-                let seed_in_cycle = reordered
-                    && plan.join_groups().iter().any(|group| {
-                        matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter()
-                        .any(|atom| atom.positive_position() == anchor))
-                    });
-                if reordered {
-                    steps.push(Step::authored_atom(
-                        plan,
-                        anchor,
-                        atom::Access::Rebound(Scan::Delta),
-                    ));
-                }
-                for (group_index, group) in plan.join_groups().iter().enumerate() {
-                    match group {
-                        JoinGroup::Binary(atom) => {
-                            let positive = atom.positive_position();
-                            if reordered && positive == anchor {
-                                continue;
-                            }
-                            let scan = scan_for(positive, anchor);
-                            steps.push(Step::authored_atom(
-                                plan,
-                                positive,
-                                if reordered {
-                                    atom::Access::Rebound(scan)
-                                } else {
-                                    atom::Access::Planned(scan)
-                                },
-                            ));
-                        }
-                        JoinGroup::Leapfrog(_) => steps.push(Step::Cycle {
-                            group: group_index,
-                            scan: JoinScan::DeltaPosition(anchor),
-                        }),
-                    }
-                }
+                let selection = Selection {
+                    scan: JoinScan::DeltaPosition(anchor),
+                    seed: reordered.then_some(anchor),
+                    cyclic: true,
+                    rebound: reordered,
+                };
+                let (selected, seed_in_cycle) = selected_steps(plan, selection, |_| true);
+                steps = selected;
                 (reordered, seed_in_cycle)
             }
             Mode::Unit => unreachable!("the empty conjunction needs no sequence"),

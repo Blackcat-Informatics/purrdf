@@ -87,7 +87,9 @@ mod atom;
 mod cycle;
 mod evidence;
 mod factors;
+mod guards;
 mod join;
+mod ordered;
 pub use evidence::NegationScope;
 use std::fmt;
 use std::sync::{
@@ -3170,43 +3172,10 @@ fn call_guard<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    call.model
-        .interner()
-        .check_read()
-        .map_err(EvalError::Source)?;
-    let result = (|| {
-        let refuse = |message: crate::guard::CallbackDiagnostic| EvalError::Guard {
-            rule: call.rule,
-            site: call.site,
-            guard: call.guard.name().to_owned(),
-            message,
-        };
-        let rows = match call.guard.operation().filter(call.inputs) {
-            Some(true) => vec![Vec::new()],
-            Some(false) => Vec::new(),
-            None => guards
-                .evaluate(call)
-                .map_err(|error| error.into_eval_error(refuse))?,
-        };
-        let width = call.guard.outputs().len();
-        for row in &rows {
-            if !governor.charge() {
-                return Ok(Vec::new());
-            }
-            if row.len() != width {
-                return Err(refuse(crate::guard::CallbackDiagnostic::RowWidth {
-                    actual: row.len(),
-                    expected: width,
-                }));
-            }
-        }
-        Ok(rows)
-    })()?;
-    call.model
-        .interner()
-        .check_read()
-        .map_err(EvalError::Source)?;
-    Ok(result)
+    let mut invocation = guards::Invocation::Uncalled;
+    invocation.advance(guards, call, governor)?;
+    debug_assert!(invocation.is_complete() || governor.spent());
+    Ok(invocation.into_rows())
 }
 
 /// A body guard, lowered once per evaluation.
@@ -3800,7 +3769,7 @@ where
 fn apply_body_guards<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     rel: &RelationStore<D, N>,
-    mut solutions: Vec<SlotSolution<D::Id, N>>,
+    solutions: Vec<SlotSolution<D::Id, N>>,
     positions: std::ops::Range<usize>,
     guards: &dyn GuardEvaluator<D, N>,
     governor: &mut StepGovernor,
@@ -3808,167 +3777,10 @@ fn apply_body_guards<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    for position in positions {
-        let guard = &entry.runtime.guards[position];
-        let declared = &entry.rule.guards()[position];
-        let mut extended = Vec::with_capacity(solutions.len());
-        for solution in solutions {
-            if governor.spent() {
-                break;
-            }
-            let rows = {
-                let inputs = guard
-                    .inputs
-                    .iter()
-                    .map(|&slot| {
-                        solution
-                            .value(slot)
-                            .as_term()
-                            .expect("a guard input is bound before the guard (DlClause scoping)")
-                    })
-                    .collect::<SmallVec<[_; INLINE_BINDING_SLOTS]>>();
-                call_guard(
-                    guards,
-                    &GuardCall {
-                        rule: entry.index,
-                        site: GuardSite::Body(position),
-                        guard: declared,
-                        inputs: &inputs,
-                        model: rel,
-                    },
-                    governor,
-                )?
-            };
-            for row in rows {
-                let mut next = solution.clone();
-                for (&slot, value) in guard.outputs.iter().zip(&row) {
-                    next.bind_value(slot, value, rel)
-                        .map_err(EvalError::Source)?;
-                }
-                extended.push(next);
-            }
-        }
-        solutions = extended;
-    }
-    Ok(solutions)
-}
-
-/// Extend one movable positive segment through the shared native join kernels.
-/// A partial delta can lead inside its segment, but cannot cross an authored
-/// guard barrier. The original scan ordinals and premise order remain logical.
-fn extend_ordered_segment<D: TermDictionary, const N: usize>(
-    entry: RuleEntry<'_, N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    strategy: JoinStrategy,
-    scan: JoinScan,
-    body: std::ops::Range<usize>,
-    mut partial: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
-where
-    Arity<N>: StoreShape<N>,
-{
-    let plan = entry.plan;
-    let cyclic = !matches!(scan, JoinScan::Uniform(_))
-        && plan.has_cyclic_subplan()
-        && matches!(strategy, JoinStrategy::Planned);
-    let seed = match scan {
-        JoinScan::DeltaPosition(anchor)
-            if snapshot.delta != Delta::all(snapshot.rel.row_count())
-                && body.contains(&plan.operator_at(anchor).body_index()) =>
-        {
-            Some(anchor)
-        }
-        _ => None,
-    };
-    let seed_in_cycle = cyclic
-        && seed.is_some_and(|anchor| {
-            plan.join_groups().iter().any(|group| {
-                matches!(group, JoinGroup::Leapfrog(cycle)
-                if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
-            })
-        });
-    if let Some(anchor) = seed {
-        partial = extend_rebound_solutions(
-            plan.operator_at(anchor),
-            snapshot.rel,
-            snapshot.delta,
-            snapshot.indexes,
-            Scan::Delta,
-            partial,
-            governor,
-        )
-        .map_err(EvalError::Source)?;
-    }
-    if cyclic {
-        for group in plan.join_groups().iter().filter(|group| {
-            let first = match group {
-                JoinGroup::Binary(atom) => atom.body_index(),
-                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].body_index(),
-            };
-            body.contains(&first)
-        }) {
-            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
-                continue;
-            }
-            partial = match group {
-                JoinGroup::Binary(atom) => extend_rebound_solutions(
-                    plan.operator_at(atom.positive_position()),
-                    snapshot.rel,
-                    snapshot.delta,
-                    snapshot.indexes,
-                    scan.at(atom.positive_position()),
-                    partial,
-                    governor,
-                ),
-                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    &LeapfrogRun {
-                        plan,
-                        cycle,
-                        scan,
-                        rel: snapshot.rel,
-                        delta: snapshot.delta,
-                        indexes: snapshot.indexes,
-                    },
-                    partial,
-                    governor,
-                ),
-            }
-            .map_err(EvalError::Source)?;
-            if partial.is_empty() || governor.spent() {
-                break;
-            }
-        }
-    } else {
-        for operator in plan
-            .operators()
-            .iter()
-            .filter(|operator| body.contains(&operator.body_index()))
-        {
-            if seed == Some(operator.positive_position()) {
-                continue;
-            }
-            partial = extend_rebound_solutions(
-                operator,
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                scan.at(operator.positive_position()),
-                partial,
-                governor,
-            )
-            .map_err(EvalError::Source)?;
-            if partial.is_empty() || governor.spent() {
-                break;
-            }
-        }
-    }
-    if seed_in_cycle {
-        for solution in &mut partial {
-            solution.sources.remove(body.start);
-        }
-    }
-    Ok(partial)
+    let mut frame = guards::Body::new(positions, solutions);
+    frame.advance(entry, rel, guards, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 /// Join authored positive segments, applying each guard before later probes.
@@ -3983,92 +3795,10 @@ fn join_ordered_body<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let plan = entry.plan;
-    let barriers = entry
-        .rule
-        .guard_positions()
-        .expect("ordered execution has authored guard barriers");
-    let base = plan
-        .operators()
-        .iter()
-        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
-    if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
-        // No body relation changed: this round creates no new obligation to run
-        // guards. Test the whole body, because an empty later atom cannot erase
-        // a guard reached through a changed earlier prefix.
-        let mut changed = false;
-        for operator in plan.operators() {
-            if delta_can_match(operator, snapshot).map_err(EvalError::Source)? {
-                changed = true;
-                break;
-            }
-        }
-        if !changed {
-            return Ok(Vec::new());
-        }
-    }
-    let anchors = if base {
-        0..1
-    } else {
-        snapshot.delta_positions(plan.positive().len())
-    };
-    let mut all = Vec::new();
-    for anchor in anchors {
-        // Even an empty later delta probe cannot suppress an earlier guard's
-        // failure. Only the segment reaching that probe may discover it is empty.
-        // A guard-first body consumes the empty conjunction's unit binding
-        // before invoking opaque code, even when that code returns no rows.
-        if barriers.first() == Some(&0) && !governor.charge() {
-            break;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let mut start = 0;
-        for (position, end) in barriers
-            .iter()
-            .copied()
-            .chain(std::iter::once(entry.rule.body().len()))
-            .enumerate()
-        {
-            partial = extend_ordered_segment(
-                entry,
-                snapshot,
-                strategy,
-                if base {
-                    JoinScan::Uniform(Scan::Full)
-                } else {
-                    JoinScan::DeltaPosition(anchor)
-                },
-                start..end,
-                partial,
-                governor,
-            )?;
-            if partial.is_empty() || governor.spent() {
-                partial.clear();
-                break;
-            }
-            if position < barriers.len() {
-                partial = apply_body_guards(
-                    entry,
-                    snapshot.rel,
-                    partial,
-                    position..position + 1,
-                    guards,
-                    governor,
-                )?;
-            }
-            start = end;
-        }
-        for solution in &mut partial {
-            solution
-                .sources
-                .sort_unstable_by_key(|source| source.body_index);
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    Ok(all)
+    let mut frame = ordered::Frame::new(entry, snapshot, strategy)?;
+    frame.advance(entry, snapshot, guards, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
