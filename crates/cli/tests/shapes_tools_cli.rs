@@ -1480,6 +1480,11 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
             stderr(&ceiling)
         );
         assert!(
+            stderr(&ceiling)
+                .trim_end()
+                .ends_with("reduce retained term sizes in the input or rules")
+        );
+        assert!(
             !stderr(&ceiling).contains("join-step"),
             "{}",
             stderr(&ceiling)

@@ -13,6 +13,8 @@ on:
       - crates/entail/src/engine.rs
       - crates/entail/src/explain.rs
       - crates/shapes/src/srl/eval.rs
+      - crates/shapes/tests/rule_capacity_limits.rs
+      - crates/cli/tests/shapes_tools_cli.rs
 
 permissions:
   contents: read

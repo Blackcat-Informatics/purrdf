@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Actionable SHACL arena refusals:** rule entry points retain the actual
+  observed bytes and ceiling and advise reducing retained term sizes. Direct
+  Datalog refusals continue to name their available `EvalOptions` setting.
+
 - **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
   visit only that predicate's partitions. `RelationStore::rows_for_predicate`
   returns original row and term identities for triple and quad stores without

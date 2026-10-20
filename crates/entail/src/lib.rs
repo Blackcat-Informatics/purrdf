@@ -2956,11 +2956,14 @@ mod tests {
             panic!("expected the chase's limit refusal, got {refused:?}");
         };
         assert_eq!(*resource, BudgetResource::StoredFacts);
-        assert!(
-            report.stored_facts() as u64 > WASM_DEFAULT_MAX_STORED_FACTS,
-            "the report must carry the observation that passed the limit, not the limit: \
-             {} vs {WASM_DEFAULT_MAX_STORED_FACTS}",
-            report.stored_facts()
+        assert_eq!(report.stored_facts() as u64, WASM_DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(
+            report.observed_stored_facts() as u64,
+            WASM_DEFAULT_MAX_STORED_FACTS + 1
+        );
+        assert_eq!(
+            resource.observed(*report),
+            WASM_DEFAULT_MAX_STORED_FACTS + 1
         );
         assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
         let rendered = refused.to_string();

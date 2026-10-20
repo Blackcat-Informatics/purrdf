@@ -1378,6 +1378,11 @@ fn term_arena_limits_are_caller_selected_and_reach_contracts() {
     let bytes = input.term_bytes() as u64;
     let default = EvalOptions::default();
     let refused = seminaive::evaluate(&program, input.clone()).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .ends_with("raise it with EvalOptions::with_max_term_arena_bytes")
+    );
     let EvalError::BudgetExhausted { resource, report } = refused else {
         panic!("arena refusal")
     };
