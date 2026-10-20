@@ -6,6 +6,23 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Regime term arena controls
+
+`MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
+retain the 16777216-byte default. `RegimeHost::limit_knobs` and `service_knobs`
+return three names, in stored-facts, join-steps, term-arena-bytes order.
+
+Materialization, conclusion-directed services and entailment queries expose
+`max_term_arena_bytes` in Python, `maxTermArenaBytes` in JavaScript, and
+`--max-term-arena-bytes` in the CLI. JavaScript free functions take the new
+optional argument immediately after `maxJoinSteps`; query methods accept it
+in their options. An arena refusal preserves the observed and permitted byte
+counts and names the calling surface's control.
+
+The corresponding C entry points declare ABI 0.12.0 and add a nullable `const uint64_t *` immediately
+after `max_join_steps`. Rebuild C clients against the regenerated `purrdf.h`;
+pass `NULL` to retain the default. A refusal leaves result buffers untouched.
+
 ## SHACL processor recursion failures
 
 Exhaustive matches on `ProcessorFailure` must handle

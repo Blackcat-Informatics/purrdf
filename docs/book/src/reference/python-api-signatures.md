@@ -623,7 +623,7 @@ class _QuadStore:
     def query_governed(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> QueryOutcome:
         ...
 
-    def query_entailment_governed(self, query: str, entailment: str, *, program: str=..., imports: Sequence[tuple[str, str]] | None=..., premise_iris: Sequence[str] | None=..., max_stored_facts: int | None=..., max_join_steps: int | None=..., substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> EntailmentQueryOutcome:
+    def query_entailment_governed(self, query: str, entailment: str, *, program: str=..., imports: Sequence[tuple[str, str]] | None=..., premise_iris: Sequence[str] | None=..., max_stored_facts: int | None=..., max_join_steps: int | None=..., max_term_arena_bytes: int | None=..., substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> EntailmentQueryOutcome:
         ...
 
     def update(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=...) -> None:
@@ -1245,11 +1245,11 @@ class entail:
     Regime: TypeAlias = _Regime
 
     @staticmethod
-    def materialize(dataset: RdfDataset, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[RdfDataset, str]:
+    def materialize(dataset: RdfDataset, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[RdfDataset, str]:
         ...
 
     @staticmethod
-    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     @staticmethod
@@ -1313,15 +1313,15 @@ class entail:
         ...
 
     @staticmethod
-    def certain_answers(regime: RegimeLike, data: str, pattern: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def certain_answers(regime: RegimeLike, data: str, pattern: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     @staticmethod
-    def graph_entails(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def graph_entails(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     @staticmethod
-    def verify_entailment(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def verify_entailment(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     class Reasoner:

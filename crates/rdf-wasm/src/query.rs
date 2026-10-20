@@ -1669,8 +1669,9 @@ impl QueryEngine {
     /// and so does a table entry the closure never reaches. Empty arrays are the ordinary
     /// "imports nothing" case, and all three are required rather than defaulted.
     ///
-    /// `max_stored_facts` and `max_join_steps` (each a `bigint`, or `undefined` for this
-    /// target's default of 131072 facts and 1048576 join steps) are the closure's evaluation
+    /// `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` (each a `bigint`,
+    /// or `undefined` for this target's default of 131072 facts, 1048576 join steps and
+    /// 16777216 term-surface bytes) are the closure's evaluation
     /// limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as `entailMaterialize`
     /// takes them. A closure past one throws naming the limit, the numbers and this method's
     /// argument (`queryEntailmentGoverned's maxStoredFacts`, …); the governors price the
@@ -1699,6 +1700,7 @@ impl QueryEngine {
         premise_iris: Vec<String>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
+        max_term_arena_bytes: Option<u64>,
         aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
@@ -1734,6 +1736,7 @@ impl QueryEngine {
             premise_iris,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
         };
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;

@@ -978,7 +978,7 @@ fn report_without_entailment_is_a_usage_error() {
 /// `reason --max-stored-facts` and `--max-join-steps` refuse naming the numbers and this
 /// command's own flag, and write no closure; a limit of exactly the store the run needs
 /// writes the same closure as the default, and one fact fewer refuses. `convert
-/// --entailment` takes the same two flags.
+/// --entailment` takes the same three flags.
 #[test]
 fn reason_honours_the_callers_evaluation_limits() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
@@ -990,8 +990,21 @@ fn reason_honours_the_callers_evaluation_limits() {
          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n",
     );
     let default_out = path(dir.path(), "default.nt");
-    let out = run(&["reason", "--regime", "rdfs", &input, &default_out]);
+    let out = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--report",
+        &input,
+        &default_out,
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
+    let arena_bytes: u64 = stderr(&out)
+        .lines()
+        .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let limited = |flag: &str, value: &str, output: &str| {
         run(&["reason", "--regime", "rdfs", flag, value, &input, output])
@@ -1081,4 +1094,58 @@ fn reason_honours_the_callers_evaluation_limits() {
         "--max-join-steps without --entailment is a usage error: {}",
         stderr(&orphan)
     );
+    let refused = limited(
+        "--max-term-arena-bytes",
+        &(arena_bytes - 1).to_string(),
+        &path(dir.path(), "arena-short.nt"),
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains(&format!(
+            "term arena bytes limit: {arena_bytes} observed, {} permitted",
+            arena_bytes - 1
+        )) && stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-term-arena-bytes"),
+        "{}",
+        stderr(&refused)
+    );
+    let exact_path = path(dir.path(), "arena-exact.nt");
+    let exact = limited(
+        "--max-term-arena-bytes",
+        &arena_bytes.to_string(),
+        &exact_path,
+    );
+    assert!(exact.status.success(), "{}", stderr(&exact));
+    assert_eq!(sorted_lines(&exact_path), sorted_lines(&default_out));
+    let refused = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-term-arena-bytes",
+        "0",
+        &input,
+        &converted,
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-term-arena-bytes"),
+        "{}",
+        stderr(&refused)
+    );
+    let exact = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-term-arena-bytes",
+        &arena_bytes.to_string(),
+        &input,
+        &converted,
+    ]);
+    assert!(exact.status.success(), "{}", stderr(&exact));
+    assert_eq!(sorted_lines(&converted), sorted_lines(&default_out));
+    let orphan = run(&["convert", "--max-term-arena-bytes", "0", &input, &converted]);
+    assert_eq!(orphan.status.code(), Some(2), "{}", stderr(&orphan));
 }

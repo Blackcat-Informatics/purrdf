@@ -346,6 +346,7 @@ function normalizeEntailmentGovernedOptions(options) {
     // widened exactly; absent is this target's default.
     maxStoredFacts: limitOption(options?.maxStoredFacts),
     maxJoinSteps: limitOption(options?.maxJoinSteps),
+    maxTermArenaBytes: limitOption(options?.maxTermArenaBytes),
   };
 }
 
@@ -1317,6 +1318,7 @@ export async function ready(wasmBytesOrUrl) {
           o.premiseIris,
           o.maxStoredFacts,
           o.maxJoinSteps,
+          o.maxTermArenaBytes,
           o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,

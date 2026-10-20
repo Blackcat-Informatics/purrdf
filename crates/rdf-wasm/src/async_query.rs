@@ -3362,7 +3362,7 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 24] = [
+const OPTION_SHAPES: [(&str, OptionShape); 25] = [
     ("base", OptionShape::Text),
     ("xpathRegex", OptionShape::Text),
     ("shaclProfile", OptionShape::Text),
@@ -3387,6 +3387,7 @@ const OPTION_SHAPES: [(&str, OptionShape); 24] = [
     ("premiseIris", OptionShape::TextList),
     ("maxStoredFacts", OptionShape::Limit),
     ("maxJoinSteps", OptionShape::Limit),
+    ("maxTermArenaBytes", OptionShape::Limit),
 ];
 
 /// The shape of option `key`, or `None` for a key no operation reads.
@@ -3502,6 +3503,7 @@ impl AsyncOperationKind {
                     "premiseIris",
                     "maxStoredFacts",
                     "maxJoinSteps",
+                    "maxTermArenaBytes",
                 ],
                 true,
                 Some("regime"),
@@ -4009,6 +4011,9 @@ impl AsyncJobOptions {
                 }
                 ("maxJoinSteps", OptionValue::Limit(limit)) => {
                     options.closure.max_join_steps = Some(limit);
+                }
+                ("maxTermArenaBytes", OptionValue::Limit(limit)) => {
+                    options.closure.max_term_arena_bytes = Some(limit);
                 }
                 ("accept", OptionValue::Text(text)) => options.accept = Some(text),
                 ("provenanceNamespace", OptionValue::Provenance { prefix, iri }) => {
@@ -5051,6 +5056,7 @@ mod tests {
                 )
                 .with("maxStoredFacts", OptionValue::Limit(140_000))
                 .with("maxJoinSteps", OptionValue::Limit(1))
+                .with("maxTermArenaBytes", OptionValue::Limit(17_000_000))
         };
         let with_closure = closure()
             .validate(AsyncOperationKind::EntailmentGoverned)
@@ -5066,6 +5072,7 @@ mod tests {
         );
         assert_eq!(with_closure.closure.max_stored_facts, Some(140_000));
         assert_eq!(with_closure.closure.max_join_steps, Some(1));
+        assert_eq!(with_closure.closure.max_term_arena_bytes, Some(17_000_000));
         assert!(
             options()
                 .with("importIris", OptionValue::TextList(Vec::new()))

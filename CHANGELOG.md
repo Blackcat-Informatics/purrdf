@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Regime arena controls (C ABI 0.12.0):** Rust, Python, JavaScript, C and
+  CLI callers can set the retained term-surface byte limit. Refusals preserve
+  the original counts and name the calling surface's available control.
+
 - **Native integer dictionaries (breaking):** `TermDictionary::compare_terms`
   defines canonical publication order, preserving lexical RDF order while allowing
   original integer comparisons. `IntegerDictionary<u32/u64>` evaluates native
