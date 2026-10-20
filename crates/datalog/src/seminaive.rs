@@ -95,7 +95,9 @@ use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
-use crate::dictionary::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity};
+use crate::dictionary::{
+    DictionaryError, DictionaryTerm, DictionaryValue, TermDictionary, TermIdentity,
+};
 use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuards};
 use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
@@ -1855,6 +1857,9 @@ where
     }
 }
 
+/// Inline width shared by binding frames and transient positive-guard input views.
+const INLINE_BINDING_SLOTS: usize = 8;
+
 /// A partial solution of one rule's positive body.
 ///
 /// Bindings live in a flat frame indexed by the plan's variable slots, and hold interned
@@ -1875,7 +1880,7 @@ where
     /// table and this workspace's own suites produce, so every real frame lives inline.
     /// The native identity keeps its NonZeroU64 niche in `Option`; a host identity
     /// determines its own inline footprint. A ninth variable spills to the heap.
-    bindings: SmallVec<[Option<I>; 8]>,
+    bindings: SmallVec<[Option<I>; INLINE_BINDING_SLOTS]>,
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
     sources: Vec<SourceRow<I, N>>,
@@ -1898,38 +1903,14 @@ enum SlotValue<'s, I: TermIdentity = TermId> {
     Unbound,
 }
 
-/// Keeps the original dictionary pin alive while a guard borrows its text.
-enum SlotSurface<'s, L: AsRef<str>> {
-    Pinned(L),
-    Computed(&'s str),
-}
-
-impl<L: AsRef<str>> AsRef<str> for SlotSurface<'_, L> {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Pinned(pin) => pin.as_ref(),
-            Self::Computed(surface) => surface,
-        }
-    }
-}
-
 impl<'s, I: TermIdentity> SlotValue<'s, I> {
-    /// Resolve only at the lexical boundary, retaining the supplied lexical owner.
-    fn surface<D: TermDictionary<Id = I>, const N: usize>(
-        self,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error>
-    where
-        Arity<N>: StoreShape<N>,
-    {
-        rel.interner().check_read()?;
-        let surface = match self {
-            Self::Interned(id) => Some(SlotSurface::Pinned(rel.interner().resolve_term(id)?)),
-            Self::Computed(surface) => Some(SlotSurface::Computed(surface)),
+    /// Carry a binding through the guard boundary without rendering an identity.
+    fn as_term(self) -> Option<DictionaryTerm<'s, I>> {
+        match self {
+            Self::Interned(id) => Some(DictionaryTerm::Id(id)),
+            Self::Computed(surface) => Some(DictionaryTerm::Surface(surface)),
             Self::Unbound => None,
-        };
-        rel.interner().check_read()?;
-        Ok(surface)
+        }
     }
 }
 
@@ -1988,29 +1969,16 @@ impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// The lexical surface bound in `slot`, if any.
-    fn surface<'s, D: TermDictionary<Id = I>>(
-        &'s self,
-        slot: usize,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error> {
-        self.value(slot).surface(rel)
-    }
-
-    /// Bind `slot` to `surface`: as an interned id when the store knows the term, as a
-    /// computed surface otherwise.
-    fn bind_surface<D: TermDictionary<Id = I>>(
+    /// Retain an original identity or canonicalize a genuinely computed spelling.
+    fn bind_value<D: TermDictionary<Id = I>>(
         &mut self,
         slot: usize,
-        surface: &str,
+        value: &DictionaryValue<I>,
         rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
-        rel.interner().check_read()?;
-        let id = rel.interner().lookup_term(surface)?;
-        rel.interner().check_read()?;
-        match id {
-            Some(id) => self.bindings[slot] = Some(id),
-            None => self.computed.push((slot, surface.into())),
+        match value.as_term().canonicalize(rel.interner())? {
+            DictionaryTerm::Id(id) => self.bindings[slot] = Some(id),
+            DictionaryTerm::Surface(surface) => self.computed.push((slot, surface.into())),
         }
         Ok(())
     }
@@ -2207,9 +2175,11 @@ where
                 (PositionPlan::Bound(slot) | PositionPlan::Free(slot), _)
                     if INDEX == INDEX_REBOUND =>
                 {
-                    solution
-                        .get(*slot)
-                        .map_or(PositionValue::Free, PositionValue::Known)
+                    match solution.value(*slot) {
+                        SlotValue::Interned(id) => PositionValue::Known(id),
+                        SlotValue::Computed(_) => PositionValue::Missing,
+                        SlotValue::Unbound => PositionValue::Free,
+                    }
                 }
                 (PositionPlan::Bound(slot), _) => solution
                     .get(*slot)
@@ -2705,6 +2675,16 @@ where
     for solution in solutions {
         if governor.spent() {
             break;
+        }
+        if run
+            .cycle
+            .variable_slots()
+            .iter()
+            .any(|&slot| matches!(solution.value(slot), SlotValue::Computed(_)))
+        {
+            // A freshly computed term absent from the dictionary cannot occur in
+            // any stored edge. It must not be mistaken for an unbound cycle slot.
+            continue;
         }
         let mut working = solution.clone();
         run.recurse(0, &mut working, &mut out, governor)?;
@@ -3763,13 +3743,13 @@ where
             guard: j,
         };
         let rows = {
-            let mut pinned = Vec::with_capacity(guard.inputs.len());
+            let mut inputs = Vec::with_capacity(guard.inputs.len());
             for input in &guard.inputs {
-                let surface = match input {
+                let value = match input {
                     GroupArg::Outer(slot) => probe
                         .solution
-                        .surface(*slot, probe.rel)
-                        .map_err(EvalError::Source)?
+                        .value(*slot)
+                        .as_term()
                         .expect("an outer group variable is bound by the enclosing rule"),
                     GroupArg::Local(local) => match &locals[*local] {
                         Some(LocalValue::Interned(id)) => SlotValue::Interned(*id),
@@ -3778,14 +3758,14 @@ where
                             "a group guard input is bound before it (DlClause scoping)"
                         ),
                     }
-                    .surface(probe.rel)
-                    .map_err(EvalError::Source)?
+                    .as_term()
                     .expect("a local group input is bound before the guard"),
-                    GroupArg::Const(surface) => SlotSurface::Computed(surface),
+                    GroupArg::Const(surface) => DictionaryTerm::Surface(surface)
+                        .canonicalize(probe.rel.interner())
+                        .map_err(EvalError::Source)?,
                 };
-                pinned.push(surface);
+                inputs.push(value);
             }
-            let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
             call_guard(
                 probe.guards,
                 &GuardCall {
@@ -3802,16 +3782,15 @@ where
             if governor.spent() {
                 return Ok(false);
             }
-            for (&local, surface) in guard.outputs.iter().zip(&row) {
+            for (&local, value) in guard.outputs.iter().zip(&row) {
                 locals[local] = Some(
-                    match probe
-                        .rel
-                        .interner()
-                        .lookup_term(surface)
+                    match value
+                        .as_term()
+                        .canonicalize(probe.rel.interner())
                         .map_err(EvalError::Source)?
                     {
-                        Some(id) => LocalValue::Interned(id),
-                        None => LocalValue::Computed(surface.as_str().into()),
+                        DictionaryTerm::Id(id) => LocalValue::Interned(id),
+                        DictionaryTerm::Surface(surface) => LocalValue::Computed(surface.into()),
                     },
                 );
             }
@@ -3838,7 +3817,7 @@ fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<Vec<String>>, EvalError<D::Error>>
+) -> Result<crate::guard::GuardRows<D::Id>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -4006,15 +3985,15 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        let value = match self {
-            Self::Interned(id) => SlotValue::Interned(*id),
-            Self::Fresh(surface) => SlotValue::Computed(surface.as_ref()),
-        };
-        Ok(value
-            .surface(rel)?
-            .expect("a head term is bound")
-            .as_ref()
-            .to_owned())
+        Ok(self.as_term().lexical(rel.interner())?.as_ref().to_owned())
+    }
+
+    /// Borrow a publication argument without resolving its original identity.
+    fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
+            Self::Interned(id) => DictionaryTerm::Id(*id),
+            Self::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
+        }
     }
 }
 
@@ -4105,13 +4084,13 @@ where
     /// A TOTAL order over observable provenance:
     /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
     /// head ordinal)`,
-    /// smallest wins. Every component is content-derived — proof heights, lexical fact
-    /// surfaces and the authored rule position — so the winner is a function of the
+    /// smallest wins. Every component is content-derived — proof heights, the
+    /// dictionary's canonical fact order and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
     ///
-    /// The comparison resolves lexical surfaces, so it is deliberately staged: the cheap
-    /// numeric prefix decides almost every real collision, and the allocating tail runs
-    /// only on an exact numeric tie.
+    /// The comparison is deliberately staged: the cheap numeric prefix decides
+    /// almost every real collision, and the dictionary-ordered source tail runs
+    /// only on an exact numeric tie. Native dictionaries need no lexical projection.
     fn preferred_over<D: TermDictionary<Id = I>>(
         &self,
         other: &Self,
@@ -4128,7 +4107,7 @@ where
     }
 }
 
-/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+/// The canonical numeric prefix, comparing the source tail only on a tie.
 fn witness_preference<E>(
     mine: (u32, u64),
     theirs: (u32, u64),
@@ -4140,7 +4119,7 @@ fn witness_preference<E>(
     }
 }
 
-/// The lexical tail of the canonical witness law, shared with projected frontiers.
+/// The dictionary-ordered tail of the canonical witness law.
 fn source_preference<D: TermDictionary, const N: usize>(
     mine: &[SourceRow<D::Id, N>],
     my_rule: usize,
@@ -4152,16 +4131,25 @@ where
     Arity<N>: StoreShape<N>,
 {
     rel.interner().check_read()?;
-    let mine: Vec<_> = mine
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
-    let theirs: Vec<_> = theirs
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
+    let compare = |left: &SourceRow<D::Id, N>, right: &SourceRow<D::Id, N>| {
+        rel.interner().compare_rows(
+            &left.terms.map(DictionaryTerm::Id),
+            &right.terms.map(DictionaryTerm::Id),
+        )
+    };
+    let mut mine_sorted = mine.to_vec();
+    let mut theirs_sorted = theirs.to_vec();
+    purrdf_lex::walk::try_sort_unstable_by(&mut mine_sorted, compare)?;
+    purrdf_lex::walk::try_sort_unstable_by(&mut theirs_sorted, compare)?;
+    let mut order = crate::dictionary::compare_sequences(&mine_sorted, &theirs_sorted, compare)?;
+    if order.is_eq() {
+        order = my_rule.cmp(&their_rule);
+    }
+    if order.is_eq() {
+        order = crate::dictionary::compare_sequences(mine, theirs, compare)?;
+    }
     rel.interner().check_read()?;
-    Ok(fact_preference(&mine, my_rule, &theirs, their_rule))
+    Ok(order)
 }
 
 /// The lexical tail over owned surfaces, also valid after a store rebuild.
@@ -4459,6 +4447,281 @@ where
     )
 }
 
+/// Apply an authored guard range through the one production callback/filter path.
+fn apply_body_guards<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    rel: &RelationStore<D, N>,
+    mut solutions: Vec<SlotSolution<D::Id, N>>,
+    positions: std::ops::Range<usize>,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    for position in positions {
+        let guard = &entry.runtime.guards[position];
+        let declared = &entry.rule.guards()[position];
+        let mut extended = Vec::with_capacity(solutions.len());
+        for solution in solutions {
+            if governor.spent() {
+                break;
+            }
+            let rows = {
+                let inputs = guard
+                    .inputs
+                    .iter()
+                    .map(|&slot| {
+                        solution
+                            .value(slot)
+                            .as_term()
+                            .expect("a guard input is bound before the guard (DlClause scoping)")
+                    })
+                    .collect::<SmallVec<[_; INLINE_BINDING_SLOTS]>>();
+                call_guard(
+                    guards,
+                    &GuardCall {
+                        rule: entry.index,
+                        site: GuardSite::Body(position),
+                        guard: declared,
+                        inputs: &inputs,
+                        model: rel,
+                    },
+                    governor,
+                )?
+            };
+            for row in rows {
+                let mut next = solution.clone();
+                for (&slot, value) in guard.outputs.iter().zip(&row) {
+                    next.bind_value(slot, value, rel)
+                        .map_err(EvalError::Source)?;
+                }
+                extended.push(next);
+            }
+        }
+        solutions = extended;
+    }
+    Ok(solutions)
+}
+
+/// Extend one movable positive segment through the shared native join kernels.
+/// A partial delta can lead inside its segment, but cannot cross an authored
+/// guard barrier. The original scan ordinals and premise order remain logical.
+fn extend_ordered_segment<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    scan: JoinScan,
+    body: std::ops::Range<usize>,
+    mut partial: Vec<SlotSolution<D::Id, N>>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let cyclic = !matches!(scan, JoinScan::Uniform(_))
+        && plan.has_cyclic_subplan()
+        && matches!(strategy, JoinStrategy::Planned);
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor)
+            if snapshot.delta != Delta::all(snapshot.rel.row_count())
+                && body.contains(&plan.operator_at(anchor).body_index()) =>
+        {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    let seed_in_cycle = cyclic
+        && seed.is_some_and(|anchor| {
+            plan.join_groups().iter().any(|group| {
+                matches!(group, JoinGroup::Leapfrog(cycle)
+                if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+            })
+        });
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            plan.operator_at(anchor),
+            snapshot.rel,
+            snapshot.delta,
+            snapshot.indexes,
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
+    if cyclic {
+        for group in plan.join_groups().iter().filter(|group| {
+            let first = match group {
+                JoinGroup::Binary(atom) => atom.body_index(),
+                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].body_index(),
+            };
+            body.contains(&first)
+        }) {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
+            partial = match group {
+                JoinGroup::Binary(atom) => extend_rebound_solutions(
+                    plan.operator_at(atom.positive_position()),
+                    snapshot.rel,
+                    snapshot.delta,
+                    snapshot.indexes,
+                    scan.at(atom.positive_position()),
+                    &partial,
+                    governor,
+                ),
+                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
+                    &LeapfrogRun {
+                        plan,
+                        cycle,
+                        scan,
+                        rel: snapshot.rel,
+                        delta: snapshot.delta,
+                        indexes: snapshot.indexes,
+                    },
+                    &partial,
+                    governor,
+                ),
+            }
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    } else {
+        for operator in plan
+            .operators()
+            .iter()
+            .filter(|operator| body.contains(&operator.body_index()))
+        {
+            if seed == Some(operator.positive_position()) {
+                continue;
+            }
+            partial = extend_rebound_solutions(
+                operator,
+                snapshot.rel,
+                snapshot.delta,
+                snapshot.indexes,
+                scan.at(operator.positive_position()),
+                &partial,
+                governor,
+            )
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    }
+    if seed_in_cycle {
+        for solution in &mut partial {
+            solution.sources.remove(body.start);
+        }
+    }
+    Ok(partial)
+}
+
+/// Join authored positive segments, applying each guard before later probes.
+/// Binary and certified cyclic segments use the existing join kernels.
+fn join_ordered_body<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let barriers = entry
+        .rule
+        .guard_positions()
+        .expect("ordered execution has authored guard barriers");
+    let base = plan
+        .operators()
+        .iter()
+        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
+    if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
+        // No body relation changed: this round creates no new obligation to run
+        // guards. Test the whole body, because an empty later atom cannot erase
+        // a guard reached through a changed earlier prefix.
+        let mut changed = false;
+        for operator in plan.operators() {
+            if delta_can_match(operator, snapshot).map_err(EvalError::Source)? {
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            return Ok(Vec::new());
+        }
+    }
+    let anchors = if base {
+        0..1
+    } else {
+        snapshot.delta_positions(plan.positive().len())
+    };
+    let mut all = Vec::new();
+    for anchor in anchors {
+        // Even an empty later delta probe cannot suppress an earlier guard's
+        // failure. Only the segment reaching that probe may discover it is empty.
+        // A guard-first body consumes the empty conjunction's unit binding
+        // before invoking opaque code, even when that code returns no rows.
+        if barriers.first() == Some(&0) && !governor.charge() {
+            break;
+        }
+        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
+        let mut start = 0;
+        for (position, end) in barriers
+            .iter()
+            .copied()
+            .chain(std::iter::once(entry.rule.body().len()))
+            .enumerate()
+        {
+            partial = extend_ordered_segment(
+                entry,
+                snapshot,
+                strategy,
+                if base {
+                    JoinScan::Uniform(Scan::Full)
+                } else {
+                    JoinScan::DeltaPosition(anchor)
+                },
+                start..end,
+                partial,
+                governor,
+            )?;
+            if partial.is_empty() || governor.spent() {
+                partial.clear();
+                break;
+            }
+            if position < barriers.len() {
+                partial = apply_body_guards(
+                    entry,
+                    snapshot.rel,
+                    partial,
+                    position..position + 1,
+                    guards,
+                    governor,
+                )?;
+            }
+            start = end;
+        }
+        for solution in &mut partial {
+            solution
+                .sources
+                .sort_unstable_by_key(|source| source.body_index);
+        }
+        all.extend(partial);
+        if governor.spent() {
+            break;
+        }
+    }
+    Ok(all)
+}
+
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -4499,72 +4762,44 @@ where
     let result = (|| {
         let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
         if entry.delta != Delta::all(rel.row_count())
+            && entry.rule.guard_positions().is_none()
             && plan.operators().len() > 1
             && !entry.rule.reads_base()
             && full_counts.contains(&Some(0))
         {
             return Ok(RoundBuffer::new());
         }
-        if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
+        if entry.rule.guard_positions().is_none()
+            && runtime.factors.len() > 1
+            && matches!(strategy, JoinStrategy::Planned)
+        {
             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
         }
-        let mut solutions = join_body(
-            plan,
-            JoinSnapshot {
+        let join_snapshot = JoinSnapshot {
+            rel,
+            delta: entry.delta,
+            indexes: snapshot.delta_indexes.expect("delta indexes were prepared"),
+        };
+        let mut solutions = if entry.rule.guard_positions().is_some() {
+            join_ordered_body(entry, join_snapshot, strategy, guards, &mut governor)?
+        } else {
+            let solutions = join_body(
+                plan,
+                join_snapshot,
+                strategy,
+                &mut governor,
+                Some(full_counts),
+            )
+            .map_err(EvalError::Source)?;
+            apply_body_guards(
+                entry,
                 rel,
-                delta: entry.delta,
-                indexes: snapshot
-                    .delta_indexes
-                    .expect("the rule's delta indexes were prepared"),
-            },
-            strategy,
-            &mut governor,
-            Some(full_counts),
-        )
-        .map_err(EvalError::Source)?;
-
-        for (position, guard) in runtime.guards.iter().enumerate() {
-            let declared = &entry.rule.guards()[position];
-            let mut extended = Vec::with_capacity(solutions.len());
-            for solution in solutions {
-                if governor.spent() {
-                    break;
-                }
-                let rows = {
-                    let pinned = guard
-                        .inputs
-                        .iter()
-                        .map(|&slot| {
-                            Ok(solution.surface(slot, rel)?.expect(
-                                "a guard input is bound before the guard (DlClause scoping)",
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, D::Error>>()
-                        .map_err(EvalError::Source)?;
-                    let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
-                    call_guard(
-                        guards,
-                        &GuardCall {
-                            rule: entry.index,
-                            site: GuardSite::Body(position),
-                            guard: declared,
-                            inputs: &inputs,
-                            model: rel,
-                        },
-                        &mut governor,
-                    )?
-                };
-                for row in rows {
-                    let mut next = solution.clone();
-                    for (&slot, surface) in guard.outputs.iter().zip(&row) {
-                        next.bind_surface(slot, surface, rel)
-                            .map_err(EvalError::Source)?;
-                    }
-                    extended.push(next);
-                }
-            }
-            solutions = extended;
-        }
+                solutions,
+                0..runtime.guards.len(),
+                guards,
+                &mut governor,
+            )?
+        };
 
         if !runtime.negated.is_empty() || !runtime.negations.is_empty() {
             let mut kept = Vec::with_capacity(solutions.len());
@@ -5523,16 +5758,30 @@ fn commit_round<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let mut winners = round
+    let mut winners: Vec<_> = round
         .entries
         .into_iter()
-        .map(|(key, candidate)| Ok::<_, D::Error>((key.fact(&state.rel)?, key, candidate)))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|(key, candidate)| {
+            let fact = if state.derivation_mode == DerivationMode::Record {
+                Some(key.fact(&state.rel)?)
+            } else {
+                None
+            };
+            Ok::<_, D::Error>((key, candidate, fact))
+        })
+        .collect::<Result<_, _>>()
         .map_err(EvalError::Source)?;
-    // Head facts are unique in a round buffer, so the lexical order is total.
-    winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+    // Head facts are unique in a round buffer. The dictionary supplies the
+    // canonical order without requiring a lexical projection of model-only rows.
+    purrdf_lex::walk::try_sort_unstable_by(&mut winners, |(left, _, _), (right, _, _)| {
+        state.rel.interner().compare_rows(
+            &left.terms().map(HeadTerm::as_term),
+            &right.terms().map(HeadTerm::as_term),
+        )
+    })
+    .map_err(EvalError::Source)?;
 
-    for (fact, key, candidate) in winners {
+    for (key, candidate, fact) in winners {
         state
             .report()
             .admit_fact()
@@ -5569,7 +5818,7 @@ where
         state.committed_facts = state.committed_facts.saturating_add(1);
         if let Some(sources) = sources {
             state.derivations.push(Derivation {
-                fact,
+                fact: fact.expect("recorded winners project their facts before publication"),
                 rule: candidate.rule,
                 head: candidate.head,
                 sources,
@@ -6143,20 +6392,22 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
-                self.calls.fetch_add(1, Ordering::Relaxed);
-                if call.guard.name() == "produce" {
-                    assert_eq!(call.inputs, ["triple", "member"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
-                    if self.lose_source {
-                        call.model.interner().lost.store(true, Ordering::Relaxed);
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
+                call.evaluate_lexical(|inputs| {
+                    self.calls.fetch_add(1, Ordering::Relaxed);
+                    if call.guard.name() == "produce" {
+                        assert_eq!(inputs, ["triple", "member"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
+                        if self.lose_source {
+                            call.model.interner().lost.store(true, Ordering::Relaxed);
+                        }
+                        Ok(vec![vec!["fresh".into()]])
+                    } else {
+                        assert_eq!(inputs, ["fresh"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
+                        Ok(vec![Vec::new()])
                     }
-                    Ok(vec![vec!["fresh".into()]])
-                } else {
-                    assert_eq!(call.inputs, ["fresh"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
-                    Ok(vec![Vec::new()])
-                }
+                })
             }
         }
         let rule = DlClause::datalog(atom("?a", R, "?b"), vec![atom("?a", P, "?b")])
@@ -6253,7 +6504,9 @@ mod tests {
             );
             store.interner().lost.store(false, Ordering::Relaxed);
             let mut binding = SlotSolution::empty(1);
-            binding.bind_surface(0, "triple", &store).unwrap();
+            binding
+                .bind_value(0, &DictionaryValue::from("triple"), &store)
+                .unwrap();
             assert_eq!(binding.get(0), Some(TRIPLE));
             let before = binding.clone();
             store
@@ -6261,7 +6514,7 @@ mod tests {
                 .lose_after_lookup
                 .store(true, Ordering::Relaxed);
             assert_eq!(
-                binding.bind_surface(0, "unknown", &store),
+                binding.bind_value(0, &DictionaryValue::from("unknown"), &store),
                 Err(SourceLost(99))
             );
             assert_eq!(
@@ -6269,6 +6522,71 @@ mod tests {
                 "a refused lexical lookup never publishes a frame mutation"
             );
         }
+    }
+
+    #[test]
+    fn native_guard_identity_flow_never_requests_lexical_values() {
+        use crate::guard::{CallbackError, GuardRows};
+        use crate::test_support::{HostDictionary, SourceLost};
+        use std::sync::atomic::Ordering;
+        const ORIGINAL: u64 = 0xf000_0000_0000_0001;
+        const OUTPUT: u64 = u64::MAX;
+        struct Identity;
+        impl GuardEvaluator<HostDictionary> for Identity {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_, HostDictionary>,
+            ) -> Result<GuardRows<u64>, CallbackError<SourceLost>> {
+                assert_eq!(call.inputs, [DictionaryTerm::Id(ORIGINAL)]);
+                Ok(vec![vec![DictionaryValue::Id(OUTPUT)]])
+            }
+        }
+        let store = RelationStore::with_dictionary(HostDictionary {
+            extra_terms: 2,
+            ..HostDictionary::default()
+        });
+        let guard = Guard::assign("identity", vec!["?in".into()], "?out");
+        let call = GuardCall {
+            rule: 0,
+            site: GuardSite::Body(0),
+            guard: &guard,
+            inputs: &[DictionaryTerm::Id(ORIGINAL)],
+            model: &store,
+        };
+        let rows = call_guard(&Identity, &call, &mut StepGovernor::new(10)).unwrap();
+        assert_eq!(rows, [vec![DictionaryValue::Id(OUTPUT)]]);
+        let mut frame = SlotSolution::empty(1);
+        frame.bind_value(0, &rows[0][0], &store).unwrap();
+        assert_eq!(frame.get(0), Some(OUTPUT));
+        let native = Guard::not_equal("?left", "?right");
+        for (right, kept) in [(ORIGINAL, 0), (OUTPUT, 1)] {
+            let call = GuardCall {
+                rule: 0,
+                site: GuardSite::Body(0),
+                guard: &native,
+                inputs: &[DictionaryTerm::Id(ORIGINAL), DictionaryTerm::Id(right)],
+                model: &store,
+            };
+            assert_eq!(
+                call_guard(&NoGuards, &call, &mut StepGovernor::new(10))
+                    .unwrap()
+                    .len(),
+                kept
+            );
+        }
+        assert_eq!(store.interner().lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(store.interner().resolves.load(Ordering::Relaxed), 0);
+        store.interner().lost.store(true, Ordering::Relaxed);
+        let before = frame.clone();
+        assert_eq!(
+            frame.bind_value(0, &DictionaryValue::Id(ORIGINAL), &store),
+            Err(SourceLost(99))
+        );
+        assert_eq!(frame, before, "a source refusal never publishes a binding");
+        assert_eq!(
+            call_guard(&Identity, &call, &mut StepGovernor::new(10)),
+            Err(EvalError::Source(SourceLost(99)))
+        );
     }
 
     #[test]
@@ -6283,7 +6601,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
                 assert_eq!(
                     call.model.interner().lookup_term("original").unwrap(),
                     Some(u64::MAX)
@@ -8572,6 +8890,133 @@ mod tests {
         }
     }
 
+    #[test]
+    fn guard_first_empty_output_requires_unit_binding_credit() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        struct DropAll(std::cell::Cell<usize>);
+        impl GuardEvaluator for DropAll {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                self.0.set(self.0.get() + 1);
+                Ok(Vec::new())
+            }
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Compute(Guard::assign("drop", Vec::new(), "?s")),
+                Atom(atom("?s", P, "?o")),
+            ]),
+        ])
+        .unwrap();
+        for ceiling in [0, 1] {
+            let callback = DropAll(std::cell::Cell::new(0));
+            let result = evaluate_guarded(
+                &program,
+                store_of(&[("a", P, "b")]),
+                &callback,
+                &EvalOptions::default().with_max_join_steps(ceiling),
+                None,
+            );
+            assert_eq!(callback.0.get(), usize::from(ceiling != 0));
+            if ceiling == 0 {
+                assert!(matches!(result, Err(EvalError::BudgetExhausted { .. })));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.work().join_steps(), 1);
+                assert_eq!(result.work().committed_facts(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_guard_outputs_select_quad_predicate_and_graph_keys() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::GuardReads;
+        const GRAPH: &str = "https://example.org/selected-graph";
+        const MISSING_PREDICATE: &str = "https://example.org/absent-guard-predicate";
+        const MISSING_GRAPH: &str = "https://example.org/absent-guard-graph";
+        struct Partition;
+        impl GuardEvaluator for Partition {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                Ok(vec![
+                    vec![surface(R).into(), surface(GRAPH).into()],
+                    vec![surface(MISSING_PREDICATE).into(), surface(GRAPH).into()],
+                    vec![surface(R).into(), surface(MISSING_GRAPH).into()],
+                ])
+            }
+        }
+        let subject = "https://example.org/subject";
+        let winner = "https://example.org/selected-value";
+        let mut input = store_of(&[(subject, P, "https://example.org/seed")]);
+        for (predicate, object, graph) in [
+            (R, winner, GRAPH),
+            (
+                R,
+                "https://example.org/wrong-graph-value",
+                "https://example.org/other-graph",
+            ),
+            (
+                "https://example.org/other-predicate",
+                "https://example.org/wrong-predicate-value",
+                GRAPH,
+            ),
+        ] {
+            input
+                .insert(
+                    &surface(subject),
+                    &surface(predicate),
+                    &surface(object),
+                    &surface(graph),
+                )
+                .unwrap();
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Atom(atom("?s", P, "?seed")),
+                Compute(Guard::new(
+                    "partition",
+                    Vec::new(),
+                    vec!["?p".into(), "?g".into()],
+                    GuardReads::Bindings,
+                )),
+                Atom(ClauseAtom::quad(v("?s"), v("?p"), v("?o"), v("?g"))),
+            ]),
+        ])
+        .unwrap();
+        let result = evaluate_guarded(
+            &program,
+            input,
+            &Partition,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.work().committed_facts(), 1);
+        assert!(result.facts().contains_row([
+            &surface(subject),
+            &surface(Q),
+            &surface(winner),
+            RelationStore::DEFAULT_GRAPH
+        ]));
+        assert!(
+            result
+                .facts()
+                .term_id(&surface(MISSING_PREDICATE))
+                .is_none()
+        );
+        assert!(result.facts().term_id(&surface(MISSING_GRAPH)).is_none());
+        let derivations = result.derivations().unwrap();
+        assert_eq!(derivations.len(), 1);
+        assert_eq!(derivations[0].sources()[0].predicate, surface(P));
+        assert_eq!(derivations[0].sources()[1].predicate, surface(R));
+        assert_eq!(derivations[0].sources()[1].graph, surface(GRAPH));
+    }
+
     /// Consumer admission bounds a large callback Vec before cloning bindings and
     /// computed surfaces. The caller's own eager Vec allocation is a separate seam.
     #[test]
@@ -8586,7 +9031,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
                 self.calls.fetch_add(1, Ordering::Relaxed);
                 Ok(if !self.keep {
                     Vec::new()
@@ -8596,7 +9041,7 @@ mod tests {
                             call.guard
                                 .outputs()
                                 .iter()
-                                .map(|_| surface(&format!("https://example.org/fresh{row}")))
+                                .map(|_| surface(&format!("https://example.org/fresh{row}")).into())
                                 .collect()
                         })
                         .collect()

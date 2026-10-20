@@ -297,6 +297,7 @@ fn select(entry: Select, regex: Option<&str>, query: &str) -> Result<Vec<String>
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     regex,
                     &raw const governors,
                     &raw mut outcome,

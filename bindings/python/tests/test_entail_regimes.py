@@ -191,38 +191,35 @@ def test_report_names_the_rules_that_fired() -> None:
 # ── The evaluation limits ───────────────────────────────────────────────────────
 
 
-def _stored_facts(report: str) -> int:
+def _budget_count(report: str, resource: str) -> int:
+    prefix = f"budget {resource} "
     for line in report.splitlines():
-        if line.startswith("budget stored-facts "):
-            return int(line.removeprefix("budget stored-facts "))
-    raise AssertionError(f"no stored-facts line:\n{report}")
+        if line.startswith(prefix):
+            return int(line.removeprefix(prefix))
+    raise AssertionError(f"no {resource} line:\n{report}")
 
 
 def test_the_evaluation_limits_refuse_naming_this_hosts_keyword() -> None:
-    """A passed limit names the keyword argument of the function called; the store the
-    run needs, stated exactly, admits the same closure, and one fact fewer refuses."""
-    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
-    needed = _stored_facts(report)
-    with pytest.raises(ValueError) as short:
-        entail.materialize(
-            _dataset(), entail.Regime.OWL_RL, "", [], [], max_stored_facts=needed - 1
-        )
-    assert f"{needed - 1} permitted (the caller's limit)" in str(short.value)
-    assert str(short.value).endswith("raise it with materialize(max_stored_facts=...)")
-    exact, _ = entail.materialize(
-        _dataset(), entail.Regime.OWL_RL, "", [], [], max_stored_facts=needed
-    )
-    assert exact.to_nquads() == closure.to_nquads()
-
-    with pytest.raises(ValueError) as steps:
-        entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [], max_join_steps=1)
-    assert "evaluation exceeded the join-step limit: " in str(steps.value)
-    assert str(steps.value).endswith("raise it with materialize_nt(max_join_steps=...)")
-    with pytest.raises(ValueError) as text_facts:
-        entail.materialize_nt(SCHEMA, entail.Regime.RDFS, "", [], [], max_stored_facts=1)
-    assert str(text_facts.value).endswith(
-        "raise it with materialize_nt(max_stored_facts=...)"
-    )
+    """Each real keyword refuses, preserves its counts and admits its neighbour."""
+    def text(value):
+        return value if isinstance(value, str) else value.to_nquads()
+    for service, data, name in [(entail.materialize, _dataset(), "materialize"),
+                                (entail.materialize_nt, SCHEMA, "materialize_nt")]:
+        closure, report = service(data, entail.Regime.OWL_RL, "", [], [])
+        facts = _budget_count(report, "stored-facts")
+        arena = _budget_count(report, "term-arena-bytes")
+        for key, short, raised in [("max_stored_facts", facts - 1, facts),
+                                    ("max_join_steps", 1, 1048576),
+                                    ("max_term_arena_bytes", arena - 1, arena)]:
+            with pytest.raises(ValueError) as refused:
+                service(data, entail.Regime.OWL_RL, "", [], [], **{key: short})
+            message = str(refused.value)
+            assert "evaluation exceeded" in message
+            assert message.endswith(f"raise it with {name}({key}=...)")
+            if key == "max_term_arena_bytes":
+                assert f"{arena} observed, {short} permitted" in message
+            exact, _ = service(data, entail.Regime.OWL_RL, "", [], [], **{key: raised})
+            assert text(exact) == text(closure)
 
 
 def test_the_limits_in_force_reach_the_contract_hash() -> None:
@@ -1332,20 +1329,16 @@ def test_materialize_and_consistency_close_over_the_import_table() -> None:
 def test_a_conclusion_directed_limit_names_this_functions_keyword(service, name, question) -> None:
     """A passed limit raises naming the keyword of the function called; the neighbour with
     the limit raised answers."""
-    with pytest.raises(ValueError) as refused:
-        service(entail.Regime.OWL_RL, SCHEMA, question, [], [], max_join_steps=1)
-    assert "evaluation exceeded the join-step limit: " in str(refused.value)
-    assert str(refused.value).endswith(f"raise it with {name}(max_join_steps=...)")
-    with pytest.raises(ValueError) as refused:
-        service(entail.Regime.OWL_RL, SCHEMA, question, [], [], max_stored_facts=1)
-    assert str(refused.value).endswith(f"raise it with {name}(max_stored_facts=...)")
-    answer, _ = service(
-        entail.Regime.OWL_RL,
-        SCHEMA,
-        question,
-        [],
-        [],
-        max_stored_facts=4194304,
-        max_join_steps=1048576,
-    )
-    assert answer.startswith("mechanism ")
+    _, certificate = service(entail.Regime.OWL_RL, SCHEMA, question, [], [])
+    arena = _budget_count(certificate, "term-arena-bytes")
+    for key, short, raised in [("max_join_steps", 1, 1048576),
+                                ("max_stored_facts", 1, 4194304),
+                                ("max_term_arena_bytes", arena - 1, arena)]:
+        with pytest.raises(ValueError) as refused:
+            service(entail.Regime.OWL_RL, SCHEMA, question, [], [], **{key: short})
+        message = str(refused.value)
+        assert message.endswith(f"raise it with {name}({key}=...)")
+        if key == "max_term_arena_bytes":
+            assert f"{arena} observed, {short} permitted" in message
+        answer, _ = service(entail.Regime.OWL_RL, SCHEMA, question, [], [], **{key: raised})
+        assert answer.startswith("mechanism ")

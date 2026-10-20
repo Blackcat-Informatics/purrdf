@@ -166,10 +166,12 @@ pub fn run() {
 const fn cli_materialize_limits(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> purrdf_validate::regime::MaterializeLimits {
     purrdf_validate::regime::MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: purrdf_validate::regime::RegimeHost::Cli,
     }
 }
@@ -259,6 +261,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             report,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             imports,
             canonical,
             input,
@@ -272,7 +275,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 base: base.as_deref(),
                 entailment: *entailment,
                 rules: rules.as_deref(),
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
                 imports,
                 canonical: *canonical,
                 jsonld_options: jsonld_options.as_ref(),
@@ -292,6 +299,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             imports,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             results_format,
             fuel,
             deadline,
@@ -315,7 +323,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 entailment: *entailment,
                 rules: rules.as_deref(),
                 imports,
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
                 results_format: *results_format,
                 query,
                 governors: GovernorFlags {
@@ -391,6 +403,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             report,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             imports,
             from,
             to,
@@ -400,7 +413,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         } => reason::run(
             *regime,
             rules.as_deref(),
-            &cli_materialize_limits(*max_stored_facts, *max_join_steps),
+            &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
             imports,
             *from,
             *to,
@@ -421,6 +434,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             imports,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             report,
             from,
             base,
@@ -433,7 +447,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 pattern: pattern.as_deref(),
                 verify: *verify,
                 imports,
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
                 from: *from,
                 base: base.as_deref(),
                 jsonld_options: jsonld_options.as_ref(),

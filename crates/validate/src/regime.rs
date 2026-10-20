@@ -86,7 +86,9 @@ use purrdf_core::TermBox;
 
 use purrdf_core::{TermValue, write_term_value};
 use purrdf_datalog::chase::ChaseError;
-use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
+use purrdf_datalog::seminaive::{
+    BudgetResource, EvalError, EvalOptions, render_budget_refusal, render_capacity_refusal,
+};
 use purrdf_entail::reasoner::SchemaObstruction;
 use purrdf_entail::{
     ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
@@ -342,7 +344,7 @@ pub fn materialize_to_nquads_string(
 /// The entailment service a set of evaluation limits is handed to: with the
 /// [`RegimeHost`], it decides the spelling of the knob a refusal names.
 ///
-/// Every service that evaluates the regime's rule table takes the same two limits, and each
+/// Every service that evaluates the regime's rule table takes the same three limits, and each
 /// host spells them on the entry point the caller actually called — a Python caller of
 /// `graph_entails` is told about `graph_entails(max_stored_facts=...)`, never about another
 /// function's argument or a Rust type it cannot reach.
@@ -381,100 +383,129 @@ pub enum RegimeHost {
 }
 
 impl RegimeHost {
-    /// The host's names for the stored-fact limit and the join-step limit of a
+    /// The host's names for the stored-fact, join-step and term-arena byte limits of a
     /// MATERIALIZATION, in that order — [`Self::service_knobs`] for
     /// [`RegimeService::Materialize`].
     #[must_use]
-    pub const fn limit_knobs(self) -> (&'static str, &'static str) {
+    pub const fn limit_knobs(self) -> (&'static str, &'static str, &'static str) {
         self.service_knobs(RegimeService::Materialize)
     }
 
-    /// The host's names for the stored-fact limit and the join-step limit of `service`, in
+    /// The host's names for the stored-fact, join-step and term-arena byte limits of `service`, in
     /// that order: the argument, keyword or flag of the entry point the caller called.
     #[must_use]
-    pub const fn service_knobs(self, service: RegimeService) -> (&'static str, &'static str) {
+    pub const fn service_knobs(
+        self,
+        service: RegimeService,
+    ) -> (&'static str, &'static str, &'static str) {
         match (self, service) {
             (Self::Rust, _) => (
                 "MaterializeLimits::max_stored_facts",
                 "MaterializeLimits::max_join_steps",
+                "MaterializeLimits::max_term_arena_bytes",
             ),
-            (Self::Cli, _) => ("--max-stored-facts", "--max-join-steps"),
+            (Self::Cli, _) => (
+                "--max-stored-facts",
+                "--max-join-steps",
+                "--max-term-arena-bytes",
+            ),
             (Self::Python | Self::PythonText, RegimeService::CertainAnswers) => (
                 "certain_answers(max_stored_facts=...)",
                 "certain_answers(max_join_steps=...)",
+                "certain_answers(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::GraphEntails) => (
                 "graph_entails(max_stored_facts=...)",
                 "graph_entails(max_join_steps=...)",
+                "graph_entails(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::VerifyEntailment) => (
                 "verify_entailment(max_stored_facts=...)",
                 "verify_entailment(max_join_steps=...)",
+                "verify_entailment(max_term_arena_bytes=...)",
             ),
             (Self::Python | Self::PythonText, RegimeService::Query) => (
                 "query_entailment_governed(max_stored_facts=...)",
                 "query_entailment_governed(max_join_steps=...)",
+                "query_entailment_governed(max_term_arena_bytes=...)",
             ),
             (Self::Wasm, RegimeService::CertainAnswers) => (
                 "entailCertainAnswers's maxStoredFacts",
                 "entailCertainAnswers's maxJoinSteps",
+                "entailCertainAnswers's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::GraphEntails) => (
                 "entailGraphEntails's maxStoredFacts",
                 "entailGraphEntails's maxJoinSteps",
+                "entailGraphEntails's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::VerifyEntailment) => (
                 "entailVerifyEntailment's maxStoredFacts",
                 "entailVerifyEntailment's maxJoinSteps",
+                "entailVerifyEntailment's maxTermArenaBytes",
             ),
             (Self::Wasm, RegimeService::Query) => (
                 "queryEntailmentGoverned's maxStoredFacts",
                 "queryEntailmentGoverned's maxJoinSteps",
+                "queryEntailmentGoverned's maxTermArenaBytes",
             ),
             (Self::CAbi, RegimeService::CertainAnswers) => (
                 "purrdf_entail_certain_answers's max_stored_facts",
                 "purrdf_entail_certain_answers's max_join_steps",
+                "purrdf_entail_certain_answers's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::GraphEntails) => (
                 "purrdf_entail_graph_entails's max_stored_facts",
                 "purrdf_entail_graph_entails's max_join_steps",
+                "purrdf_entail_graph_entails's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::VerifyEntailment) => (
                 "purrdf_entail_verify_entailment's max_stored_facts",
                 "purrdf_entail_verify_entailment's max_join_steps",
+                "purrdf_entail_verify_entailment's max_term_arena_bytes",
             ),
             (Self::CAbi, RegimeService::Query) => (
                 "purrdf_query_entailment_governed's max_stored_facts",
                 "purrdf_query_entailment_governed's max_join_steps",
+                "purrdf_query_entailment_governed's max_term_arena_bytes",
             ),
             (_, RegimeService::Materialize) => self.materialize_knobs(),
         }
     }
 
     /// The materialization entry point's knob names.
-    const fn materialize_knobs(self) -> (&'static str, &'static str) {
+    const fn materialize_knobs(self) -> (&'static str, &'static str, &'static str) {
         match self {
             Self::Rust => (
                 "MaterializeLimits::max_stored_facts",
                 "MaterializeLimits::max_join_steps",
+                "MaterializeLimits::max_term_arena_bytes",
             ),
             Self::Python => (
                 "materialize(max_stored_facts=...)",
                 "materialize(max_join_steps=...)",
+                "materialize(max_term_arena_bytes=...)",
             ),
             Self::PythonText => (
                 "materialize_nt(max_stored_facts=...)",
                 "materialize_nt(max_join_steps=...)",
+                "materialize_nt(max_term_arena_bytes=...)",
             ),
             Self::Wasm => (
                 "entailMaterialize's maxStoredFacts",
                 "entailMaterialize's maxJoinSteps",
+                "entailMaterialize's maxTermArenaBytes",
             ),
             Self::CAbi => (
                 "purrdf_entail_materialize_to_nquads's max_stored_facts",
                 "purrdf_entail_materialize_to_nquads's max_join_steps",
+                "purrdf_entail_materialize_to_nquads's max_term_arena_bytes",
             ),
-            Self::Cli => ("--max-stored-facts", "--max-join-steps"),
+            Self::Cli => (
+                "--max-stored-facts",
+                "--max-join-steps",
+                "--max-term-arena-bytes",
+            ),
         }
     }
 }
@@ -491,6 +522,7 @@ impl RegimeHost {
 /// natively, 131,072 and 1,048,576 on `wasm32`
 /// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
 /// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). They
+/// also bound retained term surfaces to 16,777,216 bytes by default on every target.
 /// govern the four rule-table regimes (`rdf`, `rdfs`, `owl-rl`, `d`); see
 /// [`purrdf_entail::materialize_with`]. A run past one fails naming the limit, the numbers
 /// and the knob that raises it in the calling host's own terms ([`Self::host`]).
@@ -500,7 +532,9 @@ pub struct MaterializeLimits {
     pub max_stored_facts: Option<u64>,
     /// The join-step limit, or `None` for the target's default.
     pub max_join_steps: Option<u64>,
-    /// The host calling, whose names for the two limits' knobs a refusal gives.
+    /// Bytes of interned term spellings, or `None` for the engine's default.
+    pub max_term_arena_bytes: Option<u64>,
+    /// The host calling, whose names for the limits' knobs a refusal gives.
     pub host: RegimeHost,
 }
 
@@ -514,6 +548,9 @@ impl MaterializeLimits {
         }
         if let Some(steps) = self.max_join_steps {
             options = options.with_max_join_steps(steps);
+        }
+        if let Some(bytes) = self.max_term_arena_bytes {
+            options = options.with_max_term_arena_bytes(bytes);
         }
         options
     }
@@ -889,7 +926,7 @@ pub fn render_entail_error<E: std::fmt::Display>(regime: &str, error: &EntailErr
     render_entail_error_for(regime, error, RegimeHost::Rust)
 }
 
-/// [`render_entail_error`], naming the knob that raises a passed stored-fact or join-step
+/// [`render_entail_error`], naming the knob that raises a passed stored-fact, join-step or term-arena
 /// limit in `host`'s own terms ([`RegimeHost::limit_knobs`]): the refusal reads
 /// `evaluation exceeded the stored-fact limit: N facts observed, M permitted (…); raise it
 /// with <knob>`.
@@ -914,13 +951,21 @@ pub fn render_entail_error_in<E: std::fmt::Display>(
     let capacity = match error {
         EntailError::Evaluate(EvalError::BudgetExhausted { resource, report })
         | EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) => {
-            let (stored_facts, join_steps) = host.service_knobs(service);
-            let knob = if *resource == BudgetResource::StoredFacts {
-                stored_facts
-            } else {
-                join_steps
-            };
-            render_capacity_refusal(*resource, *report, knob)
+            let (stored_facts, join_steps, term_arena_bytes) = host.service_knobs(service);
+            match resource {
+                BudgetResource::StoredFacts => {
+                    render_capacity_refusal(*resource, *report, stored_facts)
+                }
+                BudgetResource::JoinSteps => {
+                    render_capacity_refusal(*resource, *report, join_steps)
+                }
+                BudgetResource::TermArenaBytes => Some(render_budget_refusal(
+                    *resource,
+                    *report,
+                    &format!("raise it with {term_arena_bytes}"),
+                )),
+                _ => None,
+            }
         }
         _ => None,
     };
@@ -1144,6 +1189,7 @@ pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
 pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
     max_stored_facts: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_STORED_FACTS),
     max_join_steps: Some(purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS),
+    max_term_arena_bytes: None,
     host: RegimeHost::Rust,
 };
 

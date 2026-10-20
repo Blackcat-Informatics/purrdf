@@ -458,6 +458,7 @@ impl PyQuadStore {
         premise_iris=None,
         max_stored_facts=None,
         max_join_steps=None,
+        max_term_arena_bytes=None,
         substitutions=None,
         extension_namespaces=None,
         property_fn_namespaces=None,
@@ -491,6 +492,7 @@ impl PyQuadStore {
         premise_iris: Option<Vec<String>>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
+        max_term_arena_bytes: Option<u64>,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         property_fn_namespaces: Option<Vec<String>>,
@@ -525,6 +527,7 @@ impl PyQuadStore {
             let limits = purrdf_validate::MaterializeLimits {
                 max_stored_facts,
                 max_join_steps,
+                max_term_arena_bytes,
                 host: purrdf_validate::RegimeHost::Python,
             };
             let args = GovernorArgs {

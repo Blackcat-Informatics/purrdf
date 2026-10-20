@@ -7,6 +7,7 @@
 #include "purrdf.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,7 +151,7 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     /* NULL limits: this native library's defaults, which are the limits the
      * artifact is written under. */
     if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
-                                            0, NULL, 0, NULL, NULL,
+                                            0, NULL, 0, NULL, NULL, NULL,
                                             &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
@@ -359,7 +360,7 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                    import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                     &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
@@ -384,7 +385,7 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                      import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                       &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
@@ -402,7 +403,7 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                        import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                         &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
@@ -422,7 +423,7 @@ static int check_vendored_imports(const char *premise_path,
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
         goto done;
@@ -444,7 +445,7 @@ static int check_vendored_imports(const char *premise_path,
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");
         goto done;
@@ -1613,7 +1614,7 @@ int main(int argc, char **argv) {
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
         dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
-        0, NULL, NULL, NULL, &governors,
+        0, NULL, NULL, NULL, NULL, &governors,
         &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
@@ -1668,7 +1669,7 @@ int main(int argc, char **argv) {
         "PREFIX ex: <http://example.org/> "
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
-        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, "https://example.org/agg#",
+        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, NULL, "https://example.org/agg#",
         &governors,
         &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
@@ -1689,8 +1690,49 @@ int main(int argc, char **argv) {
     CHECK(entailed_median_view.lexical.len == 3 &&
               memcmp(entailed_median_view.lexical.ptr, "2.0", 3) == 0,
           "MEDIAN of the entailed {1, 2, 3} is the computed decimal 2.0");
+    const uint8_t *arena_report_bytes = NULL;
+    size_t arena_report_len = 0;
+    purrdf_buffer_data(entailed_median_report, &arena_report_bytes, &arena_report_len);
+    char *arena_report = dup_slice((Slice){(const char *)arena_report_bytes, arena_report_len});
+    CHECK(arena_report != NULL, "copy the baseline arena report");
+    const char *arena_prefix = "\nbudget term-arena-bytes ";
+    const char *arena_line = strstr(arena_report, arena_prefix);
+    CHECK(arena_line != NULL, "the baseline reports its original arena count");
+    char *arena_end = NULL;
+    const uint64_t arena_needed = strtoull(arena_line + strlen(arena_prefix), &arena_end, 10);
+    CHECK(arena_needed > 0 && *arena_end == '\n', "the arena count is exact");
+    free(arena_report);
+    char arena_counts[128];
+    snprintf(arena_counts, sizeof(arena_counts), "%" PRIu64 " observed, %" PRIu64 " permitted",
+             arena_needed, arena_needed - 1);
     purrdf_buffer_free(entailed_median_report);
     purrdf_rowcursor_free(entailed_median_rows);
+    entailed_median_report = NULL;
+    const uint64_t arena_limits[2] = {arena_needed - 1, arena_needed};
+    for (size_t arena_case = 0; arena_case < 2; ++arena_case) {
+        rc = purrdf_query_entailment_governed(
+            entailed_median_dataset, "ASK { ?s ?p ?o }", NULL, "rdfs", "",
+            NULL, NULL, 0, NULL, 0, NULL, NULL, &arena_limits[arena_case], NULL,
+            &governors, &entailment_outcome, &entailment_kind, NULL, NULL,
+            &entailment_boolean, &entailment_evidence, &entailment_partial,
+            &entailed_median_report, &error);
+        if (arena_case == 0) {
+            CHECK(rc != PURRDF_STATUS_OK && error != NULL &&
+                      entailed_median_report == NULL,
+                  "term-arena refusal returns no closure report");
+            CHECK(strstr(purrdf_error_message(error), "term arena bytes limit:") != NULL &&
+                      strstr(purrdf_error_message(error), arena_counts) != NULL &&
+                      strstr(purrdf_error_message(error), "purrdf_query_entailment_governed's max_term_arena_bytes") != NULL,
+                  "term-arena refusal preserves counts and names the actual C parameter");
+            purrdf_error_free(error);
+            error = NULL;
+        } else {
+            CHECK(rc == PURRDF_STATUS_OK && error == NULL && entailment_boolean == 1,
+                  "raising the actual C arena parameter completes the same query");
+            purrdf_buffer_free(entailed_median_report);
+            entailed_median_report = NULL;
+        }
+    }
     purrdf_dataset_free(entailed_median_dataset);
 
     /* C cancellation is a shareable monotone handle. */

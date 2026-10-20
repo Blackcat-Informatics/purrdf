@@ -109,6 +109,7 @@ pub(crate) fn materialize_impl(
     premise_iris: &[String],
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> Result<RegimeClosure, String> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
@@ -121,6 +122,7 @@ pub(crate) fn materialize_impl(
         &MaterializeLimits {
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             host: RegimeHost::Wasm,
         },
     )
@@ -128,7 +130,7 @@ pub(crate) fn materialize_impl(
 }
 
 /// `entailMaterialize(document, regime, program, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → a `RegimeClosure` carrying the canonical N-Quads
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → a `RegimeClosure` carrying the canonical N-Quads
 /// closure and the rendered reasoning report.
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
@@ -146,7 +148,8 @@ pub(crate) fn materialize_impl(
 /// `maxJoinSteps` (a `bigint`) the candidate solutions the rules may enumerate, for the
 /// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted, each is this target's default:
 /// 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory — a
-/// native build's defaults are 4194304 and 1048576. A run past either throws naming
+/// native build's defaults are 4194304 and 1048576. `maxTermArenaBytes` bounds retained
+/// term surfaces, defaulting to 16777216 bytes on every target. A run past a limit throws naming
 /// the limit, the numbers and the argument that raises it; a run inside them returns
 /// exactly the closure larger limits would, and the report's `contract-hash` names the
 /// calculus under the limits in force.
@@ -178,6 +181,7 @@ pub fn entail_materialize(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> Result<RegimeClosure, JsError> {
     materialize_impl(
         document,
@@ -188,6 +192,7 @@ pub fn entail_materialize(
         &premise_iris,
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -700,15 +705,17 @@ pub(crate) fn entailment_import_map(
     purrdf_validate::premise_import_map(&imports, &premise_iris)
 }
 
-/// The two optional evaluation limits every entailment entry point of this host takes, as
+/// The three optional evaluation limits every entailment entry point of this host takes, as
 /// the boundary's limits, spelled for this host.
 pub(crate) const fn wasm_limits(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> MaterializeLimits {
     MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: RegimeHost::Wasm,
     }
 }
@@ -769,7 +776,7 @@ pub(crate) fn certain_answers_impl(
 }
 
 /// `entailCertainAnswers(regime, document, pattern, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → the substitutions the knowledge
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → the substitutions the knowledge
 /// base ENTAILS the pattern under, as `var` and `row` lines.
 ///
 /// A certain answer is true in every model, not merely present in one closure, which is
@@ -843,6 +850,7 @@ pub fn entail_certain_answers(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     certain_answers_impl(
         regime,
@@ -851,7 +859,7 @@ pub fn entail_certain_answers(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -873,7 +881,7 @@ pub(crate) fn graph_entails_impl(
 }
 
 /// `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → does the premise entail the
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → does the premise entail the
 /// conclusion GRAPH under the regime's rule table?
 ///
 /// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
@@ -913,6 +921,7 @@ pub fn entail_graph_entails(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     graph_entails_impl(
         regime,
@@ -921,7 +930,7 @@ pub fn entail_graph_entails(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -943,7 +952,7 @@ pub(crate) fn verify_entailment_impl(
 }
 
 /// `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → [`entail_graph_entails`] with
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → [`entail_graph_entails`] with
 /// the warrant re-decided, without running a reasoner.
 ///
 /// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
@@ -976,6 +985,7 @@ pub fn entail_verify_entailment(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     verify_entailment_impl(
         regime,
@@ -984,7 +994,7 @@ pub fn entail_verify_entailment(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -1384,7 +1394,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("answers");
         assert!(
@@ -1406,7 +1416,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert_eq!(
@@ -1421,7 +1431,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert!(
@@ -1463,7 +1473,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert!(checked.answer().starts_with("mechanism strict-table\n"));
@@ -1489,7 +1499,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("defined by an input this signature does not carry");
             assert!(refused.contains(regime), "{refused}");
@@ -1533,7 +1543,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("an undeclared self-import is unresolved");
             assert!(refused.contains(IRI), "{refused}");
@@ -1544,7 +1554,7 @@ mod tests {
                 &[],
                 &[],
                 &named,
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("a declared premise IRI resolves the self-import");
             assert!(answered.answer().starts_with("mechanism strict-table\n"));
@@ -1582,7 +1592,7 @@ mod tests {
                     &[],
                     &[],
                     &[bad.to_owned()],
-                    &wasm_limits(None, None),
+                    &wasm_limits(None, None, None),
                 )
                 .expect_err("a premise IRI that is not absolute");
                 assert!(
@@ -1597,7 +1607,7 @@ mod tests {
                 &[],
                 &[],
                 &["http://example.org/onto".to_owned()],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("an absolute premise IRI");
             assert!(answered.answer().starts_with("mechanism "));
@@ -1647,7 +1657,7 @@ mod tests {
                 &iris,
                 &documents,
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("an entry nothing imports is refused");
             assert!(
@@ -1662,7 +1672,7 @@ mod tests {
                 &iris,
                 &documents,
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("the importing premise uses the entry");
         }
@@ -1694,20 +1704,31 @@ mod tests {
         let iris = [LIB.to_owned()];
         let documents = [schema.to_owned()];
 
-        let refused = materialize_impl(&importing, "rdfs", "", &[], &[], &[], None, None)
+        let refused = materialize_impl(&importing, "rdfs", "", &[], &[], &[], None, None, None)
             .expect_err("an unsupplied import");
         assert!(refused.contains(&format!("<{LIB}>")), "{refused}");
-        let closed = materialize_impl(&importing, "rdfs", "", &iris, &documents, &[], None, None)
-            .expect("closes over the import");
+        let closed = materialize_impl(
+            &importing,
+            "rdfs",
+            "",
+            &iris,
+            &documents,
+            &[],
+            None,
+            None,
+            None,
+        )
+        .expect("closes over the import");
         assert!(closed.nquads.contains(derived), "{}", closed.nquads);
-        let unreached = materialize_impl(fact, "rdfs", "", &iris, &documents, &[], None, None)
-            .expect_err("an unreached entry");
+        let unreached =
+            materialize_impl(fact, "rdfs", "", &iris, &documents, &[], None, None, None)
+                .expect_err("an unreached entry");
         assert!(
             unreached.contains("would be read and never used"),
             "{unreached}"
         );
-        let plain =
-            materialize_impl(fact, "rdfs", "", &[], &[], &[], None, None).expect("imports nothing");
+        let plain = materialize_impl(fact, "rdfs", "", &[], &[], &[], None, None, None)
+            .expect("imports nothing");
         assert!(!plain.nquads.contains(derived));
 
         let refused =
@@ -1762,7 +1783,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, Some(1)),
+                &wasm_limits(None, Some(1), None),
             )
             .expect_err("one join step");
             assert!(
@@ -1777,7 +1798,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(Some(1), None),
+                &wasm_limits(Some(1), None, None),
             )
             .expect_err("one stored fact");
             assert!(
@@ -1791,7 +1812,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(Some(4_194_304), Some(1_048_576)),
+                &wasm_limits(Some(4_194_304), Some(1_048_576), None),
             )
             .expect("the native defaults, stated");
         }
@@ -1898,8 +1919,8 @@ mod tests {
 
     #[test]
     fn materialize_infers_and_reports() {
-        let closed =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs closure");
+        let closed = materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None, None)
+            .expect("rdfs closure");
         assert!(closed.nquads().contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -1925,7 +1946,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_impl(SCHEMA, "RDFS", "", &[], &[], &[], None, None)
+            materialize_impl(SCHEMA, "RDFS", "", &[], &[], &[], None, None, None)
                 .expect_err("case-sensitive"),
             rules_impl("rdfs-plus").expect_err("unknown"),
             implemented_rules_impl("rdfs-plus").expect_err("unknown"),
@@ -1949,7 +1970,7 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let closed = materialize_impl(SCHEMA, regime, program, &[], &[], &[], None, None)
+            let closed = materialize_impl(SCHEMA, regime, program, &[], &[], &[], None, None, None)
                 .unwrap_or_else(|error| panic!("{regime}: {error}"));
             assert!(
                 closed.report().contains(&format!("\nregime {regime}\n")),
@@ -1959,7 +1980,7 @@ mod tests {
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], &[], None, None)
+        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], &[], None, None, None)
             .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
@@ -1968,7 +1989,8 @@ mod tests {
     /// holding exactly the store the run needs returns the default closure.
     #[test]
     fn the_evaluation_limits_name_this_hosts_arguments() {
-        let closed = materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs");
+        let closed =
+            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None, None).expect("rdfs");
         let stored: u64 = closed
             .report
             .lines()
@@ -1976,9 +1998,17 @@ mod tests {
             .expect("a stored-facts line")
             .parse()
             .expect("a count");
-        let Err(refused) =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored - 1), None)
-        else {
+        let Err(refused) = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            Some(stored - 1),
+            None,
+            None,
+        ) else {
             panic!("one fact short must be refused");
         };
         assert!(
@@ -1986,10 +2016,10 @@ mod tests {
                 && refused.ends_with("raise it with entailMaterialize's maxStoredFacts"),
             "{refused}"
         );
-        let exact =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored), None).expect("exact");
+        let exact = materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored), None, None)
+            .expect("exact");
         assert_eq!(exact.nquads, closed.nquads);
-        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, Some(1))
+        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, Some(1), None)
         else {
             panic!("one join step must be refused");
         };
@@ -1997,6 +2027,46 @@ mod tests {
             steps.ends_with("raise it with entailMaterialize's maxJoinSteps"),
             "{steps}"
         );
+    }
+
+    #[test]
+    fn materialization_arena_limit_uses_the_wasm_argument() {
+        let reference =
+            materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, None, None).unwrap();
+        let bytes: u64 = reference
+            .report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(bytes > 0);
+        let refused = materialize_impl(
+            SCHEMA,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            Some(bytes - 1),
+        )
+        .unwrap_err();
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with("raise it with entailMaterialize's maxTermArenaBytes"),
+            "{refused}"
+        );
+        let exact =
+            materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, None, Some(bytes)).unwrap();
+        assert_eq!(exact.nquads, reference.nquads);
     }
 
     #[test]
@@ -2009,6 +2079,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                None,
                 None,
                 None
             )
@@ -2151,8 +2222,8 @@ mod tests {
                 .starts_with("purrdf-dl-certificate 1\n")
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
-        let chase =
-            materialize_impl(TAXONOMY, "owl-rl", "", &[], &[], &[], None, None).expect("owl-rl");
+        let chase = materialize_impl(TAXONOMY, "owl-rl", "", &[], &[], &[], None, None, None)
+            .expect("owl-rl");
         assert!(chase.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(!chase.report().contains("completeness decided"));
     }

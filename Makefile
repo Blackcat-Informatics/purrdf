@@ -1032,6 +1032,11 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
 				narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work \
 				late_delta_seed_completes_under_a_prefix_independent_work_limit \
+				ordered_guard_outputs_probe_later_atoms_without_intermediate_relations \
+				ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms \
+				native_integer_columns_and_indexes_preserve_wide_original_handles \
+				native_integer_dictionary_runs_recursive_models_without_lexical_projection \
+				native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier \
 				native_inequality_needs_no_callback_and_is_independently_checked \
 				native_inequality_in_a_negative_group_uses_the_same_filter \
 				conjunctive_heads_share_joins_and_check_the_authored_head \

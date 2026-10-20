@@ -199,20 +199,20 @@ test("queryEntailmentGoverned closes over the dataset's owl:imports table", () =
   );
 });
 
-test("queryEntailmentGoverned takes the closure's evaluation limits, naming its own option", () => {
+test("queryEntailmentGoverned takes the closure's evaluation limits, naming its own option", async () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(RDFS, "turtle");
-  assert.throws(
-    () => engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", { maxJoinSteps: 1 }),
-    (error) =>
-      error.message.includes("evaluation exceeded the join-step limit: ") &&
-      error.message.endsWith("raise it with queryEntailmentGoverned's maxJoinSteps"),
-  );
-  const answered = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", {
-    maxStoredFacts: 131072n,
-    maxJoinSteps: 1048576,
-  });
-  assert.equal(answered.outcome.result.rowCount, 1);
+  for (const method of ["queryEntailmentGoverned", "queryEntailmentGovernedAsync"]) {
+    for (const [key, short] of [["maxJoinSteps", 1], ["maxTermArenaBytes", 0n]]) {
+      await assert.rejects(async () => engine[method](ds, RDFS_QUERY, "owl-rl", { [key]: short }),
+        (error) => error.message.includes("evaluation exceeded") &&
+          error.message.endsWith(`raise it with queryEntailmentGoverned's ${key}`));
+    }
+    const answered = await engine[method](ds, RDFS_QUERY, "owl-rl", {
+      maxStoredFacts: 131072n, maxJoinSteps: 1048576, maxTermArenaBytes: 16777216n,
+    });
+    assert.equal(answered.outcome.result.rowCount, 1);
+  }
 });
 
 test("queryEntailmentGoverned exposes a closure stop without an answer or report", () => {

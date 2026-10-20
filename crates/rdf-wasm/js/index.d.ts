@@ -216,6 +216,8 @@ export interface EntailmentQueryOptions extends GovernedQueryOptions {
    * `queryEntailmentGoverned's maxJoinSteps`.
    */
   readonly maxJoinSteps?: bigint | number | null;
+  /** Maximum bytes of interned term spellings in the entailment closure. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -1778,6 +1780,8 @@ export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
   readonly maxStoredFacts?: bigint | number | null;
   /** The closure's join-step limit, exactly as on `EntailmentQueryOptions`. */
   readonly maxJoinSteps?: bigint | number | null;
+  /** The closure's term-arena byte limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
 export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
@@ -2046,6 +2050,8 @@ export function entailMaterialize(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  /** Retained term-surface bytes; omitted, 16777216. */
+  maxTermArenaBytes?: bigint,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -2327,7 +2333,8 @@ export function entailExplainConclusion(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailCertainAnswers's maxStoredFacts` or `entailCertainAnswers's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -2338,6 +2345,7 @@ export function entailCertainAnswers(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2362,7 +2370,8 @@ export function entailCertainAnswers(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailGraphEntails's maxStoredFacts` or `entailGraphEntails's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
@@ -2373,6 +2382,7 @@ export function entailGraphEntails(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2392,7 +2402,8 @@ export function entailGraphEntails(
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
  * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailVerifyEntailment's maxStoredFacts` or `entailVerifyEntailment's maxJoinSteps`.
+ * `maxTermArenaBytes` bounds retained term surfaces (default 16777216 bytes).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
@@ -2403,6 +2414,7 @@ export function entailVerifyEntailment(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**

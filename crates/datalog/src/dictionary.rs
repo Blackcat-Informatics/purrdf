@@ -3,6 +3,10 @@
 
 //! Term identity and borrowed dictionary access at the original rule-store seam.
 
+mod integer;
+pub use integer::{IntegerDictionary, IntegerDictionaryError};
+
+use core::cmp::Ordering;
 use core::fmt;
 use core::hash::Hash;
 use purrdf_lex::allocation::StorageError;
@@ -16,12 +20,96 @@ pub trait TermIdentity: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'sta
 impl<T: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'static> TermIdentity for T {}
 
 /// One original identity or a genuinely fresh lexical term at row publication.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DictionaryTerm<'a, I: TermIdentity> {
     /// Identity already owned by the supplied dictionary; never remapped.
     Id(I),
     /// Lexical term to look up or mint in that same dictionary.
     Surface(&'a str),
+}
+
+impl<'a, I: TermIdentity> DictionaryTerm<'a, I> {
+    /// Pin an original dictionary spelling at an explicit lexical boundary.
+    ///
+    /// # Errors
+    ///
+    /// Preserves the original dictionary read or resolution failure.
+    pub fn lexical<'d, D: TermDictionary<Id = I>>(
+        self,
+        dictionary: &'d D,
+    ) -> Result<LexicalTerm<'a, D::Lexical<'d>>, D::Error> {
+        dictionary.check_read()?;
+        let value = match self {
+            Self::Id(id) => LexicalTerm::Pinned(dictionary.resolve_term(id)?),
+            Self::Surface(surface) => LexicalTerm::Computed(surface),
+        };
+        dictionary.check_read()?;
+        Ok(value)
+    }
+
+    /// Reuse an existing identity for a spelling, preserving the original borrow
+    /// when the spelling is fresh. Original identities require no lexical lookup.
+    ///
+    /// # Errors
+    ///
+    /// Preserves the dictionary's original read or lookup failure.
+    pub fn canonicalize<D: TermDictionary<Id = I>>(self, dictionary: &D) -> Result<Self, D::Error> {
+        dictionary.check_read()?;
+        let value = match self {
+            Self::Id(id) => Self::Id(id),
+            Self::Surface(surface) => match dictionary.lookup_term(surface)? {
+                Some(id) => Self::Id(id),
+                None => Self::Surface(surface),
+            },
+        };
+        dictionary.check_read()?;
+        Ok(value)
+    }
+}
+
+/// An original caller identity or an owned lexical value produced by a guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DictionaryValue<I: TermIdentity> {
+    /// Identity already owned by the supplied dictionary; never remapped.
+    Id(I),
+    /// Lexical value to look up or mint in that same dictionary.
+    Surface(String),
+}
+
+purrdf_lex::variant_from!(impl [I] DictionaryValue<I> where [I: TermIdentity] {
+    Surface(String)
+});
+purrdf_lex::variant_from!(impl [I] DictionaryValue<I> where [I: TermIdentity] {
+    Surface(&str) as ToString::to_string
+});
+
+impl<I: TermIdentity> DictionaryValue<I> {
+    /// Borrow the original identity or owned spelling.
+    pub fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
+            Self::Id(id) => DictionaryTerm::Id(*id),
+            Self::Surface(surface) => DictionaryTerm::Surface(surface),
+        }
+    }
+}
+
+/// A pinned dictionary spelling or a borrowed, newly computed spelling.
+/// The original dictionary pin stays alive while a lexical guard reads it.
+#[derive(Debug)]
+pub enum LexicalTerm<'a, L: AsRef<str>> {
+    /// Original dictionary pin or borrow.
+    Pinned(L),
+    /// A computed spelling borrowed from the current binding frame.
+    Computed(&'a str),
+}
+
+impl<L: AsRef<str>> AsRef<str> for LexicalTerm<'_, L> {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Pinned(pin) => pin.as_ref(),
+            Self::Computed(surface) => surface,
+        }
+    }
 }
 
 /// Transform the fixed row in position order, stopping at its first refusal.
@@ -35,6 +123,40 @@ pub(crate) fn try_map_row<T, U, E, const N: usize>(
         *slot = Some(convert(value)?);
     }
     Ok(converted.map(|value| value.expect("every successfully converted row position is present")))
+}
+
+/// Lexicographic comparison preserving the first original comparator refusal.
+pub(crate) fn compare_sequences<T, E>(
+    left: &[T],
+    right: &[T],
+    mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>,
+) -> Result<Ordering, E> {
+    for (left, right) in left.iter().zip(right) {
+        let order = compare(left, right)?;
+        if !order.is_eq() {
+            return Ok(order);
+        }
+    }
+    Ok(left.len().cmp(&right.len()))
+}
+
+/// The RDF lexical order, retaining original pins throughout each comparison.
+///
+/// Dictionary implementations with RDF spellings can use this for
+/// [`TermDictionary::compare_terms`]. Native integer dictionaries supply their
+/// own comparison directly.
+///
+/// # Errors
+/// Preserves the dictionary's original read or lexical-resolution refusal.
+pub fn compare_lexical_terms<D: TermDictionary>(
+    dictionary: &D,
+    left: DictionaryTerm<'_, D::Id>,
+    right: DictionaryTerm<'_, D::Id>,
+) -> Result<Ordering, D::Error> {
+    let left = left.lexical(dictionary)?;
+    let right = right.lexical(dictionary)?;
+    dictionary.check_read()?;
+    Ok(left.as_ref().cmp(right.as_ref()))
 }
 
 /// Original storage refusal or original dictionary-source failure.
@@ -95,6 +217,30 @@ pub trait TermDictionary: Send + Sync {
     fn lookup_term(&self, surface: &str) -> Result<Option<Self::Id>, Self::Error>;
     /// Pin the canonical RDF surface at a semantic or publication boundary.
     fn resolve_term(&self, id: Self::Id) -> Result<Self::Lexical<'_>, Self::Error>;
+    /// Compare terms in this dictionary's canonical publication order.
+    ///
+    /// This must be a total order consistent with term identity, stable for the
+    /// lifetime of a read. RDF dictionaries compare canonical lexical spellings;
+    /// native dictionaries may compare original integers without resolving text.
+    /// Both operands may be fresh values produced by a guard. Unsupported values
+    /// must return the original typed error, never a substitute order.
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, Self::Id>,
+        right: DictionaryTerm<'_, Self::Id>,
+    ) -> Result<Ordering, Self::Error>;
+    /// Compare complete rows in position order through the same term contract.
+    fn compare_rows(
+        &self,
+        left: &[DictionaryTerm<'_, Self::Id>],
+        right: &[DictionaryTerm<'_, Self::Id>],
+    ) -> Result<Ordering, Self::Error> {
+        self.check_read()?;
+        let order =
+            compare_sequences(left, right, |left, right| self.compare_terms(*left, *right))?;
+        self.check_read()?;
+        Ok(order)
+    }
     /// Admit the row terms in caller order, then validate their dependent publication.
     ///
     /// Original IDs are carried unchanged. On either interning or validation refusal,

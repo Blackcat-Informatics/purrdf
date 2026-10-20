@@ -8,6 +8,35 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Regime arena controls (breaking C ABI):** Rust, Python, JavaScript, C and
+  CLI callers can set the retained term-surface byte limit. Refusals preserve
+  the original counts and name the calling surface's available control.
+
+- **Native integer dictionaries (breaking):** `TermDictionary::compare_terms`
+  defines canonical publication order, preserving lexical RDF order while allowing
+  original integer comparisons. `IntegerDictionary<u32/u64>` evaluates native
+  model-only fixed points without string interning or lexical projection, using
+  explicit caller-supplied program symbols. Explicit lexical requests fail with a
+  typed error. Tied witnesses and round winners use the same dictionary contract.
+
+- **Datalog guard values (breaking):** guard calls carry original identities or
+  fresh spellings, and `GuardRows` returns typed identity/surface cells. Native
+  callbacks and native inequality avoid lexical round trips. Lexical callbacks
+  opt into `GuardCall::evaluate_lexical`, which retains original dictionary pins
+  and preserves source refusals. The SHACL rule engine uses this shared boundary.
+
+- **Native integer row storage:** `store::RowColumns<I, N, R>` retains arbitrary-width
+  rows and original handles without interning or rendering. `store::RowIndex`
+  indexes caller-selected columns and returns matching key-prefix rows without
+  query-time allocation. RDF tails use the same column buffer, and RDF secondary
+  indexes use the same integer-column sorter.
+
+- **Guard-computed join keys:** `DlClause::with_ordered_body` interleaves positive
+  atoms and guards through `clause::BodyLiteral`. Fresh guard outputs can bind
+  subsequent binary and cyclic probes. Guards are evaluation barriers; absent
+  computed keys match no row. Early guards enter a position-aware version 3
+  clause identity, and physical planner version 6 invalidates cached plans.
+
 - **SHACL SPARQL argument failures:** COALESCE, IF, boolean and membership forms can mask
   catchable nested node-expression failures using SPARQL semantics, while
   unmasked failures retain their original cause and empty results stay distinct.

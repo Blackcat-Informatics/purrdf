@@ -390,6 +390,13 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Maximum bytes of interned term spellings while materializing the closure.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the `--entailment` closure is
@@ -477,6 +484,13 @@ pub(crate) enum Command {
         /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Maximum bytes of interned term spellings while materializing the closure.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
         /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
         /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
@@ -723,6 +737,9 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Maximum bytes of interned term spellings in each evaluation store.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the closure is materialized over the
@@ -814,6 +831,9 @@ pub(crate) enum Command {
         /// is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Maximum bytes of interned term spellings in each evaluation store.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
