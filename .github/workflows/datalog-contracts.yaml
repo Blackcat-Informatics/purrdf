@@ -42,7 +42,7 @@ jobs:
           cargo test --locked -p purrdf-datalog --test rules_runtime
           cargo test --locked -p purrdf-datalog --test structured_errors
       - name: Measure model-only allocation and factor growth
-        run: cargo test --locked -p purrdf-datalog --test factor_allocation
+        run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
       - name: Check independent proofs and scheduling parity
         run: |
           cargo test --locked -p purrdf-datalog --lib every_corpus_derivation_yields_a_checkable_proof

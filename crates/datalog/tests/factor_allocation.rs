@@ -67,6 +67,13 @@ fn independent_existential_factor_work_and_allocation_grow_additively() {
         );
         assert!(model_allocation.requested_bytes < allocation.requested_bytes);
         assert!(model_allocation.retained_bytes < allocation.retained_bytes);
+        eprintln!(
+            "model_only_factors n={n} join_steps={} requested_bytes={} retained_bytes={} peak_working_bytes={}",
+            model.work().join_steps(),
+            model_allocation.requested_bytes,
+            model_allocation.retained_bytes,
+            model_allocation.peak_working_bytes
+        );
         assert_eq!(
             evaluation
                 .derivations()
