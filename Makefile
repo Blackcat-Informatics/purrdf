@@ -1060,7 +1060,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				triple_carrier_runs_the_public_rl_program_without_quad_storage \
 				triple_rl_keeps_statement_roles_and_scoped_blank_identity \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
-			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test sparql_node_expressions -- --exact \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test sparql_argument_failures -- --exact \
 				sparql_node_calls_mask_catchable_argument_failures \
 				sparql_node_calls_preserve_unmasked_failures_and_empty_branches \
 				sparql_argument_failures_follow_the_same_path_in_dated_validation \
