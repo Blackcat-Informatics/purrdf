@@ -211,7 +211,7 @@ where
         }
         _ => None,
     };
-    let seed_in_cycle = seed.is_some_and(|anchor| entry.plan.join_groups().iter().any(|group| {
+    let seed_in_cycle = entry.plan.has_cyclic_subplan() && seed.is_some_and(|anchor| entry.plan.join_groups().iter().any(|group| {
         matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
     }));
     if let Some(anchor) = seed {
