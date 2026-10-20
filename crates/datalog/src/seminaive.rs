@@ -82,6 +82,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod atom;
 mod evidence;
 mod factors;
 pub use evidence::NegationScope;
@@ -2052,7 +2053,7 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
-    solutions: &[SlotSolution<D::Id, N>],
+    solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
@@ -2077,7 +2078,7 @@ fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
     rel: &RelationStore<D, N>,
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
-    solutions: &[SlotSolution<D::Id, N>],
+    solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
@@ -2106,7 +2107,7 @@ fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
-    solutions: &[SlotSolution<D::Id, N>],
+    solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
@@ -2142,130 +2143,18 @@ fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usiz
     rel: &RelationStore<D, N>,
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
-    solutions: &[SlotSolution<D::Id, N>],
+    solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
-    let rel = rel.read_source(operator.shape().read_source());
-    let shape = operator.shape();
-    let body_index = operator.body_index();
-    let constants = constant_positions(shape, rel)?;
-    let delta_run = if SCAN == SCAN_DELTA {
-        indexes.get(delta, rel.row_count())
-    } else {
-        None
-    };
-    let mut next = Vec::new();
-
-    'solutions: for solution in solutions {
-        if governor.spent() {
-            break;
-        }
-        // Resolve every stored position: constants were resolved once above, a bound variable
-        // reads its frame slot, a free variable is bound by the scan.
-        let mut values = [PositionValue::Free; N];
-        for position in 0..N {
-            values[position] = match (&shape.positions()[position], constants[position]) {
-                (PositionPlan::Constant(_), Some(resolved)) => resolved,
-                (PositionPlan::Constant(_), None) => {
-                    unreachable!("a constant position always has a hoisted resolution")
-                }
-                (PositionPlan::Bound(slot) | PositionPlan::Free(slot), _)
-                    if INDEX == INDEX_REBOUND =>
-                {
-                    match solution.value(*slot) {
-                        SlotValue::Interned(id) => PositionValue::Known(id),
-                        SlotValue::Computed(_) => PositionValue::Missing,
-                        SlotValue::Unbound => PositionValue::Free,
-                    }
-                }
-                (PositionPlan::Bound(slot), _) => solution
-                    .get(*slot)
-                    .map_or(PositionValue::Missing, PositionValue::Known),
-                (PositionPlan::Free(_), _) => PositionValue::Free,
-            };
-        }
-        if values.contains(&PositionValue::Missing) {
-            // A pinned position the store has never interned matches nothing at all.
-            continue;
-        }
-
-        // The `(subject, object)` index bound. `INDEX` is a compile-time constant, and the
-        // planner only emits a bound index for a position it has proven known.
-        let bound = match INDEX {
-            INDEX_REBOUND => match (
-                values[POSITION_SUBJECT].known(),
-                values[POSITION_OBJECT].known(),
-            ) {
-                (Some(subject), Some(object)) => Bound::Both(subject, object),
-                (Some(subject), None) => Bound::Subject(subject),
-                (None, Some(object)) => Bound::Object(object),
-                (None, None) => Bound::Any,
-            },
-            INDEX_ANY => Bound::Any,
-            INDEX_SUBJECT => match values[POSITION_SUBJECT].known() {
-                Some(subject) => Bound::Subject(subject),
-                None => continue,
-            },
-            INDEX_OBJECT => match values[POSITION_OBJECT].known() {
-                Some(object) => Bound::Object(object),
-                None => continue,
-            },
-            INDEX_BOTH => match (
-                values[POSITION_SUBJECT].known(),
-                values[POSITION_OBJECT].known(),
-            ) {
-                (Some(subject), Some(object)) => Bound::Both(subject, object),
-                _ => continue,
-            },
-            _ => unreachable!("INDEX is a planned index code"),
-        };
-
-        for partition in rel.select_partitions(values.map(PositionValue::known), delta_run) {
-            let mut cursor = partition.select(bound);
-            while let Some((subject, object, row)) = cursor.next() {
-                #[cfg(test)]
-                {
-                    governor.row_visits += 1;
-                }
-                if !keep_row::<SCAN>(delta, row) {
-                    continue;
-                }
-                let matched = partition.row(subject, object);
-                // The generalized diagonal filter: any two positions holding the same
-                // variable must agree, whichever two they are.
-                if !shape
-                    .equalities()
-                    .iter()
-                    .all(|&(left, right)| matched[left] == matched[right])
-                {
-                    continue;
-                }
-                if !governor.charge() {
-                    break 'solutions;
-                }
-                let mut merged = solution.clone();
-                for (position, plan) in shape.positions().iter().enumerate() {
-                    if let PositionPlan::Free(slot) | PositionPlan::Bound(slot) = plan
-                        && (INDEX == INDEX_REBOUND || matches!(plan, PositionPlan::Free(_)))
-                    {
-                        merged.bindings[*slot] = Some(matched[position]);
-                    }
-                }
-                merged.sources.push(SourceRow {
-                    source: shape.read_source(),
-                    body_index,
-                    terms: matched,
-                    row,
-                });
-                next.push(merged);
-            }
-        }
-    }
-    rel.interner().check_read()?;
-    Ok(next)
+    let mut frame = atom::Frame::new(operator, rel, solutions)?;
+    frame.advance::<SCAN, INDEX, D>(operator, rel, delta, indexes, governor)?;
+    // The existing round owner observes this same refusal flag and returns no
+    // complete model. The resumable owner retains the frame instead of dropping it.
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 // ── The leapfrog triejoin ───────────────────────────────────────────────────────
@@ -2664,7 +2553,7 @@ where
 /// binary intermediate relation.
 fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
-    solutions: &[SlotSolution<D::Id, N>],
+    solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
@@ -2686,7 +2575,7 @@ where
             // any stored edge. It must not be mistaken for an unbound cycle slot.
             continue;
         }
-        let mut working = solution.clone();
+        let mut working = solution;
         run.recurse(0, &mut working, &mut out, governor)?;
     }
     run.rel.interner().check_read()?;
@@ -3007,7 +2896,7 @@ where
                 } else {
                     scan_for(position, delta_position)
                 },
-                &partial,
+                partial,
                 governor,
             )?;
             if partial.is_empty() {
@@ -3064,7 +2953,7 @@ where
                 snapshot.delta,
                 snapshot.indexes,
                 Scan::Delta,
-                &partial,
+                partial,
                 governor,
             )?;
         }
@@ -3092,7 +2981,7 @@ where
                         snapshot.delta,
                         snapshot.indexes,
                         scan_for(planned.positive_position(), delta_position),
-                        &partial,
+                        partial,
                         governor,
                     )?
                 }
@@ -3105,7 +2994,7 @@ where
                         delta: snapshot.delta,
                         indexes: snapshot.indexes,
                     },
-                    &partial,
+                    partial,
                     governor,
                 )?,
             };
@@ -4546,7 +4435,7 @@ where
             snapshot.delta,
             snapshot.indexes,
             Scan::Delta,
-            &partial,
+            partial,
             governor,
         )
         .map_err(EvalError::Source)?;
@@ -4569,7 +4458,7 @@ where
                     snapshot.delta,
                     snapshot.indexes,
                     scan.at(atom.positive_position()),
-                    &partial,
+                    partial,
                     governor,
                 ),
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
@@ -4581,7 +4470,7 @@ where
                         delta: snapshot.delta,
                         indexes: snapshot.indexes,
                     },
-                    &partial,
+                    partial,
                     governor,
                 ),
             }
@@ -4605,7 +4494,7 @@ where
                 snapshot.delta,
                 snapshot.indexes,
                 scan.at(operator.positive_position()),
-                &partial,
+                partial,
                 governor,
             )
             .map_err(EvalError::Source)?;
@@ -6909,7 +6798,7 @@ mod tests {
                 delta: Delta::all(3),
                 indexes: &DeltaIndexes { runs: Vec::new() },
             },
-            &[SlotSolution::empty(plan.variables().len())],
+            vec![SlotSolution::empty(plan.variables().len())],
             &mut StepGovernor::new(u64::MAX),
         )
         .unwrap_err();
@@ -6970,7 +6859,7 @@ mod tests {
                 Delta::all(store.row_count()),
                 &DeltaIndexes { runs: Vec::new() },
                 Scan::Full,
-                &partial,
+                partial,
                 &mut governor,
             )
             .unwrap();
@@ -6998,7 +6887,7 @@ mod tests {
             Delta::all(0),
             &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
-            &[],
+            Vec::new(),
             &mut governor,
         )
         .unwrap_err();
@@ -7018,7 +6907,7 @@ mod tests {
             Delta::all(store.row_count()),
             &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
-            &[SlotSolution::empty(plan.variables().len())],
+            vec![SlotSolution::empty(plan.variables().len())],
             &mut governor,
         )
         .unwrap_err();

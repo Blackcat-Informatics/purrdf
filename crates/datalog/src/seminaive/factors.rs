@@ -233,12 +233,12 @@ where
                 .delta_indexes
                 .expect("the factor's delta indexes were prepared"),
             Scan::Delta,
-            &partial,
+            partial,
             governor,
         )
         .map_err(EvalError::Source)?;
     }
-    let binary = |position, partial: &[SlotSolution<D::Id, N>], governor: &mut StepGovernor| {
+    let binary = |position, partial: Vec<SlotSolution<D::Id, N>>, governor: &mut StepGovernor| {
         let extend = if seed.is_some() {
             extend_rebound_solutions
         } else {
@@ -261,7 +261,7 @@ where
             if seed == Some(position) {
                 continue;
             }
-            partial = binary(position, &partial, governor).map_err(EvalError::Source)?;
+            partial = binary(position, partial, governor).map_err(EvalError::Source)?;
             if partial.is_empty() || governor.spent() {
                 break;
             }
@@ -279,7 +279,7 @@ where
                 continue;
             }
             partial = match group {
-                JoinGroup::Binary(atom) => binary(atom.positive_position(), &partial, governor)
+                JoinGroup::Binary(atom) => binary(atom.positive_position(), partial, governor)
                     .map_err(EvalError::Source)?,
                 JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
                     &LeapfrogRun {
@@ -292,7 +292,7 @@ where
                             .delta_indexes
                             .expect("the factor's delta indexes were prepared"),
                     },
-                    &partial,
+                    partial,
                     governor,
                 )
                 .map_err(EvalError::Source)?,

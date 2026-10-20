@@ -1129,6 +1129,11 @@ where
         self.relation.select(bound)
     }
 
+    /// The original immutable arrangement used by an owned native scan frame.
+    pub(crate) fn arrangement(self) -> &'a Relation<I> {
+        self.relation
+    }
+
     /// A globally subject-value-ordered trie-level cursor; `other` optionally fixes the
     /// object position.
     pub fn values_subject(self, other: Option<I>) -> ValueCursor<'a, VALUE_SUBJECT, I> {
@@ -1935,7 +1940,7 @@ where
     }
 
     /// The partition at a dense slot.
-    fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id, N> {
+    pub(crate) fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id, N> {
         let (id, key) = self.keys[slot];
         PartitionRef {
             id,
