@@ -549,6 +549,7 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         }
         other @ (EntailError::Storage(_)
         | EntailError::Build(_)
+        | EntailError::Dataset { .. }
         | EntailError::Parse(_)
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
@@ -564,7 +565,8 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
         | EntailError::Canonicalization(_)
-        | EntailError::Unsatisfiable) => other,
+        | EntailError::Unsatisfiable
+        | EntailError::Collection(_)) => other,
     }
 }
 

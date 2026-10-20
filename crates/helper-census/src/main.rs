@@ -18,6 +18,7 @@
 //! repository-hygiene check that keeps tooling and tests in Rust, run by the
 //! pre-commit hook, `make check` and CI.
 
+mod asm_reports;
 mod capacity;
 mod census;
 mod glossary;
@@ -56,6 +57,8 @@ Modes:
   --check            fail on any unsanctioned isomorphic group and on any
                      forbidden match outside its home
   --index            print the JSON index scripts/check-shared-helpers.py reads
+  --merge-asm-reports validate reports against source/manifest/producer receipts
+                     using a JSON request read from stdin
   --dump-ledger      print the parsed ledger as JSON
   --self-test        run the seeded fixtures and exit
   --no-features      refuse Cargo features except the empty cargo-c marker,
@@ -89,6 +92,7 @@ enum Mode {
     Count(String),
     Check,
     Index,
+    AsmReports,
     DumpLedger,
     SelfTest,
     NoFeatures,
@@ -145,6 +149,7 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
             )?,
             "--check" => set(Mode::Check, &mut mode)?,
             "--index" => set(Mode::Index, &mut mode)?,
+            "--merge-asm-reports" => set(Mode::AsmReports, &mut mode)?,
             "--dump-ledger" => set(Mode::DumpLedger, &mut mode)?,
             "--self-test" => set(Mode::SelfTest, &mut mode)?,
             "--no-features" => set(Mode::NoFeatures, &mut mode)?,
@@ -229,6 +234,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Mode::SelfTest => return Ok(self_test()),
+        Mode::AsmReports => return asm_reports::run(),
         Mode::NoFeatures => return policy::no_features(&arguments.root),
         Mode::PythonBindingTests => return policy::python_binding_tests(&arguments.root),
         Mode::NonRustRatchet => {
@@ -317,6 +323,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         }
         Mode::Index => println!("{}", census::index(&workspace, &ledger)),
         Mode::DumpLedger
+        | Mode::AsmReports
         | Mode::SelfTest
         | Mode::NonRustRatchet
         | Mode::Help
@@ -852,6 +859,7 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
     cases.extend(distinct_cases());
     cases.extend(near_miss_cases());
     cases.extend(policy::self_test_cases());
+    cases.extend(asm_reports::self_test_cases());
     cases
 }
 

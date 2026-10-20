@@ -105,6 +105,10 @@ purrdf-testkit = { workspace = true }
 # lookup, timed in isolation. Report-only: the deterministic counterparts are
 # asserted in `tests/multimodal_exclusion_lookup.rs` and in
 # `purrdf-retrieval`'s `tests/text_exclusion_lookup.rs`.
+[[test]]
+name = "reasoning_inspection"
+harness = false
+
 [[bench]]
 name = "multimodal_on_demand_read"
 harness = false

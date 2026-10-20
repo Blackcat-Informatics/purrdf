@@ -113,6 +113,15 @@ pub struct TerminationCertificate {
     existential_edges: usize,
 }
 
+impl purrdf_hash::error::StructuredError for TerminationCertificate {
+    purrdf_hash::error_visit! {
+        @record self { positions, existential_edges } => "entailment-termination" {
+            "positions" => Unsigned(self.positions as u128),
+            "existential_edges" => Unsigned(self.existential_edges as u128),
+        }
+    }
+}
+
 impl TerminationCertificate {
     /// The certificate `termination` states, or `None` if it certified nothing.
     ///
@@ -745,6 +754,14 @@ pub struct Boundary {
     construct: Construct,
 }
 
+impl purrdf_hash::error::StructuredError for Boundary {
+    purrdf_hash::error_visit! {
+        @record self { construct } => "entailment-boundary" {
+            "construct" => Code(self.construct.as_str()),
+        }
+    }
+}
+
 impl Boundary {
     /// The boundary for `construct`.
     #[must_use]
@@ -783,6 +800,15 @@ pub struct WitnessTriple {
     predicate: TermValue,
     /// The object term.
     object: TermValue,
+}
+
+impl purrdf_hash::error::StructuredError for WitnessTriple {
+    purrdf_hash::error_visit! {
+        @record self { subject, predicate, object } => "entailment-witness-triple" {
+            "subject" => Term(&self.subject), "predicate" => Term(&self.predicate),
+            "object" => Term(&self.object),
+        }
+    }
 }
 
 impl WitnessTriple {
@@ -858,6 +884,16 @@ pub struct InconsistencyWitness {
     graph: Option<TermValue>,
 }
 
+impl purrdf_hash::error::StructuredError for InconsistencyWitness {
+    purrdf_hash::error_visit! {
+        @record self { rule, premises, graph } => "entailment-inconsistency-witness" {
+            "rule" => Code(self.rule.as_str()),
+            "premises" => List(self.premises.iter().map(|premise| purrdf_hash::error::ErrorValue::Record(premise))),
+            "graph" => Value(self.graph.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |graph| purrdf_hash::error::ErrorValue::Term(graph))),
+        }
+    }
+}
+
 impl InconsistencyWitness {
     /// A witness that `rule` fired on `premises` while closing `graph`.
     ///
@@ -920,6 +956,14 @@ pub struct InconsistentRun {
     witness: InconsistencyWitness,
     /// What the run had done when it stopped.
     report: ReasoningReport,
+}
+
+impl purrdf_hash::error::StructuredError for InconsistentRun {
+    purrdf_hash::error_visit! {
+        @record self { witness, report } => "entailment-inconsistent-run" {
+            "witness" => Record(&self.witness), "report" => Record(&self.report),
+        }
+    }
 }
 
 impl InconsistentRun {
@@ -1161,6 +1205,66 @@ pub struct ReasoningReport {
     /// than the one that answered is a value nothing can build, exactly as
     /// [`Self::contract_hash`] cannot name a calculus other than its regime's.
     mechanism: Option<EntailmentMechanism>,
+}
+
+impl purrdf_hash::error::StructuredError for ReasoningReport {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            regime,
+            rules_fired,
+            boundaries,
+            budget,
+            contract_hash,
+            inconsistency,
+            withheld_surrogates,
+            termination,
+            mechanism,
+        } = self;
+        visitor.variant("entailment-report");
+        visitor.value(Some("regime"), ErrorValue::Code(regime.name()));
+        visitor.begin_list(Some("rules_fired"), rules_fired.len());
+        for (rule, count) in rules_fired {
+            visitor.begin_record(None, "entailment-rule-count");
+            visitor.value(Some("rule"), ErrorValue::Code(rule.as_str()));
+            visitor.value(Some("count"), ErrorValue::Unsigned(u128::from(*count)));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visit_list(
+            visitor,
+            Some("boundaries"),
+            boundaries
+                .iter()
+                .map(|boundary| ErrorValue::Record(boundary)),
+        );
+        visitor.value(Some("budget"), ErrorValue::Record(budget));
+        visitor.value(Some("contract_hash"), ErrorValue::Record(contract_hash));
+        visitor.value(
+            Some("inconsistency"),
+            inconsistency
+                .as_ref()
+                .map_or(ErrorValue::Absent, |witness| ErrorValue::Record(witness)),
+        );
+        visitor.value(
+            Some("withheld_surrogates"),
+            ErrorValue::Unsigned(u128::from(*withheld_surrogates)),
+        );
+        visitor.value(
+            Some("termination"),
+            termination
+                .as_ref()
+                .map_or(ErrorValue::Absent, |certificate| {
+                    ErrorValue::Record(certificate)
+                }),
+        );
+        visitor.value(
+            Some("mechanism"),
+            mechanism.map_or(ErrorValue::Absent, |mechanism| {
+                ErrorValue::Code(mechanism.as_str())
+            }),
+        );
+    }
 }
 
 impl ReasoningReport {

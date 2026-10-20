@@ -893,6 +893,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				role_refusals_keep_native_fields_after_the_source_drops \
+				entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run \
+				import_conflict_inspection_keeps_original_versions_and_default_graph \
+				actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
+				empty_collection_admission_checks_nil_structure \
+				dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
 				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
@@ -910,6 +916,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				nominal_merges_and_simple_functionality_preserve_role_obligations \
 				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
 				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
+				actual_query_and_entailment_failures_retain_their_original_owners \
+				original_reader_failures_cross_both_generic_reasoning_boundaries \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \

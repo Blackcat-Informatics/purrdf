@@ -158,6 +158,21 @@ pub enum ReasoningError<E = std::convert::Infallible> {
     Materialization(purrdf_rdf::DatasetMaterializationError<E>),
 }
 
+impl<E: purrdf_lex::error::StructuredError> purrdf_lex::error::StructuredError
+    for ReasoningError<E>
+{
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_lex::error::ErrorVisitor<'error>) {
+        use purrdf_lex::error::{ErrorValue, StructuredError};
+        let (code, cause): (&'static str, &dyn StructuredError) = match self {
+            Self::Query(cause) => ("reasoning-query", cause),
+            Self::Entailment(cause) => ("reasoning-entailment", cause),
+            Self::Materialization(cause) => ("reasoning-materialization", cause),
+        };
+        visitor.variant(code);
+        visitor.value(Some("cause"), ErrorValue::Cause(cause));
+    }
+}
+
 impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

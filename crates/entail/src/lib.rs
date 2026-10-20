@@ -129,6 +129,7 @@ pub mod entails;
 pub mod explain;
 pub(crate) mod interner;
 pub(crate) mod lists;
+pub use lists::{CollectionError, CollectionPhase};
 pub(crate) mod owl_dl;
 pub mod reasoner;
 pub mod report;
@@ -342,7 +343,31 @@ impl Materialization<'_> {
 /// The typed refusal of an object-property hierarchy before reasoning starts.
 pub use owl_dl::roles::RoleHierarchyError;
 
+/// The dataset-producing operation that retained an original RDF diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatasetFailurePhase {
+    /// Building a derived dataset through the shared RDF boundary.
+    Build,
+    /// Freezing the query-directed augmented dataset.
+    AugmentedFreeze,
+}
+
+impl purrdf_hash::error::StructuredError for DatasetFailurePhase {
+    purrdf_hash::error_visit! {
+        Build => "entailment-dataset-build" {},
+        AugmentedFreeze => "entailment-augmented-freeze" {},
+    }
+}
+
 /// Why a closure could not be produced.
+///
+/// [`purrdf_hash::error::StructuredError`] exposes the original variant, fields
+/// and nested causes without formatting or cloning them. Generic source-read
+/// failures remain the caller's type and are inspectable when that type provides
+/// the same trait. Inconsistent runs retain both their original witness and
+/// complete reasoning report, including the native budget and calculus identity.
+/// Existing string payloads remain explicit messages; inspection does not parse
+/// those messages into reconstructed causes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntailError<E = std::convert::Infallible> {
@@ -350,6 +375,13 @@ pub enum EntailError<E = std::convert::Infallible> {
     Storage(purrdf_lex::allocation::StorageError),
     /// Building the derived dataset failed.
     Build(String),
+    /// An original RDF build diagnostic, with its native payload and reporting metadata.
+    Dataset {
+        /// The operation that refused to publish a dataset.
+        phase: DatasetFailurePhase,
+        /// The original diagnostic, retained without rendering or copying.
+        cause: purrdf_core::RdfDiagnostic,
+    },
     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
     /// class-expression graph or an unrecognized RIF construct).
     Parse(String),
@@ -399,6 +431,9 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// existential edge in a cycle is named rather than looped on. Neither declared lane
     /// is such a program, which is a CHECKED fact rather than a hope.
     Chase(purrdf_datalog::chase::ChaseError),
+    /// A caller-supplied collection diagnostic message.
+    /// Native OWL collection producers return [`Self::Collection`].
+    MalformedList(String),
     /// An RDF collection an OWL 2 axiom points at is not a well-formed collection.
     ///
     /// `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:members`,
@@ -409,9 +444,9 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// edge, or a cycle is a refusal
     /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
     /// collection would answer a question the caller did not ask, and it would do so
-    /// silently. The message names the collection's head, the cell the walk stopped at,
-    /// and the fault.
-    MalformedList(String),
+    /// silently. The native payload retains the original head, failed cell,
+    /// ordered members and fault in source-independent RDF term coordinates.
+    Collection(Box<CollectionError>),
     /// A term id of the input view did not resolve to a value: the view handed back a
     /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
     /// reasoned over a term the input does not actually hold.
@@ -548,6 +583,41 @@ pub enum EntailError<E = std::convert::Infallible> {
     Canonicalization(purrdf_core::CanonError<E>),
 }
 
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for EntailError<E>
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "entailment-storage" { "cause" => Cause(cause) },
+        Build(message) => "entailment-build" { "message" => Message(message) },
+        Dataset { phase, cause } => "entailment-dataset" {
+            "phase" => Record(phase), "cause" => Cause(cause),
+        },
+        Parse(message) => "entailment-parse" { "message" => Message(message) },
+        RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
+        ProofsNotRecorded => "entailment-proofs-not-recorded" {},
+        Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
+        Chase(cause) => "entailment-chase" { "cause" => Cause(cause) },
+        MalformedList(message) => "entailment-malformed-list" { "message" => Message(message) },
+        Collection(cause) => "entailment-collection" { "cause" => Cause(cause.as_ref()) },
+        ForeignTerm(cause) => "entailment-foreign-term" { "cause" => Cause(cause) },
+        SourceRead(cause) => "entailment-source-read" { "cause" => Cause(cause) },
+        Inconsistent(run) => "entailment-inconsistent" { "run" => Record(run.as_ref()) },
+        Unsatisfiable => "entailment-unsatisfiable" {},
+        UnsupportedRegime(regime) => "entailment-unsupported-regime" { "regime" => Code(regime.name()) },
+        UnresolvedImport(iri) => "entailment-unresolved-import" { "iri" => Iri(iri) },
+        UnreachedImport { iris, unanchored } => "entailment-unreached-import" {
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+            "unanchored" => List(unanchored.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+        },
+        IncompatibleImports(conflicts) => "entailment-incompatible-imports" {
+            "conflicts" => List(conflicts.iter().map(|conflict| purrdf_hash::error::ErrorValue::Record(conflict))),
+        },
+        MatchBudget => "entailment-match-budget" {},
+        Stopped => "entailment-stopped" {},
+        Canonicalization(cause) => "entailment-canonicalization" { "cause" => Cause(cause) },
+    }
+}
+
 impl<E> EntailError<E> {
     /// Preserve the operational refusal's classification at this crate's boundary.
     pub(crate) fn source_read(error: E) -> Self {
@@ -574,12 +644,14 @@ impl EntailError {
         match self {
             Self::Storage(cause) => EntailError::Storage(cause),
             Self::Build(reason) => EntailError::Build(reason),
+            Self::Dataset { phase, cause } => EntailError::Dataset { phase, cause },
             Self::Parse(reason) => EntailError::Parse(reason),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
             Self::Chase(cause) => EntailError::Chase(cause),
             Self::MalformedList(reason) => EntailError::MalformedList(reason),
+            Self::Collection(cause) => EntailError::Collection(cause),
             Self::ForeignTerm(cause) => EntailError::ForeignTerm(cause),
             Self::SourceRead(never) => match never {},
             Self::Inconsistent(run) => EntailError::Inconsistent(run),
@@ -601,9 +673,10 @@ purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocatio
 
 impl<E> From<purrdf_core::RdfDiagnostic> for EntailError<E> {
     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
-        error
-            .storage_error()
-            .map_or_else(|| Self::Build(error.to_string()), Self::Storage)
+        Self::Dataset {
+            phase: DatasetFailurePhase::Build,
+            cause: error,
+        }
     }
 }
 
@@ -621,6 +694,16 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
         match self {
             Self::Storage(error) => write!(f, "entailment storage error: {error}"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
+            Self::Dataset { phase, cause } => match phase {
+                DatasetFailurePhase::Build => match cause.storage_error() {
+                    Some(storage) => write!(f, "entailment storage error: {storage}"),
+                    None => write!(f, "entailment build error: {cause}"),
+                },
+                DatasetFailurePhase::AugmentedFreeze => write!(
+                    f,
+                    "entailment build error: freeze augmented dataset: {cause}"
+                ),
+            },
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
             Self::ProofsNotRecorded => write!(
@@ -631,6 +714,7 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
+            Self::Collection(cause) => cause.fmt(f),
             Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
             Self::SourceRead(error) => write!(f, "entailment source read error: {error}"),
             Self::Inconsistent(run) => write!(
@@ -732,34 +816,24 @@ impl<E> From<purrdf_core::TermLookupError<E>> for EntailError<E> {
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
-    /// The wrapped cause, for the variants that carry one.
+    /// The original native cause, when this variant wraps another failure.
     ///
-    /// Two of these variants exist ONLY to carry another crate's diagnostic —
-    /// `Evaluate` holds the evaluator's ceiling report, `Chase` holds the termination
-    /// analysis — and without this the standard chain stopped at the outermost message.
-    /// A caller printing `{:#}`, or walking `Error::source`, saw "the chase refused"
-    /// and could not reach WHICH ceiling refused it, though the value was right there;
-    /// the only way through was to match this enum's concrete variant, which is what a
-    /// trait-object error exists to avoid.
-    ///
-    /// The rest return `None` because they genuinely have no cause to name.
-    /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — `UnreachedImport` carries the unused table keys,
-    /// `IncompatibleImports` carries the conflicting
-    /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
-    /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
-    /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
-    /// that the premise has no model, and the run it describes succeeded at producing
-    /// it, so calling it the cause of this error would misdescribe both. `Canonicalization`
-    /// carries [`purrdf_core::CanonError`], which DOES have a cause to name.
+    /// `Build`, `Parse` and `MalformedList` retain diagnostic messages.
+    /// `UnresolvedImport` and `UnreachedImport` retain original IRI keys;
+    /// `IncompatibleImports` retains the conflicting document pairs. These
+    /// payloads describe the refusal itself rather than a nested error.
+    /// `Inconsistent` carries the original successful run's inconsistency
+    /// witness and report. Unit refusals also have no nested cause.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(inner) => Some(inner),
+            Self::Dataset { cause, .. } => Some(cause),
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::RoleHierarchy(inner) => Some(inner),
+            Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
             | Self::Parse(_)

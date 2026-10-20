@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 310 named cases in 52 integration targets,
-with 320 executions across 57 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 318 named cases in 53 integration targets,
+with 328 executions across 58 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the numeric, sentence and MIME byte-identity targets and the
 Turtle-chain, regular-role, evidence, real-producer, physical-shape, graph-free
@@ -19,7 +19,8 @@ carrier, governed-request EXPLAIN, core `structured_inspection` and `pack_certif
 slice `structured_errors` targets, the SPARQL `lexer_owned_admission` target,
 the retrieval `structured_foundations` target, the evaluator and SPARQL results
 `structured_errors` targets, the HNSW, Datalog, ShEx and columnar `structured_errors`
-targets, Datalog's `never_derive` target and the JSON Schema `api` target.
+targets, Datalog's `never_derive` target, the JSON Schema `api` target and the
+umbrella `reasoning_inspection` target.
 These inspection targets preserve original data,
 error payloads and refusal paths on the 32-bit target. The evidence and scoped retrieval cases exercise the original
 admitted owners, four-valued evidence, exact aggregation and refusal paths on the
@@ -47,7 +48,7 @@ N-Triples and JSON-LD bytes, and reconstructs every original through the actual
 RDF parser and shared cover decoder. The Turtle-chain target reproduces frozen
 native bytes for actual100,000- and1,000,000-node packed, Turtle and TriG routes,
 with exact layout, graph and statement-metadata preservation. The regular-role
-target executes the same seventeen production reasoning and refusal cases on the
+target executes the same twenty-three native reasoning and inspection controls on the
 portable build, including recursive and inverse chains, blocking, proof replay,
 query services, fixed roles, resource exhaustion and cancellation.
 Runner preflight additionally exercises panic handling, refused flags
@@ -94,7 +95,8 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-core` / `model_traits` | scalar | `owned_term_walks_stay_inside_the_wasm_shadow_stack_floor` | Measures the derive's per-level shadow-stack growth and the owned-term walks' depth-independent peak, runs the 100,000-level walks and drops inside the actual 128 KiB scoped span, restores the caller context, and refuses an over-floor neighbor before its closure runs. |
 | `purrdf-rdf` / `turtle_chains` | scalar | `blank_chains_at_one_hundred_thousand`, `blank_chains_at_one_million` | Runs actual packed rendering, native Turtle/default-graph and TriG/named-graph output at both depths against frozen per-route native byte receipts; reparses native output with graph and statement metadata fidelity. |
 | `purrdf-rdf` / `turtle_chains` | scalar | `exact_guard_neighbors_and_permuted_interning`, `cycles_shared_and_quoted_blanks_preserve_statements`, `tied_guarded_branches_keep_order_under_permutation`, `a_long_collection_keeps_every_member`, `continuation_objects_saturate_at_the_same_indent_guard` | Checks exact layout around the permanent forty-level guard, input permutation, cyclic/shared/quoted blank identity, continuation indentation and the indexed strict 100,000-member collection route. |
-| `purrdf-entail` / `regular_role_chains` | scalar | All seventeen exact production cases registered in `make wasm-test` | Replays the native recursive/inverse role, blocking, proof, query-service, fixed-role, malformed-input, source-witness retention, exhaustion and cancellation expectations through the portable reasoning implementation. |
+| `purrdf-entail` / `regular_role_chains` | scalar | All twenty-three exact cases registered in `make wasm-test` | Replays native recursive/inverse roles, blocking, proofs, query services, fixed roles, malformed inputs, source-witness retention, exhaustion and cancellation. Borrowed inspection retains original role/list fields, import conflicts, inconsistent-run reports, RDF diagnostics and caller-read errors; strict collection refusal preserves original terms and ordered members. |
+| `purrdf` / `reasoning_inspection` | scalar | Both exact facade cases registered in `make wasm-test` | Original query, entailment and materialization causes remain inspectable through the umbrella after source destruction, including generic caller-read failures and their standard source chains. |
 | `purrdf-entail` / `recorded_stop` | scalar | All seven exact cases registered in `make wasm-test` | Checks one caller signal through canonical identity, every observed ontology-preparation poll and decision search; preserves completed proof identity/replay and selected preparation ceilings, and reports cancellation without a semantic verdict. |
 | `purrdf-entail` / `current_clash_support` | scalar | All fourteen exact cases registered in `make wasm-test` | Checks source-bound ordinary and causal replay, named/scoped-blank identities and disconnected controls, public service/certificate parity, generated existential nodes, exhaustive nominal merge branches and fresh refutation assumptions through the shared support arena. Selected transitive paths retain both signed edges and original subproperty, inverse and transitivity licenses. Key-equality support retains typed, language-tagged and directional literal metadata after wire decoding. Reserved births, including recursive reserved origins, preserve their typed original descriptors and actual generative predecessor licenses after wire decoding. Independent borrowed consumer contexts replay repeatedly with owning-context parity and leave the prepared reasoner reusable. Shared and packed dataset views preserve source identity and independent causal verification. |
 | `purrdf-sparql-eval` / `query_completion` | scalar | `governed_explain_matches_bound_query_receipts_and_original_ownership`, `governed_explain_preserves_remote_refusal_and_zero_request_limit` | Compares the actual substituted measuring ledger and governor receipts with direct and prepared execution for all four query forms, typed literals and IRIs, base resolution, zero and nonzero ceilings and no-ceiling policy. Retained explanations survive actual source destruction under finite physical admission; missing remote providers and zero remote allowance preserve native failure/stop evidence. |
