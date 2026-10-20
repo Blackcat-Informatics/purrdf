@@ -390,7 +390,9 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
-        /// Maximum bytes of interned term spellings while materializing the closure.
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -442,9 +444,9 @@ pub(crate) enum Command {
         /// (the query then runs over the closure, not the raw view). Combines with
         /// every governor flag: the ceilings bound the QUERY over the closure, and
         /// `--deadline` additionally bounds computing the closure itself. The query
-        /// governors never become limits on the reasoning run; `--max-stored-facts` and
-        /// `--max-join-steps` are its limits, and like every evaluation limit they can
-        /// only refuse, never truncate a closure. A deadline that expires while the
+        /// governors never become limits on the reasoning run; `--max-stored-facts`,
+        /// `--max-join-steps` and `--max-term-arena-bytes` are its limits. Like every
+        /// evaluation limit they can only refuse, never truncate a closure. A deadline that expires while the
         /// closure is still being computed prints the governor report, writes no rows,
         /// and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
@@ -484,7 +486,9 @@ pub(crate) enum Command {
         /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
-        /// Maximum bytes of interned term spellings while materializing the closure.
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, the limit is 16777216 bytes.
         #[arg(
             long = "max-term-arena-bytes",
             value_name = "BYTES",
@@ -737,7 +741,9 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
-        /// Maximum bytes of interned term spellings in each evaluation store.
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
@@ -831,7 +837,9 @@ pub(crate) enum Command {
         /// is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
-        /// Maximum bytes of interned term spellings in each evaluation store.
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, the limit is 16777216 bytes.
         #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
         max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
