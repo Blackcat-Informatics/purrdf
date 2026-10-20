@@ -406,7 +406,7 @@ ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
     () => shaclApplyRules(data, copy),
     (error) =>
       error.message ===
-      "SHACL rules did not complete: the rules exceeded the stored-fact limit: 140000 facts " +
+      "SHACL rules did not complete: the rules exceeded the stored-fact limit: 131073 facts " +
         "observed, 131072 permitted (the default for this target); raise it with " +
         "shaclApplyRules's maxStoredFacts",
   );

@@ -13,11 +13,12 @@
 use crate::store::{Arity, StoreShape};
 
 use super::{
-    ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence, JoinGroup,
-    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
-    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_slot_solutions,
-    extend_solutions_leapfrog, source_heights, source_preference,
+    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, GroupProbe,
+    HeadEvidence, JoinGroup, JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan,
+    RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan,
+    SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, delta_can_match,
+    emit_solution, extend_rebound_solutions, extend_slot_solutions, extend_solutions_leapfrog,
+    source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -204,12 +205,52 @@ fn factor_matches<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_count()) => {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    let seed_in_cycle = entry.plan.has_cyclic_subplan() && seed.is_some_and(|anchor| entry.plan.join_groups().iter().any(|group| {
+        matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+    }));
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            entry.plan.operator_at(anchor),
+            snapshot.rel,
+            entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
     let binary = |position, partial: &[SlotSolution<D::Id, N>], governor: &mut StepGovernor| {
-        extend_slot_solutions(
+        let extend = if seed.is_some() {
+            extend_rebound_solutions
+        } else {
+            extend_slot_solutions
+        };
+        extend(
             entry.plan.operator_at(position),
             snapshot.rel,
             entry.delta,
+            snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
             scan.at(position),
             partial,
             governor,
@@ -217,6 +258,9 @@ where
     };
     if !entry.plan.has_cyclic_subplan() {
         for &position in &factor.positions {
+            if seed == Some(position) {
+                continue;
+            }
             partial = binary(position, &partial, governor).map_err(EvalError::Source)?;
             if partial.is_empty() || governor.spent() {
                 break;
@@ -224,6 +268,9 @@ where
         }
     } else {
         for group in entry.plan.join_groups() {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
             let position = match group {
                 JoinGroup::Binary(atom) => atom.positive_position(),
                 JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].positive_position(),
@@ -241,6 +288,9 @@ where
                         scan,
                         rel: snapshot.rel,
                         delta: entry.delta,
+                        indexes: snapshot
+                            .delta_indexes
+                            .expect("the factor's delta indexes were prepared"),
                     },
                     &partial,
                     governor,
@@ -256,6 +306,9 @@ where
     for mut solution in partial {
         if governor.spent() {
             break;
+        }
+        if seed_in_cycle {
+            solution.sources.remove(0);
         }
         solution.sources.sort_by_key(|source| source.body_index);
         let mut blocked = false;
@@ -330,6 +383,9 @@ where
     let join = JoinSnapshot {
         rel: snapshot.rel,
         delta: entry.delta,
+        indexes: snapshot
+            .delta_indexes
+            .expect("the factor's delta indexes were prepared"),
     };
     let mut matches = Vec::new();
     for &position in &factor.positions {
@@ -601,6 +657,8 @@ where
     tables: Vec<&'a FrontierTable<'a, D::Id, N>>,
     /// The authored head currently emitted.
     head: &'r [ArgShape; N],
+    /// The position in the authored head conjunction.
+    head_ordinal: usize,
     /// Rule identity and variable-frame width.
     entry: RuleEntry<'r, N>,
     /// Store and source proof heights.
@@ -695,6 +753,7 @@ where
             self.snapshot,
             evidence,
             HeadEvidence {
+                head: self.head_ordinal,
                 witness,
                 uses_absence: !self.entry.runtime.negated.is_empty()
                     || !self.entry.runtime.negations.is_empty(),
@@ -725,6 +784,15 @@ pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -735,6 +803,9 @@ where
         let join = JoinSnapshot {
             rel: snapshot.rel,
             delta: entry.delta,
+            indexes: snapshot
+                .delta_indexes
+                .expect("the factor's delta indexes were prepared"),
         };
         let mut can_match = false;
         for operator in entry.plan.operators() {
@@ -776,7 +847,7 @@ where
                 solution.retain_negative(id, owner)?;
             }
         }
-        for head in &entry.runtime.head {
+        for (head_ordinal, head) in entry.runtime.head.iter().enumerate() {
             let projections: Vec<_> = entry
                 .runtime
                 .factors
@@ -816,6 +887,7 @@ where
                 Product {
                     tables,
                     head,
+                    head_ordinal,
                     entry,
                     snapshot,
                 }
@@ -904,8 +976,8 @@ mod tests {
     use crate::guard::{Guard, Negation, NoGuards};
     use crate::plan::RulePlan;
     use crate::seminaive::{
-        Delta, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry, RuleRuntime,
-        SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
+        Delta, DeltaIndexes, EvalOptions, JoinStrategy, RoundExecution, RoundSnapshot, RuleEntry,
+        RuleRuntime, SlotSolution, SourceRow, StepGovernor, compile, evaluate_rule, evaluate_with,
         source_heights, source_preference,
     };
     use crate::store::RelationStore;
@@ -992,15 +1064,18 @@ mod tests {
             JoinSnapshot {
                 rel: &rel,
                 delta: Delta::all(2),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
+            None,
         )
         .unwrap();
         let snapshot = RoundSnapshot {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         let delta = Delta { lo: 1, hi: 2 };
         let projection = project(&matches, &[], snapshot, delta, true).unwrap();
@@ -1073,6 +1148,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             let binary = evaluate_rule(
@@ -1081,6 +1157,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -1132,6 +1209,7 @@ mod tests {
             rel: &rel,
             depth: &[0, 0],
             assumed: &[],
+            delta_indexes: None,
         };
         assert!(matches!(
             project(&missing, &[], snapshot, delta, true),
@@ -1163,7 +1241,14 @@ mod tests {
                 delta: Delta { lo: 2, hi: 2 },
             };
             assert!(matches!(
-                evaluate_rule(entry, snapshot, strategy, StepGovernor::new(0), &NoGuards),
+                evaluate_rule(
+                    entry,
+                    snapshot,
+                    strategy,
+                    StepGovernor::new(0),
+                    &NoGuards,
+                    None
+                ),
                 Err(crate::seminaive::EvalError::Source(SourceLost(99)))
             ));
         }
@@ -1173,9 +1258,22 @@ mod tests {
             DlClause::datalog(atom("?x", B, "?y"), vec![atom("?x", Q, "?y")]),
         ])
         .unwrap();
-        let result = crate::seminaive::evaluate(&exe, rel).unwrap();
+        let result = crate::seminaive::evaluate_guarded(
+            &exe,
+            rel,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.facts().row_count(), 10);
-        assert_eq!(result.derivations().len(), 8);
+        assert_eq!(
+            result
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            8
+        );
         assert_eq!(result.budget().input_terms(), (1u64 << 40) + 7);
         assert_eq!(result.budget().generated_terms(), 0);
         for (_, ids) in result.facts().rows_from(2) {
@@ -1191,7 +1289,14 @@ mod tests {
             .lost
             .store(true, Ordering::Relaxed);
         assert!(matches!(
-            crate::seminaive::evaluate(&compile(Vec::new()).unwrap(), result.into_facts()),
+            crate::seminaive::evaluate_guarded(
+                &compile(Vec::new()).unwrap(),
+                result.into_facts(),
+                &NoGuards,
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None
+            ),
             Err(crate::seminaive::EvalError::Source(SourceLost(99)))
         ));
     }
@@ -1224,7 +1329,8 @@ mod tests {
                         seeded(&input),
                         None,
                         &NoGuards,
-                        EvalOptions::default(),
+                        EvalOptions::default()
+                            .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                         RoundExecution::Sequential,
                         JoinStrategy::Planned,
                     )
@@ -1234,7 +1340,8 @@ mod tests {
                         seeded(&input),
                         None,
                         &NoGuards,
-                        EvalOptions::default(),
+                        EvalOptions::default()
+                            .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                         RoundExecution::Sequential,
                         JoinStrategy::ForcedBinary,
                     )
@@ -1245,8 +1352,12 @@ mod tests {
                         "mask {mask}, projection {projection}, seed {seed}"
                     );
                     assert_eq!(
-                        planned.derivations(),
-                        binary.derivations(),
+                        planned
+                            .derivations()
+                            .expect("derivation recording was requested"),
+                        binary
+                            .derivations()
+                            .expect("derivation recording was requested"),
                         "mask {mask}, projection {projection}, seed {seed}"
                     );
                     let a: Vec<_> = input
@@ -1266,8 +1377,17 @@ mod tests {
                             _ => a.len() * b.len(),
                         }
                     };
-                    assert_eq!(planned.derivations().len(), expected);
-                    for derivation in planned.derivations() {
+                    assert_eq!(
+                        planned
+                            .derivations()
+                            .expect("derivation recording was requested")
+                            .len(),
+                        expected
+                    );
+                    for derivation in planned
+                        .derivations()
+                        .expect("derivation recording was requested")
+                    {
                         assert_eq!(derivation.proof_height, 1);
                         assert_eq!(derivation.sources.len(), 2);
                         assert_eq!(derivation.sources[0].predicate, format!("<{B}>"));
@@ -1313,12 +1433,19 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
             .expect("linear input stays within default limits");
-            assert_eq!(evaluation.derivations().len(), n);
+            assert_eq!(
+                evaluation
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                n
+            );
             assert_eq!(evaluation.budget().join_steps, 3 * n as u64);
         }
     }
@@ -1359,7 +1486,8 @@ mod tests {
                     seeded(&input),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     strategy,
                 )
@@ -1371,8 +1499,21 @@ mod tests {
                 planned.facts().facts_sorted(),
                 binary.facts().facts_sorted()
             );
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations().len(), (n - 1) * (n - 2) / 2);
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                (n - 1) * (n - 2) / 2
+            );
             assert!(
                 planned.budget().join_steps <= 4 * (n * n) as u64,
                 "recursive factor work must stay quadratic: n={n}, report={:?}",
@@ -1413,6 +1554,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 let entry = RuleEntry {
                     index: 0,
@@ -1443,6 +1585,7 @@ mod tests {
                     JoinStrategy::ForcedBinary,
                     StepGovernor::new(u64::MAX),
                     &NoGuards,
+                    None,
                 )
                 .expect("exhaustive partial join matches");
                 assert_eq!(planned.entries.len(), binary.entries.len());
@@ -1480,6 +1623,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let entry = RuleEntry {
                 index: 0,
@@ -1555,6 +1699,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             let planned = evaluate_rule(
                 entry,
@@ -1562,6 +1707,7 @@ mod tests {
                 JoinStrategy::Planned,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("factor round completes");
             let binary = evaluate_rule(
@@ -1570,6 +1716,7 @@ mod tests {
                 JoinStrategy::ForcedBinary,
                 StepGovernor::new(u64::MAX),
                 &NoGuards,
+                None,
             )
             .expect("exhaustive round completes");
             assert_eq!(planned.entries, binary.entries, "delta lower bound {lo}");
@@ -1624,6 +1771,7 @@ mod tests {
                 rel: &rel,
                 depth: &depth,
                 assumed: &[],
+                delta_indexes: None,
             };
             for lo in 0..=input.len() {
                 for hi in lo..=input.len() {
@@ -1641,6 +1789,7 @@ mod tests {
                             strategy,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("hybrid factor round matches")
                     };
@@ -1697,6 +1846,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -1771,11 +1921,16 @@ mod tests {
                 JoinStrategy::Planned,
             )
         };
-        let reference = run(EvalOptions::default(), RoundExecution::Sequential)
-            .expect("recursive reference completes");
+        let reference = run(
+            EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            RoundExecution::Sequential,
+        )
+        .expect("recursive reference completes");
         let expected = reference.budget().join_steps();
         let exact_reference = run(
-            EvalOptions::default().with_max_join_steps(expected),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_join_steps(expected),
             RoundExecution::Sequential,
         )
         .expect("sequential exact credits complete");
@@ -1787,7 +1942,9 @@ mod tests {
                 .expect("test worker pool");
             pool.install(|| {
                 let exact = run(
-                    EvalOptions::default().with_max_join_steps(expected),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                        .with_max_join_steps(expected),
                     RoundExecution::Parallel,
                 )
                 .expect("exact partial-round credits complete");
@@ -1795,13 +1952,22 @@ mod tests {
                     exact.facts().facts_sorted(),
                     reference.facts().facts_sorted()
                 );
-                assert_eq!(exact.derivations(), reference.derivations());
+                assert_eq!(
+                    exact
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    reference
+                        .derivations()
+                        .expect("derivation recording was requested")
+                );
                 assert_eq!(exact.budget(), exact_reference.budget());
                 let reports: Vec<_> = [0, expected - 1]
                     .into_iter()
                     .map(|ceiling| {
                         let error = run(
-                            EvalOptions::default().with_max_join_steps(ceiling),
+                            EvalOptions::default()
+                                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                                .with_max_join_steps(ceiling),
                             RoundExecution::Parallel,
                         )
                         .expect_err("insufficient partial-round credits refuse");
@@ -1899,6 +2065,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=shuffled.len() {
                     for hi in lo..=shuffled.len() {
@@ -1916,6 +2083,7 @@ mod tests {
                                 strategy,
                                 StepGovernor::new(u64::MAX),
                                 &NoGuards,
+                                None,
                             )
                             .expect("negative factor round completes")
                         };
@@ -1931,7 +2099,8 @@ mod tests {
                     seeded(&shuffled),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     JoinStrategy::Planned,
                 )
@@ -1941,7 +2110,8 @@ mod tests {
                     seeded(&shuffled),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     RoundExecution::Sequential,
                     JoinStrategy::ForcedBinary,
                 )
@@ -1950,7 +2120,14 @@ mod tests {
                     planned.facts().facts_sorted(),
                     binary.facts().facts_sorted()
                 );
-                assert_eq!(planned.derivations(), binary.derivations());
+                assert_eq!(
+                    planned
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    binary
+                        .derivations()
+                        .expect("derivation recording was requested")
+                );
             }
         }
     }
@@ -2000,6 +2177,7 @@ mod tests {
             rel: &rel,
             depth: &depth,
             assumed: &[],
+            delta_indexes: None,
         };
         let entry = RuleEntry {
             index: 0,
@@ -2014,6 +2192,7 @@ mod tests {
             JoinStrategy::Planned,
             StepGovernor::new(3),
             &NoGuards,
+            None,
         )
         .expect("a false body requires no positive product");
         assert!(buffer.entries.is_empty());
@@ -2093,7 +2272,8 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -2103,14 +2283,31 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::ForcedBinary,
             )
             .expect("the exhaustive model completes");
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations().len(), 16);
-            for proof in planned.derivations() {
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                16
+            );
+            for proof in planned
+                .derivations()
+                .expect("derivation recording was requested")
+            {
                 assert_eq!(proof.fact.subject, proof.sources[0].subject);
                 assert_eq!(proof.fact.predicate, proof.sources[1].predicate);
                 assert_eq!(proof.fact.object, proof.sources[2].object);
@@ -2191,7 +2388,8 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -2201,13 +2399,28 @@ mod tests {
                 seeded(&input),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::ForcedBinary,
             )
             .expect("exhaustive evaluation completes");
-            assert_eq!(planned.derivations(), binary.derivations());
-            assert_eq!(planned.derivations()[0].sources[0].subject, surface("a"));
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
+            assert_eq!(
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested")[0]
+                    .sources[0]
+                    .subject,
+                surface("a")
+            );
         }
     }
 
@@ -2286,6 +2499,7 @@ mod tests {
                     rel: &rel,
                     depth: &depth,
                     assumed: &[],
+                    delta_indexes: None,
                 };
                 for lo in 0..=input.len() {
                     for hi in lo..=input.len() {
@@ -2303,6 +2517,7 @@ mod tests {
                             JoinStrategy::Planned,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("factored round completes");
                         let binary = evaluate_rule(
@@ -2311,6 +2526,7 @@ mod tests {
                             JoinStrategy::ForcedBinary,
                             StepGovernor::new(u64::MAX),
                             &NoGuards,
+                            None,
                         )
                         .expect("exhaustive round completes");
                         assert_eq!(

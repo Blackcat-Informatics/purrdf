@@ -1761,8 +1761,8 @@ fn lower_atom(
 /// # Errors
 ///
 /// Returns the first [`NonDatalogClause`] refusal for a clause whose head is not
-/// [`crate::clause::HeadForm::Atomic`] — this lowering is Datalog-only, exactly
-/// like [`crate::seminaive::compile`].
+/// [`crate::clause::HeadForm::Atomic`]. This backward-resolution lowering currently
+/// requires one head atom; the semi-naive evaluator also admits conjunctions.
 fn lower_datalog_clauses(
     dag: &mut TermDag,
     triple_op: NodeId,

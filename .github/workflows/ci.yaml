@@ -760,6 +760,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      compiler-version: ${{ steps.compiler.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -776,7 +778,15 @@ jobs:
           targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
       - name: Identify the actual compiler
         id: compiler
-        run: echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p target
+          rustc -vV > target/asm-compiler.txt
+          echo "identity=$(sha256sum target/asm-compiler.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          {
+            echo 'version<<RUSTC_VERSION'
+            cat target/asm-compiler.txt
+            echo 'RUSTC_VERSION'
+          } >> "$GITHUB_OUTPUT"
       - name: Restore assembly build contexts and evidence
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -886,6 +896,7 @@ jobs:
             > target/asm-projection/qualification.log 2>&1
       - name: Require complete checked evidence and the same compiler
         run: |
+          rustc -vV > target/asm-projection/reports/compiler-receipt.txt
           make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-projection/reports" \
             > target/asm-projection/aggregate.log 2>&1
           rustc -vV > target/asm-projection/compiler-after.txt
@@ -934,7 +945,12 @@ jobs:
           merge-multiple: true
           path: target/asm-reports
       - name: Check complete matrix and document parity
-        run: make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
+        env:
+          PRODUCER_COMPILER: ${{ needs.simd-asm-config.outputs.compiler-version }}
+        run: |
+          test -n "$PRODUCER_COMPILER"
+          printf '%s\n' "$PRODUCER_COMPILER" > target/asm-reports/compiler-receipt.txt
+          make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
 
   # Native aarch64 distance arithmetic is checked against the same literal
   # goldens as native x86_64. The exact law pins one summation order; this job

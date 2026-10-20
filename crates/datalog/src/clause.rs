@@ -18,7 +18,7 @@
 //! |---|---|---|
 //! | [`Atomic`](HeadForm::Atomic) | `m = 1`, `C₁` is one atom, `ȳ = ∅` | this crate's semi-naive evaluator ([`crate::seminaive`]) |
 //! | [`Existential`](HeadForm::Existential) | `ȳ ≠ ∅` | [`crate::chase`], a restricted chase with frontier-addressed Skolem witnesses |
-//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::chase`], which asserts a conjunction atomically |
+//! | [`Conjunctive`](HeadForm::Conjunctive) | `m = 1`, `C₁` is several atoms, `ȳ = ∅` | [`crate::seminaive`], sharing one body and retaining authored head ordinals; also [`crate::chase`] |
 //! | [`Inconsistency`](HeadForm::Inconsistency) | `m = 0` (the head is `false`) | a hard error carrying a witness |
 //! | [`Disjunctive`](HeadForm::Disjunctive) | `m > 1`, `ȳ = ∅` | **refused by name here**; case-split by `purrdf-entail`'s `SHOIQ(D)` hypertableau |
 //!
@@ -110,14 +110,14 @@
 //!
 //! # Why all five are representable now
 //!
-//! Only the atomic form has evaluation semantics in this crate. The other four are
-//! nonetheless *first-class values*: a Datalog-only IR that had to grow an existential
+//! Atomic and unquantified conjunctive heads have semi-naive evaluation semantics.
+//! The other forms are also *first-class values*: an IR that had to grow an existential
 //! quantifier or a head disjunction later would force every consumer — planner, evaluator,
 //! plan cache, content digest — to be rewritten around the new shape. Representing the
 //! whole target now costs one enum and three validation rules; retrofitting it costs a
 //! redesign.
 //!
-//! The evaluator does NOT silently ignore the other four and does not accept them as if
+//! The evaluator does NOT silently ignore the other forms and does not accept them as if
 //! they were atomic. [`Parsed::new`](crate::plan::Parsed::new) — the sole entrance to the
 //! `Parsed → Stratified → Planned → Executable` pipeline, and therefore the sole route to
 //! an executable program — refuses them with [`NonDatalogClause`], and
@@ -560,14 +560,10 @@ pub enum HeadForm {
     /// `→ p(x) ∧ q(x)`. There is no disjunction here and no witness to mint, so naming it
     /// [`Disjunctive`](Self::Disjunctive) would be a false diagnostic; it is its own form.
     ///
-    /// It is not a Datalog rule either: a Datalog clause is a DEFINITE clause, with
-    /// exactly one head atom. The conjunction is equivalent to one Datalog rule per
-    /// conjunct over the same body, but this crate does not perform that expansion,
-    /// because it would renumber the program — a
-    /// [`Derivation`](crate::seminaive::Derivation) names its producing clause by authored
-    /// index, so splitting one clause into several would silently move an observable. A
-    /// caller who wants the split performs it before construction; the evaluator refuses
-    /// the unsplit clause by this name.
+    /// Equivalent to one Datalog rule per conjunct over the same body. The semi-naive
+    /// evaluator shares that body and retains the authored clause index and head
+    /// ordinal in [`Derivation`](crate::seminaive::Derivation), without expanding or
+    /// renumbering the program.
     Conjunctive,
     /// `m = 0` — the head is `false`. The clause asserts that its body is unsatisfiable,
     /// so a body match is an inconsistency witness rather than a derivation.
@@ -588,7 +584,7 @@ impl purrdf_hash::error::StructuredError for HeadForm {
 impl HeadForm {
     /// Whether this is the Datalog form, and therefore evaluable by [`crate::seminaive`].
     pub fn is_datalog(self) -> bool {
-        matches!(self, Self::Atomic)
+        matches!(self, Self::Atomic | Self::Conjunctive)
     }
 
     /// The form's name, for a diagnostic.
@@ -623,8 +619,8 @@ impl fmt::Display for HeadForm {
 /// A clause whose head form the Datalog evaluator has no semantics for.
 ///
 /// This is a REFUSAL, not a deferral: a semi-naive least-fixpoint evaluator computes the
-/// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier — and
-/// an existential, a disjunction, a conjunction and `false` each fall outside that class
+/// least model of definite clauses, including shared head conjunctions. An existential,
+/// a disjunction and `false` fall outside that class
 /// by definition rather than by omission. Accepting one — or dropping it — would return
 /// an answer that is not the model of the program it was given.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -706,10 +702,23 @@ impl fmt::Display for NonDatalogClause {
 
 impl std::error::Error for NonDatalogClause {}
 
+/// One authored step of a positive rule body.
+///
+/// Guards create evaluation barriers: their inputs come from preceding atoms and
+/// guards, and their outputs may constrain subsequent atoms. Negated conjunctions
+/// are attached separately through [`DlClause::with_negations`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyLiteral<const N: usize = 4> {
+    /// A positive relation probe.
+    Atom(ClauseAtom<N>),
+    /// Native filtering or caller-defined computation.
+    Guard(Guard),
+}
+
 /// One DL-clause: `U₁ ∧ … ∧ Uₙ → ∃ȳ. (C₁ ∨ … ∨ Cₘ)`, each `Cᵢ` a conjunction of atoms.
 ///
 /// See the [module docs](self) for the five head forms and for why all five are
-/// representable while only the atomic one is evaluable here.
+/// representable while atomic and unquantified conjunctive heads are evaluable here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlClause<const N: usize = 4> {
     /// An explicit operational no-output head; never inferred from an empty logical head.
@@ -723,9 +732,12 @@ pub struct DlClause<const N: usize = 4> {
     /// The head disjunction `C₁ ∨ … ∨ Cₘ`, in authored order. Empty means the head is
     /// `false`; each disjunct is itself a non-empty conjunction.
     head: Vec<HeadDisjunct<N>>,
-    /// The body's guard literals ([`crate::guard`]), in authored order: evaluated after
-    /// the positive atoms have joined, before any negation is decided.
+    /// The body's guard literals ([`crate::guard`]), in authored order: evaluated at
+    /// explicit barriers, or after all positive atoms when no barriers are present.
     guards: Vec<Guard>,
+    /// Number of authored atoms before each guard in an explicitly ordered body.
+    /// Absent when every guard follows the complete positive join.
+    guard_after: Option<Vec<usize>>,
     /// The body's negated conjunctions ([`crate::guard::Negation`]), in authored order:
     /// decided after the guards, alongside the negated atoms.
     negations: Vec<Negation<N>>,
@@ -809,11 +821,14 @@ impl<const N: usize> DlClause<N> {
             existentials,
             head,
             guards: Vec::new(),
+            guard_after: None,
             negations: Vec::new(),
         }
     }
 
     /// This clause with `guards` as its guard literals, in authored order.
+    /// All supplied guards follow the complete positive join, replacing any ordered
+    /// barriers. Use [`Self::with_ordered_body`] to place guards between atoms.
     ///
     /// # Panics
     ///
@@ -823,8 +838,59 @@ impl<const N: usize> DlClause<N> {
     #[must_use]
     pub fn with_guards(mut self, guards: Vec<Guard>) -> Self {
         self.guards = guards;
+        self.guard_after = None;
         self.assert_scoped();
         self
+    }
+
+    /// Replace the body's atoms and guards in authored evaluation order.
+    ///
+    /// A guard output is fresh when the guard runs and may be read by later atoms.
+    /// Atoms between two guards may be reordered by the join planner; no atom may
+    /// cross a guard barrier. Supplied atoms must be positive; attach negated
+    /// conjunctions with [`Self::with_negations`]. Existing attached conjunctions
+    /// run after this body.
+    ///
+    /// # Panics
+    ///
+    /// Panics for a negated atom, an unbound guard input, a repeated output binding,
+    /// or an existential head variable also bound by this body.
+    #[must_use]
+    pub fn with_ordered_body(mut self, literals: Vec<BodyLiteral<N>>) -> Self {
+        self.body.clear();
+        self.guards.clear();
+        let mut positions = Vec::new();
+        for literal in literals {
+            match literal {
+                BodyLiteral::Atom(atom) => {
+                    assert!(!atom.negated, "an ordered body atom must be positive");
+                    self.body.push(atom);
+                }
+                BodyLiteral::Guard(guard) => {
+                    positions.push(self.body.len());
+                    self.guards.push(guard);
+                }
+            }
+        }
+        self.guard_after = positions
+            .iter()
+            .any(|&position| position != self.body.len())
+            .then_some(positions);
+        self.assert_scoped();
+        let bound = self.bound_variables();
+        for name in &self.existentials {
+            assert!(
+                !bound.contains(name),
+                "existential variable {name} is also bound by the ordered body"
+            );
+        }
+        self
+    }
+
+    /// Authored atom-prefix length at each guard barrier, when guards precede atoms.
+    /// An absent value means every guard follows the complete positive join.
+    pub fn guard_positions(&self) -> Option<&[usize]> {
+        self.guard_after.as_deref()
     }
 
     /// This clause with `negations` as its negated conjunctions, in authored order.
@@ -833,10 +899,10 @@ impl<const N: usize> DlClause<N> {
     ///
     /// Panics if the guards and negations are not SCOPED:
     ///
-    /// * a body guard's input must be bound by a positive body atom or by an EARLIER
-    ///   body guard's output — a guard runs after the positive join, in authored
-    ///   order, so nothing later can have bound it;
-    /// * a body guard's output must be fresh: bound by no positive body atom and by no
+    /// * a body guard's input must be bound by a preceding positive body atom or an
+    ///   earlier body guard's output. With [`Self::with_guards`], every positive atom
+    ///   precedes every guard; [`Self::with_ordered_body`] states explicit barriers;
+    /// * a body guard's output must be fresh: bound by no preceding positive atom or
     ///   earlier guard, or the guard would silently overwrite a join binding;
     /// * inside a negated conjunction, a guard's input must be bound by the enclosing
     ///   rule (positive atoms and body guards), by an atom of the group, or by an
@@ -852,10 +918,16 @@ impl<const N: usize> DlClause<N> {
     /// Check the scoping rule documented on [`Self::with_negations`].
     fn assert_scoped(&self) {
         let mut bound = BTreeSet::new();
-        for atom in self.body.iter().filter(|atom| !atom.negated) {
-            atom.collect_variables(&mut bound);
-        }
-        for guard in &self.guards {
+        let mut consumed = 0;
+        for (position, guard) in self.guards.iter().enumerate() {
+            let end = self
+                .guard_after
+                .as_ref()
+                .map_or(self.body.len(), |positions| positions[position]);
+            for atom in self.body[consumed..end].iter().filter(|atom| !atom.negated) {
+                atom.collect_variables(&mut bound);
+            }
+            consumed = end;
             for input in guard.inputs() {
                 assert!(
                     bound.contains(input),
@@ -870,6 +942,9 @@ impl<const N: usize> DlClause<N> {
                     guard.name()
                 );
             }
+        }
+        for atom in self.body[consumed..].iter().filter(|atom| !atom.negated) {
+            atom.collect_variables(&mut bound);
         }
         for negation in &self.negations {
             let mut scope = bound.clone();
@@ -997,11 +1072,15 @@ impl<const N: usize> DlClause<N> {
         HeadForm::Atomic
     }
 
-    /// The single head atom of a DATALOG clause, or `None` for any other head form.
+    /// The authored head conjunction of an ordinary Datalog clause.
+    /// Existentials, disjunction, inconsistency and no-output clauses return `None`.
+    pub fn datalog_heads(&self) -> Option<&[ClauseAtom<N>]> {
+        self.head_form().is_datalog().then(|| self.head[0].atoms())
+    }
+
+    /// The single head atom of an atomic Datalog clause, or `None` for any other form.
     ///
-    /// This is the one accessor the semi-naive pipeline reads, so a non-Datalog clause
-    /// cannot be mistaken for an atomic one by a caller that simply forgot to check: there
-    /// is no "the head" to take.
+    /// A conjunction has no single head; use [`Self::datalog_heads`] to read it.
     pub fn datalog_head(&self) -> Option<&ClauseAtom<N>> {
         match self.head_form() {
             HeadForm::Atomic => self.head.first().and_then(HeadDisjunct::single_atom),
@@ -1038,6 +1117,37 @@ mod tests {
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn ordered_guard_outputs_are_fresh_before_later_atoms_read_them() {
+        let rule = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::assign("key", vec!["?Y".into()], "?K")),
+            BodyLiteral::Atom(atom("?K", Q, "?V")),
+        ]);
+        assert_eq!(rule.guard_positions(), Some([1].as_slice()));
+        assert_eq!(rule.body().len(), 2);
+        assert!(rule.bound_variables().contains("?K"));
+    }
+
+    #[test]
+    #[should_panic(expected = "reads ?K")]
+    fn an_ordered_guard_cannot_read_a_later_atom_binding() {
+        let _ = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::filter("test", vec!["?K".into()])),
+            BodyLiteral::Atom(atom("?K", Q, "?V")),
+        ]);
+    }
+
+    #[test]
+    #[should_panic(expected = "already binds")]
+    fn an_ordered_guard_cannot_overwrite_a_preceding_atom_binding() {
+        let _ = DlClause::datalog(atom("?X", R, "?Y"), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(atom("?X", P, "?Y")),
+            BodyLiteral::Guard(Guard::assign("key", vec!["?X".into()], "?Y")),
+        ]);
+    }
     /// The `rdf:type`-shaped predicate a DL concept name lowers through. PurRDF mints no
     /// vocabulary, so the fixture names its own.
     const TYPE: &str = "https://example.org/type";
@@ -1133,8 +1243,8 @@ mod tests {
     }
 
     /// Form 4 — a CONJUNCTIVE head (`m = 1`, several conjuncts, no existential) is its own
-    /// form, because it is neither a disjunction nor a Datalog rule: calling it either
-    /// would be a false diagnostic.
+    /// form, distinct from an atomic head or a disjunction, while remaining evaluable
+    /// by the semi-naive Datalog engine.
     #[test]
     fn a_conjunctive_head_classifies_as_conjunctive() {
         let clause = DlClause::new(
@@ -1146,7 +1256,8 @@ mod tests {
             vec![atom("?X", P, "?Y")],
         );
         assert_eq!(clause.head_form(), HeadForm::Conjunctive);
-        assert!(!clause.head_form().is_datalog());
+        assert!(clause.head_form().is_datalog());
+        assert_eq!(clause.datalog_heads().unwrap().len(), 2);
         assert_eq!(clause.datalog_head(), None, "there is no single head atom");
         assert_eq!(clause.head_disjuncts().len(), 1, "no disjunction at all");
         assert_eq!(clause.head_disjuncts()[0].atoms().len(), 2);

@@ -68,12 +68,13 @@
 //! strictly in program order; `par_sort`/`par_bridge` are never used, because they are not
 //! order-stable.
 //!
-//! # Limits are parameters; the arena ceiling is a constant
+//! # Limits and exported evidence are caller parameters
 //!
 //! The stored-fact limit and the join-step limit are the caller's, on [`EvalOptions`]
 //! ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]), with a
 //! default sized for the target ([`DEFAULT_MAX_STORED_FACTS`], [`DEFAULT_MAX_JOIN_STEPS`]).
-//! [`MAX_TERM_ARENA_BYTES`] stays a fixed `const`. Exceeding any of them returns
+//! The arena limit defaults to [`DEFAULT_MAX_TERM_ARENA_BYTES`] and can be raised
+//! or removed through [`EvalOptions`]. Exceeding any limit returns
 //! [`EvalError::BudgetExhausted`] carrying an accurate [`BudgetReport`] — never a panic,
 //! never a truncated answer presented as complete. [`EvalOptions`] also carries the two
 //! limits on term generation: term-generating rounds and generated terms.
@@ -94,19 +95,23 @@ use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
-use crate::dictionary::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity};
+use crate::dictionary::{
+    DictionaryError, DictionaryTerm, DictionaryValue, TermDictionary, TermIdentity,
+};
 use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuards};
 use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
+use purrdf_lex::allocation::StorageError;
 
+pub use crate::plan::Executable;
 use crate::plan::{
-    AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup, POSITION_OBJECT,
-    POSITION_SUBJECT, Parsed, PositionPlan, RulePlan, predicate_symbol,
+    AtomOperator, AtomShape, CyclicPlan, IndexChoice, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT,
+    Parsed, PositionPlan, RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
-    Arity, Bound, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
+    Arity, Bound, DeltaRun, PartitionRef, RelationStore, ShapeFact, StoreShape, TermInterner,
 };
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
@@ -150,7 +155,7 @@ pub const NATIVE_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 22;
 ///
 /// Shape rules re-execute only for focus nodes whose inputs changed. Term
 /// generation has its own guards: the term-generating round limit for bounded
-/// new-term lengths, and [`MAX_TERM_ARENA_BYTES`] when retained surfaces grow.
+/// new-term lengths, and [`DEFAULT_MAX_TERM_ARENA_BYTES`] when retained surfaces grow.
 pub const NATIVE_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
 
 /// The stored-fact limit in force when the caller states none
@@ -196,9 +201,21 @@ pub const DEFAULT_MAX_JOIN_STEPS: u64 = NATIVE_DEFAULT_MAX_JOIN_STEPS;
 /// arbitrarily large if its terms are: one relation of a thousand megabyte-long IRIs is a
 /// hundred-fold smaller in facts and a thousand-fold larger in bytes. This ceiling closes
 /// that gap. It is checked on the seeded store and again after every round, so no future
-/// term-minting extension can grow past it unobserved. Unlike the stored-fact and
-/// join-step limits it is not a parameter: it is the same on every target.
-pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
+/// term-minting extension can grow past it unobserved. The caller can raise or
+/// remove it through [`EvalOptions::with_max_term_arena_bytes`] and
+/// [`EvalOptions::without_term_arena_limit`].
+pub const DEFAULT_MAX_TERM_ARENA_BYTES: usize = 1 << 24;
+
+/// Whether a completed evaluation retains rendered derivation records.
+/// Internal row support and proof preference do not depend on this choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DerivationMode {
+    /// Return the least model without allocating exported derivation records.
+    #[default]
+    ModelOnly,
+    /// Retain the canonical derivation of every derived fact.
+    Record,
+}
 
 /// The default limit on TERM-GENERATING rounds ([`EvalOptions`]).
 ///
@@ -298,9 +315,68 @@ pub struct EvalOptions {
     term_generating_rounds: Option<u64>,
     /// The caller's generated-term budget, or `None` for the input-derived default.
     generated_terms: Option<u64>,
+    /// Interned surface bytes, or the default when unstated.
+    term_arena_bytes: Option<u64>,
+    /// Whether to retain exported derivations.
+    derivation_mode: DerivationMode,
+    /// The per-call rule scheduling policy.
+    execution: RoundExecution,
 }
 
 impl EvalOptions {
+    /// Select exported derivation recording. The default returns the model only.
+    #[must_use]
+    pub fn with_derivation_mode(mut self, mode: DerivationMode) -> Self {
+        self.derivation_mode = mode;
+        self
+    }
+
+    /// The exported evidence requested for this run.
+    #[must_use]
+    pub fn derivation_mode(&self) -> DerivationMode {
+        self.derivation_mode
+    }
+
+    /// Select rule scheduling for this call without changing the global Rayon pool.
+    #[must_use]
+    pub fn with_round_execution(mut self, execution: RoundExecution) -> Self {
+        self.execution = execution;
+        self
+    }
+
+    /// The per-call rule scheduling policy.
+    #[must_use]
+    pub fn round_execution(&self) -> RoundExecution {
+        self.execution
+    }
+
+    /// Permit exactly `bytes` interned surface bytes. `u64::MAX` removes the
+    /// logical ceiling; actual storage admission can still refuse allocation.
+    #[must_use]
+    pub fn with_max_term_arena_bytes(mut self, bytes: u64) -> Self {
+        self.term_arena_bytes = Some(bytes);
+        self
+    }
+
+    /// Remove the logical term-arena ceiling while retaining storage admission.
+    #[must_use]
+    pub fn without_term_arena_limit(self) -> Self {
+        self.with_max_term_arena_bytes(u64::MAX)
+    }
+
+    /// The effective surface-byte ceiling, defaulting to 16 MiB.
+    #[must_use]
+    pub fn max_term_arena_bytes(&self) -> u64 {
+        self.term_arena_bytes
+            .unwrap_or(DEFAULT_MAX_TERM_ARENA_BYTES as u64)
+    }
+
+    /// The caller's surface-byte ceiling, or `None` for the default.
+    #[must_use]
+    pub fn stated_max_term_arena_bytes(&self) -> Option<u64> {
+        self.term_arena_bytes
+    }
+
     /// Permit a store of exactly `facts` facts, seeded plus derived; one more is refused
     /// with [`EvalError::BudgetExhausted`] naming [`BudgetResource::StoredFacts`].
     #[must_use]
@@ -387,10 +463,8 @@ impl EvalOptions {
     }
 }
 
-/// The four limits one evaluation runs under, and which of them the caller stated.
-///
-/// The stated flags are one bit set rather than four `bool`s, which keeps a
-/// [`BudgetReport`] — carried by value in every [`EvalError`] — small.
+/// The five effective limits. Origins and refusal flags are packed separately
+/// in [`BudgetReport`] to keep operational errors inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Limits {
     /// The join-step limit.
@@ -401,60 +475,52 @@ struct Limits {
     term_generating_rounds: u64,
     /// The generated-term budget.
     generated_terms: u64,
-    /// Which limits the caller stated: the `STATED_*` bits.
-    stated: u8,
+    /// The interned surface-byte ceiling.
+    term_arena_bytes: u64,
 }
 
 impl purrdf_hash::error::StructuredError for Limits {
     purrdf_hash::error_visit! {
-        @record self { join_steps, stored_facts, term_generating_rounds, generated_terms, stated } => "datalog-limits" {
+        @record self { join_steps, stored_facts, term_generating_rounds, generated_terms, term_arena_bytes } => "datalog-limits" {
             "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(u128::from(self.stored_facts)),
             "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)), "generated_terms" => Unsigned(u128::from(self.generated_terms)),
-            "stated" => Unsigned(u128::from(self.stated))
+            "term_arena_bytes" => ByteCount(u128::from(self.term_arena_bytes)),
         }
     }
 }
 
-/// [`Limits::stated`]: the join-step limit is the caller's.
+/// [`BudgetReport::flags`]: the join-step limit is the caller's.
 const STATED_JOIN_STEPS: u8 = 1;
-/// [`Limits::stated`]: the stored-fact limit is the caller's.
+/// [`BudgetReport::flags`]: the stored-fact limit is the caller's.
 const STATED_STORED_FACTS: u8 = 1 << 1;
-/// [`Limits::stated`]: the term-generating round limit is the caller's.
+/// [`BudgetReport::flags`]: the term-generating round limit is the caller's.
 const STATED_TERM_GENERATING_ROUNDS: u8 = 1 << 2;
-/// [`Limits::stated`]: the generated-term budget is the caller's.
+/// [`BudgetReport::flags`]: the generated-term budget is the caller's.
 const STATED_GENERATED_TERMS: u8 = 1 << 3;
+/// [`BudgetReport::flags`]: the surface-byte ceiling is the caller's.
+const STATED_TERM_ARENA_BYTES: u8 = 1 << 4;
+/// The first unique stored-fact insertion was refused before mutation.
+const REFUSED_STORED_FACT: u8 = 1 << 7;
 
 impl Limits {
     /// The limits `options` states, over a seeded store of `input_terms` distinct terms.
     fn of(options: &EvalOptions, input_terms: u64) -> Self {
-        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
         Self {
             join_steps: options.max_join_steps(),
             stored_facts: options.max_stored_facts(),
             term_generating_rounds: options.max_term_generating_rounds(),
             generated_terms: options.generated_term_budget(input_terms),
-            stated: bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
-                | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
-                | bit(
-                    options.stated_max_term_generating_rounds(),
-                    STATED_TERM_GENERATING_ROUNDS,
-                )
-                | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS),
+            term_arena_bytes: options.max_term_arena_bytes(),
         }
-    }
-
-    /// Whether the caller stated the limit `flag` names.
-    const fn is_stated(self, flag: u8) -> bool {
-        self.stated & flag != 0
     }
 }
 
 /// What an evaluation actually consumed, against the limits it ran under.
 ///
 /// Returned on success ([`Evaluation::budget`]) and on failure
-/// ([`EvalError::BudgetExhausted`]) alike; on failure the field naming the exhausted
-/// resource holds the observation that proved the limit was passed, so the report is
-/// never rounded down to the limit it exceeded.
+/// ([`EvalError::BudgetExhausted`]) alike. Stored facts count actual admissions;
+/// [`Self::observed_stored_facts`] includes the first refused insertion. Each
+/// [`BudgetResource::observed`] names the observation proving the refusal.
 ///
 /// Every measurement is a deterministic function of the input: the same program over the
 /// same facts reports the same numbers on every target. The limits it carries are the ones
@@ -466,7 +532,9 @@ pub struct BudgetReport {
     join_steps: u64,
     /// Facts held by the store, against [`Self::stored_fact_limit`].
     stored_facts: usize,
-    /// Interned term surface bytes, against [`MAX_TERM_ARENA_BYTES`].
+    /// Caller-stated limits and the first refused fact admission.
+    flags: u8,
+    /// Interned term surface bytes, against [`DEFAULT_MAX_TERM_ARENA_BYTES`].
     term_arena_bytes: usize,
     /// Term-generating rounds run, against [`Self::term_generating_round_limit`].
     term_generating_rounds: u64,
@@ -481,8 +549,10 @@ pub struct BudgetReport {
 
 impl purrdf_hash::error::StructuredError for BudgetReport {
     purrdf_hash::error_visit! {
-        @record self { join_steps, stored_facts, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
+        @record self { join_steps, stored_facts, flags, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
             "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(self.stored_facts as u128),
+            "stored_fact_refused" => Boolean(self.flags & REFUSED_STORED_FACT != 0),
+            "stated_limits" => Unsigned(u128::from(self.flags & !REFUSED_STORED_FACT)),
             "term_arena_bytes" => ByteCount(self.term_arena_bytes as u128), "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)),
             "generated_terms" => Unsigned(u128::from(self.generated_terms)), "input_terms" => Unsigned(u128::from(self.input_terms)),
             "limits" => Record(&self.limits)
@@ -498,6 +568,25 @@ impl Default for BudgetReport {
 }
 
 impl BudgetReport {
+    /// Pack limit origins alongside refusal state without padding each limit record.
+    fn stated_limits(options: &EvalOptions) -> u8 {
+        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
+        bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
+            | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
+            | bit(
+                options.stated_max_term_generating_rounds(),
+                STATED_TERM_GENERATING_ROUNDS,
+            )
+            | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS)
+            | bit(
+                options.stated_max_term_arena_bytes(),
+                STATED_TERM_ARENA_BYTES,
+            )
+    }
+
+    const fn is_stated(self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
     /// A report over three already-measured coordinates.
     ///
     /// This crate's own evaluator fills the fields directly; the constructor exists so
@@ -516,6 +605,7 @@ impl BudgetReport {
         Self {
             join_steps,
             stored_facts,
+            flags: Self::stated_limits(&EvalOptions::default()),
             term_arena_bytes,
             term_generating_rounds: 0,
             generated_terms: 0,
@@ -529,12 +619,14 @@ impl BudgetReport {
     #[must_use]
     pub fn governed_by(self, options: &EvalOptions) -> Self {
         let capacity = Limits::of(options, 0);
-        let kept = self.limits.stated & !(STATED_JOIN_STEPS | STATED_STORED_FACTS);
+        let capacity_flags = STATED_JOIN_STEPS | STATED_STORED_FACTS | STATED_TERM_ARENA_BYTES;
+        let kept = self.flags & !capacity_flags;
         Self {
+            flags: kept | (Self::stated_limits(options) & capacity_flags),
             limits: Limits {
                 join_steps: capacity.join_steps,
                 stored_facts: capacity.stored_facts,
-                stated: kept | (capacity.stated & (STATED_JOIN_STEPS | STATED_STORED_FACTS)),
+                term_arena_bytes: capacity.term_arena_bytes,
                 ..self.limits
             },
             ..self
@@ -557,7 +649,7 @@ impl BudgetReport {
     /// Whether the join-step limit was the caller's rather than
     /// [`DEFAULT_MAX_JOIN_STEPS`].
     pub fn join_step_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_JOIN_STEPS)
+        self.is_stated(STATED_JOIN_STEPS)
     }
 
     /// The stored-fact limit the run was governed by ([`EvalOptions::max_stored_facts`]).
@@ -568,7 +660,7 @@ impl BudgetReport {
     /// Whether the stored-fact limit was the caller's rather than
     /// [`DEFAULT_MAX_STORED_FACTS`].
     pub fn stored_fact_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_STORED_FACTS)
+        self.is_stated(STATED_STORED_FACTS)
     }
 
     /// Facts held by the store when evaluation stopped (seeded plus derived).
@@ -576,12 +668,42 @@ impl BudgetReport {
         self.stored_facts
     }
 
+    /// The first refused insertion, or the retained count if none was refused.
+    /// Unlike a round projection, a refusal is exactly one past the admitted count.
+    pub fn observed_stored_facts(self) -> usize {
+        self.stored_facts
+            .saturating_add(usize::from(self.flags & REFUSED_STORED_FACT != 0))
+    }
+
+    /// Admit one absent fact before insertion, retaining the first refusal separately
+    /// from facts actually stored. Shared by ordinary, ordered and chase commits.
+    pub(crate) fn admit_fact(self) -> Result<(), Self> {
+        if self.stored_facts as u64 >= self.limits.stored_facts {
+            Err(Self {
+                flags: self.flags | REFUSED_STORED_FACT,
+                ..self
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The effective interned surface-byte ceiling.
+    pub fn term_arena_limit(self) -> u64 {
+        self.limits.term_arena_bytes
+    }
+
+    /// Whether the caller stated the interned surface-byte ceiling.
+    pub fn term_arena_limit_stated(self) -> bool {
+        self.is_stated(STATED_TERM_ARENA_BYTES)
+    }
+
     /// Interned term surface bytes held by the store when evaluation stopped.
     pub fn term_arena_bytes(self) -> usize {
         self.term_arena_bytes
     }
 
-    /// Term-generating rounds run ([`EvalOptions`]). Always zero for a guard-free
+    /// Completed term-generating rounds ([`EvalOptions`]). Always zero for a guard-free
     /// program, which has no guard to compute a term.
     pub fn term_generating_rounds(self) -> u64 {
         self.term_generating_rounds
@@ -595,7 +717,7 @@ impl BudgetReport {
     /// Whether the term-generating round limit was the caller's rather than
     /// [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`].
     pub fn term_generating_round_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_TERM_GENERATING_ROUNDS)
+        self.is_stated(STATED_TERM_GENERATING_ROUNDS)
     }
 
     /// Terms the evaluation added to the store beyond the seeded ones ([`EvalOptions`]).
@@ -611,7 +733,7 @@ impl BudgetReport {
     /// Whether the generated-term budget was the caller's rather than the input-derived
     /// default.
     pub fn generated_term_budget_stated(self) -> bool {
-        self.limits.is_stated(STATED_GENERATED_TERMS)
+        self.is_stated(STATED_GENERATED_TERMS)
     }
 
     /// The distinct terms of the seeded store.
@@ -630,7 +752,7 @@ pub enum BudgetResource {
     /// The stored-fact limit ([`EvalOptions::with_max_stored_facts`]) — too many facts
     /// seeded or derived.
     StoredFacts,
-    /// [`MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
+    /// [`DEFAULT_MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
     TermArenaBytes,
     /// The term-generating round limit ([`EvalOptions`]) — too many rounds committed a
     /// guard-computed term.
@@ -656,7 +778,7 @@ impl BudgetResource {
         match self {
             Self::JoinSteps => report.limits.join_steps,
             Self::StoredFacts => report.limits.stored_facts,
-            Self::TermArenaBytes => MAX_TERM_ARENA_BYTES as u64,
+            Self::TermArenaBytes => report.limits.term_arena_bytes,
             Self::TermGeneratingRounds => report.limits.term_generating_rounds,
             Self::GeneratedTerms => report.limits.generated_terms,
         }
@@ -667,7 +789,7 @@ impl BudgetResource {
     pub fn observed(self, report: BudgetReport) -> u64 {
         match self {
             Self::JoinSteps => report.join_steps,
-            Self::StoredFacts => report.stored_facts as u64,
+            Self::StoredFacts => report.observed_stored_facts() as u64,
             Self::TermArenaBytes => report.term_arena_bytes as u64,
             Self::TermGeneratingRounds => report.term_generating_rounds,
             Self::GeneratedTerms => report.generated_terms,
@@ -697,6 +819,9 @@ struct StepGovernor {
     allowance: u64,
     /// Candidates enumerated so far.
     consumed: u64,
+    /// Actual binary cursor rows, before semi-naive filtering, for complexity checks.
+    #[cfg(test)]
+    row_visits: u64,
     /// One shared round-wide credit pool.
     pool: Arc<StepPool>,
 }
@@ -715,6 +840,8 @@ impl StepGovernor {
         Self {
             allowance,
             consumed: 0,
+            #[cfg(test)]
+            row_visits: 0,
             pool: Arc::new(StepPool {
                 used: AtomicU64::new(0),
                 refused: AtomicBool::new(false),
@@ -761,6 +888,8 @@ impl StepGovernor {
         Self {
             allowance: self.allowance,
             consumed: 0,
+            #[cfg(test)]
+            row_visits: 0,
             pool: Arc::clone(&self.pool),
         }
     }
@@ -788,32 +917,28 @@ pub enum EvalError<E = core::convert::Infallible> {
         rule: usize,
     },
     /// The original logical capacity or physical storage refusal.
-    Storage(purrdf_lex::allocation::StorageError),
+    Storage(StorageError),
     /// The original row-evidence account refused or encountered a broken invariant.
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
     /// The full rule bundle violates an assessor-only declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
-    /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
+    /// A clause's head is existential, disjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
     ///
     /// The DL-clause IR ([`crate::clause`]) represents all five head forms in one type, so a
-    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential and
-    /// conjunctive forms, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
+    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential
+    /// form, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
     /// disjunctive one (over its own concept-id atoms, through this crate's
     /// [`crate::clause::HeadForm`]), and both are refused by name HERE rather than
     /// parsed away. A semi-naive least-fixpoint evaluator computes the
-    /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
-    /// existential mints witnesses, a disjunction has no single least model, a conjunction
-    /// abbreviates several clauses at once, and `false` derives nothing while asserting
-    /// its body is unsatisfiable. None of the four is a definite clause, so each is
+    /// least model of definite clauses: an existential mints witnesses, a disjunction
+    /// has no single least model, and `false` derives nothing while asserting
+    /// its body is unsatisfiable. Each is
     /// refused by its OWN name here rather than silently ignored, silently treated as
     /// atomic, or reported under a neighbouring form's name.
     ///
-    /// The conjunctive case deserves the emphasis: `→ p(x) ∧ q(x)` *is* equivalent to two
-    /// Datalog rules over one body, and this evaluator could have split it. It does not,
-    /// because a [`Derivation`] names its producing clause by authored index, so splitting
-    /// one clause into two would renumber the program and move an observable. A caller who
-    /// wants the split performs it before compiling.
+    /// A head conjunction without existential variables shares one body evaluation.
+    /// Its derivations retain both the authored clause index and head ordinal.
     NonDatalogHead {
         /// The clause's index in authored program order.
         rule: usize,
@@ -864,8 +989,9 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// Which limit.
         resource: BudgetResource,
         /// The rules whose derivations committed a guard-computed term in the refused
-        /// round, in authored program order.
-        rules: Vec<usize>,
+        /// round, in authored program order. A fixed slice keeps the operational
+        /// error compact when embedded by entailment and host errors.
+        rules: Box<[usize]>,
         /// Consumption when evaluation stopped, the limit in force included.
         report: BudgetReport,
     },
@@ -963,7 +1089,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
 /// Where a report's stored-fact limit came from, for a diagnostic.
 #[must_use]
 pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
-    if report.limits.is_stated(STATED_STORED_FACTS) {
+    if report.is_stated(STATED_STORED_FACTS) {
         "the caller's limit"
     } else {
         "the default for this target"
@@ -973,7 +1099,7 @@ pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
 /// Where a report's join-step limit came from, for a diagnostic.
 #[must_use]
 pub fn join_step_limit_origin(report: BudgetReport) -> &'static str {
-    if report.limits.is_stated(STATED_JOIN_STEPS) {
+    if report.is_stated(STATED_JOIN_STEPS) {
         "the caller's limit"
     } else {
         "the default for this target"
@@ -994,7 +1120,7 @@ pub fn render_capacity_refusal(
         BudgetResource::StoredFacts => Some(format!(
             "evaluation exceeded the stored-fact limit: {} facts observed, {} permitted ({}); \
              raise it with {knob}",
-            report.stored_facts,
+            report.observed_stored_facts(),
             report.limits.stored_facts,
             stored_fact_limit_origin(report),
         )),
@@ -1021,10 +1147,26 @@ pub fn render_capacity_refusal(
     }
 }
 
+/// Render an exact resource refusal with remediation available to the caller.
+/// Hosts supply an action from their own entry point rather than an inner API.
+#[must_use]
+pub fn render_budget_refusal(
+    resource: BudgetResource,
+    report: BudgetReport,
+    remediation: &str,
+) -> String {
+    format!(
+        "evaluation exceeded the {} limit: {} observed, {} permitted; {remediation}",
+        resource.name(),
+        resource.observed(report),
+        resource.limit(report)
+    )
+}
+
 /// Where a report's term-generating round limit came from, for a diagnostic.
 #[must_use]
 pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
-    if report.limits.is_stated(STATED_TERM_GENERATING_ROUNDS) {
+    if report.is_stated(STATED_TERM_GENERATING_ROUNDS) {
         "the caller's limit".to_owned()
     } else {
         "the default".to_owned()
@@ -1034,7 +1176,7 @@ pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
 /// Where a report's generated-term budget came from, for a diagnostic.
 #[must_use]
 pub fn generated_term_budget_origin(report: BudgetReport) -> String {
-    if report.limits.is_stated(STATED_GENERATED_TERMS) {
+    if report.is_stated(STATED_GENERATED_TERMS) {
         "the caller's budget".to_owned()
     } else {
         format!(
@@ -1061,7 +1203,7 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
             Self::NonDatalogHead { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
-                 clauses (one head atom, no existential) only",
+                 clauses (an atomic or conjunctive head, no existential) only",
                 form.article()
             ),
             Self::NonStratifiable {
@@ -1124,13 +1266,11 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
                 };
                 match render_capacity_refusal(*resource, *report, knob) {
                     Some(rendered) => f.write_str(&rendered),
-                    None => write!(
-                        f,
-                        "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
-                        resource.name(),
-                        resource.observed(*report),
-                        resource.limit(*report)
-                    ),
+                    None => f.write_str(&render_budget_refusal(
+                        *resource,
+                        *report,
+                        "raise it with EvalOptions::with_max_term_arena_bytes",
+                    )),
                 }
             }
             Self::Stopped { report } => write!(
@@ -1194,7 +1334,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EvalError<E> {
 }
 
 purrdf_lex::variant_from!(impl<E> EvalError<E> {
-    Storage(purrdf_lex::allocation::StorageError),
+    Storage(StorageError),
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
 });
 
@@ -1220,6 +1360,8 @@ where
     fact: ShapeFact<N>,
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The producing atom's position in the authored head conjunction.
+    head: usize,
     /// The matched positive body facts, in authored body order.
     sources: Vec<ShapeFact<N>>,
     /// `1 + max(source proof heights)`; a seeded fact has height 0.
@@ -1240,6 +1382,11 @@ where
         self.rule
     }
 
+    /// The producing atom's position in the authored head conjunction.
+    pub fn head(&self) -> usize {
+        self.head
+    }
+
     /// The matched positive body facts, in authored body order.
     pub fn sources(&self) -> &[ShapeFact<N>] {
         &self.sources
@@ -1251,7 +1398,48 @@ where
     }
 }
 
-/// A completed evaluation: the saturated store, its derivations and the budget report.
+/// Semantic output counts alongside the planner's physical candidate count.
+///
+/// For an ordinary completed stratified evaluation, seeded and newly committed
+/// fact counts are invariant under join planning and derivation recording.
+/// Scheduled retractions can cause another commit of a previously withdrawn fact;
+/// that is another commit event. Physical candidates may change between planners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkReport {
+    /// Unique seeded facts.
+    input_facts: u64,
+    /// Successful unique rule insertions.
+    committed_facts: u64,
+    /// Physical candidate admissions.
+    join_steps: u64,
+}
+
+impl WorkReport {
+    /// Unique facts in the seeded store.
+    pub fn input_facts(self) -> u64 {
+        self.input_facts
+    }
+    /// Unique fact insertions performed by rule commits.
+    pub fn committed_facts(self) -> u64 {
+        self.committed_facts
+    }
+    /// Physical candidate admissions; divide by committed facts to compare plans.
+    pub fn join_steps(self) -> u64 {
+        self.join_steps
+    }
+    /// Physical candidate admissions per committed fact, as an exact numerator
+    /// and denominator. No ratio is defined when nothing was committed.
+    pub fn candidates_per_committed_fact(self) -> Option<(u64, u64)> {
+        (self.committed_facts != 0).then_some((self.join_steps, self.committed_facts))
+    }
+
+    /// Version of the physical planner that produced the candidate count.
+    pub fn planner_version(self) -> &'static str {
+        crate::cache::PLAN_SOLVER_VERSION
+    }
+}
+
+/// A completed least model, optional derivations and measured consumption.
 #[derive(Debug, Clone)]
 pub struct Evaluation<D: TermDictionary = TermInterner, const N: usize = 4>
 where
@@ -1259,10 +1447,12 @@ where
 {
     /// The least model: the seeded EDB plus every derived fact.
     facts: RelationStore<D, N>,
-    /// Every derivation, in lexical `(fact, rule, sources)` order.
-    derivations: Vec<Derivation<N>>,
+    /// Every derivation, in lexical `(fact, rule, head, sources)` order.
+    derivations: Option<Vec<Derivation<N>>>,
     /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
+    /// Stable semantic counts and plan-dependent candidate work.
+    work: WorkReport,
 }
 
 impl<D: TermDictionary, const N: usize> Evaluation<D, N>
@@ -1279,9 +1469,15 @@ where
         self.facts
     }
 
-    /// Every derivation, in a total lexical order.
-    pub fn derivations(&self) -> &[Derivation<N>] {
-        &self.derivations
+    /// Recorded derivations in lexical order; `None` means recording was disabled,
+    /// while `Some([])` means recording was enabled and no fact was derived.
+    pub fn derivations(&self) -> Option<&[Derivation<N>]> {
+        self.derivations.as_deref()
+    }
+
+    /// Semantic fact counts and the physical work of this execution.
+    pub fn work(&self) -> WorkReport {
+        self.work
     }
 
     /// What the run consumed, against the limits it ran under.
@@ -1312,7 +1508,7 @@ where
 /// Compile a rule program into the executor's [`Executable`], or refuse it.
 ///
 /// This is [`crate::plan`]'s pipeline with three refusals attached: a clause whose head is
-/// not a single unquantified atom is reported by head form, a non-stratifiable program is
+/// existential, disjunctive or false is reported by head form, a non-stratifiable program is
 /// reported with the concrete cycle its negative edge sits in, and a clause whose head
 /// carries a variable no positive body atom can bind is reported as not range-restricted.
 /// All three are hard errors; none has a best-effort fallback.
@@ -1325,12 +1521,8 @@ pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>,
 where
     Arity<N>: StoreShape<N>,
 {
-    // The head form is decided FIRST, because the other two checks are both defined in
-    // terms of a single head atom: an existential, a disjunctive or an empty head has no
-    // "the head predicate" to stratify on and no "the head variables" to range-restrict.
-    // Reporting either of those instead would be reporting a consequence of the real
-    // defect. This is the same gate `Parsed::new` enforces below; it runs here so the
-    // diagnostic is an `EvalError` alongside the other two.
+    // Decide the fragment before stratification and safety: neither check supplies
+    // semantics for witnesses, branching or inconsistency.
     for (index, rule) in rules.iter().enumerate() {
         let form = rule.head_form();
         if !form.is_datalog() {
@@ -1364,7 +1556,7 @@ where
     check_range_restricted(&rules)?;
 
     Ok(Parsed::new(rules)
-        .expect("every head form was just established to be atomic on the same rules")
+        .expect("every head form was just established to be Datalog on the same rules")
         .stratify()
         .expect("stratifiability was just established on the same rules")
         .plan()
@@ -1493,6 +1685,58 @@ impl Delta {
     }
 }
 
+/// One native arrangement per distinct partial delta, shared by every rule task.
+/// An all-row seed borrows the accumulated arrangements instead of copying them.
+#[derive(Debug)]
+pub(crate) struct DeltaIndexes<I: TermIdentity> {
+    runs: Vec<((usize, usize), DeltaRun<I>)>,
+}
+
+impl<I: TermIdentity> DeltaIndexes<I> {
+    fn build<D: TermDictionary<Id = I>, const N: usize>(
+        rel: &RelationStore<D, N>,
+        deltas: impl IntoIterator<Item = Delta>,
+    ) -> Result<Self, EvalError<D::Error>>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        rel.interner().check_read().map_err(EvalError::Source)?;
+        let mut ranges = Vec::new();
+        for delta in deltas {
+            if delta != Delta::all(rel.row_count()) {
+                ranges
+                    .try_reserve(1)
+                    .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+                ranges.push((delta.lo, delta.hi));
+            }
+        }
+        ranges.sort_unstable();
+        ranges.dedup();
+        let mut runs = Vec::new();
+        runs.try_reserve(ranges.len())
+            .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+        for (lo, hi) in ranges {
+            let run = rel.delta_run(lo..hi).map_err(|error| match error {
+                DictionaryError::Storage(error) => EvalError::Storage(error),
+                DictionaryError::Source(error) => EvalError::Source(error),
+            })?;
+            runs.push(((lo, hi), run));
+        }
+        Ok(Self { runs })
+    }
+
+    fn get(&self, delta: Delta, row_count: usize) -> Option<&DeltaRun<I>> {
+        if delta == Delta::all(row_count) {
+            return None;
+        }
+        let position = self
+            .runs
+            .binary_search_by_key(&(delta.lo, delta.hi), |&(range, _)| range)
+            .expect("every scheduled partial delta has an admitted arrangement");
+        Some(&self.runs[position].1)
+    }
+}
+
 /// Compile-time scan-mode code: bind only rows in the delta.
 const SCAN_DELTA: u8 = 0;
 /// Compile-time scan-mode code: bind any row.
@@ -1570,6 +1814,8 @@ const INDEX_SUBJECT: u8 = 1;
 const INDEX_OBJECT: u8 = 2;
 /// Compile-time index code: both columns bound.
 const INDEX_BOTH: u8 = 3;
+/// Rebind a reordered operator against the current frame rather than its old prefix.
+const INDEX_REBOUND: u8 = 4;
 
 // ── The physical binding frame ──────────────────────────────────────────────────
 
@@ -1611,6 +1857,9 @@ where
     }
 }
 
+/// Inline width shared by binding frames and transient positive-guard input views.
+const INLINE_BINDING_SLOTS: usize = 8;
+
 /// A partial solution of one rule's positive body.
 ///
 /// Bindings live in a flat frame indexed by the plan's variable slots, and hold interned
@@ -1631,7 +1880,7 @@ where
     /// table and this workspace's own suites produce, so every real frame lives inline.
     /// The native identity keeps its NonZeroU64 niche in `Option`; a host identity
     /// determines its own inline footprint. A ninth variable spills to the heap.
-    bindings: SmallVec<[Option<I>; 8]>,
+    bindings: SmallVec<[Option<I>; INLINE_BINDING_SLOTS]>,
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
     sources: Vec<SourceRow<I, N>>,
@@ -1654,38 +1903,14 @@ enum SlotValue<'s, I: TermIdentity = TermId> {
     Unbound,
 }
 
-/// Keeps the original dictionary pin alive while a guard borrows its text.
-enum SlotSurface<'s, L: AsRef<str>> {
-    Pinned(L),
-    Computed(&'s str),
-}
-
-impl<L: AsRef<str>> AsRef<str> for SlotSurface<'_, L> {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Pinned(pin) => pin.as_ref(),
-            Self::Computed(surface) => surface,
-        }
-    }
-}
-
 impl<'s, I: TermIdentity> SlotValue<'s, I> {
-    /// Resolve only at the lexical boundary, retaining the supplied lexical owner.
-    fn surface<D: TermDictionary<Id = I>, const N: usize>(
-        self,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error>
-    where
-        Arity<N>: StoreShape<N>,
-    {
-        rel.interner().check_read()?;
-        let surface = match self {
-            Self::Interned(id) => Some(SlotSurface::Pinned(rel.interner().resolve_term(id)?)),
-            Self::Computed(surface) => Some(SlotSurface::Computed(surface)),
+    /// Carry a binding through the guard boundary without rendering an identity.
+    fn as_term(self) -> Option<DictionaryTerm<'s, I>> {
+        match self {
+            Self::Interned(id) => Some(DictionaryTerm::Id(id)),
+            Self::Computed(surface) => Some(DictionaryTerm::Surface(surface)),
             Self::Unbound => None,
-        };
-        rel.interner().check_read()?;
-        Ok(surface)
+        }
     }
 }
 
@@ -1744,29 +1969,16 @@ impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// The lexical surface bound in `slot`, if any.
-    fn surface<'s, D: TermDictionary<Id = I>>(
-        &'s self,
-        slot: usize,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error> {
-        self.value(slot).surface(rel)
-    }
-
-    /// Bind `slot` to `surface`: as an interned id when the store knows the term, as a
-    /// computed surface otherwise.
-    fn bind_surface<D: TermDictionary<Id = I>>(
+    /// Retain an original identity or canonicalize a genuinely computed spelling.
+    fn bind_value<D: TermDictionary<Id = I>>(
         &mut self,
         slot: usize,
-        surface: &str,
+        value: &DictionaryValue<I>,
         rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
-        rel.interner().check_read()?;
-        let id = rel.interner().lookup_term(surface)?;
-        rel.interner().check_read()?;
-        match id {
-            Some(id) => self.bindings[slot] = Some(id),
-            None => self.computed.push((slot, surface.into())),
+        match value.as_term().canonicalize(rel.interner())? {
+            DictionaryTerm::Id(id) => self.bindings[slot] = Some(id),
+            DictionaryTerm::Surface(surface) => self.computed.push((slot, surface.into())),
         }
         Ok(())
     }
@@ -1838,6 +2050,7 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     scan: Scan,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
@@ -1846,15 +2059,15 @@ where
     Arity<N>: StoreShape<N>,
 {
     match scan {
-        Scan::Delta => {
-            extend_slot_operator::<SCAN_DELTA, D, N>(operator, rel, delta, solutions, governor)
-        }
-        Scan::Full => {
-            extend_slot_operator::<SCAN_FULL, D, N>(operator, rel, delta, solutions, governor)
-        }
-        Scan::OldOnly => {
-            extend_slot_operator::<SCAN_OLD_ONLY, D, N>(operator, rel, delta, solutions, governor)
-        }
+        Scan::Delta => extend_slot_operator::<SCAN_DELTA, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::Full => extend_slot_operator::<SCAN_FULL, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::OldOnly => extend_slot_operator::<SCAN_OLD_ONLY, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
     }
 }
 
@@ -1863,6 +2076,7 @@ fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -1871,17 +2085,43 @@ where
 {
     match operator.index() {
         IndexChoice::Any => {
-            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, solutions, governor)
+            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, indexes, solutions, governor)
         }
-        IndexChoice::Subject => {
-            extend_atom::<SCAN, INDEX_SUBJECT, D, N>(operator, rel, delta, solutions, governor)
-        }
-        IndexChoice::Object => {
-            extend_atom::<SCAN, INDEX_OBJECT, D, N>(operator, rel, delta, solutions, governor)
-        }
-        IndexChoice::Both => {
-            extend_atom::<SCAN, INDEX_BOTH, D, N>(operator, rel, delta, solutions, governor)
-        }
+        IndexChoice::Subject => extend_atom::<SCAN, INDEX_SUBJECT, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        IndexChoice::Object => extend_atom::<SCAN, INDEX_OBJECT, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        IndexChoice::Both => extend_atom::<SCAN, INDEX_BOTH, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+    }
+}
+
+/// Probe a physically reordered atom while retaining its logical scan ordinal.
+fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
+    delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
+    scan: Scan,
+    solutions: &[SlotSolution<D::Id, N>],
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    match scan {
+        Scan::Delta => extend_atom::<SCAN_DELTA, INDEX_REBOUND, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::Full => extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
+        Scan::OldOnly => extend_atom::<SCAN_OLD_ONLY, INDEX_REBOUND, D, N>(
+            operator, rel, delta, indexes, solutions, governor,
+        ),
     }
 }
 
@@ -1895,10 +2135,13 @@ where
 /// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
 /// names its predicate — and only degrades to a sweep of matching partitions when the rule
 /// genuinely quantifies over the predicate or the graph.
+/// Reordered delta probes use `INDEX_REBOUND`: the same kernel binds against the
+/// current frame and selects the subject/object arrangement from those bindings.
 fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
+    indexes: &DeltaIndexes<D::Id>,
     solutions: &[SlotSolution<D::Id, N>],
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -1909,6 +2152,11 @@ where
     let shape = operator.shape();
     let body_index = operator.body_index();
     let constants = constant_positions(shape, rel)?;
+    let delta_run = if SCAN == SCAN_DELTA {
+        indexes.get(delta, rel.row_count())
+    } else {
+        None
+    };
     let mut next = Vec::new();
 
     'solutions: for solution in solutions {
@@ -1924,6 +2172,15 @@ where
                 (PositionPlan::Constant(_), None) => {
                     unreachable!("a constant position always has a hoisted resolution")
                 }
+                (PositionPlan::Bound(slot) | PositionPlan::Free(slot), _)
+                    if INDEX == INDEX_REBOUND =>
+                {
+                    match solution.value(*slot) {
+                        SlotValue::Interned(id) => PositionValue::Known(id),
+                        SlotValue::Computed(_) => PositionValue::Missing,
+                        SlotValue::Unbound => PositionValue::Free,
+                    }
+                }
                 (PositionPlan::Bound(slot), _) => solution
                     .get(*slot)
                     .map_or(PositionValue::Missing, PositionValue::Known),
@@ -1938,6 +2195,15 @@ where
         // The `(subject, object)` index bound. `INDEX` is a compile-time constant, and the
         // planner only emits a bound index for a position it has proven known.
         let bound = match INDEX {
+            INDEX_REBOUND => match (
+                values[POSITION_SUBJECT].known(),
+                values[POSITION_OBJECT].known(),
+            ) {
+                (Some(subject), Some(object)) => Bound::Both(subject, object),
+                (Some(subject), None) => Bound::Subject(subject),
+                (None, Some(object)) => Bound::Object(object),
+                (None, None) => Bound::Any,
+            },
             INDEX_ANY => Bound::Any,
             INDEX_SUBJECT => match values[POSITION_SUBJECT].known() {
                 Some(subject) => Bound::Subject(subject),
@@ -1957,9 +2223,13 @@ where
             _ => unreachable!("INDEX is a planned index code"),
         };
 
-        for partition in rel.partitions_for(values.map(PositionValue::known)) {
+        for partition in rel.select_partitions(values.map(PositionValue::known), delta_run) {
             let mut cursor = partition.select(bound);
             while let Some((subject, object, row)) = cursor.next() {
+                #[cfg(test)]
+                {
+                    governor.row_visits += 1;
+                }
                 if !keep_row::<SCAN>(delta, row) {
                     continue;
                 }
@@ -1978,7 +2248,9 @@ where
                 }
                 let mut merged = solution.clone();
                 for (position, plan) in shape.positions().iter().enumerate() {
-                    if let PositionPlan::Free(slot) = plan {
+                    if let PositionPlan::Free(slot) | PositionPlan::Bound(slot) = plan
+                        && (INDEX == INDEX_REBOUND || matches!(plan, PositionPlan::Free(_)))
+                    {
                         merged.bindings[*slot] = Some(matched[position]);
                     }
                 }
@@ -2186,13 +2458,19 @@ impl<'a, I: TermIdentity> LeapfrogIntersection<'a, I> {
 fn cycle_atom_partition<'a, D: TermDictionary, const N: usize>(
     shape: &AtomShape<N>,
     rel: &'a RelationStore<D, N>,
+    delta_run: Option<&'a DeltaRun<D::Id>>,
 ) -> Result<Option<PartitionRef<'a, D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
     let constants = constant_positions(shape, rel)?;
     let known = constants.map(|value| value.and_then(PositionValue::known));
-    Ok(rel.partition_for(&known))
+    Ok(rel
+        .partition_for(&known)
+        .and_then(|partition| match delta_run {
+            Some(run) => run.project(partition),
+            None => Some(partition),
+        }))
 }
 
 /// The subject and object frame slots of a certified cycle atom.
@@ -2256,12 +2534,21 @@ where
     rel: &'a RelationStore<D, N>,
     /// The round's delta span.
     delta: Delta,
+    /// Shared native new-row arrangements, selected only for delta atoms.
+    indexes: &'a DeltaIndexes<D::Id>,
 }
 
 impl<D: TermDictionary, const N: usize> LeapfrogRun<'_, D, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    fn delta_run(&self, position: usize) -> Option<&DeltaRun<D::Id>> {
+        if matches!(self.scan.at(position), Scan::Delta) {
+            self.indexes.get(self.delta, self.rel.row_count())
+        } else {
+            None
+        }
+    }
     /// Capture the unique fully-ground row for every cycle atom, in the component's
     /// authored atom order.
     ///
@@ -2276,7 +2563,7 @@ where
             let (Some(subject), Some(object), Some(partition)) = (
                 solution.get(subject_slot),
                 solution.get(object_slot),
-                cycle_atom_partition(shape, self.rel)?,
+                cycle_atom_partition(shape, self.rel, self.delta_run(planned.positive_position()))?,
             ) else {
                 solution.sources.truncate(original);
                 return Ok(false);
@@ -2336,7 +2623,9 @@ where
                 continue;
             }
             let scan = self.scan.at(planned.positive_position());
-            let Some(partition) = cycle_atom_partition(shape, self.rel)? else {
+            let Some(partition) =
+                cycle_atom_partition(shape, self.rel, self.delta_run(planned.positive_position()))?
+            else {
                 return Ok(());
             };
             let Some(cursor) =
@@ -2387,6 +2676,16 @@ where
         if governor.spent() {
             break;
         }
+        if run
+            .cycle
+            .variable_slots()
+            .iter()
+            .any(|&slot| matches!(solution.value(slot), SlotValue::Computed(_)))
+        {
+            // A freshly computed term absent from the dictionary cannot occur in
+            // any stored edge. It must not be mistaken for an unbound cycle slot.
+            continue;
+        }
         let mut working = solution.clone();
         run.recurse(0, &mut working, &mut out, governor)?;
     }
@@ -2395,6 +2694,115 @@ where
 }
 
 // ── Joining a rule body ─────────────────────────────────────────────────────────
+
+/// Indexed cardinality of a constant-key full pattern or a native delta pattern.
+/// A free-key full pattern returns `None` rather than sweeping historical partitions.
+/// Subject/object bounds use existing run lengths and the bounded mutable tail.
+fn constant_pattern_count<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
+    delta: Option<&DeltaRun<D::Id>>,
+) -> Result<Option<usize>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let constants = constant_positions(operator.shape(), rel)?;
+    if constants.contains(&Some(PositionValue::Missing)) {
+        return Ok(Some(0));
+    }
+    let positions = constants.map(|value| value.and_then(PositionValue::known));
+    if delta.is_none()
+        && !Arity::<N>::KEY_POSITIONS
+            .iter()
+            .all(|&position| positions[position].is_some())
+    {
+        return Ok(None);
+    }
+    let bound = match (positions[POSITION_SUBJECT], positions[POSITION_OBJECT]) {
+        (Some(subject), Some(object)) => Bound::Both(subject, object),
+        (Some(subject), None) => Bound::Subject(subject),
+        (None, Some(object)) => Bound::Object(object),
+        (None, None) => Bound::Any,
+    };
+    let mut count = 0usize;
+    for partition in rel.select_partitions(positions, delta) {
+        let selected = if delta.is_some() {
+            match bound {
+                Bound::Any => partition.row_count(),
+                _ => partition.select(bound).remaining_count(),
+            }
+        } else if let Some(selected) = partition.indexed_count(bound) {
+            selected
+        } else {
+            return Ok(None);
+        };
+        count = count.saturating_add(selected);
+    }
+    rel.interner().check_read()?;
+    Ok(Some(count))
+}
+
+/// Freeze metadata advice before any task can warm an access path. Empty means
+/// this all-row, single-atom or Base-reading join needs no adaptive advice.
+fn constant_pattern_counts<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    rel: &RelationStore<D, N>,
+    delta: Delta,
+) -> Result<Vec<Option<usize>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    rel.interner().check_read()?;
+    if delta == Delta::all(rel.row_count())
+        || plan.operators().len() <= 1
+        || plan
+            .operators()
+            .iter()
+            .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base)
+    {
+        return Ok(Vec::new());
+    }
+    let counts = plan
+        .operators()
+        .iter()
+        .map(|operator| constant_pattern_count(operator, rel, None))
+        .collect::<Result<_, _>>()?;
+    rel.interner().check_read()?;
+    Ok(counts)
+}
+
+/// Prefer an old indexed seed only when it is strictly smaller than the delta.
+/// This admits at most the delta's cardinality before probing the delta itself;
+/// a selective delta never pays for a large old prefix. Unknown/free-key full
+/// patterns cannot displace the delta. Counts read run metadata, not old tuples.
+fn decomposition_seed<D: TermDictionary, const N: usize>(
+    plan: &RulePlan<N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    anchor: usize,
+    full_counts: &[Option<usize>],
+) -> Result<usize, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let delta = snapshot
+        .indexes
+        .get(snapshot.delta, snapshot.rel.row_count());
+    let mut best = constant_pattern_count(&plan.operators()[anchor], snapshot.rel, delta)?
+        .expect("a partial delta has native indexed runs");
+    let mut seed = anchor;
+    for (position, count) in full_counts.iter().copied().enumerate() {
+        if position == anchor {
+            continue;
+        }
+        if let Some(count) = count
+            && count < best
+        {
+            seed = position;
+            best = count;
+        }
+    }
+    Ok(seed)
+}
 
 /// Which physical join the evaluator runs for a rule.
 ///
@@ -2423,11 +2831,20 @@ fn join_body<D: TermDictionary, const N: usize>(
     snapshot: JoinSnapshot<'_, D, N>,
     strategy: JoinStrategy,
     governor: &mut StepGovernor,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
     snapshot.rel.interner().check_read()?;
+    let owned_counts = if full_counts.is_none() {
+        Some(constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?)
+    } else {
+        None
+    };
+    let full_counts = full_counts
+        .or(owned_counts.as_deref())
+        .expect("the join's metadata advice was prepared");
     let leapfrog = plan.has_cyclic_subplan()
         && matches!(strategy, JoinStrategy::Planned)
         && plan.operators().iter().all(|operator| {
@@ -2445,7 +2862,7 @@ where
     } else if leapfrog {
         join_positive_leapfrog(plan, snapshot, governor)
     } else {
-        join_positive_binary(plan, snapshot, governor)
+        join_positive_binary(plan, snapshot, governor, full_counts)
     }?;
     snapshot.rel.interner().check_read()?;
     Ok(joined)
@@ -2461,6 +2878,8 @@ where
     rel: &'a RelationStore<D, N>,
     /// The rows this evaluation treats as new.
     delta: Delta,
+    /// The round's shared arrangements, including this delta when it is partial.
+    indexes: &'a DeltaIndexes<D::Id>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for JoinSnapshot<'_, D, N> where Arity<N>: StoreShape<N>
@@ -2521,18 +2940,23 @@ where
             Some(PositionValue::Free) | None => None,
         };
     }
+    let run = snapshot
+        .indexes
+        .get(snapshot.delta, snapshot.rel.row_count());
     Ok(snapshot
         .rel
-        .partitions_for(positions)
-        .any(|partition| partition.has_row_from(snapshot.delta.lo)))
+        .select_partitions(positions, run)
+        .next()
+        .is_some())
 }
 
-/// The indexed binary positive join: every planned operator in execution order, for every
-/// semi-naive delta position whose delta atom can match ([`delta_can_match`]).
+/// The indexed binary positive join. Partial deltas seed each decomposition
+/// before the remaining planned operators; logical scan ordinals stay fixed.
 fn join_positive_binary<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
     governor: &mut StepGovernor,
+    full_counts: &[Option<usize>],
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -2553,11 +2977,31 @@ where
             continue;
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        for (position, operator) in operators.iter().enumerate() {
-            partial = extend_slot_solutions(
-                operator,
+        let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
+        let seed = if reordered {
+            decomposition_seed(plan, snapshot, delta_position, full_counts)?
+        } else {
+            delta_position
+        };
+        let order = [seed, delta_position]
+            .into_iter()
+            .enumerate()
+            .filter(|&(index, position)| reordered && (index == 0 || position != seed))
+            .map(|(_, position)| position)
+            .chain((0..operators.len()).filter(|&position| {
+                !reordered || (position != seed && position != delta_position)
+            }));
+        for position in order {
+            let extend = if reordered {
+                extend_rebound_solutions
+            } else {
+                extend_slot_solutions
+            };
+            partial = extend(
+                &operators[position],
                 snapshot.rel,
                 snapshot.delta,
+                snapshot.indexes,
                 if base {
                     Scan::Full
                 } else {
@@ -2570,14 +3014,22 @@ where
                 break;
             }
         }
+        if reordered {
+            for solution in &mut partial {
+                solution
+                    .sources
+                    .sort_unstable_by_key(|source| source.body_index);
+            }
+        } else {
+            for solution in &mut partial {
+                for &(left, right) in plan.operator_source_order_swaps() {
+                    solution.sources.swap(left, right);
+                }
+            }
+        }
         all.extend(partial);
         if governor.spent() {
             break;
-        }
-    }
-    for solution in &mut all {
-        for &(left, right) in plan.operator_source_order_swaps() {
-            solution.sources.swap(left, right);
         }
     }
     snapshot.rel.interner().check_read()?;
@@ -2585,8 +3037,8 @@ where
 }
 
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, for every semi-naive delta position whose delta atom
-/// can match ([`delta_can_match`]).
+/// physical group in execution order, seeded by the partial delta before old
+/// prefixes. Cyclic components keep their certified leapfrog traversal.
 fn join_positive_leapfrog<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
@@ -2601,14 +3053,44 @@ where
             continue;
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
+        let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
+        let seed_in_cycle = reordered && plan.join_groups().iter().any(|group| {
+            matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == delta_position))
+        });
+        if reordered {
+            partial = extend_rebound_solutions(
+                plan.operator_at(delta_position),
+                snapshot.rel,
+                snapshot.delta,
+                snapshot.indexes,
+                Scan::Delta,
+                &partial,
+                governor,
+            )?;
+        }
         for group in plan.join_groups() {
+            if reordered
+                && matches!(group, JoinGroup::Binary(atom) if atom.positive_position() == delta_position)
+            {
+                continue;
+            }
+            if partial.is_empty() || governor.spent() {
+                partial.clear();
+                break;
+            }
             partial = match group {
                 JoinGroup::Binary(planned) => {
                     let operator = plan.operator_at(planned.positive_position());
-                    extend_slot_solutions(
+                    let extend = if reordered {
+                        extend_rebound_solutions
+                    } else {
+                        extend_slot_solutions
+                    };
+                    extend(
                         operator,
                         snapshot.rel,
                         snapshot.delta,
+                        snapshot.indexes,
                         scan_for(planned.positive_position(), delta_position),
                         &partial,
                         governor,
@@ -2621,6 +3103,7 @@ where
                         scan: JoinScan::DeltaPosition(delta_position),
                         rel: snapshot.rel,
                         delta: snapshot.delta,
+                        indexes: snapshot.indexes,
                     },
                     &partial,
                     governor,
@@ -2631,8 +3114,19 @@ where
             }
         }
         for solution in &mut partial {
-            for &(left, right) in plan.hybrid_source_order_swaps() {
-                solution.sources.swap(left, right);
+            if seed_in_cycle {
+                // The seed fixes bindings before any old prefix. The original
+                // group still captures its source in the authored group order.
+                solution.sources.remove(0);
+            }
+            if reordered {
+                solution
+                    .sources
+                    .sort_unstable_by_key(|source| source.body_index);
+            } else {
+                for &(left, right) in plan.hybrid_source_order_swaps() {
+                    solution.sources.swap(left, right);
+                }
             }
         }
         all.extend(partial);
@@ -3249,13 +3743,13 @@ where
             guard: j,
         };
         let rows = {
-            let mut pinned = Vec::with_capacity(guard.inputs.len());
+            let mut inputs = Vec::with_capacity(guard.inputs.len());
             for input in &guard.inputs {
-                let surface = match input {
+                let value = match input {
                     GroupArg::Outer(slot) => probe
                         .solution
-                        .surface(*slot, probe.rel)
-                        .map_err(EvalError::Source)?
+                        .value(*slot)
+                        .as_term()
                         .expect("an outer group variable is bound by the enclosing rule"),
                     GroupArg::Local(local) => match &locals[*local] {
                         Some(LocalValue::Interned(id)) => SlotValue::Interned(*id),
@@ -3264,14 +3758,14 @@ where
                             "a group guard input is bound before it (DlClause scoping)"
                         ),
                     }
-                    .surface(probe.rel)
-                    .map_err(EvalError::Source)?
+                    .as_term()
                     .expect("a local group input is bound before the guard"),
-                    GroupArg::Const(surface) => SlotSurface::Computed(surface),
+                    GroupArg::Const(surface) => DictionaryTerm::Surface(surface)
+                        .canonicalize(probe.rel.interner())
+                        .map_err(EvalError::Source)?,
                 };
-                pinned.push(surface);
+                inputs.push(value);
             }
-            let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
             call_guard(
                 probe.guards,
                 &GuardCall {
@@ -3288,16 +3782,15 @@ where
             if governor.spent() {
                 return Ok(false);
             }
-            for (&local, surface) in guard.outputs.iter().zip(&row) {
+            for (&local, value) in guard.outputs.iter().zip(&row) {
                 locals[local] = Some(
-                    match probe
-                        .rel
-                        .interner()
-                        .lookup_term(surface)
+                    match value
+                        .as_term()
+                        .canonicalize(probe.rel.interner())
                         .map_err(EvalError::Source)?
                     {
-                        Some(id) => LocalValue::Interned(id),
-                        None => LocalValue::Computed(surface.as_str().into()),
+                        DictionaryTerm::Id(id) => LocalValue::Interned(id),
+                        DictionaryTerm::Surface(surface) => LocalValue::Computed(surface.into()),
                     },
                 );
             }
@@ -3324,7 +3817,7 @@ fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<Vec<String>>, EvalError<D::Error>>
+) -> Result<crate::guard::GuardRows<D::Id>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -3339,9 +3832,13 @@ where
             guard: call.guard.name().to_owned(),
             message,
         };
-        let rows = guards
-            .evaluate(call)
-            .map_err(|error| error.into_eval_error(refuse))?;
+        let rows = match call.guard.operation().filter(call.inputs) {
+            Some(true) => vec![Vec::new()],
+            Some(false) => Vec::new(),
+            None => guards
+                .evaluate(call)
+                .map_err(|error| error.into_eval_error(refuse))?,
+        };
         let width = call.guard.outputs().len();
         for row in &rows {
             if !governor.charge() {
@@ -3385,8 +3882,8 @@ where
     /// Independent positive components, certified without opaque callbacks.
     factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
-    /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
-    /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
+    /// order. A conjunctive head asserts every conjunct from one body solution under
+    /// both the stratified fixpoint and the ordered schedule ([`crate::schedule`]).
     head: Vec<[ArgShape; N]>,
     /// The rule's negated body atoms, in authored order.
     negated: Vec<NegatedAtom<N>>,
@@ -3488,15 +3985,15 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        let value = match self {
-            Self::Interned(id) => SlotValue::Interned(*id),
-            Self::Fresh(surface) => SlotValue::Computed(surface.as_ref()),
-        };
-        Ok(value
-            .surface(rel)?
-            .expect("a head term is bound")
-            .as_ref()
-            .to_owned())
+        Ok(self.as_term().lexical(rel.interner())?.as_ref().to_owned())
+    }
+
+    /// Borrow a publication argument without resolving its original identity.
+    fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
+            Self::Interned(id) => DictionaryTerm::Id(*id),
+            Self::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
+        }
     }
 }
 
@@ -3549,6 +4046,8 @@ where
 {
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The authored head ordinal, also distinguishing repeated head atoms.
+    head: usize,
     /// The matched body rows, in authored body order.
     sources: Vec<SourceRow<I, N>>,
     /// `1 + max(source proof heights)`.
@@ -3583,14 +4082,15 @@ where
     /// Whether this candidate beats `other` for the same head fact.
     ///
     /// A TOTAL order over observable provenance:
-    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts)`,
-    /// smallest wins. Every component is content-derived — proof heights, lexical fact
-    /// surfaces and the authored rule position — so the winner is a function of the
+    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
+    /// head ordinal)`,
+    /// smallest wins. Every component is content-derived — proof heights, the
+    /// dictionary's canonical fact order and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
     ///
-    /// The comparison resolves lexical surfaces, so it is deliberately staged: the cheap
-    /// numeric prefix decides almost every real collision, and the allocating tail runs
-    /// only on an exact numeric tie.
+    /// The comparison is deliberately staged: the cheap numeric prefix decides
+    /// almost every real collision, and the dictionary-ordered source tail runs
+    /// only on an exact numeric tie. Native dictionaries need no lexical projection.
     fn preferred_over<D: TermDictionary<Id = I>>(
         &self,
         other: &Self,
@@ -3603,11 +4103,11 @@ where
             || source_preference(&self.sources, self.rule, &other.sources, other.rule, rel),
         )?;
         rel.interner().check_read()?;
-        Ok(order.is_lt())
+        Ok(order.then_with(|| self.head.cmp(&other.head)).is_lt())
     }
 }
 
-/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+/// The canonical numeric prefix, comparing the source tail only on a tie.
 fn witness_preference<E>(
     mine: (u32, u64),
     theirs: (u32, u64),
@@ -3619,7 +4119,7 @@ fn witness_preference<E>(
     }
 }
 
-/// The lexical tail of the canonical witness law, shared with projected frontiers.
+/// The dictionary-ordered tail of the canonical witness law.
 fn source_preference<D: TermDictionary, const N: usize>(
     mine: &[SourceRow<D::Id, N>],
     my_rule: usize,
@@ -3631,16 +4131,25 @@ where
     Arity<N>: StoreShape<N>,
 {
     rel.interner().check_read()?;
-    let mine: Vec<_> = mine
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
-    let theirs: Vec<_> = theirs
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
+    let compare = |left: &SourceRow<D::Id, N>, right: &SourceRow<D::Id, N>| {
+        rel.interner().compare_rows(
+            &left.terms.map(DictionaryTerm::Id),
+            &right.terms.map(DictionaryTerm::Id),
+        )
+    };
+    let mut mine_sorted = mine.to_vec();
+    let mut theirs_sorted = theirs.to_vec();
+    purrdf_lex::walk::try_sort_unstable_by(&mut mine_sorted, compare)?;
+    purrdf_lex::walk::try_sort_unstable_by(&mut theirs_sorted, compare)?;
+    let mut order = crate::dictionary::compare_sequences(&mine_sorted, &theirs_sorted, compare)?;
+    if order.is_eq() {
+        order = my_rule.cmp(&their_rule);
+    }
+    if order.is_eq() {
+        order = crate::dictionary::compare_sequences(mine, theirs, compare)?;
+    }
     rel.interner().check_read()?;
-    Ok(fact_preference(&mine, my_rule, &theirs, their_rule))
+    Ok(order)
 }
 
 /// The lexical tail over owned surfaces, also valid after a store rebuild.
@@ -3683,12 +4192,15 @@ where
             (other.derivation.proof_height, other.sum_source_height),
             (self.derivation.proof_height, self.sum_source_height),
             || {
-                Ok::<_, core::convert::Infallible>(fact_preference(
-                    &other.derivation.sources,
-                    other.derivation.rule,
-                    &self.derivation.sources,
-                    self.derivation.rule,
-                ))
+                Ok::<_, core::convert::Infallible>(
+                    fact_preference(
+                        &other.derivation.sources,
+                        other.derivation.rule,
+                        &self.derivation.sources,
+                        self.derivation.rule,
+                    )
+                    .then_with(|| other.derivation.head.cmp(&self.derivation.head)),
+                )
             },
         )
         .unwrap_or_else(|never| match never {})
@@ -3840,6 +4352,8 @@ where
     /// ([`crate::schedule::LayerHooks`]) and will retract at its end unless a rule derives
     /// it too; a rule that re-derives one is recorded in [`RoundBuffer::confirmed`].
     pub(crate) assumed: &'a [bool],
+    /// Shared physical runs; direct rule probes prepare their own owner.
+    pub(crate) delta_indexes: Option<&'a DeltaIndexes<D::Id>>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for RoundSnapshot<'_, D, N> where
@@ -3878,21 +4392,20 @@ where
 /// Both policies feed the SAME program-order merge and the same sorted commit, so
 /// scheduling cannot affect an answer or a budget observation — which is exactly what
 /// `sequential_and_parallel_rounds_agree` asserts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RoundExecution {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RoundExecution {
     /// Evaluate rules into independent buffers, then merge them in program order.
     ///
-    /// Production's only policy. It already degrades to the direct in-order path for a
+    /// The default policy. It degrades to the direct in-order path for a
     /// single-rule round, for a round holding a guarded rule (a guard runs on the calling
     /// thread — see [`crate::guard`]) and for a one-worker pool — which is every `wasm32`
     /// build.
+    #[default]
     Parallel,
     /// Force the direct in-order path even where rayon would be used.
     ///
-    /// Test-only, for the same reason [`JoinStrategy::ForcedBinary`] is: scheduling may
-    /// not change an answer, so this exists to assert that it does not, never to let a
-    /// caller weaken production execution.
-    #[cfg(test)]
+    /// Selectable per call through [`EvalOptions::with_round_execution`]. The
+    /// same kernels and merge order run without activating a global worker pool.
     Sequential,
 }
 
@@ -3918,11 +4431,295 @@ fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
     strategy: JoinStrategy,
     governor: StepGovernor,
     guards: &dyn GuardEvaluator<D, N>,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
-    evaluate_rule_with_evidence(entry, snapshot, strategy, governor, guards, None)
+    evaluate_rule_with_evidence(
+        entry,
+        snapshot,
+        strategy,
+        governor,
+        guards,
+        None,
+        full_counts,
+    )
+}
+
+/// Apply an authored guard range through the one production callback/filter path.
+fn apply_body_guards<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    rel: &RelationStore<D, N>,
+    mut solutions: Vec<SlotSolution<D::Id, N>>,
+    positions: std::ops::Range<usize>,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    for position in positions {
+        let guard = &entry.runtime.guards[position];
+        let declared = &entry.rule.guards()[position];
+        let mut extended = Vec::with_capacity(solutions.len());
+        for solution in solutions {
+            if governor.spent() {
+                break;
+            }
+            let rows = {
+                let inputs = guard
+                    .inputs
+                    .iter()
+                    .map(|&slot| {
+                        solution
+                            .value(slot)
+                            .as_term()
+                            .expect("a guard input is bound before the guard (DlClause scoping)")
+                    })
+                    .collect::<SmallVec<[_; INLINE_BINDING_SLOTS]>>();
+                call_guard(
+                    guards,
+                    &GuardCall {
+                        rule: entry.index,
+                        site: GuardSite::Body(position),
+                        guard: declared,
+                        inputs: &inputs,
+                        model: rel,
+                    },
+                    governor,
+                )?
+            };
+            for row in rows {
+                let mut next = solution.clone();
+                for (&slot, value) in guard.outputs.iter().zip(&row) {
+                    next.bind_value(slot, value, rel)
+                        .map_err(EvalError::Source)?;
+                }
+                extended.push(next);
+            }
+        }
+        solutions = extended;
+    }
+    Ok(solutions)
+}
+
+/// Extend one movable positive segment through the shared native join kernels.
+/// A partial delta can lead inside its segment, but cannot cross an authored
+/// guard barrier. The original scan ordinals and premise order remain logical.
+fn extend_ordered_segment<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    scan: JoinScan,
+    body: std::ops::Range<usize>,
+    mut partial: Vec<SlotSolution<D::Id, N>>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let cyclic = !matches!(scan, JoinScan::Uniform(_))
+        && plan.has_cyclic_subplan()
+        && matches!(strategy, JoinStrategy::Planned);
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor)
+            if snapshot.delta != Delta::all(snapshot.rel.row_count())
+                && body.contains(&plan.operator_at(anchor).body_index()) =>
+        {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    let seed_in_cycle = cyclic
+        && seed.is_some_and(|anchor| {
+            plan.join_groups().iter().any(|group| {
+                matches!(group, JoinGroup::Leapfrog(cycle)
+                if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+            })
+        });
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            plan.operator_at(anchor),
+            snapshot.rel,
+            snapshot.delta,
+            snapshot.indexes,
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
+    if cyclic {
+        for group in plan.join_groups().iter().filter(|group| {
+            let first = match group {
+                JoinGroup::Binary(atom) => atom.body_index(),
+                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].body_index(),
+            };
+            body.contains(&first)
+        }) {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
+            partial = match group {
+                JoinGroup::Binary(atom) => extend_rebound_solutions(
+                    plan.operator_at(atom.positive_position()),
+                    snapshot.rel,
+                    snapshot.delta,
+                    snapshot.indexes,
+                    scan.at(atom.positive_position()),
+                    &partial,
+                    governor,
+                ),
+                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
+                    &LeapfrogRun {
+                        plan,
+                        cycle,
+                        scan,
+                        rel: snapshot.rel,
+                        delta: snapshot.delta,
+                        indexes: snapshot.indexes,
+                    },
+                    &partial,
+                    governor,
+                ),
+            }
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    } else {
+        for operator in plan
+            .operators()
+            .iter()
+            .filter(|operator| body.contains(&operator.body_index()))
+        {
+            if seed == Some(operator.positive_position()) {
+                continue;
+            }
+            partial = extend_rebound_solutions(
+                operator,
+                snapshot.rel,
+                snapshot.delta,
+                snapshot.indexes,
+                scan.at(operator.positive_position()),
+                &partial,
+                governor,
+            )
+            .map_err(EvalError::Source)?;
+            if partial.is_empty() || governor.spent() {
+                break;
+            }
+        }
+    }
+    if seed_in_cycle {
+        for solution in &mut partial {
+            solution.sources.remove(body.start);
+        }
+    }
+    Ok(partial)
+}
+
+/// Join authored positive segments, applying each guard before later probes.
+/// Binary and certified cyclic segments use the existing join kernels.
+fn join_ordered_body<D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'_, N>,
+    snapshot: JoinSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    guards: &dyn GuardEvaluator<D, N>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let plan = entry.plan;
+    let barriers = entry
+        .rule
+        .guard_positions()
+        .expect("ordered execution has authored guard barriers");
+    let base = plan
+        .operators()
+        .iter()
+        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
+    if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
+        // No body relation changed: this round creates no new obligation to run
+        // guards. Test the whole body, because an empty later atom cannot erase
+        // a guard reached through a changed earlier prefix.
+        let mut changed = false;
+        for operator in plan.operators() {
+            if delta_can_match(operator, snapshot).map_err(EvalError::Source)? {
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            return Ok(Vec::new());
+        }
+    }
+    let anchors = if base {
+        0..1
+    } else {
+        snapshot.delta_positions(plan.positive().len())
+    };
+    let mut all = Vec::new();
+    for anchor in anchors {
+        // Even an empty later delta probe cannot suppress an earlier guard's
+        // failure. Only the segment reaching that probe may discover it is empty.
+        // A guard-first body consumes the empty conjunction's unit binding
+        // before invoking opaque code, even when that code returns no rows.
+        if barriers.first() == Some(&0) && !governor.charge() {
+            break;
+        }
+        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
+        let mut start = 0;
+        for (position, end) in barriers
+            .iter()
+            .copied()
+            .chain(std::iter::once(entry.rule.body().len()))
+            .enumerate()
+        {
+            partial = extend_ordered_segment(
+                entry,
+                snapshot,
+                strategy,
+                if base {
+                    JoinScan::Uniform(Scan::Full)
+                } else {
+                    JoinScan::DeltaPosition(anchor)
+                },
+                start..end,
+                partial,
+                governor,
+            )?;
+            if partial.is_empty() || governor.spent() {
+                partial.clear();
+                break;
+            }
+            if position < barriers.len() {
+                partial = apply_body_guards(
+                    entry,
+                    snapshot.rel,
+                    partial,
+                    position..position + 1,
+                    guards,
+                    governor,
+                )?;
+            }
+            start = end;
+        }
+        for solution in &mut partial {
+            solution
+                .sources
+                .sort_unstable_by_key(|source| source.body_index);
+        }
+        all.extend(partial);
+        if governor.spent() {
+            break;
+        }
+    }
+    Ok(all)
 }
 
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
@@ -3932,10 +4729,31 @@ fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     mut governor: StepGovernor,
     guards: &dyn GuardEvaluator<D, N>,
     mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+    full_counts: Option<&[Option<usize>]>,
 ) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
+    let owned_counts = if full_counts.is_none() {
+        Some(
+            constant_pattern_counts(entry.plan, snapshot.rel, entry.delta)
+                .map_err(EvalError::Source)?,
+        )
+    } else {
+        None
+    };
+    let full_counts = full_counts
+        .or(owned_counts.as_deref())
+        .expect("the rule's metadata advice was prepared");
     snapshot
         .rel
         .interner()
@@ -3943,62 +4761,45 @@ where
         .map_err(EvalError::Source)?;
     let result = (|| {
         let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
-        if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
+        if entry.delta != Delta::all(rel.row_count())
+            && entry.rule.guard_positions().is_none()
+            && plan.operators().len() > 1
+            && !entry.rule.reads_base()
+            && full_counts.contains(&Some(0))
+        {
+            return Ok(RoundBuffer::new());
+        }
+        if entry.rule.guard_positions().is_none()
+            && runtime.factors.len() > 1
+            && matches!(strategy, JoinStrategy::Planned)
+        {
             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
         }
-        let mut solutions = join_body(
-            plan,
-            JoinSnapshot {
+        let join_snapshot = JoinSnapshot {
+            rel,
+            delta: entry.delta,
+            indexes: snapshot.delta_indexes.expect("delta indexes were prepared"),
+        };
+        let mut solutions = if entry.rule.guard_positions().is_some() {
+            join_ordered_body(entry, join_snapshot, strategy, guards, &mut governor)?
+        } else {
+            let solutions = join_body(
+                plan,
+                join_snapshot,
+                strategy,
+                &mut governor,
+                Some(full_counts),
+            )
+            .map_err(EvalError::Source)?;
+            apply_body_guards(
+                entry,
                 rel,
-                delta: entry.delta,
-            },
-            strategy,
-            &mut governor,
-        )
-        .map_err(EvalError::Source)?;
-
-        for (position, guard) in runtime.guards.iter().enumerate() {
-            let declared = &entry.rule.guards()[position];
-            let mut extended = Vec::with_capacity(solutions.len());
-            for solution in solutions {
-                if governor.spent() {
-                    break;
-                }
-                let rows = {
-                    let pinned = guard
-                        .inputs
-                        .iter()
-                        .map(|&slot| {
-                            Ok(solution.surface(slot, rel)?.expect(
-                                "a guard input is bound before the guard (DlClause scoping)",
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, D::Error>>()
-                        .map_err(EvalError::Source)?;
-                    let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
-                    call_guard(
-                        guards,
-                        &GuardCall {
-                            rule: entry.index,
-                            site: GuardSite::Body(position),
-                            guard: declared,
-                            inputs: &inputs,
-                            model: rel,
-                        },
-                        &mut governor,
-                    )?
-                };
-                for row in rows {
-                    let mut next = solution.clone();
-                    for (&slot, surface) in guard.outputs.iter().zip(&row) {
-                        next.bind_surface(slot, surface, rel)
-                            .map_err(EvalError::Source)?;
-                    }
-                    extended.push(next);
-                }
-            }
-            solutions = extended;
-        }
+                solutions,
+                0..runtime.guards.len(),
+                guards,
+                &mut governor,
+            )?
+        };
 
         if !runtime.negated.is_empty() || !runtime.negations.is_empty() {
             let mut kept = Vec::with_capacity(solutions.len());
@@ -4065,6 +4866,7 @@ where
                     snapshot,
                     &mut evidence,
                     HeadEvidence {
+                        head: position,
                         witness: None,
                         uses_absence: !runtime.negated.is_empty() || !runtime.negations.is_empty(),
                     },
@@ -4085,6 +4887,7 @@ where
 /// The witness and absence dependency of one emitted head.
 #[derive(Clone, Copy)]
 struct HeadEvidence {
+    head: usize,
     witness: Option<purrdf_core::evidence::EvidenceId>,
     uses_absence: bool,
 }
@@ -4137,6 +4940,7 @@ where
                 derivation: Derivation {
                     fact: key.fact(rel).map_err(EvalError::Source)?,
                     rule,
+                    head: head_evidence.head,
                     sources: solution
                         .sources
                         .iter()
@@ -4161,6 +4965,7 @@ where
             key,
             Candidate {
                 rule,
+                head: head_evidence.head,
                 sources: solution.sources.clone(),
                 proof_height: proof_height.saturating_add(1),
                 sum_source_height,
@@ -4281,6 +5086,19 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    // Every task sees the same pre-task access-path state, including on the
+    // sequential policy. An earlier task's lazy index cannot change a later
+    // task's join order or candidate charges.
+    let full_counts: Vec<_> = entries
+        .iter()
+        .map(|entry| constant_pattern_counts(entry.plan, snapshot.rel, entry.delta))
+        .collect::<Result<_, _>>()
+        .map_err(EvalError::Source)?;
+    let indexes = DeltaIndexes::build(snapshot.rel, entries.iter().map(|entry| entry.delta))?;
+    let snapshot = RoundSnapshot {
+        delta_indexes: Some(&indexes),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -4291,7 +5109,7 @@ where
         let guarded = entries.iter().any(|entry| entry.rule.is_guarded());
         let mut round = RoundBuffer::new();
         if evidence.is_some() || guarded || !execution.should_parallelize(entries.len()) {
-            for &entry in entries {
+            for (position, &entry) in entries.iter().enumerate() {
                 let buffer = match evidence.as_mut() {
                     Some(owner) => evaluate_rule_with_evidence(
                         entry,
@@ -4300,8 +5118,16 @@ where
                         pool.task(),
                         guards,
                         Some(&mut **owner),
+                        Some(&full_counts[position]),
                     )?,
-                    None => evaluate_rule(entry, snapshot, strategy, pool.task(), guards)?,
+                    None => evaluate_rule(
+                        entry,
+                        snapshot,
+                        strategy,
+                        pool.task(),
+                        guards,
+                        Some(&full_counts[position]),
+                    )?,
                 };
                 round
                     .merge_from(buffer, snapshot.rel)
@@ -4322,7 +5148,17 @@ where
         // evaluator every task receives is the one that refuses every call.
         let buffers: Vec<_> = entries
             .par_iter()
-            .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
+            .enumerate()
+            .map(|(position, &entry)| {
+                evaluate_rule(
+                    entry,
+                    snapshot,
+                    strategy,
+                    pool.task(),
+                    &NoGuards,
+                    Some(&full_counts[position]),
+                )
+            })
             .collect();
 
         for buffer in buffers {
@@ -4356,6 +5192,14 @@ where
     pub(crate) depth: Vec<u32>,
     /// Every committed derivation.
     pub(crate) derivations: Vec<Derivation<N>>,
+    /// Exported evidence requested by the caller.
+    pub(crate) derivation_mode: DerivationMode,
+    /// Per-call scheduling, also used by ordered execution.
+    pub(crate) execution: RoundExecution,
+    /// Unique input facts, before any schedule assumptions.
+    input_facts: u64,
+    /// Successful unique rule insertions.
+    committed_facts: u64,
     /// Candidate solutions enumerated so far.
     pub(crate) join_steps: u64,
     /// A refused reservation, including an observation past u64::MAX.
@@ -4364,6 +5208,8 @@ where
     pub(crate) term_generating_rounds: u64,
     /// The limits in force.
     limits: Limits,
+    /// Caller-stated limits, retained for budget reporting.
+    stated: u8,
     /// The distinct terms of the seeded store.
     input_terms: u64,
     /// The rules that generated a term in the latest term-generating round.
@@ -4378,14 +5224,20 @@ where
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
         let depth = vec![0u32; edb.row_count()];
         let input_terms = edb.interner().term_count();
+        let input_facts = edb.retained_rows() as u64;
         Self {
             rel: edb,
             depth,
             derivations: Vec::new(),
+            derivation_mode: options.derivation_mode(),
+            execution: options.round_execution(),
+            input_facts,
+            committed_facts: 0,
             join_steps: 0,
             join_refused: false,
             term_generating_rounds: 0,
             limits: Limits::of(&options, input_terms),
+            stated: BudgetReport::stated_limits(&options),
             input_terms,
             generating_rules: BTreeSet::new(),
         }
@@ -4396,6 +5248,7 @@ where
         BudgetReport {
             join_steps: self.join_steps,
             stored_facts: self.rel.retained_rows(),
+            flags: self.stated,
             term_arena_bytes: self.rel.term_bytes(),
             term_generating_rounds: self.term_generating_rounds,
             generated_terms: self
@@ -4408,14 +5261,6 @@ where
         }
     }
 
-    /// The report that would describe the state if it also held `extra` more facts.
-    fn projected_report(&self, extra: usize) -> BudgetReport {
-        BudgetReport {
-            stored_facts: self.rel.retained_rows().saturating_add(extra),
-            ..self.report()
-        }
-    }
-
     /// One round's shared remaining successful credits.
     pub(crate) fn allowance(&self) -> u64 {
         self.limits.join_steps.saturating_sub(self.join_steps)
@@ -4425,11 +5270,11 @@ where
     ///
     /// # Errors
     ///
-    /// [`EvalError::BudgetExhausted`] when the round passed a ceiling — decided before a
-    /// single surface is materialised where the fact count alone proves it.
+    /// [`EvalError::BudgetExhausted`] when work or an individual fact admission
+    /// passes a ceiling. Facts already admitted remain within the stated limit.
     pub(crate) fn absorb(
         &mut self,
-        round: RoundBuffer<'_, D::Id, N>,
+        mut round: RoundBuffer<'_, D::Id, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
@@ -4437,21 +5282,16 @@ where
         if round.entries.is_empty() {
             return Ok(());
         }
-        // Every entry was gated on absence from the store when it was created, and the
-        // entries are unique by head fact, so this projection is exact rather than an
-        // over-estimate: the limit is decided before a single surface is materialised.
-        let projected = self.rel.retained_rows().saturating_add(round.entries.len());
-        if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
-            return Err(EvalError::BudgetExhausted {
-                resource: BudgetResource::StoredFacts,
-                report: self.projected_report(round.entries.len()),
-            });
-        }
-        if round.generates_terms {
-            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
-            self.generating_rules.clone_from(&round.generating_rules);
-        }
+        let generates_terms = round.generates_terms;
+        let generating_rules = std::mem::take(&mut round.generating_rules);
         commit_round(round, self)?;
+        // A fact-limit refusal may commit only a prefix. Count a generating
+        // round only once its whole commit completes; retained term bytes and
+        // generated terms already report the exact admitted prefix.
+        if generates_terms {
+            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
+            self.generating_rules = generating_rules;
+        }
         check_budget(self)
     }
 }
@@ -4553,15 +5393,15 @@ where
         stop,
         guards,
         *options,
-        RoundExecution::Parallel,
+        options.round_execution(),
         JoinStrategy::Planned,
     )
 }
 
 /// The policy-selectable implementation behind [`evaluate`].
 ///
-/// The policies are private: a caller may neither weaken production scheduling nor
-/// override the planner's join choice. The tests use them to prove the alternatives agree.
+/// Scheduling is caller-selected; the join strategy remains planner-owned.
+/// Tests use the private join override to prove both kernels agree.
 fn evaluate_with<D: TermDictionary, const N: usize>(
     exe: &Executable<N>,
     edb: RelationStore<D, N>,
@@ -4642,7 +5482,7 @@ where
             stop,
             guards,
             *options,
-            RoundExecution::Parallel,
+            options.round_execution(),
             JoinStrategy::Planned,
         )?;
         for (row, _) in evaluation.facts.rows_from(rows.row_count()) {
@@ -4662,7 +5502,7 @@ where
         StratumRun {
             stop,
             guards,
-            execution: RoundExecution::Parallel,
+            execution: options.round_execution(),
             strategy: JoinStrategy::Planned,
         },
         &mut Some(&mut capture),
@@ -4728,8 +5568,14 @@ where
         self.derivations.sort();
         Evaluation {
             budget: self.report(),
+            work: WorkReport {
+                input_facts: self.input_facts,
+                committed_facts: self.committed_facts,
+                join_steps: self.join_steps,
+            },
             facts: self.rel,
-            derivations: self.derivations,
+            derivations: (self.derivation_mode == DerivationMode::Record)
+                .then_some(self.derivations),
         }
     }
 }
@@ -4759,7 +5605,7 @@ where
             report,
         });
     }
-    if report.term_arena_bytes > MAX_TERM_ARENA_BYTES {
+    if report.term_arena_bytes as u64 > report.limits.term_arena_bytes {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::TermArenaBytes,
             report,
@@ -4861,6 +5707,7 @@ where
                 rel: &state.rel,
                 depth: &state.depth,
                 assumed: &[],
+                delta_indexes: None,
             },
             run.execution,
             run.strategy,
@@ -4911,19 +5758,46 @@ fn commit_round<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let mut winners = round
+    let mut winners: Vec<_> = round
         .entries
         .into_iter()
-        .map(|(key, candidate)| Ok::<_, D::Error>((key.fact(&state.rel)?, key, candidate)))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|(key, candidate)| {
+            let fact = if state.derivation_mode == DerivationMode::Record {
+                Some(key.fact(&state.rel)?)
+            } else {
+                None
+            };
+            Ok::<_, D::Error>((key, candidate, fact))
+        })
+        .collect::<Result<_, _>>()
         .map_err(EvalError::Source)?;
-    // Head facts are unique in a round buffer, so the lexical order is total.
-    winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+    // Head facts are unique in a round buffer. The dictionary supplies the
+    // canonical order without requiring a lexical projection of model-only rows.
+    purrdf_lex::walk::try_sort_unstable_by(&mut winners, |(left, _, _), (right, _, _)| {
+        state.rel.interner().compare_rows(
+            &left.terms().map(HeadTerm::as_term),
+            &right.terms().map(HeadTerm::as_term),
+        )
+    })
+    .map_err(EvalError::Source)?;
 
-    for (fact, key, candidate) in winners {
-        let sources = candidate
-            .source_facts(&state.rel)
-            .map_err(EvalError::Source)?;
+    for (key, candidate, fact) in winners {
+        state
+            .report()
+            .admit_fact()
+            .map_err(|report| EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                report,
+            })?;
+        let sources = if state.derivation_mode == DerivationMode::Record {
+            Some(
+                candidate
+                    .source_facts(&state.rel)
+                    .map_err(EvalError::Source)?,
+            )
+        } else {
+            None
+        };
         let terms = key.terms().map(|term| match term {
             HeadTerm::Interned(id) => DictionaryTerm::Id(*id),
             HeadTerm::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
@@ -4941,12 +5815,16 @@ where
             "depth tracks store rows"
         );
         state.depth.push(candidate.proof_height);
-        state.derivations.push(Derivation {
-            fact,
-            rule: candidate.rule,
-            sources,
-            proof_height: candidate.proof_height,
-        });
+        state.committed_facts = state.committed_facts.saturating_add(1);
+        if let Some(sources) = sources {
+            state.derivations.push(Derivation {
+                fact: fact.expect("recorded winners project their facts before publication"),
+                rule: candidate.rule,
+                head: candidate.head,
+                sources,
+                proof_height: candidate.proof_height,
+            });
+        }
     }
     Ok(())
 }
@@ -4961,6 +5839,322 @@ mod tests {
     use crate::synth_corpus::{self, SynthWorkload};
     use crate::test_support::evidence_scope;
     use crate::test_support::permute;
+
+    #[test]
+    fn impossible_constant_patterns_refuse_before_broad_delta_seeding() {
+        let broad = ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::var("?p"),
+            ClauseTerm::var("?o"),
+        );
+        let declared = ClauseAtom::triple(
+            ClauseTerm::var("?p"),
+            ClauseTerm::literal("declared"),
+            ClauseTerm::literal("missing"),
+        );
+        let head = ClauseAtom::triple(
+            ClauseTerm::var("?s"),
+            ClauseTerm::literal("out"),
+            ClauseTerm::var("?o"),
+        );
+        let program = compile(vec![DlClause::datalog(head, vec![broad, declared])]).unwrap();
+        let (rule, plan) = program.rule_entry(0);
+        let runtime = RuleRuntime::new(rule, plan);
+        let mut store = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for row in [
+            ["p", "declared", "active"],
+            ["missing", "exists", "yes"],
+            ["a", "p", "b"],
+        ] {
+            store.insert_row(row).unwrap();
+        }
+        let depth = vec![0; store.row_count()];
+        let pool = StepGovernor::new(0);
+        let result = evaluate_rule(
+            RuleEntry {
+                index: 0,
+                rule,
+                plan,
+                runtime: &runtime,
+                delta: Delta { lo: 2, hi: 3 },
+            },
+            RoundSnapshot {
+                rel: &store,
+                depth: &depth,
+                assumed: &[],
+                delta_indexes: None,
+            },
+            JoinStrategy::Planned,
+            pool.task(),
+            &NoGuards,
+            None,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert_eq!(pool.observed(), 0);
+        assert!(
+            !pool.spent(),
+            "an impossible indexed pattern needs no candidate admission"
+        );
+    }
+
+    #[test]
+    fn round_work_does_not_depend_on_another_tasks_index_warming() {
+        let atom = |subject: &str, predicate: &str, object: &str| {
+            ClauseAtom::triple(
+                if subject.starts_with('?') {
+                    ClauseTerm::var(subject)
+                } else {
+                    ClauseTerm::literal(subject)
+                },
+                ClauseTerm::literal(predicate),
+                if object.starts_with('?') {
+                    ClauseTerm::var(object)
+                } else {
+                    ClauseTerm::literal(object)
+                },
+            )
+        };
+        let program = compile(vec![
+            DlClause::datalog(
+                atom("?s", "out", "?tag"),
+                vec![atom("?s", "p", "needle"), atom("?s", "q", "?tag")],
+            ),
+            DlClause::datalog(
+                atom("?s", "warmed", "needle"),
+                vec![atom("?s", "p", "needle")],
+            ),
+        ])
+        .unwrap();
+        let (target, target_plan) = program.rule_entry(0);
+        let (warmer, warmer_plan) = program.rule_entry(1);
+        let target_runtime = RuleRuntime::new(target, target_plan);
+        let warmer_runtime = RuleRuntime::new(warmer, warmer_plan);
+        let mut original =
+            RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for index in 0..1000 {
+            let subject = format!("s{index}");
+            let object = if index == 0 {
+                "needle".to_owned()
+            } else {
+                format!("other{index}")
+            };
+            original.insert_row([&subject, "p", &object]).unwrap();
+        }
+        let lo = original.row_count();
+        for index in 0..5 {
+            original
+                .insert_row([&format!("s{index}"), "q", "tag"])
+                .unwrap();
+        }
+        let mut observations = Vec::new();
+        for warm_first in [false, true] {
+            let store = original.clone();
+            let target = RuleEntry {
+                index: 0,
+                rule: target,
+                plan: target_plan,
+                runtime: &target_runtime,
+                delta: Delta {
+                    lo,
+                    hi: store.row_count(),
+                },
+            };
+            let warmer = RuleEntry {
+                index: 1,
+                rule: warmer,
+                plan: warmer_plan,
+                runtime: &warmer_runtime,
+                delta: Delta::all(store.row_count()),
+            };
+            let entries = if warm_first {
+                [warmer, target]
+            } else {
+                [target, warmer]
+            };
+            let round = evaluate_round(
+                &entries,
+                RoundSnapshot {
+                    rel: &store,
+                    depth: &vec![0; store.row_count()],
+                    assumed: &[],
+                    delta_indexes: None,
+                },
+                RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                u64::MAX,
+                &NoGuards,
+            )
+            .unwrap();
+            observations.push((
+                round.join_steps,
+                round.entries.keys().cloned().collect::<Vec<_>>(),
+            ));
+        }
+        assert_eq!(
+            observations[0], observations[1],
+            "task order must not select a different physical join"
+        );
+    }
+
+    #[test]
+    fn partial_delta_cursors_never_visit_the_old_label_history() {
+        const LABEL: &str = "https://example.org/label";
+        const EDGE: &str = "https://example.org/edge";
+        let label = |subject: &str| {
+            ClauseAtom::positive(
+                ClauseTerm::var(subject),
+                LABEL,
+                ClauseTerm::iri("https://example.org/marked"),
+            )
+        };
+        let program = compile(vec![DlClause::datalog(
+            label("?y"),
+            vec![
+                label("?x"),
+                ClauseAtom::positive(ClauseTerm::var("?x"), EDGE, ClauseTerm::var("?y")),
+            ],
+        )])
+        .unwrap();
+        let (_, plan) = program.rule_entry(0);
+        for count in [100, 1000, 10_000] {
+            let mut store = RelationStore::default();
+            for index in 0..count {
+                store
+                    .insert(
+                        &format!("old{index}"),
+                        &format!("<{LABEL}>"),
+                        "<https://example.org/marked>",
+                        "",
+                    )
+                    .unwrap();
+            }
+            let edge = store
+                .insert("frontier", &format!("<{EDGE}>"), "end", "")
+                .unwrap()
+                .unwrap()
+                .2;
+            let lo = store.row_count();
+            let fresh = store
+                .insert(
+                    "frontier",
+                    &format!("<{LABEL}>"),
+                    "<https://example.org/marked>",
+                    "",
+                )
+                .unwrap()
+                .unwrap()
+                .2;
+            let delta = Delta {
+                lo,
+                hi: store.row_count(),
+            };
+            let indexes =
+                DeltaIndexes::build(&store, [delta, delta, Delta::all(store.row_count())]).unwrap();
+            assert_eq!(
+                indexes.runs.len(),
+                1,
+                "rules share each partial run and borrow the all-row seed"
+            );
+            let mut governor = StepGovernor::new(10);
+            let solutions = join_body(
+                plan,
+                JoinSnapshot {
+                    rel: &store,
+                    delta,
+                    indexes: &indexes,
+                },
+                JoinStrategy::Planned,
+                &mut governor,
+                None,
+            )
+            .unwrap();
+            assert_eq!(solutions.len(), 1);
+            assert_eq!(
+                governor.row_visits, 2,
+                "cursor work must exclude old label rows"
+            );
+            assert_eq!(
+                solutions[0]
+                    .sources
+                    .iter()
+                    .map(|source| source.row)
+                    .collect::<Vec<_>>(),
+                [fresh, edge]
+            );
+        }
+    }
+
+    #[test]
+    fn late_delta_anchor_binds_before_a_large_old_prefix() {
+        for count in [100, 1000] {
+            let mut store = RelationStore::default();
+            for index in 0..count {
+                store
+                    .insert(
+                        &format!("s{index}"),
+                        "<https://example.org/p>",
+                        &format!("m{index}"),
+                        "",
+                    )
+                    .unwrap();
+            }
+            let lo = store.row_count();
+            store
+                .insert("m0", "<https://example.org/q>", "end", "")
+                .unwrap();
+            let atom = |subject: &str, predicate: &str, object: &str| {
+                ClauseAtom::positive(ClauseTerm::var(subject), predicate, ClauseTerm::var(object))
+            };
+            let program = compile(vec![DlClause::datalog(
+                atom("?s", "https://example.org/out", "?o"),
+                vec![
+                    atom("?s", "https://example.org/p", "?m"),
+                    atom("?m", "https://example.org/q", "?o"),
+                ],
+            )])
+            .unwrap();
+            let (_, plan) = program.rule_entry(0);
+            assert_eq!(
+                plan.operators()
+                    .iter()
+                    .map(AtomOperator::body_index)
+                    .collect::<Vec<_>>(),
+                [0, 1]
+            );
+            let mut governor = StepGovernor::new(10);
+            let delta = Delta {
+                lo,
+                hi: store.row_count(),
+            };
+            let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
+            let solutions = join_positive_binary(
+                plan,
+                JoinSnapshot {
+                    rel: &store,
+                    delta,
+                    indexes: &indexes,
+                },
+                &mut governor,
+                &constant_pattern_counts(plan, &store, delta).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(solutions.len(), 1);
+            assert_eq!(
+                governor.observed(),
+                2,
+                "old prefixes must not consume candidate credit"
+            );
+            assert_eq!(
+                solutions[0]
+                    .sources
+                    .iter()
+                    .map(|source| source.body_index)
+                    .collect::<Vec<_>>(),
+                [0, 1]
+            );
+        }
+    }
 
     #[test]
     fn capacity_cause_stays_inline_without_inflating_the_operational_error() {
@@ -5023,9 +6217,11 @@ mod tests {
             JoinSnapshot {
                 rel: &store,
                 delta: Delta::all(2),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             JoinStrategy::Planned,
             &mut StepGovernor::new(u64::MAX),
+            None,
         )
         .unwrap();
         assert_eq!(solutions.len(), 2);
@@ -5052,6 +6248,7 @@ mod tests {
                         key,
                         Candidate {
                             rule: 0,
+                            head: 0,
                             sources: solution.sources.clone(),
                             proof_height: 1,
                             sum_source_height: 0,
@@ -5143,9 +6340,11 @@ mod tests {
                     rel: &store,
                     depth: &[0, 0],
                     assumed: &[],
+                    delta_indexes: None,
                 },
                 &mut Some(&mut capture),
                 HeadEvidence {
+                    head: 0,
                     witness: None,
                     uses_absence: false,
                 },
@@ -5193,20 +6392,22 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
-                self.calls.fetch_add(1, Ordering::Relaxed);
-                if call.guard.name() == "produce" {
-                    assert_eq!(call.inputs, ["triple", "member"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
-                    if self.lose_source {
-                        call.model.interner().lost.store(true, Ordering::Relaxed);
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
+                call.evaluate_lexical(|inputs| {
+                    self.calls.fetch_add(1, Ordering::Relaxed);
+                    if call.guard.name() == "produce" {
+                        assert_eq!(inputs, ["triple", "member"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
+                        if self.lose_source {
+                            call.model.interner().lost.store(true, Ordering::Relaxed);
+                        }
+                        Ok(vec![vec!["fresh".into()]])
+                    } else {
+                        assert_eq!(inputs, ["fresh"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
+                        Ok(vec![Vec::new()])
                     }
-                    Ok(vec![vec!["fresh".into()]])
-                } else {
-                    assert_eq!(call.inputs, ["fresh"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
-                    Ok(vec![Vec::new()])
-                }
+                })
             }
         }
         let rule = DlClause::datalog(atom("?a", R, "?b"), vec![atom("?a", P, "?b")])
@@ -5260,9 +6461,11 @@ mod tests {
                 JoinSnapshot {
                     rel: &store,
                     delta: Delta::all(3),
+                    indexes: &DeltaIndexes { runs: Vec::new() },
                 },
                 JoinStrategy::Planned,
                 &mut StepGovernor::new(u64::MAX),
+                None,
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
@@ -5301,7 +6504,9 @@ mod tests {
             );
             store.interner().lost.store(false, Ordering::Relaxed);
             let mut binding = SlotSolution::empty(1);
-            binding.bind_surface(0, "triple", &store).unwrap();
+            binding
+                .bind_value(0, &DictionaryValue::from("triple"), &store)
+                .unwrap();
             assert_eq!(binding.get(0), Some(TRIPLE));
             let before = binding.clone();
             store
@@ -5309,7 +6514,7 @@ mod tests {
                 .lose_after_lookup
                 .store(true, Ordering::Relaxed);
             assert_eq!(
-                binding.bind_surface(0, "unknown", &store),
+                binding.bind_value(0, &DictionaryValue::from("unknown"), &store),
                 Err(SourceLost(99))
             );
             assert_eq!(
@@ -5317,6 +6522,71 @@ mod tests {
                 "a refused lexical lookup never publishes a frame mutation"
             );
         }
+    }
+
+    #[test]
+    fn native_guard_identity_flow_never_requests_lexical_values() {
+        use crate::guard::{CallbackError, GuardRows};
+        use crate::test_support::{HostDictionary, SourceLost};
+        use std::sync::atomic::Ordering;
+        const ORIGINAL: u64 = 0xf000_0000_0000_0001;
+        const OUTPUT: u64 = u64::MAX;
+        struct Identity;
+        impl GuardEvaluator<HostDictionary> for Identity {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_, HostDictionary>,
+            ) -> Result<GuardRows<u64>, CallbackError<SourceLost>> {
+                assert_eq!(call.inputs, [DictionaryTerm::Id(ORIGINAL)]);
+                Ok(vec![vec![DictionaryValue::Id(OUTPUT)]])
+            }
+        }
+        let store = RelationStore::with_dictionary(HostDictionary {
+            extra_terms: 2,
+            ..HostDictionary::default()
+        });
+        let guard = Guard::assign("identity", vec!["?in".into()], "?out");
+        let call = GuardCall {
+            rule: 0,
+            site: GuardSite::Body(0),
+            guard: &guard,
+            inputs: &[DictionaryTerm::Id(ORIGINAL)],
+            model: &store,
+        };
+        let rows = call_guard(&Identity, &call, &mut StepGovernor::new(10)).unwrap();
+        assert_eq!(rows, [vec![DictionaryValue::Id(OUTPUT)]]);
+        let mut frame = SlotSolution::empty(1);
+        frame.bind_value(0, &rows[0][0], &store).unwrap();
+        assert_eq!(frame.get(0), Some(OUTPUT));
+        let native = Guard::not_equal("?left", "?right");
+        for (right, kept) in [(ORIGINAL, 0), (OUTPUT, 1)] {
+            let call = GuardCall {
+                rule: 0,
+                site: GuardSite::Body(0),
+                guard: &native,
+                inputs: &[DictionaryTerm::Id(ORIGINAL), DictionaryTerm::Id(right)],
+                model: &store,
+            };
+            assert_eq!(
+                call_guard(&NoGuards, &call, &mut StepGovernor::new(10))
+                    .unwrap()
+                    .len(),
+                kept
+            );
+        }
+        assert_eq!(store.interner().lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(store.interner().resolves.load(Ordering::Relaxed), 0);
+        store.interner().lost.store(true, Ordering::Relaxed);
+        let before = frame.clone();
+        assert_eq!(
+            frame.bind_value(0, &DictionaryValue::Id(ORIGINAL), &store),
+            Err(SourceLost(99))
+        );
+        assert_eq!(frame, before, "a source refusal never publishes a binding");
+        assert_eq!(
+            call_guard(&Identity, &call, &mut StepGovernor::new(10)),
+            Err(EvalError::Source(SourceLost(99)))
+        );
     }
 
     #[test]
@@ -5331,7 +6601,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
                 assert_eq!(
                     call.model.interner().lookup_term("original").unwrap(),
                     Some(u64::MAX)
@@ -5557,15 +6827,27 @@ mod tests {
             Delta { lo: 1, hi: 2 },
             Delta { lo: 2, hi: 3 },
         ] {
-            let snapshot = JoinSnapshot { rel: &store, delta };
+            let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
+            let snapshot = JoinSnapshot {
+                rel: &store,
+                delta,
+                indexes: &indexes,
+            };
             let mut planned_governor = StepGovernor::new(u64::MAX);
-            let planned =
-                join_body(plan, snapshot, JoinStrategy::Planned, &mut planned_governor).unwrap();
+            let planned = join_body(
+                plan,
+                snapshot,
+                JoinStrategy::Planned,
+                &mut planned_governor,
+                None,
+            )
+            .unwrap();
             let binary = join_body(
                 plan,
                 snapshot,
                 JoinStrategy::ForcedBinary,
                 &mut StepGovernor::new(u64::MAX),
+                None,
             )
             .unwrap();
             assert_eq!(planned, binary);
@@ -5595,10 +6877,12 @@ mod tests {
                 plan,
                 JoinSnapshot {
                     rel: &store,
-                    delta: Delta::all(0)
+                    delta: Delta::all(0),
+                    indexes: &DeltaIndexes { runs: Vec::new() },
                 },
                 JoinStrategy::Planned,
-                &mut StepGovernor::new(0)
+                &mut StepGovernor::new(0),
+                None,
             )
             .unwrap_err(),
             SourceLost(99)
@@ -5623,6 +6907,7 @@ mod tests {
                 scan: JoinScan::Uniform(Scan::Full),
                 rel: &store,
                 delta: Delta::all(3),
+                indexes: &DeltaIndexes { runs: Vec::new() },
             },
             &[SlotSolution::empty(plan.variables().len())],
             &mut StepGovernor::new(u64::MAX),
@@ -5641,10 +6926,7 @@ mod tests {
             Some(&SourceLost(99))
         );
         assert_eq!(cause.to_string(), "source lost: 99");
-        assert_ne!(
-            cause,
-            EvalError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
-        );
+        assert_ne!(cause, EvalError::Storage(StorageError::AllocationFailed));
     }
 
     #[test]
@@ -5686,6 +6968,7 @@ mod tests {
                 operator,
                 &store,
                 Delta::all(store.row_count()),
+                &DeltaIndexes { runs: Vec::new() },
                 Scan::Full,
                 &partial,
                 &mut governor,
@@ -5713,6 +6996,7 @@ mod tests {
             &plan.operators()[0],
             &store,
             Delta::all(0),
+            &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
             &[],
             &mut governor,
@@ -5732,6 +7016,7 @@ mod tests {
             &plan.operators()[0],
             &store,
             Delta::all(store.row_count()),
+            &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
             &[SlotSolution::empty(plan.variables().len())],
             &mut governor,
@@ -5804,7 +7089,14 @@ mod tests {
 
     fn run(rules: Vec<DlClause>, edb: RelationStore) -> Evaluation {
         let exe = compile(rules).expect("the fixture program compiles");
-        evaluate(&exe, edb).expect("the fixture program stays inside every ceiling")
+        evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture program stays inside every ceiling")
     }
 
     #[test]
@@ -5844,7 +7136,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -5879,7 +7171,12 @@ mod tests {
             result.evaluation.facts.row_count()
         );
         assert_eq!(
-            result.evaluation.derivations.len(),
+            result
+                .evaluation
+                .derivations
+                .as_deref()
+                .expect("recorded")
+                .len(),
             1,
             "evidence changes do not invent preferred provenance proofs for preexisting facts"
         );
@@ -5928,14 +7225,22 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
             evidence_scope(),
         )
         .unwrap();
-        assert_eq!(result.evaluation.derivations.len(), 1);
+        assert_eq!(
+            result
+                .evaluation
+                .derivations
+                .as_deref()
+                .expect("recorded")
+                .len(),
+            1
+        );
         let row = result.evaluation.facts.rows_from(3).next().unwrap().0;
         assert_eq!(
             result.evidence.record(row).unwrap().aggregate_bounds(),
@@ -6003,7 +7308,8 @@ mod tests {
                                 let result = evaluate_evidenced(
                                     &exe,
                                     edb,
-                                    &EvalOptions::default(),
+                                    &EvalOptions::default()
+                                        .with_derivation_mode(DerivationMode::Record),
                                     &NoGuards,
                                     None,
                                     rows,
@@ -6085,7 +7391,7 @@ mod tests {
             let result = evaluate_evidenced(
                 &exe,
                 edb,
-                &EvalOptions::default(),
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 &NoGuards,
                 None,
                 rows,
@@ -6163,7 +7469,7 @@ mod tests {
                         let result = evaluate_evidenced(
                             &exe,
                             edb,
-                            &EvalOptions::default(),
+                            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                             &NoGuards,
                             None,
                             rows,
@@ -6219,7 +7525,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -6246,7 +7552,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -6330,8 +7636,16 @@ mod tests {
         )];
         let edb = store_of(&[("a", P, "b"), ("b", Q, "c")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations().len(), 1);
-        let derivation = &evaluation.derivations()[0];
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let derivation = &evaluation
+            .derivations()
+            .expect("derivation recording was requested")[0];
         assert_eq!(derivation.rule(), 0);
         assert_eq!(derivation.proof_height(), 1);
         assert_eq!(
@@ -6412,7 +7726,13 @@ mod tests {
             relation(&evaluation, R),
             BTreeSet::from([(surface("https://example.org/new"), surface("b"))])
         );
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
     }
 
     /// A body with no positive atom is relational identity: it fires once and its head is
@@ -6428,7 +7748,13 @@ mod tests {
             Vec::new(),
         )];
         let evaluation = run(rules, RelationStore::new());
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
         assert_eq!(evaluation.facts().row_count(), 1);
     }
 
@@ -6443,8 +7769,16 @@ mod tests {
         ];
         let edb = store_of(&[("a", P, "b"), ("a", Q, "b")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations().len(), 1);
-        let derivation = &evaluation.derivations()[0];
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let derivation = &evaluation
+            .derivations()
+            .expect("derivation recording was requested")[0];
         // Equal proof heights and equal sums, so the sorted source facts decide: the
         // `p` fact sorts before the `q` fact, so rule 0 wins.
         assert_eq!(derivation.rule(), 0);
@@ -6540,7 +7874,10 @@ mod tests {
             "exactly the three typings prp-dom licenses"
         );
         assert_eq!(
-            evaluation.derivations().len(),
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
             3,
             "one derivation per derived typing"
         );
@@ -6548,6 +7885,7 @@ mod tests {
         // variable-predicate atom is data rather than rule text.
         let matched: BTreeSet<String> = evaluation
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .map(|derivation| derivation.sources()[1].predicate.clone())
             .collect();
@@ -6578,8 +7916,12 @@ mod tests {
                 "seed {seed}: facts"
             );
             assert_eq!(
-                again.derivations(),
-                reference.derivations(),
+                again
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                reference
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "seed {seed}: derivations"
             );
             assert_eq!(again.budget(), reference.budget(), "seed {seed}: budget");
@@ -6628,6 +7970,7 @@ mod tests {
         let evaluation = run(vec![rule], edb);
         let derived: BTreeSet<(String, String, String)> = evaluation
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .map(|derivation| {
                 let fact = derivation.fact();
@@ -6775,9 +8118,9 @@ mod tests {
     /// not the budget report.
     ///
     /// This is the property that admits a stop signal into a crate whose budgets are
-    /// deliberately constants: attaching one is observationally nothing until it fires.
+    /// deterministic: attaching one is observationally nothing until it fires.
     /// Asserted over the whole synthetic corpus rather than over one program, and against
-    /// the ungoverned [`evaluate`] rather than against itself.
+    /// the same execution without a stop signal rather than against itself.
     #[test]
     fn an_unfired_stop_signal_changes_no_answer() {
         let never = StopsAfter {
@@ -6785,9 +8128,30 @@ mod tests {
         };
         for workload in synth_corpus::all() {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let plain = evaluate(&exe, workload.edb()).expect("inside every ceiling");
-            let watched =
+            let plain = evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &NoGuards,
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                None,
+            )
+            .expect("inside every ceiling");
+            let model_only =
                 evaluate_until(&exe, workload.edb(), Some(&never)).expect("inside every ceiling");
+            assert!(model_only.derivations().is_none());
+            assert_eq!(
+                plain.facts().facts_sorted(),
+                model_only.facts().facts_sorted()
+            );
+            assert_eq!(plain.budget(), model_only.budget());
+            let watched = evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &NoGuards,
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                Some(&never),
+            )
+            .expect("inside every ceiling");
             assert_eq!(
                 plain.facts().facts_sorted(),
                 watched.facts().facts_sorted(),
@@ -6795,8 +8159,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                plain.derivations(),
-                watched.derivations(),
+                plain
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                watched
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: derivations",
                 workload.name
             );
@@ -6899,8 +8267,12 @@ mod tests {
                     workload.name
                 );
                 assert_eq!(
-                    again.derivations(),
-                    reference.derivations(),
+                    again
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    reference
+                        .derivations()
+                        .expect("derivation recording was requested"),
                     "{}: seed {seed} derivations",
                     workload.name
                 );
@@ -6937,7 +8309,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -6947,7 +8319,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::ForcedBinary,
             )
@@ -6960,8 +8332,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                planned.derivations(),
-                binary.derivations(),
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: the two joins must agree on provenance too",
                 workload.name
             );
@@ -7107,6 +8483,7 @@ mod tests {
                 Derivation {
                     fact: fact.clone(),
                     rule: 0,
+                    head: 0,
                     sources: vec![
                         seed_fact(
                             &root,
@@ -7136,7 +8513,7 @@ mod tests {
                     shuffled.edb(),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                     RoundExecution::Parallel,
                     strategy,
                 )
@@ -7147,7 +8524,9 @@ mod tests {
                     "seed {seed}, {strategy:?}: analytic facts"
                 );
                 assert_eq!(
-                    evaluation.derivations(),
+                    evaluation
+                        .derivations()
+                        .expect("derivation recording was requested"),
                     expected_proofs,
                     "seed {seed}, {strategy:?}: exact canonical authored proofs"
                 );
@@ -7179,7 +8558,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -7189,7 +8568,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -7201,8 +8580,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                sequential.derivations(),
-                parallel.derivations(),
+                sequential
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                parallel
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: derivations",
                 workload.name
             );
@@ -7252,7 +8635,9 @@ mod tests {
                     &exe,
                     edb.clone(),
                     &NoGuards,
-                    &EvalOptions::default().with_max_join_steps(expected),
+                    &EvalOptions::default()
+                        .with_derivation_mode(DerivationMode::Record)
+                        .with_max_join_steps(expected),
                     None,
                 )
                 .expect("exact credits");
@@ -7260,7 +8645,10 @@ mod tests {
                 assert_eq!(exact.facts().row_count(), 2 * expected as usize);
                 let answer = (
                     exact.facts().facts_sorted(),
-                    exact.derivations().to_vec(),
+                    exact
+                        .derivations()
+                        .expect("derivation recording was requested")
+                        .to_vec(),
                     exact.budget(),
                 );
                 if let Some(prior) = &reference {
@@ -7273,7 +8661,9 @@ mod tests {
                         &exe,
                         edb.clone(),
                         &NoGuards,
-                        &EvalOptions::default().with_max_join_steps(ceiling),
+                        &EvalOptions::default()
+                            .with_derivation_mode(DerivationMode::Record)
+                            .with_max_join_steps(ceiling),
                         None,
                     )
                     .expect_err("total refusal");
@@ -7313,8 +8703,12 @@ mod tests {
             ("https://example.org/a", P, "https://example.org/o"),
             ("https://example.org/b", P, "https://example.org/o"),
         ]);
-        let mut state =
-            FixpointState::seeded(edb, EvalOptions::default().with_max_join_steps(u64::MAX));
+        let mut state = FixpointState::seeded(
+            edb,
+            EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(u64::MAX),
+        );
         state.join_steps = u64::MAX - 1;
         let entry = RuleEntry {
             index: 0,
@@ -7329,6 +8723,7 @@ mod tests {
                 rel: &state.rel,
                 depth: &state.depth,
                 assumed: &[],
+                delta_indexes: None,
             },
             RoundExecution::Parallel,
             JoinStrategy::Planned,
@@ -7385,7 +8780,9 @@ mod tests {
             edb.clone(),
             &NoGuards,
             &mut NoHooks,
-            &EvalOptions::default().with_max_join_steps(128),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(128),
             None,
         )
         .expect("exact conjunctive credits");
@@ -7397,7 +8794,9 @@ mod tests {
                 edb.clone(),
                 &NoGuards,
                 &mut NoHooks,
-                &EvalOptions::default().with_max_join_steps(ceiling),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(ceiling),
                 None,
             )
             .expect_err("conjunctive total refusal");
@@ -7461,7 +8860,9 @@ mod tests {
                 edb.clone(),
                 &NoGuards,
                 &mut NoHooks,
-                &EvalOptions::default().with_max_join_steps(credits),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(credits),
                 None,
             )
             .expect("exact traversal credits");
@@ -7473,7 +8874,9 @@ mod tests {
                     edb.clone(),
                     &NoGuards,
                     &mut NoHooks,
-                    &EvalOptions::default().with_max_join_steps(ceiling),
+                    &EvalOptions::default()
+                        .with_derivation_mode(DerivationMode::Record)
+                        .with_max_join_steps(ceiling),
                     None,
                 )
                 .expect_err("empty-index traversal refused");
@@ -7485,6 +8888,133 @@ mod tests {
                 assert_eq!(report.stored_facts(), 1001);
             }
         }
+    }
+
+    #[test]
+    fn guard_first_empty_output_requires_unit_binding_credit() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        struct DropAll(std::cell::Cell<usize>);
+        impl GuardEvaluator for DropAll {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                self.0.set(self.0.get() + 1);
+                Ok(Vec::new())
+            }
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Compute(Guard::assign("drop", Vec::new(), "?s")),
+                Atom(atom("?s", P, "?o")),
+            ]),
+        ])
+        .unwrap();
+        for ceiling in [0, 1] {
+            let callback = DropAll(std::cell::Cell::new(0));
+            let result = evaluate_guarded(
+                &program,
+                store_of(&[("a", P, "b")]),
+                &callback,
+                &EvalOptions::default().with_max_join_steps(ceiling),
+                None,
+            );
+            assert_eq!(callback.0.get(), usize::from(ceiling != 0));
+            if ceiling == 0 {
+                assert!(matches!(result, Err(EvalError::BudgetExhausted { .. })));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.work().join_steps(), 1);
+                assert_eq!(result.work().committed_facts(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_guard_outputs_select_quad_predicate_and_graph_keys() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::GuardReads;
+        const GRAPH: &str = "https://example.org/selected-graph";
+        const MISSING_PREDICATE: &str = "https://example.org/absent-guard-predicate";
+        const MISSING_GRAPH: &str = "https://example.org/absent-guard-graph";
+        struct Partition;
+        impl GuardEvaluator for Partition {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                Ok(vec![
+                    vec![surface(R).into(), surface(GRAPH).into()],
+                    vec![surface(MISSING_PREDICATE).into(), surface(GRAPH).into()],
+                    vec![surface(R).into(), surface(MISSING_GRAPH).into()],
+                ])
+            }
+        }
+        let subject = "https://example.org/subject";
+        let winner = "https://example.org/selected-value";
+        let mut input = store_of(&[(subject, P, "https://example.org/seed")]);
+        for (predicate, object, graph) in [
+            (R, winner, GRAPH),
+            (
+                R,
+                "https://example.org/wrong-graph-value",
+                "https://example.org/other-graph",
+            ),
+            (
+                "https://example.org/other-predicate",
+                "https://example.org/wrong-predicate-value",
+                GRAPH,
+            ),
+        ] {
+            input
+                .insert(
+                    &surface(subject),
+                    &surface(predicate),
+                    &surface(object),
+                    &surface(graph),
+                )
+                .unwrap();
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Atom(atom("?s", P, "?seed")),
+                Compute(Guard::new(
+                    "partition",
+                    Vec::new(),
+                    vec!["?p".into(), "?g".into()],
+                    GuardReads::Bindings,
+                )),
+                Atom(ClauseAtom::quad(v("?s"), v("?p"), v("?o"), v("?g"))),
+            ]),
+        ])
+        .unwrap();
+        let result = evaluate_guarded(
+            &program,
+            input,
+            &Partition,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.work().committed_facts(), 1);
+        assert!(result.facts().contains_row([
+            &surface(subject),
+            &surface(Q),
+            &surface(winner),
+            RelationStore::DEFAULT_GRAPH
+        ]));
+        assert!(
+            result
+                .facts()
+                .term_id(&surface(MISSING_PREDICATE))
+                .is_none()
+        );
+        assert!(result.facts().term_id(&surface(MISSING_GRAPH)).is_none());
+        let derivations = result.derivations().unwrap();
+        assert_eq!(derivations.len(), 1);
+        assert_eq!(derivations[0].sources()[0].predicate, surface(P));
+        assert_eq!(derivations[0].sources()[1].predicate, surface(R));
+        assert_eq!(derivations[0].sources()[1].graph, surface(GRAPH));
     }
 
     /// Consumer admission bounds a large callback Vec before cloning bindings and
@@ -7501,7 +9031,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
                 self.calls.fetch_add(1, Ordering::Relaxed);
                 Ok(if !self.keep {
                     Vec::new()
@@ -7511,7 +9041,7 @@ mod tests {
                             call.guard
                                 .outputs()
                                 .iter()
-                                .map(|_| surface(&format!("https://example.org/fresh{row}")))
+                                .map(|_| surface(&format!("https://example.org/fresh{row}")).into())
                                 .collect()
                         })
                         .collect()
@@ -7538,7 +9068,9 @@ mod tests {
                 &exe,
                 edb.clone(),
                 &rows,
-                &EvalOptions::default().with_max_join_steps(limit),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(limit),
                 None,
             )
             .expect_err("producer refused");
@@ -7554,7 +9086,9 @@ mod tests {
             &exe,
             edb.clone(),
             &rows,
-            &EvalOptions::default().with_max_join_steps(10001),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(10001),
             None,
         )
         .expect("exact producer boundary");
@@ -7565,7 +9099,9 @@ mod tests {
                 &exe,
                 edb.clone(),
                 &rows,
-                &EvalOptions::default().with_max_join_steps(10000),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(10000),
                 None
             ),
             Err(EvalError::BudgetExhausted { .. })
@@ -7601,7 +9137,9 @@ mod tests {
             &exe,
             negative_edb.clone(),
             &multirow,
-            &EvalOptions::default().with_max_join_steps(17),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(17),
             None,
         )
         .expect_err("negative callback rows are admitted too");
@@ -7622,7 +9160,9 @@ mod tests {
                 &exe,
                 negative_edb.clone(),
                 &reject,
-                &EvalOptions::default().with_max_join_steps(limit),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(limit),
                 None,
             )
             .expect_err("negative traversal refused");
@@ -7637,7 +9177,9 @@ mod tests {
             &exe,
             negative_edb.clone(),
             &reject,
-            &EvalOptions::default().with_max_join_steps(203),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(203),
             None,
         )
         .expect("one positive, group and partition admission, and two per negative row");
@@ -7648,7 +9190,9 @@ mod tests {
                 &exe,
                 negative_edb,
                 &reject,
-                &EvalOptions::default().with_max_join_steps(202),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(202),
                 None
             ),
             Err(EvalError::BudgetExhausted { .. })
@@ -7712,16 +9256,9 @@ mod tests {
         assert!(error.to_string().contains("a disjunctive head"));
     }
 
-    /// A CONJUNCTIVE head is refused by a name that is TRUE.
-    ///
-    /// `q(?x, ?y) ∧ r(?x, ?y) :- p(?x, ?y)` is not a Datalog rule — a definite clause has
-    /// exactly one head atom — but it is not a disjunction either, and there is no witness
-    /// to mint. Reporting it as "disjunctive" or "existential" would name a property the
-    /// clause does not have, so the refusal carries its own form. The clause IS equivalent
-    /// to two Datalog rules, and the evaluator still refuses it rather than splitting it:
-    /// the split would renumber the program that a derivation's clause index names.
+    /// A conjunction preserves its authored clause index and checks every head's safety.
     #[test]
-    fn a_conjunctive_head_is_refused_by_its_own_name() {
+    fn a_conjunctive_head_checks_every_authored_atom() {
         let rules = vec![DlClause::new(
             vec![HeadDisjunct::new(vec![
                 atom("?x", Q, "?y"),
@@ -7730,25 +9267,19 @@ mod tests {
             Vec::new(),
             vec![atom("?x", P, "?y")],
         )];
-        let error = compile(rules).expect_err("a conjunctive head is not a Datalog rule");
-        assert_eq!(
-            error,
-            EvalError::NonDatalogHead {
-                rule: 0,
-                form: HeadForm::Conjunctive,
-            }
+        let executable = compile(rules).expect("ordinary conjunction is Datalog");
+        assert_eq!(executable.rule_count(), 1);
+        assert_eq!(executable.rule_entry(0).0.head_atoms().count(), 2);
+        let unsafe_rule = DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("?x", Q, "?y"),
+                atom("?x", R, "?unbound"),
+            ])],
+            Vec::new(),
+            vec![atom("?x", P, "?y")],
         );
-        let rendered = error.to_string();
-        assert!(rendered.contains("a conjunctive head"), "{rendered}");
         assert!(
-            !rendered.contains("disjunctive"),
-            "the refusal must not name a property the clause lacks: {rendered}"
-        );
-        // The trailing "(one head atom, no existential)" states what a Datalog clause IS,
-        // so only the phrase that NAMES this clause's form is asserted against.
-        assert!(
-            !rendered.contains("an existential head"),
-            "the refusal must not name a property the clause lacks: {rendered}"
+            matches!(compile(vec![unsafe_rule]), Err(EvalError::UnboundHeadVariable { rule: 0, variable }) if variable == "?unbound")
         );
     }
 
@@ -7943,7 +9474,9 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let limited = EvalOptions::default().with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        let limited = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
             .expect_err("the join-step limit must be passed");
         let EvalError::BudgetExhausted { resource, report } = error.clone() else {
@@ -7968,12 +9501,16 @@ mod tests {
 
         // The valid neighbour: the same program over the same store under a limit of
         // exactly the candidates it enumerates completes, with its one head fact.
-        let admitted = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED);
+        let admitted = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(JOIN_STEPS_OBSERVED);
         let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &admitted, None)
             .expect("a limit the run fits under admits it");
         assert_eq!(model.facts().row_count(), n + 1);
         assert_eq!(model.budget().join_steps(), JOIN_STEPS_OBSERVED);
-        let short = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
+        let short = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
         assert!(matches!(
             evaluate_guarded(&exe, edb, &NoGuards, &short, None),
             Err(EvalError::BudgetExhausted {
@@ -8006,7 +9543,9 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let limited = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let limited = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
             .expect_err("the stored-fact limit must be passed");
         let EvalError::BudgetExhausted { resource, report } = error.clone() else {
@@ -8015,25 +9554,29 @@ mod tests {
         assert_eq!(resource, BudgetResource::StoredFacts);
         assert_eq!(
             report.stored_facts(),
-            n + n * n,
-            "the report is the count the round would have produced"
+            WASM_DEFAULT_MAX_STORED_FACTS as usize,
+            "only admitted facts are stored"
         );
         assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
         assert!(report.join_steps() <= report.join_step_limit());
         let rendered = error.to_string();
         assert!(
-            rendered.contains("160400 facts observed, 131072 permitted (the caller's limit)")
+            rendered.contains("131073 facts observed, 131072 permitted (the caller's limit)")
                 && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
             "{rendered}"
         );
 
         // The valid neighbour: a limit of exactly the least model's size admits it, and
         // one fact fewer does not.
-        let exact = EvalOptions::default().with_max_stored_facts((n + n * n) as u64);
+        let exact = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts((n + n * n) as u64);
         let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &exact, None)
             .expect("a limit of exactly the model's size admits it");
         assert_eq!(model.facts().row_count(), n + n * n);
-        let short = EvalOptions::default().with_max_stored_facts((n + n * n - 1) as u64);
+        let short = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts((n + n * n - 1) as u64);
         assert!(matches!(
             evaluate_guarded(&exe, edb, &NoGuards, &short, None),
             Err(EvalError::BudgetExhausted {
@@ -8079,7 +9622,9 @@ mod tests {
         let seeded = (SIDE + 1) * SIDE + 1;
         assert!(seeded as u64 > NATIVE_DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
-        let native = EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let native = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &native, None)
             .expect_err("the native default is passed by the seeded store");
         assert_eq!(
@@ -8089,15 +9634,23 @@ mod tests {
         );
         if !cfg!(target_arch = "wasm32") {
             assert_eq!(
-                evaluate(&exe, edb.clone())
-                    .expect_err("the native default refuses it unstated too")
-                    .to_string(),
+                evaluate_guarded(
+                    &exe,
+                    edb.clone(),
+                    &NoGuards,
+                    &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                    None
+                )
+                .expect_err("the native default refuses it unstated too")
+                .to_string(),
                 "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
                  permitted (the default for this target); raise it with \
                  EvalOptions::with_max_stored_facts"
             );
         }
-        let raised = EvalOptions::default().with_max_stored_facts(seeded as u64 + 1);
+        let raised = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(seeded as u64 + 1);
         let model = evaluate_guarded(&exe, edb, &NoGuards, &raised, None)
             .expect("raised to exactly the model's size");
         assert_eq!(model.facts().row_count(), seeded + 1);
@@ -8120,7 +9673,7 @@ mod tests {
             assert_eq!(DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_STORED_FACTS);
             assert_eq!(DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_JOIN_STEPS);
         }
-        let options = EvalOptions::default();
+        let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
         assert_eq!(options.max_stored_facts(), DEFAULT_MAX_STORED_FACTS);
         assert_eq!(options.max_join_steps(), DEFAULT_MAX_JOIN_STEPS);
         assert_eq!(options.stated_max_stored_facts(), None);
@@ -8149,7 +9702,13 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let outcome = evaluate(&exe, edb);
+        let outcome = evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        );
         if cfg!(target_arch = "wasm32") {
             assert!(outcome.is_err(), "the wasm32 default refuses 160,400 facts");
         } else {
@@ -8189,12 +9748,19 @@ mod tests {
         }
         assert!((edb.row_count() as u64) < DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the term-arena ceiling must be passed");
+        let error = evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .expect_err("the term-arena ceiling must be passed");
         let EvalError::BudgetExhausted { resource, report } = error else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::TermArenaBytes);
-        assert!(report.term_arena_bytes() > MAX_TERM_ARENA_BYTES);
+        assert!(report.term_arena_bytes() > DEFAULT_MAX_TERM_ARENA_BYTES);
         assert_eq!(report.stored_facts(), 24);
     }
 
@@ -8266,7 +9832,14 @@ mod tests {
                 again.facts().facts_sorted(),
                 reference.facts().facts_sorted()
             );
-            assert_eq!(again.derivations(), reference.derivations());
+            assert_eq!(
+                again
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                reference
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
             assert_eq!(again.budget(), reference.budget());
         }
     }
@@ -8310,11 +9883,13 @@ mod tests {
             assert_eq!(
                 again
                     .derivations()
+                    .expect("derivation recording was requested")
                     .iter()
                     .map(|d| (d.fact().clone(), d.sources().to_vec()))
                     .collect::<Vec<_>>(),
                 reference
                     .derivations()
+                    .expect("derivation recording was requested")
                     .iter()
                     .map(|d| (d.fact().clone(), d.sources().to_vec()))
                     .collect::<Vec<_>>(),
@@ -8346,7 +9921,15 @@ mod tests {
     #[test]
     fn only_a_delta_covering_the_whole_snapshot_eliminates_old_suffixes() {
         let rel = store_of(&[("a", P, "b"), ("b", Q, "c"), ("c", R, "d")]);
-        let positions = |delta| JoinSnapshot { rel: &rel, delta }.delta_positions(3);
+        let indexes = DeltaIndexes { runs: Vec::new() };
+        let positions = |delta| {
+            JoinSnapshot {
+                rel: &rel,
+                delta,
+                indexes: &indexes,
+            }
+            .delta_positions(3)
+        };
         assert_eq!(positions(Delta::all(3)), 2..3);
         // Later rounds keep the first and middle anchors, whose OldOnly suffixes
         // can match older facts. A prefix delta is not the whole frozen store.
@@ -8356,7 +9939,8 @@ mod tests {
         assert_eq!(
             JoinSnapshot {
                 rel: &rel,
-                delta: Delta::all(3)
+                delta: Delta::all(3),
+                indexes: &indexes,
             }
             .delta_positions(0),
             0..0
@@ -8413,7 +9997,12 @@ mod tests {
         )];
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
     }
 
     /// A fully ground body atom is a membership probe.
@@ -8433,10 +10022,21 @@ mod tests {
         );
         let edb = store_of(&[("https://example.org/a", P, "https://example.org/b")]);
         let evaluation = run(vec![present.clone()], edb);
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
 
         let evaluation = run(vec![present], store_of(&[("x", P, "y")]));
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
     }
 
     /// An empty program over a seeded store is the store itself.
@@ -8444,7 +10044,12 @@ mod tests {
     fn an_empty_program_derives_nothing() {
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(Vec::new(), edb);
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
         assert_eq!(evaluation.facts().row_count(), 1);
         assert_eq!(evaluation.budget().join_steps(), 0);
     }

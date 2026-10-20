@@ -14,6 +14,67 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   lookup uses the same authenticated forward reader. Older segmented profiles
   must be regenerated from their original RDF input; the reader refuses them.
   Receipt encoding and hash laws remain separate from the data profile.
+  Dictionary payloads use native DEFLATE when it admits more records per physical
+  block; numeric reverse-index pages fill independently of the dictionary record
+  cap. Readers admit bounded inflation scratch and preserve native codec causes.
+
+- **Native integer dictionaries (breaking):** `TermDictionary::compare_terms`
+  defines canonical publication order, preserving lexical RDF order while allowing
+  original integer comparisons. `IntegerDictionary<u32/u64>` evaluates native
+  model-only fixed points without string interning or lexical projection, using
+  explicit caller-supplied program symbols. Explicit lexical requests fail with a
+  typed error. Tied witnesses and round winners use the same dictionary contract.
+
+- **Datalog guard values (breaking):** guard calls carry original identities or
+  fresh spellings, and `GuardRows` returns typed identity/surface cells. Native
+  callbacks and native inequality avoid lexical round trips. Lexical callbacks
+  opt into `GuardCall::evaluate_lexical`, which retains original dictionary pins
+  and preserves source refusals. The SHACL rule engine uses this shared boundary.
+
+- **Native integer row storage:** `store::RowColumns<I, N, R>` retains arbitrary-width
+  rows and original handles without interning or rendering. `store::RowIndex`
+  indexes caller-selected columns and returns matching key-prefix rows without
+  query-time allocation. RDF tails use the same column buffer, and RDF secondary
+  indexes use the same integer-column sorter.
+
+- **Guard-computed join keys:** `DlClause::with_ordered_body` interleaves positive
+  atoms and guards through `clause::BodyLiteral`. Fresh guard outputs can bind
+  subsequent binary and cyclic probes. Guards are evaluation barriers; absent
+  computed keys match no row. Early guards enter a position-aware version 3
+  clause identity, and physical planner version 6 invalidates cached plans.
+
+- **SHACL SPARQL argument failures:** COALESCE, IF, boolean and membership forms can mask
+  catchable nested node-expression failures using SPARQL semantics, while
+  unmasked failures retain their original cause and empty results stay distinct.
+  Validation recursion refusals now carry typed
+  `ProcessorFailure::ValidationDepth` fields and cannot be caught as expression
+  errors. Processor, storage and stop failures always escape the call.
+
+- **Actionable SHACL arena refusals:** rule entry points retain the actual
+  observed bytes and ceiling and advise reducing retained term sizes. Direct
+  Datalog refusals continue to name their available `EvalOptions` setting.
+
+- **Indexed round deltas:** Datalog builds native arrangements from each distinct
+  new-row span once per round and shares them across rule tasks. Binary probes,
+  cyclic leapfrog cursors and productive-anchor checks read those arrangements;
+  the all-row seed borrows the accumulated store. Original row, partition and
+  term IDs are retained, with no term rendering or whole-store delta scans.
+
+- **Selective delta rule joins:** partial Datalog rounds bind their new-row anchor
+  before visiting old join prefixes, including factored and cyclic bodies.
+  Binary joins may first use one strictly smaller indexed seed, then immediately
+  probe the delta. Cardinality advice reads existing runs and never constructs a
+  cold historical object index. Impossible constant patterns skip delta seeding.
+  Advice is frozen before rule tasks run, so a sibling warming a lazy index
+  cannot change the round's candidate work.
+  Dynamic probes constrain every already-bound position and retain authored
+  proof order. Physical planner version 5 identifies the changed candidate
+  accounting; completed models and semantic fact counts retain their meaning.
+
+- **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
+  visit only that predicate's partitions. `RelationStore::rows_for_predicate`
+  returns original row and term identities for triple and quad stores without
+  rendering terms or scanning other predicates, in lexical partition order.
 
 - **Editor's-draft SHACL law (breaking):** `ShaclProfile::ED_20261016`
   (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at commit
@@ -59,6 +120,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   remain unchanged.
 
 ### Breaking Changes
+
+- **Explicit Datalog evidence and governors:** ordinary evaluation defaults to
+  model-only output. Request `DerivationMode::Record` for exported derivations;
+  `Evaluation::derivations` returns an `Option`, and proof construction returns
+  a typed refusal if recording was disabled. Entailment and SHACL proof callers
+  request recording explicitly. The term-arena ceiling is caller-selected through
+  `EvalOptions`, with a removable 16 MiB default named
+  `DEFAULT_MAX_TERM_ARENA_BYTES`. Stored-fact refusal reports distinguish the
+  admitted count from the first refused insertion. Semantic fact counts and
+  versioned candidate work are available through `Evaluation::work`, and each
+  call can select sequential rule execution without changing a global pool.
+
+- **Shared Datalog head conjunctions:** ordinary semi-naive evaluation admits
+  several unquantified head atoms over one shared body, including recursive
+  and stratified programs. Recorded derivations expose the authored head
+  ordinal. Independent proof encoding moves to version 2 and records that
+  ordinal; version 1 proof bytes require regeneration. Physical plans use
+  planner version 4, invalidating earlier cached plan identities.
+
+- **Native Datalog inequality:** `Guard::not_equal` filters exact bound terms
+  without a caller callback, including inside negated groups. Independent proofs
+  recheck native top-level filters. Programs with native filters use an
+  operation-tagged version 2 clause identity; unchanged callback-only identities
+  remain stable.
 
 - **One exact XSD numeric value API:** public `XsdValue::Integer` and
   `XsdValue::Decimal` carry the exact integer and decimal types at every size.

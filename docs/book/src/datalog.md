@@ -37,8 +37,15 @@ disjunctive, conjunctive, and empty (`false`) — so an axiom like `A ⊑ ∃r.C
 which lowers to `∃y. (r(x, y) ∧ C(y))` with one *shared* witness, is one rule
 rather than two unrelated ones.
 
-The semi-naive evaluator runs the atomic form and refuses the other four **by
-name**. The existential form is not lost by that refusal: the restricted chase
+The semi-naive evaluator runs atomic and unquantified conjunctive heads. Several
+heads share one body evaluation; each recorded derivation names its authored
+clause index and head ordinal. Recursion, factor projection and stratified
+negation use the same evaluator. Predicate completion follows every producer,
+even when a shared rule emits a higher-stratum head early. Independent proofs
+check the selected head ordinal; their version 2 encoding carries it explicitly.
+
+Existential, disjunctive and false heads are refused **by name**. The existential
+form is not lost by that refusal: the restricted chase
 consumes it, minting frontier-addressed Skolem witnesses, which is how the four
 existential RDF/RDFS patterns fire and the rule inventory reads complete. What
 never happens is a surrogate leaking into an answer — the entailment layer above
@@ -47,6 +54,13 @@ boundary and reports the withholding, rather than inventing an answer the caller
 did not ask for.
 
 ## Determinism
+
+Use `Guard::not_equal("?left", "?right")` for native term inequality, without a
+callback. It compares exact bound term identity without numeric coercion.
+A caller-defined `Guard::filter("!=", ...)` remains a callback: operation kind,
+not its name, selects native behavior and participates in the clause digest.
+The independent proof checker re-evaluates native top-level filters from the
+checked premises.
 
 - Per-key rows keep insertion order; the arrangement is sorted; no map iteration
   order reaches an output path.
@@ -62,14 +76,23 @@ Identical input yields byte-identical output, on every target.
 
 ## Limits refuse; they never truncate
 
-Three limits bound what every run holds and enumerates. Two are the caller's,
-on `EvalOptions`, with a default sized for the target; the third is a constant:
+Three limits bound what every run holds and enumerates. All are caller-selected
+through `EvalOptions`, with explicit defaults:
 
 | Limit | Bounds | Set with | Default on `wasm32` | Default elsewhere |
 | --- | --- | --- | --- | --- |
 | join steps | candidate solutions enumerated | `EvalOptions::with_max_join_steps` | 1,048,576 | 1,048,576 |
 | stored facts | facts seeded or derived | `EvalOptions::with_max_stored_facts` | 131,072 | 4,194,304 |
-| term arena bytes | interned term surface bytes | `MAX_TERM_ARENA_BYTES` (fixed) | 16,777,216 | 16,777,216 |
+| term arena bytes | interned term surface bytes | `EvalOptions::with_max_term_arena_bytes` | 16,777,216 | 16,777,216 |
+
+`EvalOptions::without_term_arena_limit` removes the logical surface-byte ceiling.
+Actual storage admission still applies. The effective ceiling is available in
+the budget report and participates in the contract hash.
+
+Stored-fact admission checks each unique insertion before changing the store.
+On refusal, `BudgetReport::stored_facts` reports the admitted count and
+`observed_stored_facts` reports the first refused insertion, exactly one higher.
+Duplicate candidates do not consume another stored-fact allowance.
 
 The stored-fact defaults differ because the memory the store lives in does: a
 `wasm32` evaluation shares one linear memory with the rest of its page, and its
@@ -105,6 +128,28 @@ completed answer.
 
 There is deliberately no wall-clock budget: it would break both `wasm32` and
 reproducibility.
+
+## Model output, proofs and measured work
+
+Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set
+`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported
+derivations are needed. `Evaluation::derivations` returns `None` when recording
+was disabled and `Some([])` when recording was enabled but derived nothing.
+Proof construction refuses a model-only result with
+`ProofError::DerivationsNotRecorded`. Recording does not change the least model,
+internal canonical witness preference or candidate accounting.
+
+`Evaluation::work` separates unique input facts and committed fact insertions
+from physical candidate admissions. For an ordinary completed stratified run,
+the fact counts are independent of the join plan. Candidate counts can change
+with the planner; the report names its version, and callers can compare
+candidates per committed fact. Scheduled withdrawals can cause a later commit
+of the same fact and therefore another commit event.
+
+`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the
+direct execution path for one call, without changing a global thread pool.
+Both scheduling policies use the same evaluator, program-order merge and sorted
+commit, and preserve the same model and recorded derivations.
 
 Passing a limit is a **total** refusal, not a truncation. There is no partial
 fixpoint to hand back with a note attached, and a truncated closure presented as

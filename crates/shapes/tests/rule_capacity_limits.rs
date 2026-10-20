@@ -120,7 +120,7 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
     assert_eq!(
         shacl(&data, COPY, &wasm_defaults()),
         Err(
-            "SHACL rules did not complete: the rules exceeded the stored-fact limit: 140000 \
+            "SHACL rules did not complete: the rules exceeded the stored-fact limit: 131073 \
              facts observed, 131072 permitted (the caller's limit); raise it with \
              RuleOptions::with_max_stored_facts"
                 .to_owned()
@@ -134,6 +134,33 @@ fn a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm(
         refused.contains("140000 facts observed, 139999 permitted"),
         "{refused}"
     );
+}
+
+/// Both public rule entry points retain the refused bytes and offer usable advice.
+#[test]
+fn arena_refusals_name_a_host_usable_remedy() {
+    let oversized = "x".repeat(purrdf_datalog::seminaive::DEFAULT_MAX_TERM_ARENA_BYTES + 1);
+    let text = format!("ex:s ex:p \"{oversized}\" .");
+    let shapes_error = shacl(&holder(&text), COPY, &RuleOptions::default()).unwrap_err();
+    let srl_error = srl_run(
+        &dataset(&text),
+        "PREFIX ex: <http://example.org/ns#> RULE { ?s ex:q ?o } WHERE { ?s ex:p ?o }",
+        &InferOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        srl_error.strip_prefix("SPARQL 1.2 RL evaluation failed: "),
+        Some(shapes_error.as_str()),
+    );
+    let expected_bytes =
+        oversized.len() + "<http://example.org/ns#s>".len() + "<http://example.org/ns#p>".len() + 2;
+    assert!(shapes_error.contains(&format!("limit: {expected_bytes} observed,")));
+    assert!(shapes_error.contains("term arena bytes limit:"));
+    assert!(
+        shapes_error
+            .ends_with("16777216 permitted; reduce retained term sizes in the input or rules")
+    );
+    assert!(!shapes_error.contains("EvalOptions"));
 }
 
 /// The transitive closure of a 1,000-edge chain — 500,500 inferred triples — completes
@@ -328,8 +355,9 @@ fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_jo
         assert_eq!(
             run(&options),
             Err(
-                "SHACL rules did not complete: evaluation exceeded the fixed term arena bytes \
-                 ceiling: 16782539 observed, 16777216 permitted"
+                "SHACL rules did not complete: evaluation exceeded the term arena bytes \
+                 limit: 16782539 observed, 16777216 permitted; reduce retained term sizes \
+                 in the input or rules"
                     .to_owned()
             )
         );

@@ -1164,6 +1164,13 @@ impl SegmentedSession {
             if digest != self.receipt.root {
                 return Err(SegmentedError::Corrupt("block/index authentication failed"));
             }
+            let scratch_bytes = if in_dictionary {
+                format::decode_scratch_bytes(&bytes, self.header.records_per_block, decoded)?
+            } else {
+                0
+            };
+            self.make_room(&mut state, scratch_bytes, false)?;
+            let scratch = self.budget.reserve(scratch_bytes)?;
             let decoded_records = match bytes[0] {
                 format::DICTIONARY if slot != 0 => Some(DecodedRecords::decode(
                     &bytes,
@@ -1172,6 +1179,7 @@ impl SegmentedSession {
                 )?),
                 _ => None,
             };
+            drop(scratch);
             let dictionary_range = if in_dictionary {
                 let records = decoded_records.as_ref().ok_or(SegmentedError::Corrupt(
                     "forward dictionary block kind changed",

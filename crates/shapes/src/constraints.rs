@@ -1220,12 +1220,12 @@ fn walk_shape<S: ResultSink>(
     let plan = context.plan;
     let shape = plan.shape();
     if context.depth > crate::expression::MAX_RECURSION_DEPTH {
-        return Err(format!(
-            "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
-            context.depth,
-            crate::expression::MAX_RECURSION_DEPTH,
-            shape.id
-        ).into());
+        return Err(crate::error::ProcessorFailure::ValidationDepth {
+            shape: shape.id.to_string(),
+            depth: context.depth,
+            limit: crate::expression::MAX_RECURSION_DEPTH,
+        }
+        .into());
     }
     if shape.deactivated {
         return Ok(Flow::Continue);

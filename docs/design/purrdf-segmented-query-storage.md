@@ -13,9 +13,18 @@ Dictionary blocks close before the next encoded record would exceed
 `block_bytes`, or when they reach `records_per_block`. The record count is an
 upper bound. The insertion-order dictionary uses front coding and stores its first
 key once; routing reads that decoded record instead of a duplicate fence. The
-lexical-order reverse index stores only eight-byte identifiers into this dictionary.
-Its blocks share the record-count ceiling and carry no lexical payload or decoded
-text arena. Their populations and block counts may differ from dictionary blocks.
+encoder keeps raw front coding when all offered records fit. Otherwise it tries
+native DEFLATE on bounded record prefixes and uses a compressed payload only
+when it holds more records than the raw block. Prefix selection does not assume
+that compressed size grows monotonically. The payload-length high bit marks
+compression; the remaining bits give the encoded length, with zero padding to
+the physical block boundary. The count and decoded-key-byte fields stay outside
+the compressed payload.
+
+The lexical-order reverse index stores only eight-byte identifiers into this dictionary.
+Its blocks fill their physical eight-byte identifier slots independently of the
+dictionary record-count ceiling and carry no lexical payload or decoded text
+arena. Their populations and block counts may differ from dictionary blocks.
 One encoded record, including its framing, must fit a block or sealing
 returns `ConstructionLimit`. The encoder does not retry the complete image with
 a larger layout. Selective term lookup uses authenticated stored ID ranges;
@@ -35,6 +44,13 @@ concrete capacities, copied/decoded blocks, pins and query scratch share the
 live-byte admission. Buffer replacement admits both the old and new layouts
 until the old allocation is destroyed. A refusal reports the original typed
 cause; evidence is never truncated to fit a smaller ledger.
+
+After authentication and before inflation, the reader admits the complete framed
+decode buffer and `Inflater::max_live_heap_bytes()` workspace in addition to the
+physical block and decoded cache allocation. Framed output is bounded by decoded
+key bytes plus sixteen bytes per record. The scratch reservation is released
+before the decoded block enters the cache. Truncated streams, trailing bytes and
+native codec refusals retain their typed `purrdf_deflate::Error` cause.
 
 Learned routing bounds are cache hints, not required read state. Their index
 grows only from spare capacity, without evicting cached payloads. If growth
@@ -143,3 +159,40 @@ the old 4096 / 128 refusal is historical evidence, not current behavior or a new
 layout measurement. These measurements describe this authored corpus, not a
 universal compression ratio or timing claim. Recorded peak admitted COUNT
 bytes are 193,304,220 for both 4096-byte layouts and 168,269,468 for 8192 / 128.
+
+## Profile 3 text controls
+
+`ir_layout`'s `ir_segmented_text` groups compare 64 standalone literals at
+4096 bytes / 64 records, including the datatype term automatically interned by
+the builder. The repeated case uses authored prose with distinct leading record
+numbers; the lower-redundancy neighbor uses deterministic seeded letters.
+These are dictionary controls, separate from the historical claim/query corpus.
+One native optimized development-profile quick run measured:
+
+| Text | Image bytes | Build peak heap | Certification peak heap | Cold read peak heap | Admitted read peak | Cold forward/reverse provider requests |
+|---|---:|---:|---:|---:|---:|---:|
+| Short | 16,640 | 75,751 | 16,912 | 16,752 | 305,005 | 12 |
+| Repeated prose | 16,640 | 1,032,324 | 359,824 | 272,132 | 1,370,384 | 12 |
+| Lower redundancy | 100,352 | 1,202,715 | 360,656 | 381,459 | 1,480,855 | 144 |
+
+Heap peaks are incremental allocations within each measurement window, not RSS.
+The certification input copy is prepared outside its window; fixture values and
+immutable provider bytes are prepared outside the read window. Warm reverse
+lookup adds no provider requests. Median build times in this quick run were
+93 microseconds, 639 microseconds and 81 milliseconds respectively; ten samples
+on a shared host establish neither stable release timing nor a universal ratio.
+The lower-redundancy build requested 64,920,621 total allocation bytes across
+candidate encoding attempts despite its much smaller peak. Candidate encoding
+therefore has a measured construction cost; this reader/storage improvement does
+not establish the bounded, caller-owned writer required by the separate writer
+work. The benchmark prints all allocation totals and times build, cold forward
+lookup and warm reverse lookup independently.
+
+The `compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace`
+integration control additionally carries scoped blanks, quoted triples, reifiers,
+annotations, named and explicit empty graphs, and sparse identifiers above 2^54.
+Its 116,288 literal text bytes fit the same 71,680-byte image as its short-text
+neighbor. It checks exact forward/reverse values, certification, sticky typed
+residency refusal, escaped guards and a warm full-dictionary read with no extra
+provider requests. This authored high-redundancy result does not promise that
+arbitrary long text has the same size as short text.

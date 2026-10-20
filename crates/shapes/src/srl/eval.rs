@@ -389,7 +389,9 @@ where
 {
     let _coordinates = options.coordinate_scope();
     let source_rules = options.source_rules();
-    let governors = options.eval_options();
+    let governors = options
+        .eval_options()
+        .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
     for rule in &set.rules {
         if let IrRuleBody::Elements(element_rule) = &rule.body {
             element_rule
@@ -524,7 +526,10 @@ where
     inferred.sort_by_cached_key(|triple| triple.each_ref().map(ToString::to_string));
 
     let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("SHACL rules requested derivation recording")
+    {
         if !Arity::<N>::is_output(derivation.fact()) {
             continue;
         }
@@ -751,6 +756,17 @@ fn describe(error: &EvalError, set: &RuleSet<'_>) -> String {
                 name(*rule)
             )
         }
+        EvalError::BudgetExhausted {
+            resource: BudgetResource::TermArenaBytes,
+            report,
+        } => format!(
+            "SHACL rules did not complete: {}",
+            purrdf_datalog::seminaive::render_budget_refusal(
+                BudgetResource::TermArenaBytes,
+                *report,
+                "reduce retained term sizes in the input or rules",
+            )
+        ),
         EvalError::Guard {
             rule,
             guard,
@@ -1171,7 +1187,7 @@ where
     fn evaluate(
         &self,
         call: &GuardCall<'_, TermInterner, N>,
-    ) -> Result<Vec<Vec<String>>, purrdf_datalog::guard::CallbackError> {
+    ) -> Result<purrdf_datalog::guard::GuardRows, purrdf_datalog::guard::CallbackError> {
         let implementation = self
             .guards
             .get(&(call.rule, call.site))
@@ -1192,36 +1208,45 @@ where
                 )?;
                 Ok(triples
                     .iter()
-                    .map(|triple| triple.iter().map(|t| self.codec.surface(t)).collect())
+                    .map(|triple| {
+                        triple
+                            .iter()
+                            .map(|t| self.codec.surface(t).into())
+                            .collect()
+                    })
                     .collect())
             }
-            GuardImpl::Filter { query, variables } => {
-                let args = self.arguments(variables, call.inputs)?;
+            GuardImpl::Filter { query, variables } => call.evaluate_lexical(|lexical| {
+                let args = self.arguments(variables, lexical)?;
                 let value =
                     crate::sparql::eval_scalar_query_view(self.empty.sparql_view(), query, &args)?;
                 Ok(match value {
                     Some(Term::Literal(l)) if l.value() == "true" => vec![Vec::new()],
                     _ => Vec::new(),
                 })
-            }
+            }),
             GuardImpl::Assign { query, variables } => {
-                let args = self.arguments(variables, call.inputs)?;
-                // A blank node the expression computes (`BNODE()`) is fresh per
-                // evaluation: each call mints under its own prefix.
-                let prefix = format!("{}a{}_", self.mint_prefix, self.mint());
-                let value = crate::sparql::eval_scalar_query_view_minting(
-                    self.empty.sparql_view(),
-                    query,
-                    &args,
-                    &prefix,
-                )?;
-                // "If evaluating the expression in an assignment causes an error, then the
-                // current solution mapping is rejected by the assignment."
-                Ok(value.map_or_else(Vec::new, |term| vec![vec![self.codec.surface(&term)]]))
+                call.evaluate_lexical(|lexical| {
+                    let args = self.arguments(variables, lexical)?;
+                    // A blank node the expression computes (`BNODE()`) is fresh per
+                    // evaluation: each call mints under its own prefix.
+                    let prefix = format!("{}a{}_", self.mint_prefix, self.mint());
+                    let value = crate::sparql::eval_scalar_query_view_minting(
+                        self.empty.sparql_view(),
+                        query,
+                        &args,
+                        &prefix,
+                    )?;
+                    // "If evaluating the expression in an assignment causes an error, then the
+                    // current solution mapping is rejected by the assignment."
+                    Ok(value.map_or_else(Vec::new, |term| {
+                        vec![vec![self.codec.surface(&term).into()]]
+                    }))
+                })
             }
             GuardImpl::FreshBlank => {
                 let blank = Term::blank(format!("{}h{}", self.mint_prefix, self.mint()));
-                Ok(vec![vec![self.codec.surface(&blank)]])
+                Ok(vec![vec![self.codec.surface(&blank).into()]])
             }
             GuardImpl::SameTerm => Ok(if call.inputs[0] == call.inputs[1] {
                 vec![Vec::new()]
@@ -1232,10 +1257,10 @@ where
                 pattern,
                 inputs,
                 outputs,
-            } => {
-                let term = self.codec.term(call.inputs[0])?;
+            } => call.evaluate_lexical(|lexical| {
+                let term = self.codec.term(lexical[0])?;
                 let mut known: BTreeMap<&str, Term> = BTreeMap::new();
-                for (name, surface) in inputs.iter().zip(&call.inputs[1..]) {
+                for (name, surface) in inputs.iter().zip(&lexical[1..]) {
                     known.insert(name.as_str(), self.codec.term(surface)?);
                 }
                 if !match_triple(pattern, &term, &mut known) {
@@ -1244,18 +1269,18 @@ where
                 Ok(vec![
                     outputs
                         .iter()
-                        .map(|name| self.codec.surface(&known[name.as_str()]))
+                        .map(|name| self.codec.surface(&known[name.as_str()]).into())
                         .collect(),
                 ])
-            }
-            GuardImpl::BuildTriple { template, inputs } => {
+            }),
+            GuardImpl::BuildTriple { template, inputs } => call.evaluate_lexical(|lexical| {
                 let mut known: BTreeMap<&str, Term> = BTreeMap::new();
-                for (name, surface) in inputs.iter().zip(call.inputs) {
+                for (name, surface) in inputs.iter().zip(lexical) {
                     known.insert(name.as_str(), self.codec.term(surface)?);
                 }
                 let term = build_triple(template, &known)?;
-                Ok(vec![vec![self.codec.surface(&term)]])
-            }
+                Ok(vec![vec![self.codec.surface(&term).into()]])
+            }),
         }
     }
 }

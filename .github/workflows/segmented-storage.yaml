@@ -11,6 +11,8 @@ on:
       - crates/rdf-core/src/ir/segmented/**
       - crates/rdf-core/tests/segmented.rs
       - crates/rdf-core/tests/segmented_stack.rs
+      - crates/rdf-core/tests/support/segmented_text.rs
+      - crates/deflate/**
 
 permissions:
   contents: read
@@ -81,6 +83,7 @@ jobs:
             byte_packed_dictionaries_round_trip_with_sparse_high_id_reads \
             indexed_reopen_preserves_high_ids_and_bidirectional_batches \
             rdf12_references_empty_graphs_and_streamed_lines_survive \
+            compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace \
             cache_eviction_preserves_exact_non_cache_owner_conservation
           cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test segmented_stack -- --exact \
             persisted_layer_row_orders_disagree_after_shared_identity_translation \

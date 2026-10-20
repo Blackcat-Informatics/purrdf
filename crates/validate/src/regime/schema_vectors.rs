@@ -240,8 +240,10 @@ fn controls() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     if !matches!(
         Reasoner::with_proofs(&refused_count),
-        Err(purrdf_entail::EntailError::Parse(detail))
-            if detail.contains("4294967295") && detail.contains("4294967294")
+        Err(purrdf_entail::EntailError::OwlSyntax(error))
+            if matches!(error.as_ref(), purrdf_entail::OwlSyntaxError::CardinalityRange {
+                value: u32::MAX, maximum, ..
+            } if *maximum == u32::MAX - 1)
     ) {
         return Err(
             "portable boundary did not preserve the typed unrepresentable-count refusal".to_owned(),

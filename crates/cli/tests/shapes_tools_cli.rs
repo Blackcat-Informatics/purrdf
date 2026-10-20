@@ -1278,16 +1278,14 @@ fn cli_rules_capacity_limits() {
     assert_eq!(stdout(&roomy), expected_inference());
 }
 
-/// The NON-linear transitive closure of a 181-edge chain enumerates 1,056,743 join
-/// steps, just past the default limit of 2^20: `rules` refuses it naming
-/// `--max-join-steps` and writes no graph, and completes with every one of its 16,471
-/// triples when the limit is raised to 2^21. One edge fewer (1,039,835 steps) fits the
-/// default, so the refusal is the limit's and not the rule shape's. The linear closure
-/// of the same chain fits the default and yields the identical graph.
+/// Nonlinear recursive closure refuses an explicit small work budget without writing
+/// a partial graph. Raising the budget completes the same closure as the default
+/// and the linear rule. The test does not depend on an optimizer's historical step
+/// count or require the default budget to reject a workload it can now complete.
 #[test]
 fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     use std::fmt::Write as _;
-    const EDGES: usize = 181;
+    const EDGES: usize = 32;
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let chain_of = |edges: usize| {
         let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
@@ -1297,7 +1295,6 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         chain
     };
     let data = write_file(dir.path(), "chain.ttl", &chain_of(EDGES));
-    let shorter = write_file(dir.path(), "shorter.ttl", &chain_of(EDGES - 1));
     let rules = |recursive_atom: &str| {
         format!(
             "PREFIX ex: <http://example.org/ns#>\n\
@@ -1308,11 +1305,20 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     let nonlinear = write_file(dir.path(), "nonlinear.srl", &rules("ex:connected"));
     let linear = write_file(dir.path(), "linear.srl", &rules("ex:link"));
 
-    let refused = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
+    let refused = run(&[
+        "rules",
+        "--srl",
+        &nonlinear,
+        "--max-join-steps",
+        "64",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
         stderr(&refused).contains("the rules exceeded the join-step limit: ")
-            && stderr(&refused).contains("1048576 permitted (the default for this target)")
+            && stderr(&refused).contains("64 permitted (the caller's limit)")
             && stderr(&refused)
                 .trim_end()
                 .ends_with("raise it with --max-join-steps"),
@@ -1321,9 +1327,9 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     );
     assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
-    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &shorter]);
+    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
     assert_eq!(code(&fits), 0, "{}", stderr(&fits));
-    assert_eq!(stdout(&fits).lines().count(), 16_290);
+    assert_eq!(stdout(&fits).lines().count(), EDGES * (EDGES + 1) / 2);
 
     let raised = run(&[
         "rules",
@@ -1336,7 +1342,7 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         &data,
     ]);
     assert_eq!(code(&raised), 0, "{}", stderr(&raised));
-    assert_eq!(stdout(&raised).lines().count(), 16_471);
+    assert_eq!(stdout(&raised), stdout(&fits));
 
     let linear_run = run(&["rules", "--srl", &linear, "--to", "ntriples", &data]);
     assert_eq!(code(&linear_run), 0, "{}", stderr(&linear_run));
@@ -1473,11 +1479,16 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
         assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
         assert!(
             stderr(&ceiling).contains(
-                "evaluation exceeded the fixed term arena bytes ceiling: 16782539 observed, \
+                "evaluation exceeded the term arena bytes limit: 16782539 observed, \
                  16777216 permitted"
             ),
             "{}",
             stderr(&ceiling)
+        );
+        assert!(
+            stderr(&ceiling)
+                .trim_end()
+                .ends_with("reduce retained term sizes in the input or rules")
         );
         assert!(
             !stderr(&ceiling).contains("join-step"),

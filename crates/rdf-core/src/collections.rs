@@ -116,6 +116,17 @@ pub enum ListErrorKind {
     NonEmptyNil,
 }
 
+impl purrdf_hash::error::StructuredError for ListErrorKind {
+    purrdf_hash::error_visit! {
+        Cycle => "rdf-list-cycle" {},
+        MissingFirst => "rdf-list-missing-first" {},
+        MultipleFirst => "rdf-list-multiple-first" {},
+        MissingRest => "rdf-list-missing-rest" {},
+        MultipleRest => "rdf-list-multiple-rest" {},
+        NonEmptyNil => "rdf-list-nonempty-nil" {},
+    }
+}
+
 impl ListErrorKind {
     const fn describe(self) -> &'static str {
         match self {
@@ -153,6 +164,34 @@ pub struct ListError<Id = crate::ir::TermId> {
     pub members: Vec<Id>,
     /// The cell (or `rdf:nil`) where the walk stopped.
     pub node: Id,
+}
+
+impl<Id> ListError<Id> {
+    /// Preserve the fault and ordered prefix while changing its identifier domain.
+    pub fn map<Mapped>(self, mut map: impl FnMut(Id) -> Mapped) -> ListError<Mapped> {
+        let Self {
+            kind,
+            members,
+            node,
+        } = self;
+        ListError {
+            kind,
+            members: members.into_iter().map(&mut map).collect(),
+            node: map(node),
+        }
+    }
+}
+
+impl<Id: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for ListError<Id>
+{
+    purrdf_hash::error_visit! {
+        @record self { kind, members, node } => "rdf-list-error" {
+            "kind" => Record(&self.kind),
+            "members" => List(self.members.iter().map(|member| purrdf_hash::error::ErrorValue::Record(member))),
+            "node" => Record(&self.node),
+        }
+    }
 }
 
 impl<Id: std::fmt::Debug> std::fmt::Display for ListError<Id> {

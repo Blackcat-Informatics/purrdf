@@ -23,7 +23,7 @@
 //!
 //! [`contract_hash`] identifies the calculus a result came from. It hashes the things that
 //! can change an answer — the clause program in canonical form, the stored-fact and
-//! join-step limits in force and the fixed term-arena ceiling, and the hand-maintained
+//! join-step limits in force and the effective term-arena ceiling, and the hand-maintained
 //! [`CALCULUS_VERSION`] — and it hashes them AS DATA.
 //!
 //! The obvious alternative is to embed the evaluator's own source text in the binary and
@@ -58,17 +58,17 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
-use crate::guard::{Guard, GuardReads};
+use crate::guard::{Guard, GuardOperation, GuardReads};
 use crate::plan::Executable;
 use crate::schedule::Schedule;
-use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
+use crate::seminaive::{EvalError, EvalOptions, compile};
 
 /// Version of the planner and its executable-kernel shape.
 ///
 /// Deliberately independent of the clause digest and the caller's contract hash: a change
 /// to index selection, to the sideways-information-passing order or to the cyclic
 /// certification invalidates every cached plan even though its logical input is unchanged.
-pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v2";
+pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v6";
 
 /// Domain-separation tag for [`canonical_rule_hash`].
 ///
@@ -85,18 +85,32 @@ const CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-dl-clause-ir-v
 /// ([`crate::guard`]).
 ///
 /// A guard-free program hashes under [`CLAUSE_IR_DIGEST_TAG`] exactly as it always has,
-/// so no existing digest moves; a guarded one hashes under this tag, and every clause's
+/// so no existing digest moves; a callback-only guarded one hashes under this tag, and every clause's
 /// encoding is then followed by its guard section — a guard count, then per guard its
 /// name, inputs, outputs and read kind, then a negation count, then per negated
 /// conjunction its atoms and guards — framed unconditionally, so within this domain the
 /// encoding is injective too.
 const GUARDED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v1");
 
+/// Programs containing native filters encode every guard's explicit operation kind.
+/// Their separate domain preserves identities of unchanged callback-only programs.
+const NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-guarded-dl-clause-ir-v2");
+
 /// Graph-free clause identity: no graph term or dataset-kind field is encoded.
 const TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-triple-clause-ir-v1");
 /// The guarded graph-free clause encoding.
 const GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
     Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v1");
+/// The operation-tagged graph-free encoding for programs containing native filters.
+const NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-guarded-triple-clause-ir-v2");
+
+/// Programs with guard barriers encode the authored atom prefix of every guard.
+const ORDERED_CLAUSE_IR_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-ordered-dl-clause-ir-v3");
+/// Graph-free programs with authored guard barriers.
+const ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG: Domain =
+    Domain::new(b"purrdf-datalog-ordered-triple-clause-ir-v3");
 
 /// Domain-separation tag for [`scheduled_contract_hash`].
 const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-scheduled-contract-v1");
@@ -191,12 +205,27 @@ fn hash_atom<const N: usize>(hasher: &mut purrdf_hash::blake3::Hasher, atom: &Cl
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
     let guarded = rules.iter().any(DlClause::is_guarded);
+    let ordered = rules.iter().any(|rule| rule.guard_positions().is_some());
+    let native = rules.iter().any(|rule| {
+        rule.guards()
+            .iter()
+            .chain(
+                rule.negations()
+                    .iter()
+                    .flat_map(crate::guard::Negation::guards),
+            )
+            .any(|guard| guard.operation() != GuardOperation::Callback)
+    });
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let domain = match (N, guarded) {
-        (3, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (3, true) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
-        (_, true) => GUARDED_CLAUSE_IR_DIGEST_TAG,
-        (_, false) => CLAUSE_IR_DIGEST_TAG,
+    let domain = match (N, guarded, native, ordered) {
+        (3, _, _, true) => ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, _, _, true) => ORDERED_CLAUSE_IR_DIGEST_TAG,
+        (3, _, true, false) => NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, _, true, false) => NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (3, false, false, false) => TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (3, true, false, false) => GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG,
+        (_, true, false, false) => GUARDED_CLAUSE_IR_DIGEST_TAG,
+        (_, false, false, false) => CLAUSE_IR_DIGEST_TAG,
     };
     frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
@@ -222,14 +251,22 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
             }
         }
         if guarded {
-            hash_guards(&mut hasher, rule.guards());
+            hash_guards(&mut hasher, rule.guards(), native || ordered);
+            if ordered {
+                for position in 0..rule.guards().len() {
+                    let after = rule
+                        .guard_positions()
+                        .map_or_else(|| rule.body().len(), |positions| positions[position]);
+                    hasher.update(&(after as u64).to_le_bytes());
+                }
+            }
             hasher.update(&(rule.negations().len() as u64).to_le_bytes());
             for negation in rule.negations() {
                 hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
                 for atom in negation.atoms() {
                     hash_atom(&mut hasher, atom);
                 }
-                hash_guards(&mut hasher, negation.guards());
+                hash_guards(&mut hasher, negation.guards(), native || ordered);
             }
         }
     }
@@ -237,9 +274,15 @@ pub fn canonical_rule_hash<const N: usize>(rules: &[DlClause<N>]) -> [u8; 32] {
 }
 
 /// Hash a guard list: its length, then per guard its name, inputs, outputs and read kind.
-fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
+fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard], native: bool) {
     hasher.update(&(guards.len() as u64).to_le_bytes());
     for guard in guards {
+        if native {
+            hasher.update(&[match guard.operation() {
+                GuardOperation::Callback => 0,
+                GuardOperation::NotEqual => 1,
+            }]);
+        }
         frame_le_into(hasher, guard.name().as_bytes());
         hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
         for input in guard.inputs() {
@@ -360,8 +403,8 @@ impl fmt::Display for ContractHash {
 ///   contract hash inherits every order-sensitivity and every field separation that function
 ///   already proves;
 /// * the EFFECTIVE join-step and stored-fact limits
-///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the fixed
-///   [`MAX_TERM_ARENA_BYTES`] — a limit change turns an answer into a refusal or a refusal
+///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the
+///   effective [`EvalOptions::max_term_arena_bytes`] — a limit change turns an answer into a refusal or a refusal
 ///   into an answer, which is as large a difference as an answer can have. The effective
 ///   value is hashed, never "the default": the default differs by target
 ///   ([`DEFAULT_MAX_STORED_FACTS`](crate::seminaive::DEFAULT_MAX_STORED_FACTS)), so a
@@ -415,7 +458,7 @@ pub fn contract_hash_with<const N: usize>(
         CALCULUS_VERSION,
         options.max_join_steps(),
         options.max_stored_facts(),
-        MAX_TERM_ARENA_BYTES as u64,
+        options.max_term_arena_bytes(),
     );
     if !rules.iter().any(DlClause::is_guarded) {
         return digest;
@@ -475,7 +518,7 @@ pub fn scheduled_contract_hash<const N: usize>(
     frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&options.max_join_steps().to_le_bytes());
     hasher.update(&options.max_stored_facts().to_le_bytes());
-    hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
+    hasher.update(&options.max_term_arena_bytes().to_le_bytes());
     fold_term_generating_limit(&mut hasher, options);
     hasher.update(&canonical_rule_hash(rules));
     hasher.update(&(schedule.layers().len() as u64).to_le_bytes());
@@ -784,15 +827,44 @@ mod tests {
     use super::*;
     use crate::clause::HeadDisjunct;
     use crate::seminaive::{
-        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_JOIN_STEPS,
-        NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_JOIN_STEPS,
-        WASM_DEFAULT_MAX_STORED_FACTS, evaluate,
+        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, DEFAULT_MAX_TERM_ARENA_BYTES,
+        NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
+        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS,
     };
     use crate::store::RelationStore;
 
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn guard_barriers_participate_in_clause_identity() {
+        use crate::clause::BodyLiteral;
+        let head = atom("?X", R, "?Z");
+        let first = atom("?X", P, "?Y");
+        let second = atom("?Y", Q, "?Z");
+        let guard = Guard::filter("test", vec!["?X".into()]);
+        let early = DlClause::datalog(head.clone(), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(first.clone()),
+            BodyLiteral::Guard(guard.clone()),
+            BodyLiteral::Atom(second.clone()),
+        ]);
+        let late = DlClause::datalog(head.clone(), Vec::new()).with_ordered_body(vec![
+            BodyLiteral::Atom(first.clone()),
+            BodyLiteral::Atom(second.clone()),
+            BodyLiteral::Guard(guard.clone()),
+        ]);
+        let legacy = DlClause::datalog(head, vec![first, second]).with_guards(vec![guard]);
+        assert_ne!(
+            canonical_rule_hash(&[early]),
+            canonical_rule_hash(std::slice::from_ref(&late)),
+        );
+        assert_eq!(
+            canonical_rule_hash(&[late]),
+            canonical_rule_hash(&[legacy]),
+            "an end-of-body barrier preserves the existing interpretation",
+        );
+    }
     const CONTRACT: &str = "contract-a";
 
     fn v(name: &str) -> ClauseTerm {
@@ -1154,8 +1226,18 @@ mod tests {
 
         let run = |rules: Vec<DlClause>| {
             let exe = compile(rules).expect("the fixture compiles");
-            let evaluation = evaluate(&exe, edb()).expect("the fixture stays inside every ceiling");
-            let derivation = &evaluation.derivations()[0];
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                edb(),
+                &crate::guard::NoGuards,
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the fixture stays inside every ceiling");
+            let derivation = &evaluation
+                .derivations()
+                .expect("derivation recording was requested")[0];
             (derivation.rule(), derivation.sources()[0].predicate.clone())
         };
         assert_eq!(run(forward), (0, format!("<{P}>")));
@@ -1325,10 +1407,11 @@ mod tests {
                 CALCULUS_VERSION,
                 DEFAULT_MAX_JOIN_STEPS,
                 DEFAULT_MAX_STORED_FACTS,
-                MAX_TERM_ARENA_BYTES as u64,
+                DEFAULT_MAX_TERM_ARENA_BYTES as u64,
             )
         );
         let stated = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(12_345)
             .with_max_stored_facts(678);
         assert_eq!(
@@ -1338,7 +1421,7 @@ mod tests {
                 CALCULUS_VERSION,
                 12_345,
                 678,
-                MAX_TERM_ARENA_BYTES as u64
+                DEFAULT_MAX_TERM_ARENA_BYTES as u64
             )
         );
     }
@@ -1352,13 +1435,16 @@ mod tests {
         let rules = transitive_step(Q);
         let default = contract_hash(&rules);
         let restated = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS);
         assert_eq!(contract_hash_with(&rules, &restated), default);
         let wasm = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         let native = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         assert_ne!(
@@ -1367,8 +1453,12 @@ mod tests {
             "a native result never shares an identity with a wasm32 one"
         );
         for options in [
-            EvalOptions::default().with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
-            EvalOptions::default().with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
         ] {
             assert_ne!(contract_hash_with(&rules, &options), default, "{options:?}");
         }
@@ -1401,7 +1491,7 @@ mod tests {
         let real = (
             DEFAULT_MAX_JOIN_STEPS,
             DEFAULT_MAX_STORED_FACTS,
-            MAX_TERM_ARENA_BYTES as u64,
+            DEFAULT_MAX_TERM_ARENA_BYTES as u64,
         );
         assert_eq!(recipe(real.0, real.1, real.2), reference);
         assert_ne!(
@@ -1417,7 +1507,7 @@ mod tests {
         assert_ne!(
             reference,
             recipe(real.0, real.1, real.2 + 1),
-            "MAX_TERM_ARENA_BYTES must reach the digest"
+            "DEFAULT_MAX_TERM_ARENA_BYTES must reach the digest"
         );
 
         // The calculus version.
@@ -1451,6 +1541,7 @@ mod tests {
     #[test]
     fn the_contract_hash_is_frozen() {
         let wasm = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
@@ -1459,6 +1550,7 @@ mod tests {
             "the contract hash of the fixture program under the wasm32 defaults moved"
         );
         let native = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
@@ -1479,6 +1571,7 @@ mod tests {
     /// on every target.
     fn stated_options() -> EvalOptions {
         EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(1_000)
             .with_max_stored_facts(2_000)
             .with_max_term_generating_rounds(3)
@@ -1500,6 +1593,15 @@ mod tests {
     #[test]
     fn every_cache_digest_is_frozen() {
         let hex = |digest: &[u8; 32]| purrdf_hash::hex::Lower(digest).to_string();
+        let native: Vec<_> = transitive_step(Q)
+            .into_iter()
+            .map(|clause| clause.with_guards(vec![Guard::not_equal("?s", "?o")]))
+            .collect();
+        assert_eq!(
+            hex(&canonical_rule_hash(&native)),
+            "9de678b4bf5b3c34416eb88788cb7f37dba81fed708a09c953c3fb6a1b9a648b",
+            "the operation-tagged native clause digest moved",
+        );
         assert_eq!(
             hex(&canonical_rule_hash(&transitive_step(Q))),
             "a8d8438226d780583249aa985250add53f899547c92240a145c97c3de0f0d0a0",
@@ -1523,7 +1625,7 @@ mod tests {
         );
         assert_eq!(
             hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
-            "bb5cee96a06449cb6d1655d96819d26a704f5d4bb375484c96f8644dd1f42a7b",
+            "d74e5318609fd61d6e78ac8910ee6fb2386a1d3b7ec711b88638a06ed8e24163",
             "the plan identity moved"
         );
     }

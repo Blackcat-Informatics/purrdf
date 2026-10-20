@@ -569,15 +569,13 @@ fn encode_dataset(
     records.sort_by(|a, b| a.1.cmp(&b.1));
     let reverse = append_fixed(
         &mut blocks,
-        records
-            .chunks(records_per_block.min((block_bytes - 9) / 8))
-            .map(|chunk| {
-                let mut bytes = Vec::with_capacity(chunk.len() * 8);
-                for (id, _) in chunk {
-                    format::push_id(&mut bytes, *id);
-                }
-                bytes
-            }),
+        records.chunks((block_bytes - 9) / 8).map(|chunk| {
+            let mut bytes = Vec::with_capacity(chunk.len() * 8);
+            for (id, _) in chunk {
+                format::push_id(&mut bytes, *id);
+            }
+            bytes
+        }),
         u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
         format::REVERSE,
         8,
@@ -943,7 +941,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     let mut reverse_count = 0_u64;
     for slot in header.reverse.first..header.reverse.first + header.reverse.blocks {
         let records = fixed_records(block(bytes, header, slot)?, format::REVERSE, 8)?;
-        if records.is_empty() || records.len() / 8 > header.records_per_block as usize {
+        if records.is_empty() {
             return Err(SegmentedError::Corrupt(
                 "reverse index block packing is false",
             ));

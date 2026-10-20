@@ -893,6 +893,14 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				role_refusals_keep_native_fields_after_the_source_drops \
+				entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run \
+				import_conflict_inspection_keeps_original_versions_and_default_graph \
+				actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
+				empty_collection_admission_checks_nil_structure \
+				dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
+				authored_cardinality_refusals_retain_the_original_operands_and_integer_cause \
+				actual_rif_refusals_keep_original_scope_and_survive_the_document \
 				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
@@ -910,6 +918,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				nominal_merges_and_simple_functionality_preserve_role_obligations \
 				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
 				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
+				actual_query_and_entailment_failures_retain_their_original_owners \
+				original_reader_failures_cross_both_generic_reasoning_boundaries \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
@@ -1018,6 +1030,24 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work \
+				late_delta_seed_completes_under_a_prefix_independent_work_limit \
+				ordered_guard_outputs_probe_later_atoms_without_intermediate_relations \
+				ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms \
+				native_integer_columns_and_indexes_preserve_wide_original_handles \
+				native_integer_dictionary_runs_recursive_models_without_lexical_projection \
+				native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier \
+				native_inequality_needs_no_callback_and_is_independently_checked \
+				native_inequality_in_a_negative_group_uses_the_same_filter \
+				conjunctive_heads_share_joins_and_check_the_authored_head \
+				conjunctive_heads_settle_at_each_predicates_actual_stratum \
+				conjunctive_recursion_and_factor_projection_match_split_programs \
+				predicate_rows_keep_native_identities_and_lexical_graph_order \
+				model_only_and_recorded_models_have_explicit_evidence_and_equal_counts \
+				interrupted_guarded_commit_counts_only_completed_generating_rounds \
+				term_arena_limits_are_caller_selected_and_reach_contracts \
+				stored_fact_admission_refuses_the_first_extra_fact_in_both_engines \
+				public_sequential_execution_preserves_models_proofs_and_counters \
 				triple_base_authority_survives_data_growth_and_layer_retraction \
 				triple_negated_base_preserves_seminaive_work_and_limits \
 				triple_no_output_runs_the_body_without_fabricating_a_fact \
@@ -1032,6 +1062,12 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test srl_language -- --exact \
 				triple_carrier_runs_the_public_rl_program_without_quad_storage \
 				triple_rl_keeps_statement_roles_and_scoped_blank_identity \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test sparql_argument_failures -- --exact \
+				sparql_node_calls_mask_catchable_argument_failures \
+				sparql_node_calls_preserve_unmasked_failures_and_empty_branches \
+				sparql_argument_failures_follow_the_same_path_in_dated_validation \
+				sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-shapes --test rule_coordinates -- --exact \
 				shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes \
