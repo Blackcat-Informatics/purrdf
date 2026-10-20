@@ -1029,9 +1029,10 @@ where
     /// u64 node_count
     /// node_count times, in emission order:
     ///     u8  kind                                -- 0 axiom, 1 by_rule
-    ///     u64 len + bytes, four times             -- subject, predicate, object, graph
+    ///     u64 len + bytes, N times                -- subject, predicate, object[, graph]
     ///     if kind == 1:
     ///         u64 rule
+    ///         u64 head                            -- ordinal in the authored head conjunction
     ///         u64 premise_count
     ///         u64 premise position, premise_count times   -- each < this node's position
     /// ```
