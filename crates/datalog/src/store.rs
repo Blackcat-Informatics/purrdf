@@ -578,10 +578,17 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// The batch positions whose object is `o`, via the lazily-built [`ObjectIndex`].
     /// A subslice of the `(object, subject)`-sorted permutation.
     pub(crate) fn object_positions(&self, o: I) -> &[usize] {
+        let (lo, hi) = self.object_run(o);
+        &self.object_order()[lo..hi]
+    }
+
+    /// The selected range in the original object permutation, without borrowing
+    /// its slice into a cursor's retained position.
+    pub(crate) fn object_run(&self, o: I) -> (usize, usize) {
         let perm = self.object_order();
         let lo = perm.partition_point(|&p| self.obj[p] < o);
         let hi = perm.partition_point(|&p| self.obj[p] <= o);
-        &perm[lo..hi]
+        (lo, hi)
     }
 
     /// Every batch position in `(object_id, subject_id)` order.

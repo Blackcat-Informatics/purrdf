@@ -70,7 +70,8 @@ pub trait LendingIterator: sealed::Sealed {
 }
 
 /// The within-source iteration state for the current arrangement leg.
-enum Inner<'a> {
+#[derive(Debug, Clone, Copy)]
+enum Inner {
     /// A contiguous column-position range `[pos, end)` of the current batch — an `Any`
     /// full scan (`0..len`) or a subject-bound run.
     Range {
@@ -79,13 +80,12 @@ enum Inner<'a> {
         /// One past the last column position of the run.
         end: usize,
     },
-    /// The current batch's object permutation subslice; `pos` indexes into it and each
-    /// entry is a column position.
+    /// An absolute range in the current batch's original object permutation.
     Perm {
-        /// The `(object, subject)`-ordered positions matching the bound object.
-        perm: &'a [usize],
-        /// The next index into `perm`.
+        /// The next index into the original permutation.
         pos: usize,
+        /// One past the last selected permutation index.
+        end: usize,
     },
     /// At most one column position (a `Both` bound over the unique `(s, o)` key).
     One(Option<usize>),
@@ -106,13 +106,23 @@ enum Inner<'a> {
 pub struct RowCursor<'a, I: TermIdentity = TermId> {
     /// The arrangement being scanned.
     rel: &'a Relation<I>,
+    /// Owned indices into that same arrangement; no retained slice borrows.
+    position: RowPosition<I>,
+}
+
+/// The native row scan's owned position, retained between source borrows.
+///
+/// The enclosing execution state must keep the original arrangement unchanged.
+/// This is crate-private: it is not a token callers may attach to another source.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RowPosition<I: TermIdentity = TermId> {
     /// The selection this cursor enumerates.
     bound: Bound<I>,
     /// The current arrangement leg: `0..batches.len()` selects that batch, an index
     /// equal to `batches.len()` selects the tail, and anything greater is exhausted.
     src: usize,
     /// The within-source state of the current leg.
-    inner: Inner<'a>,
+    inner: Inner,
 }
 
 impl<I: TermIdentity> fmt::Debug for RowCursor<'_, I> {
@@ -120,7 +130,7 @@ impl<I: TermIdentity> fmt::Debug for RowCursor<'_, I> {
     /// position, and dumping a relation's whole arrangement into a diagnostic would be
     /// both enormous and useless.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let leg = match self.inner {
+        let leg = match self.position.inner {
             Inner::Range { .. } => "range",
             Inner::Perm { .. } => "perm",
             Inner::One(_) => "one",
@@ -128,8 +138,8 @@ impl<I: TermIdentity> fmt::Debug for RowCursor<'_, I> {
             Inner::Done => "done",
         };
         f.debug_struct("RowCursor")
-            .field("bound", &self.bound)
-            .field("source", &self.src)
+            .field("bound", &self.position.bound)
+            .field("source", &self.position.src)
             .field("leg", &leg)
             .finish()
     }
@@ -139,22 +149,43 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
     /// A cursor over the rows of `rel` selected by `bound`, positioned at the first
     /// source (batch 0, or the tail, or exhausted).
     pub(crate) fn new(rel: &'a Relation<I>, bound: Bound<I>) -> Self {
-        let mut cursor = Self {
+        Self {
             rel,
+            position: RowPosition::new(rel, bound),
+        }
+    }
+
+    /// Whether the cursor has at least one remaining row, without materializing
+    /// an intermediate collection.
+    pub fn any_remaining(mut self) -> bool {
+        self.next().is_some()
+    }
+
+    /// Count the remaining matches from indexed run lengths and the bounded tail.
+    /// Sealed rows are never enumerated and no result buffer is allocated.
+    pub(crate) fn remaining_count(self) -> usize {
+        self.position.remaining_count(self.rel)
+    }
+}
+
+impl<I: TermIdentity> RowPosition<I> {
+    /// Start at the first original batch, then its bounded mutable tail.
+    pub(crate) fn new(rel: &Relation<I>, bound: Bound<I>) -> Self {
+        let mut cursor = Self {
             bound,
             src: 0,
             inner: Inner::Done,
         };
-        cursor.enter(0);
+        cursor.enter(rel, 0);
         cursor
     }
 
     /// Position the cursor at source `src`, computing its bound-run. A batch source
     /// gallops the sorted columns for the run; the tail source is a linear scan; past
     /// the tail is exhausted.
-    fn enter(&mut self, src: usize) {
+    fn enter(&mut self, rel: &Relation<I>, src: usize) {
         self.src = src;
-        let batches = self.rel.batches();
+        let batches = rel.batches();
         self.inner = match src.cmp(&batches.len()) {
             Ordering::Less => {
                 let b: &Batch<(), I> = &batches[src];
@@ -167,10 +198,10 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
                         let (lo, hi) = b.subject_run(s);
                         Inner::Range { pos: lo, end: hi }
                     }
-                    Bound::Object(o) => Inner::Perm {
-                        perm: b.object_positions(o),
-                        pos: 0,
-                    },
+                    Bound::Object(o) => {
+                        let (pos, end) = b.object_run(o);
+                        Inner::Perm { pos, end }
+                    }
                     Bound::Both(s, o) => Inner::One(b.both_pos(s, o)),
                 }
             }
@@ -190,24 +221,15 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
         }
     }
 
-    /// Whether the cursor has at least one remaining row — the allocation-free
-    /// membership probe existential negation-as-failure uses, with no `Vec`
-    /// materialised just to ask "is this empty".
-    pub fn any_remaining(mut self) -> bool {
-        self.next().is_some()
-    }
-
     /// Count the remaining matches from indexed run lengths and the bounded tail.
     /// Sealed rows are never enumerated and no result buffer is allocated.
-    pub(crate) fn remaining_count(mut self) -> usize {
+    fn remaining_count(mut self, rel: &Relation<I>) -> usize {
         let mut count = 0;
         loop {
             count += match &self.inner {
-                Inner::Range { pos, end } => end - pos,
-                Inner::Perm { perm, pos } => perm.len() - pos,
+                Inner::Range { pos, end } | Inner::Perm { pos, end } => end - pos,
                 Inner::One(position) => usize::from(position.is_some()),
-                Inner::Tail { pos } => self
-                    .rel
+                Inner::Tail { pos } => rel
                     .tail()
                     .iter()
                     .skip(*pos)
@@ -215,19 +237,12 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
                     .count(),
                 Inner::Done => return count,
             };
-            self.enter(self.src + 1);
+            self.enter(rel, self.src + 1);
         }
     }
-}
 
-impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
-    type Item<'a>
-        = (I, I, RowId)
-    where
-        Self: 'a;
-
-    fn next(&mut self) -> Option<Self::Item<'_>> {
-        let rel = self.rel;
+    /// Continue directly from the retained indices in the original arrangement.
+    pub(crate) fn next(&mut self, rel: &Relation<I>) -> Option<(I, I, RowId)> {
         let bound = self.bound;
         loop {
             match &mut self.inner {
@@ -238,9 +253,9 @@ impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
                         return Some(rel.batches()[self.src].row_at(p));
                     }
                 }
-                Inner::Perm { perm, pos } => {
-                    if *pos < perm.len() {
-                        let p = perm[*pos];
+                Inner::Perm { pos, end } => {
+                    if *pos < *end {
+                        let p = rel.batches()[self.src].object_order()[*pos];
                         *pos += 1;
                         return Some(rel.batches()[self.src].row_at(p));
                     }
@@ -264,8 +279,19 @@ impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
             }
             // The current source is exhausted; advance to the next.
             let next_src = self.src + 1;
-            self.enter(next_src);
+            self.enter(rel, next_src);
         }
+    }
+}
+
+impl<I: TermIdentity> LendingIterator for RowCursor<'_, I> {
+    type Item<'a>
+        = (I, I, RowId)
+    where
+        Self: 'a;
+
+    fn next(&mut self) -> Option<Self::Item<'_>> {
+        self.position.next(self.rel)
     }
 }
 
@@ -670,6 +696,39 @@ mod tests {
             let mut cursor = select(&store, P, bound);
             let consumed = usize::from(cursor.next().is_some());
             assert_eq!(cursor.remaining_count(), expected - consumed);
+        }
+    }
+
+    #[test]
+    fn owned_row_positions_resume_at_every_selected_boundary() {
+        let store = big_store();
+        let subject = store.term_id(&iri("a")).unwrap();
+        let other = store.term_id(&iri("z")).unwrap();
+        let object = store.term_id(&iri("o000")).unwrap();
+        let absent_pair = store.term_id(&iri("o199")).unwrap();
+        for bound in [
+            Bound::Any,
+            Bound::Subject(subject),
+            Bound::Object(object),
+            Bound::Object(subject),
+            Bound::Both(subject, object),
+            Bound::Both(other, absent_pair),
+        ] {
+            let expected = drain(select(&store, P, bound));
+            for cut in 0..=expected.len() {
+                let mut cursor = select(&store, P, bound);
+                let mut prefix = Vec::new();
+                for _ in 0..cut {
+                    prefix.push(cursor.next().unwrap());
+                }
+                // Retain only the original source and integer position, then
+                // attach a fresh lending borrow without seeking or skipping.
+                let RowCursor { rel, position } = cursor;
+                assert_eq!(position.remaining_count(rel), expected.len() - cut);
+                let resumed = RowCursor { rel, position };
+                prefix.extend(drain(resumed));
+                assert_eq!(prefix, expected, "bound {bound:?}, cut {cut}");
+            }
         }
     }
 
