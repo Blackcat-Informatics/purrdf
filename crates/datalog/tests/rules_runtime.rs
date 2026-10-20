@@ -965,7 +965,8 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
     else {
         panic!("the retained base and projected fact exceed the limit");
     };
-    assert_eq!(report.stored_facts(), 4);
+    assert_eq!(report.stored_facts(), 3);
+    assert_eq!(report.observed_stored_facts(), 4);
     assert_eq!(
         report.generated_terms(),
         0,
