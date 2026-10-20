@@ -140,4 +140,6 @@ jobs:
           cargo test --locked --target wasm32-unknown-unknown -p purrdf --test reasoning_inspection -- --exact \
             actual_query_and_entailment_failures_retain_their_original_owners \
             original_reader_failures_cross_both_generic_reasoning_boundaries
-          cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors
+          cargo test --locked --target wasm32-unknown-unknown -p purrdf-validate --test dl_proof_vectors -- --exact \
+            all_shared_dl_proof_vectors_match_the_current_native_boundary \
+            imported_closure_proofs_check_against_the_consumers_native_snapshot
