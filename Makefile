@@ -1034,6 +1034,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				late_delta_seed_completes_under_a_prefix_independent_work_limit \
 				ordered_guard_outputs_probe_later_atoms_without_intermediate_relations \
 				ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms \
+				native_integer_columns_and_indexes_preserve_wide_original_handles \
 				native_inequality_needs_no_callback_and_is_independently_checked \
 				native_inequality_in_a_negative_group_uses_the_same_filter \
 				conjunctive_heads_share_joins_and_check_the_authored_head \

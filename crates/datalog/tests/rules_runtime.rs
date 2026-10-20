@@ -1961,6 +1961,46 @@ fn triple_pattern(subject: &str, predicate: &str, object: &str) -> ClauseAtom<3>
     )
 }
 
+fn native_integer_columns_and_indexes_preserve_wide_original_handles() {
+    use purrdf_datalog::store::{RowColumns, RowIndex, RowIndexError};
+    let mut rows = RowColumns::<u32, 6, u64>::default();
+    let first = [0, 1, 2, 3, u32::MAX, 5];
+    let second = [u32::MAX, 6, 7, 8, 9, 10];
+    let third = [0, 99, 98, 97, u32::MAX, 96];
+    let wide_handle = 1_u64 << 50;
+    for (row, handle) in [(first, wide_handle), (second, 7), (third, wide_handle + 17)] {
+        rows.try_push(row, handle).unwrap();
+    }
+    let index = RowIndex::new(&rows, &[4, 0]).unwrap();
+    assert_eq!(
+        index.select(&[u32::MAX, 0]).unwrap().collect::<Vec<_>>(),
+        [(first, wide_handle), (third, wide_handle + 17)],
+    );
+    assert_eq!(index.select(&[9]).unwrap().next_back(), Some((second, 7)));
+    assert_eq!(
+        index.positions(&[0, 0, 0]),
+        Err(RowIndexError::PrefixTooLong {
+            provided: 3,
+            indexed: 2
+        }),
+    );
+    assert!(matches!(
+        RowIndex::new(&rows, &[6]),
+        Err(RowIndexError::ColumnOutOfBounds {
+            column: 6,
+            width: 6
+        })
+    ));
+    let mut wide = RowColumns::<u32, 65, u64>::default();
+    let cells = core::array::from_fn(|column| u32::try_from(column).unwrap());
+    wide.try_push(cells, wide_handle).unwrap();
+    let index = RowIndex::new(&wide, &[64, 0]).unwrap();
+    assert_eq!(
+        index.select(&[64, 0]).unwrap().next(),
+        Some((cells, wide_handle))
+    );
+}
+
 fn ordered_guard_outputs_probe_later_atoms_without_intermediate_relations() {
     use purrdf_datalog::clause::BodyLiteral::{Atom, Guard as Compute};
     use purrdf_datalog::store::TermInterner;
@@ -2215,6 +2255,7 @@ fn native_inequality_in_a_negative_group_uses_the_same_filter() {
 }
 
 purrdf_testkit::harness_main!(
+    native_integer_columns_and_indexes_preserve_wide_original_handles,
     narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work,
     late_delta_seed_completes_under_a_prefix_independent_work_limit,
     ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms,
