@@ -11,13 +11,23 @@ original explicit term, lexical-byte and row limits.
 
 Dictionary blocks close before the next encoded record would exceed
 `block_bytes`, or when they reach `records_per_block`. The record count is an
-upper bound. Both insertion-order and lexical-order streams use the same
-front-coding encoder; their block populations and block counts may differ.
-One encoded record, including its fence and framing, must fit a block or sealing
+upper bound. The insertion-order dictionary uses front coding and stores its first
+key once; routing reads that decoded record instead of a duplicate fence. The
+lexical-order reverse index stores only eight-byte identifiers into this dictionary.
+Its blocks share the record-count ceiling and carry no lexical payload or decoded
+text arena. Their populations and block counts may differ from dictionary blocks.
+One encoded record, including its framing, must fit a block or sealing
 returns `ConstructionLimit`. The encoder does not retry the complete image with
 a larger layout. Selective term lookup uses authenticated stored ID ranges;
-opening still loads no dictionary directory or term map. Existing full-count
-blocks retain their encoding and their direct first-probe lookup.
+opening still loads no dictionary directory or term map. Full-population
+blocks retain their direct first-probe lookup. Data profile 3 refuses older
+profiles; regenerate their images from the original RDF input.
+
+Reverse lookup compares the referenced dictionary keys through the same admitted
+reader as forward lookup. A held reverse-index block may leave the payload cache
+while its original reservation remains charged until the last internal owner
+drops. This allows a one-slot cache to read the dictionary during lookup without
+evicting an escaped lexical term guard or hiding its live bytes.
 
 `SegmentedReadLimits` specifies ceilings, not arrays to allocate at opening.
 The exact request ledger, payload cache and learned routing bounds grow as they are used. Their
@@ -55,7 +65,7 @@ ordinary positive LIMIT need not intern every reifier in the image.
 
 ## Statistical metadata
 
-Data profile 2 stores four authenticated statistical sections: predicate/scope
+Data profile 3 retains four authenticated statistical sections: predicate/scope
 records, compressed distinct-ID domains, selected object frequencies and
 object-category/datatype counts. Predicate records carry row and distinct counts
 and ranges into the other sections. Fixed record widths permit selective binary
@@ -95,10 +105,10 @@ released with the operation; opening never preloads a directory or term map.
 
 The byte and peak figures in this section were recorded on main at
 `0d075201f`, before data profile 2 added the authenticated statistics sections.
-They are historical layout measurements, not current profile-2 size claims.
-The unchanged 2,000/200,000-claim query control passes profile 2's answer,
-touched-value and live-byte limits; new section sizes must be measured before
-publishing a profile-2 compression comparison.
+They are historical layout measurements. The 2,000/200,000-claim query control
+separately passed profile 2's answer, touched-value and live-byte limits. Neither
+result establishes profile 3's image size, lookup work or live residency; those
+require new measurements of the complete representation.
 
 The `segmented_query` integration control builds 200,000 RDF 1.2 claims, each
 with a reifier and an annotation. It has 600,260 terms and a 9,291,797-byte
@@ -113,13 +123,16 @@ representatives. The smaller 2,000-claim neighbor checks the same behavior.
 | 4096 / 64 | 92,127,232 | 76,840,960 | 12,902,400 | 282,624 | 2,097,152 |
 | 8192 / 128 | 90,906,624 | 76,840,960 | 12,861,440 | 147,456 | 1,048,576 |
 
-Each total also includes one header block. The dictionary appears twice: in
+Each historical total also includes one header block. That dictionary appears twice: in
 original ID order and in lexical reverse-lookup order. Both use fixed-size,
 prefix-compressed blocks capped at the selected number of records. At 4096 / 32,
 these two indexes occupy about 90% of this image. Sparse dictionary blocks,
 rather than the authentication tree, dominate the expansion over the compact
 pack. The row streams are ordinary, reifier and annotation rows, each in one
 subject-first order; they are not three permutations of the entire dataset.
+These totals do not measure profile 3's single dictionary and identifier-only
+reverse index. New byte, reader-work and live-residency measurements are required
+before attributing a compression or memory improvement to that representation.
 
 Increasing the record cap can reduce padding and the number of authenticated
 blocks. These recorded measurements used fixed-count grouping: for this corpus,

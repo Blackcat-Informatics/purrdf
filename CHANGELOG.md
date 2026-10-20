@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Segmented data profile 3 (breaking persisted format):** the reverse index
+  stores identifiers into the forward dictionary, and dictionary blocks read
+  their first key from its record instead of a second stored fence. Exact reverse
+  lookup uses the same authenticated forward reader. Older segmented profiles
+  must be regenerated from their original RDF input; the reader refuses them.
+  Receipt encoding and hash laws remain separate from the data profile.
+
 - **Editor's-draft SHACL law (breaking):** `ShaclProfile::ED_20261016`
   (`shacl-ed-2026-10-16`) names the `w3c/data-shapes` editor's drafts at commit
   `4cd469867a1cc6d2fff80e8a40723b26c695d67a`, with XPath 3.1. It is the working

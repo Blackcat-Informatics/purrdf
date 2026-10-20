@@ -565,19 +565,22 @@ fn encode_dataset(
         )?);
         records.push((map_id(local, limits.first_term_index), key));
     }
-    let dictionary = append_records(
-        &mut blocks,
-        &records,
-        format::DICTIONARY,
-        records_per_block,
-        block_bytes,
-    )?;
+    let dictionary = append_dictionary(&mut blocks, &records, records_per_block, block_bytes)?;
     records.sort_by(|a, b| a.1.cmp(&b.1));
-    let reverse = append_records(
+    let reverse = append_fixed(
         &mut blocks,
-        &records,
+        records
+            .chunks(records_per_block.min((block_bytes - 9) / 8))
+            .map(|chunk| {
+                let mut bytes = Vec::with_capacity(chunk.len() * 8);
+                for (id, _) in chunk {
+                    format::push_id(&mut bytes, *id);
+                }
+                bytes
+            }),
+        u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
         format::REVERSE,
-        records_per_block,
+        8,
         block_bytes,
     )?;
     let mut summaries = Vec::new();
@@ -727,10 +730,9 @@ fn append_statistics(
     Ok(streams)
 }
 
-fn append_records(
+fn append_dictionary(
     blocks: &mut Vec<Vec<u8>>,
     records: &[(GlobalTermId, Vec<u8>)],
-    kind: u8,
     chunk: usize,
     block_bytes: usize,
 ) -> Result<Stream, SegmentedError> {
@@ -738,7 +740,7 @@ fn append_records(
     let mut remaining = records;
     while !remaining.is_empty() {
         let (block, used) =
-            format::record_block(kind, &remaining[..remaining.len().min(chunk)], block_bytes)?;
+            format::record_block(&remaining[..remaining.len().min(chunk)], block_bytes)?;
         blocks.push(block);
         remaining = &remaining[used..];
     }
@@ -907,7 +909,6 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     for slot in header.dictionary.first..header.dictionary.first + header.dictionary.blocks {
         let records = DecodedRecords::decode(
             block(bytes, header, slot)?,
-            format::DICTIONARY,
             header.records_per_block,
             u64::from(header.block_bytes) * u64::from(header.records_per_block),
         )?;
@@ -938,38 +939,37 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
         return Err(SegmentedError::Corrupt("dictionary cardinality is false"));
     }
     let mut seen = vec![false; keys.len()];
-    let mut previous: Option<Vec<u8>> = None;
+    let mut previous: Option<usize> = None;
     let mut reverse_count = 0_u64;
     for slot in header.reverse.first..header.reverse.first + header.reverse.blocks {
-        let records = DecodedRecords::decode(
-            block(bytes, header, slot)?,
-            format::REVERSE,
-            header.records_per_block,
-            u64::from(header.block_bytes) * u64::from(header.records_per_block),
-        )?;
-        for (index, (id, _)) in records.entries.iter().enumerate() {
-            let key = records.key(index);
-            if previous.as_deref().is_some_and(|previous| previous >= key) {
-                return Err(SegmentedError::Corrupt(
-                    "reverse index is not globally strictly ordered",
-                ));
-            }
+        let records = fixed_records(block(bytes, header, slot)?, format::REVERSE, 8)?;
+        if records.is_empty() || records.len() / 8 > header.records_per_block as usize {
+            return Err(SegmentedError::Corrupt(
+                "reverse index block packing is false",
+            ));
+        }
+        for record in records.as_chunks::<8>().0 {
+            let id = Reader::at(record, 0).id()?;
             let local = id
                 .index()
                 .checked_sub(header.first_term_index)
                 .and_then(|v| usize::try_from(v).ok())
                 .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
-            if keys
+            let key = keys
                 .get(local)
-                .is_none_or(|forward| forward.as_slice() != key)
-                || seen.get(local).copied().unwrap_or(true)
-            {
+                .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
+            if seen.get(local).copied().unwrap_or(true) {
                 return Err(SegmentedError::Corrupt(
                     "forward/reverse correspondence is false",
                 ));
             }
+            if previous.is_some_and(|previous| keys[previous] >= *key) {
+                return Err(SegmentedError::Corrupt(
+                    "reverse index is not globally strictly ordered",
+                ));
+            }
             seen[local] = true;
-            previous = Some(key.to_vec());
+            previous = Some(local);
             reverse_count += 1;
         }
     }
@@ -1578,19 +1578,40 @@ mod certification_tests {
     }
 
     #[test]
-    fn recomputed_hashes_cannot_certify_a_false_dictionary_fence() {
+    fn recomputed_hashes_cannot_certify_false_reverse_identifiers() {
         let image = image();
         let header = Header::decode(image.bytes()).unwrap();
-        let mut bytes = image.bytes().to_vec();
-        let fence = usize::try_from(header.dictionary.first).unwrap()
+        let first = usize::try_from(header.reverse.first).unwrap()
             * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
-        bytes[fence + 9] ^= 1;
-        rehash(&mut bytes, &image.receipt);
-        assert!(matches!(
-            SegmentedImage::certify(bytes),
-            Err(SegmentedError::Corrupt(_))
-        ));
+            + 9;
+        for mutation in 0..4 {
+            let mut bytes = image.bytes().to_vec();
+            let expected = match mutation {
+                0 => {
+                    bytes.copy_within(first + 8..first + 16, first);
+                    "forward/reverse correspondence is false"
+                }
+                1 => {
+                    bytes[first..first + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+                    "reverse index names foreign ID"
+                }
+                2 => {
+                    bytes[first..first + 8].fill(0);
+                    "zero dictionary reference"
+                }
+                _ => {
+                    for offset in 0..8 {
+                        bytes.swap(first + offset, first + 8 + offset);
+                    }
+                    "reverse index is not globally strictly ordered"
+                }
+            };
+            rehash(&mut bytes, &image.receipt);
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt(expected)
+            );
+        }
     }
 
     #[test]
@@ -1600,7 +1621,7 @@ mod certification_tests {
         let mut bytes = image.bytes().to_vec();
         let record = usize::try_from(header.summaries.first).unwrap()
             * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
+            + 9;
         bytes[record + 24..record + 32].copy_from_slice(&999_u64.to_le_bytes());
         bytes[record + 32..record + 40].copy_from_slice(&999_u64.to_le_bytes());
         rehash(&mut bytes, &image.receipt);
@@ -1617,7 +1638,7 @@ mod certification_tests {
         let mut bytes = image.bytes().to_vec();
         let record = usize::try_from(header.streams[0].first).unwrap()
             * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
+            + 9;
         bytes[record..record + 8].copy_from_slice(&999_u64.to_le_bytes());
         rehash(&mut bytes, &image.receipt);
         assert!(matches!(

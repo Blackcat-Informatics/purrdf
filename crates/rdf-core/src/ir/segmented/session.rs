@@ -27,6 +27,15 @@ mod cache;
 mod cache_control;
 mod statistics;
 
+/// Read an identifier ordinal without allocating a decoded reverse dictionary.
+fn reverse_id(ids: &[u8], index: u64) -> Result<GlobalTermId, SegmentedError> {
+    let offset = usize::try_from(index)
+        .ok()
+        .and_then(|index| index.checked_mul(8))
+        .ok_or(SegmentedError::AddressExhausted)?;
+    Reader::at(ids, offset).id()
+}
+
 // Both owners reserve through the same admission home after their own readiness
 // check; a session additionally verifies its provider's snapshot identity.
 macro_rules! reserve_workspace_method {
@@ -1084,9 +1093,7 @@ impl SegmentedSession {
         let encoded = u64::from(self.receipt.block_bytes);
         let in_dictionary = slot >= self.header.dictionary.first
             && slot < self.header.dictionary.first + self.header.dictionary.blocks;
-        let in_reverse = slot >= self.header.reverse.first
-            && slot < self.header.reverse.first + self.header.reverse.blocks;
-        let records = if slot != 0 && (in_dictionary || in_reverse) {
+        let records = if slot != 0 && in_dictionary {
             u64::from(self.header.records_per_block)
         } else {
             0
@@ -1158,9 +1165,8 @@ impl SegmentedSession {
                 return Err(SegmentedError::Corrupt("block/index authentication failed"));
             }
             let decoded_records = match bytes[0] {
-                format::DICTIONARY | format::REVERSE if slot != 0 => Some(DecodedRecords::decode(
+                format::DICTIONARY if slot != 0 => Some(DecodedRecords::decode(
                     &bytes,
-                    bytes[0],
                     self.header.records_per_block,
                     decoded,
                 )?),
@@ -1342,11 +1348,13 @@ impl SegmentedSession {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let block = self.block(self.header.reverse.first + mid)?;
-            let records = block
-                .decoded
-                .as_ref()
-                .ok_or(SegmentedError::Corrupt("reverse index block kind changed"))?;
-            if records.key(0) <= key {
+            let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
+            let id = reverse_id(ids, 0)?;
+            let (dictionary, index) = self.term_block(id)?;
+            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            if records.key(index) <= key {
                 lo = mid + 1;
             } else {
                 hi = mid;
@@ -1356,14 +1364,24 @@ impl SegmentedSession {
             return Ok(None);
         }
         let block = self.block(self.header.reverse.first + lo - 1)?;
-        let records = block
-            .decoded
-            .as_ref()
-            .ok_or(SegmentedError::Corrupt("reverse index block kind changed"))?;
-        let index = records
-            .entries
-            .binary_search_by(|(_, range)| records.arena[range.clone()].cmp(key));
-        Ok(index.ok().map(|index| records.entries[index].0))
+        let ids = fixed_records(&block.encoded, format::REVERSE, 8)?;
+        let count = u64::try_from(ids.len() / 8).map_err(|_| SegmentedError::AddressExhausted)?;
+        let index = format::partition_point(count, |index| {
+            let (dictionary, record) = self.term_block(reverse_id(ids, index)?)?;
+            let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+                "forward dictionary block kind changed",
+            ))?;
+            Ok::<_, SegmentedError>(records.key(record) < key)
+        })?;
+        if index == count {
+            return Ok(None);
+        }
+        let id = reverse_id(ids, index)?;
+        let (dictionary, record) = self.term_block(id)?;
+        let records = dictionary.decoded.as_ref().ok_or(SegmentedError::Corrupt(
+            "forward dictionary block kind changed",
+        ))?;
+        Ok((records.key(record) == key).then_some(id))
     }
 
     fn lookup_value(

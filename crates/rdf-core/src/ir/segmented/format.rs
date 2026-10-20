@@ -12,9 +12,9 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG2";
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG3";
 pub(super) const HEADER_BYTES: usize = 312;
-pub(super) const RECORD_HEADER: usize = 17;
+pub(super) const RECORD_HEADER: usize = 13;
 pub(super) const SUMMARY_BYTES: usize = 88;
 pub(super) const MAX_RECORDS_PER_BLOCK: u32 = 256;
 pub(super) const DICTIONARY: u8 = 1;
@@ -71,7 +71,7 @@ impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&2_u32.to_le_bytes());
+        out.extend_from_slice(&3_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -100,7 +100,7 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(2) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(3) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile",
             ));
@@ -348,36 +348,27 @@ pub(super) fn decode_term(bytes: &[u8]) -> Result<TermRef<'_, GlobalTermId>, Seg
 }
 
 pub(super) fn record_block(
-    kind: u8,
     records: &[(GlobalTermId, Vec<u8>)],
     block_bytes: usize,
 ) -> Result<(Vec<u8>, usize), SegmentedError> {
-    let fence = records
+    let first = records
         .first()
         .ok_or(SegmentedError::Corrupt("empty record block input"))?
         .1
         .as_slice();
-    // The first key is also the fence. Refuse it before copying either instance;
-    // all following records are admitted at this same encoder before appending.
-    let first_bytes = fence
+    // Routing reads the first decoded record; no second copy of its key is stored.
+    let first_bytes = first
         .len()
-        .checked_mul(2)
-        .and_then(|bytes| bytes.checked_add(RECORD_HEADER + 16))
+        .checked_add(RECORD_HEADER + 16)
         .ok_or(SegmentedError::AddressExhausted)?;
     if first_bytes > block_bytes {
         return Err(SegmentedError::ConstructionLimit);
     }
     let mut out = Vec::with_capacity(block_bytes);
-    out.push(kind);
+    out.push(DICTIONARY);
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
     out.extend_from_slice(&0_u32.to_le_bytes());
-    out.extend_from_slice(
-        &u32::try_from(fence.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(fence);
     let mut previous = &[][..];
     let mut count = 0_usize;
     let mut decoded = 0_u32;
@@ -434,23 +425,19 @@ impl DecodedRecords {
     /// session before this function allocates either collection.
     pub(super) fn decode(
         bytes: &[u8],
-        kind: u8,
         max_records: u32,
         max_decoded: u64,
     ) -> Result<Self, SegmentedError> {
         let mut input = Reader::at(bytes, 0);
-        if input.byte()? != kind {
+        if input.byte()? != DICTIONARY {
             return Err(SegmentedError::Corrupt("wrong record block kind"));
         }
         let count = input.u32()?;
         let decoded = input.u32()?;
         let payload = input.u32()?;
-        let fence_len = input.u32()?;
         if count == 0 || count > max_records || u64::from(decoded) > max_decoded {
             return Err(SegmentedError::Corrupt("record decode bound exceeded"));
         }
-        let fence = input
-            .take(usize::try_from(fence_len).map_err(|_| SegmentedError::AddressExhausted)?)?;
         let mut arena = Vec::with_capacity(
             usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?,
         );
@@ -493,11 +480,6 @@ impl DecodedRecords {
         {
             return Err(SegmentedError::Corrupt(
                 "non-canonical record block length/padding",
-            ));
-        }
-        if arena.get(entries[0].1.clone()) != Some(fence) {
-            return Err(SegmentedError::Corrupt(
-                "index fence does not name its first record",
             ));
         }
         Ok(Self { arena, entries })
@@ -553,7 +535,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn record_fit_includes_fence_framing_and_actual_front_coding() {
+    fn record_fit_stores_the_first_key_once_and_counts_actual_front_coding() {
         let mut second = vec![b'a'; 200];
         second[199] = b'b';
         let records = [
@@ -561,13 +543,20 @@ mod tests {
             (GlobalTermId::from_index(13).unwrap(), second),
             (GlobalTermId::from_index(14).unwrap(), vec![b'z'; 200]),
         ];
-        // 17 header + 200 fence + 16 framing + 200 first key = 433.
+        // 13 header + 16 framing + 200 first key = 229; no duplicate fence.
         // The next key shares 199 bytes, so adds exactly 17 bytes.
-        for (width, expected) in [(433, 1), (449, 1), (450, 2), (512, 2)] {
-            let (bytes, used) = record_block(DICTIONARY, &records, width).unwrap();
+        for (width, expected) in [(229, 1), (245, 1), (246, 2), (461, 2), (462, 3), (512, 3)] {
+            let (bytes, used) = record_block(&records, width).unwrap();
             assert_eq!(bytes.len(), width);
             assert_eq!(used, expected);
-            let decoded = DecodedRecords::decode(&bytes, DICTIONARY, 3, 600).unwrap();
+            assert_eq!(
+                bytes
+                    .windows(200)
+                    .filter(|key| *key == records[0].1)
+                    .count(),
+                1
+            );
+            let decoded = DecodedRecords::decode(&bytes, 3, 600).unwrap();
             assert_eq!(decoded.entries.len(), expected);
             for (index, (id, key)) in records[..used].iter().enumerate() {
                 assert_eq!(decoded.entries[index].0, *id);
@@ -575,15 +564,13 @@ mod tests {
             }
         }
         assert!(matches!(
-            record_block(DICTIONARY, &records, 432),
+            record_block(&records, 228),
             Err(SegmentedError::ConstructionLimit)
         ));
-        let (bytes, used) = record_block(REVERSE, &records[..1], 512).unwrap();
+        let (bytes, used) = record_block(&records[..1], 512).unwrap();
         assert_eq!(used, 1);
         assert_eq!(
-            DecodedRecords::decode(&bytes, REVERSE, 1, 200)
-                .unwrap()
-                .key(0),
+            DecodedRecords::decode(&bytes, 1, 200).unwrap().key(0),
             records[0].1
         );
     }

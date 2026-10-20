@@ -206,7 +206,7 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
     let dictionary_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 56).unwrap();
     let reverse_first = purrdf_core::bytes::read_u64_le(image.bytes(), 72).unwrap();
     let reverse_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 80).unwrap();
-    assert_eq!(dictionary_blocks, 80);
+    assert_eq!(dictionary_blocks, 40);
     assert!(reverse_blocks < dictionary_blocks);
     let mut count = 0_u64;
     let mut widest = 0;
@@ -267,8 +267,8 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
                 .iter()
                 .filter(|request| request.bytes() == 512)
                 .count(),
-            81,
-            "header plus one payload read per term, without distant search fences"
+            41,
+            "header plus one payload read per two-term page, without distant search fences"
         );
     });
 
@@ -317,12 +317,66 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
 fn a_single_oversized_encoded_term_refuses_without_a_sealed_image() {
     let mut builder =
         SegmentedBuilder::new(SegmentedBuildLimits::new(4, 4096, 0, 512, 8).unwrap()).unwrap();
-    let term = TermValue::iri(format!("https://example.org/{}", "x".repeat(300)));
+    let term = TermValue::iri(format!("https://example.org/{}", "x".repeat(600)));
     builder.intern_batch(&[term], |_, _| {}).unwrap();
     assert!(matches!(
         builder.seal(),
         Err(SegmentedError::ConstructionLimit)
     ));
+}
+
+fn reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot() {
+    let marker = "Only one original encoding of this authored literal survives in the image. ";
+    let lexical = format!("{marker}{}", "natural language payload ".repeat(8));
+    let values = [
+        TermValue::iri("urn:single-owner"),
+        TermValue::simple_literal(lexical),
+        TermValue::iri("urn:lexically-before"),
+        TermValue::iri("urn:lexically-after"),
+    ];
+    let (image, ids) = build(&values, (1_u64 << 54) + 19);
+    let mut previous_profile = image.bytes().to_vec();
+    previous_profile[7] = b'2';
+    purrdf_core::bytes::put_u32_le(&mut previous_profile, 8, 2).unwrap();
+    assert!(matches!(
+        SegmentedImage::certify(previous_profile),
+        Err(SegmentedError::Corrupt(
+            "unsupported segmented format/profile"
+        ))
+    ));
+    assert_eq!(
+        image
+            .bytes()
+            .windows(marker.len())
+            .filter(|bytes| *bytes == marker.as_bytes())
+            .count(),
+        1
+    );
+    let reverse_first = purrdf_core::bytes::read_u64_le(image.bytes(), 72).unwrap();
+    let reverse_blocks = purrdf_core::bytes::read_u64_le(image.bytes(), 80).unwrap();
+    for slot in reverse_first..reverse_first + reverse_blocks {
+        let start = usize::try_from(slot * 1024).unwrap();
+        let bytes = &image.bytes()[start..start + 1024];
+        let records = purrdf_core::bytes::read_u32_le(bytes, 1).unwrap();
+        assert_eq!(purrdf_core::bytes::read_u32_le(bytes, 5), Some(records * 8));
+        assert!(
+            !bytes
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        );
+    }
+    let read = session(&image, 1);
+    for (value, id) in values.iter().zip(ids) {
+        assert_eq!(read.term_id_by_value(value).unwrap(), Some(id));
+        assert_eq!(read.term_value(id).unwrap(), *value);
+    }
+    assert_eq!(
+        read.term_id_by_value(&TermValue::iri("urn:absent"))
+            .unwrap(),
+        None
+    );
+    assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
+    assert_eq!(read.read_error(), None);
 }
 
 fn indexed_reopen_preserves_high_ids_and_bidirectional_batches() {
@@ -899,6 +953,7 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
 }
 
 purrdf_testkit::harness_main!(
+    reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot,
     routing_growth_cannot_refuse_an_already_admitted_payload,
     construction_limits_grow_on_input_instead_of_reserving_their_ceilings,
     demand_growth_keeps_typed_construction_limits_and_failed_ingress_atomic,
