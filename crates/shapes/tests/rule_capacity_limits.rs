@@ -328,8 +328,9 @@ fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_jo
         assert_eq!(
             run(&options),
             Err(
-                "SHACL rules did not complete: evaluation exceeded the fixed term arena bytes \
-                 ceiling: 16782539 observed, 16777216 permitted"
+                "SHACL rules did not complete: evaluation exceeded the term arena bytes \
+                 limit: 16782539 observed, 16777216 permitted; raise it with \
+                 EvalOptions::with_max_term_arena_bytes"
                     .to_owned()
             )
         );

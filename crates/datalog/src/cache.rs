@@ -23,7 +23,7 @@
 //!
 //! [`contract_hash`] identifies the calculus a result came from. It hashes the things that
 //! can change an answer — the clause program in canonical form, the stored-fact and
-//! join-step limits in force and the fixed term-arena ceiling, and the hand-maintained
+//! join-step limits in force and the effective term-arena ceiling, and the hand-maintained
 //! [`CALCULUS_VERSION`] — and it hashes them AS DATA.
 //!
 //! The obvious alternative is to embed the evaluator's own source text in the binary and
