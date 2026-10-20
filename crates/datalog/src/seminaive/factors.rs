@@ -601,6 +601,8 @@ where
     tables: Vec<&'a FrontierTable<'a, D::Id, N>>,
     /// The authored head currently emitted.
     head: &'r [ArgShape; N],
+    /// The position in the authored head conjunction.
+    head_ordinal: usize,
     /// Rule identity and variable-frame width.
     entry: RuleEntry<'r, N>,
     /// Store and source proof heights.
@@ -695,6 +697,7 @@ where
             self.snapshot,
             evidence,
             HeadEvidence {
+                head: self.head_ordinal,
                 witness,
                 uses_absence: !self.entry.runtime.negated.is_empty()
                     || !self.entry.runtime.negations.is_empty(),
@@ -776,7 +779,7 @@ where
                 solution.retain_negative(id, owner)?;
             }
         }
-        for head in &entry.runtime.head {
+        for (head_ordinal, head) in entry.runtime.head.iter().enumerate() {
             let projections: Vec<_> = entry
                 .runtime
                 .factors
@@ -816,6 +819,7 @@ where
                 Product {
                     tables,
                     head,
+                    head_ordinal,
                     entry,
                     snapshot,
                 }

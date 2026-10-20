@@ -5,8 +5,8 @@
 //! `Parsed → Stratified → Planned → Executable`.
 //!
 //! The program this pipeline consumes is a [`DlClause`] slice —
-//! the crate's one rule representation. Only its [`Atomic`](crate::clause::HeadForm::Atomic)
-//! head form is a Datalog rule, and [`Parsed::new`] refuses the other four by name.
+//! the crate's one rule representation. Atomic and unquantified conjunctive heads
+//! are Datalog; [`Parsed::new`] refuses forms requiring another calculus by name.
 //!
 //! # Why a type-state pipeline
 //!
@@ -1383,16 +1383,14 @@ impl<const N: usize> Parsed<N> {
     /// rather than at the executor, because that is what makes the refusal unbypassable:
     /// an [`Executable`] is reachable only through this constructor, so a value of that
     /// type is a proof that every clause in it is
-    /// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), on top of the
+    /// atomic or conjunctive without existential variables, on top of the
     /// stratification and planning proofs the later stages add.
     ///
     /// # Errors
     ///
     /// [`NonDatalogClause`], naming the first clause in authored order whose head is
-    /// existential, disjunctive, conjunctive or `false`. That is a refusal, not a gap:
-    /// those four forms are outside the class of definite clauses a least-fixpoint
-    /// evaluator computes over, and accepting one as if it were atomic — or dropping
-    /// it — would return an answer that is not the model of the program supplied.
+    /// existential, disjunctive or `false`. Such a clause needs a different calculus;
+    /// accepting or dropping it would not compute the supplied program's model.
     pub fn new(rules: Vec<DlClause<N>>) -> Result<Self, NonDatalogClause> {
         for (index, rule) in rules.iter().enumerate() {
             let form = rule.head_form();
@@ -1412,7 +1410,7 @@ impl<const N: usize> Parsed<N> {
     /// cycle. That is a declared gap the caller reports; there is no fallback engine and
     /// no partial answer.
     ///
-    /// A rule belongs to the stratum of its HEAD predicate, and within a stratum the
+    /// A rule runs at its lowest head-predicate stratum; within a stratum the
     /// authored program order is preserved, so rules fire in a stable order.
     pub fn stratify(self) -> Option<Stratified<N>> {
         let stratum_of = stratify(&self.rules)?;
@@ -1420,15 +1418,35 @@ impl<const N: usize> Parsed<N> {
         let max_stratum = self
             .rules
             .iter()
-            .map(|r| stratum_of[&predicate_symbol(datalog_head(r))])
+            .flat_map(DlClause::head_atoms)
+            .map(|head| stratum_of[&predicate_symbol(head)])
             .max()
             .unwrap_or(0);
         let mut strata: Vec<Vec<usize>> = vec![Vec::new(); max_stratum + 1];
         for (i, rule) in self.rules.iter().enumerate() {
-            strata[stratum_of[&predicate_symbol(datalog_head(rule))]].push(i);
+            // Every head depends on the same body. The lowest head stratum is
+            // already late enough for all body reads. Higher-stratum heads may
+            // be emitted early, but settle only after all their producers run.
+            let level = rule
+                .head_atoms()
+                .map(|head| stratum_of[&predicate_symbol(head)])
+                .min()
+                .expect("admitted Datalog clauses have a nonempty head");
+            strata[level].push(i);
         }
 
+        let mut settled_predicates = vec![Vec::new(); max_stratum + 1];
+        let heads: BTreeSet<_> = self
+            .rules
+            .iter()
+            .flat_map(DlClause::head_atoms)
+            .map(predicate_symbol)
+            .collect();
+        for predicate in heads {
+            settled_predicates[stratum_of[&predicate]].push(predicate);
+        }
         Some(Stratified {
+            settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata,
@@ -1436,23 +1454,11 @@ impl<const N: usize> Parsed<N> {
     }
 }
 
-/// The single head atom of a clause that has already passed the [`Parsed::new`] gate.
-///
-/// # Panics
-///
-/// Panics on any non-atomic head. Every clause inside the pipeline came through
-/// [`Parsed::new`], which admits only
-/// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), so reaching this would be a
-/// contradiction in that gate rather than a caller error.
-pub(crate) fn datalog_head<const N: usize>(rule: &DlClause<N>) -> &ClauseAtom<N> {
-    rule.datalog_head().unwrap_or_else(|| {
-        unreachable!("the plan pipeline admits only atomic-head clauses (Parsed::new)")
-    })
-}
-
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified<const N: usize = 4> {
+    /// Predicates complete after each stratum, independent of early head emission.
+    settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1490,6 +1496,7 @@ impl<const N: usize> Stratified<N> {
             .map(|rule| RulePlan::for_rule_with_estimates(rule, estimate))
             .collect();
         Planned {
+            settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata: self.strata,
@@ -1501,6 +1508,8 @@ impl<const N: usize> Stratified<N> {
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
 pub struct Planned<const N: usize = 4> {
+    /// Predicates complete after each stratum.
+    settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1517,9 +1526,11 @@ impl<const N: usize> Planned<N> {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
-            .map(|r| predicate_symbol(datalog_head(r)))
+            .flat_map(DlClause::head_atoms)
+            .map(predicate_symbol)
             .collect();
         Executable {
+            settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata: self.strata,
@@ -1536,6 +1547,8 @@ impl<const N: usize> Planned<N> {
 /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
 #[derive(Debug, Clone)]
 pub struct Executable<const N: usize = 4> {
+    /// Predicates complete after each stratum.
+    settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1617,17 +1630,15 @@ impl<const N: usize> Executable<N> {
         (&self.rules[index], &self.plans[index])
     }
 
-    /// The head predicate SYMBOLS of stratum `k`'s rules — recorded into the settled
-    /// frontier when the stratum reaches its natural fixpoint. See
+    /// Head predicate SYMBOLS that become complete at stratum `k`, recorded into
+    /// the settled frontier when it reaches its natural fixpoint. See
     /// [`Self::head_predicates`] for what a variable head predicate contributes.
     ///
     /// # Panics
     ///
     /// Panics if `k` is not a stratum of this program.
     pub fn stratum_head_predicates(&self, k: usize) -> impl Iterator<Item = String> {
-        self.strata[k]
-            .iter()
-            .map(move |&i| predicate_symbol(datalog_head(&self.rules[i])))
+        self.settled_predicates[k].iter().cloned()
     }
 }
 
@@ -1795,7 +1806,7 @@ mod tests {
         assert_eq!(plan.negated(), [1]);
         assert!(!plan.has_cyclic_subplan());
         assert_eq!(rule.body()[1].subject().variable(), Some("?Y"));
-        assert!(!datalog_head(&rule).is_negated());
+        assert!(!rule.datalog_head().unwrap().is_negated());
     }
 
     /// Variable slots are authored first-occurrence order across the body, then the head
@@ -2478,7 +2489,7 @@ mod tests {
             "stratum 1 derives exactly r"
         );
         let (rule, plan) = exe.rule_entry(1);
-        assert_eq!(datalog_head(rule).predicate_iri(), Some(R));
+        assert_eq!(rule.datalog_head().unwrap().predicate_iri(), Some(R));
         assert_eq!(rule.body().len(), 2);
         assert!(rule.body()[1].is_negated());
         assert_eq!(rule.body()[1].object(), &v("?Y"));
@@ -2527,8 +2538,8 @@ mod tests {
         assert_eq!(exe.stratum_rule_indices(0), [0, 1, 2, 3, 4]);
     }
 
-    /// The pipeline's entrance is the head-form gate: an existential, a disjunctive, a
-    /// conjunctive and an empty head are each refused by name, so a non-Datalog clause can
+    /// The pipeline's entrance is the head-form gate: an existential, a disjunctive and
+    /// an empty head are each refused by name, so a non-Datalog clause can
     /// never reach an [`Executable`] — and therefore never reach the evaluator.
     #[test]
     fn pipeline_refuses_every_non_datalog_head_form() {
@@ -2548,17 +2559,6 @@ mod tests {
                         HeadDisjunct::atom(atom("?X", Q, "?Y")),
                         HeadDisjunct::atom(atom("?X", R, "?Y")),
                     ],
-                    Vec::new(),
-                    vec![atom("?X", P, "?Y")],
-                ),
-            ),
-            (
-                HeadForm::Conjunctive,
-                DlClause::new(
-                    vec![HeadDisjunct::new(vec![
-                        atom("?X", Q, "?Y"),
-                        atom("?X", R, "?Y"),
-                    ])],
                     Vec::new(),
                     vec![atom("?X", P, "?Y")],
                 ),

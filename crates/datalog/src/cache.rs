@@ -68,7 +68,7 @@ use crate::seminaive::{EvalError, EvalOptions, compile};
 /// Deliberately independent of the clause digest and the caller's contract hash: a change
 /// to index selection, to the sideways-information-passing order or to the cyclic
 /// certification invalidates every cached plan even though its logical input is unchanged.
-pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v2";
+pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v4";
 
 /// Domain-separation tag for [`canonical_rule_hash`].
 ///
@@ -1544,7 +1544,7 @@ mod tests {
         );
         assert_eq!(
             hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
-            "bb5cee96a06449cb6d1655d96819d26a704f5d4bb375484c96f8644dd1f42a7b",
+            "2b07633e3cad343e5bde6bd615108af3e7f744bcb84b1964d449baffddaabf5d",
             "the plan identity moved"
         );
     }

@@ -6,6 +6,16 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Datalog proofs and shared heads
+
+Ordinary head conjunctions now execute one shared body. Read `Derivation::head`
+alongside `Derivation::rule` to identify the producing atom. `ProofArena::by_rule`
+selects head zero; use `by_rule_head` to construct a proof for another head.
+The independent proof encoding is version 2 and explicitly includes this ordinal.
+Regenerate stored version 1 proof bytes from the original inputs and rule program;
+the decoder refuses their old tag. Planner version 4 also changes content-addressed
+plan identities, causing earlier cached plans to miss and be replanned.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`

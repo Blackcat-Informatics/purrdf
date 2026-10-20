@@ -73,6 +73,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   versioned candidate work are available through `Evaluation::work`, and each
   call can select sequential rule execution without changing a global pool.
 
+- **Shared Datalog head conjunctions:** ordinary semi-naive evaluation admits
+  several unquantified head atoms over one shared body, including recursive
+  and stratified programs. Recorded derivations expose the authored head
+  ordinal. Independent proof encoding moves to version 2 and records that
+  ordinal; version 1 proof bytes require regeneration. Physical plans use
+  planner version 4, invalidating earlier cached plan identities.
+
 - **One exact XSD numeric value API:** public `XsdValue::Integer` and
   `XsdValue::Decimal` carry the exact integer and decimal types at every size.
   The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal

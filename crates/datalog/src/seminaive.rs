@@ -912,27 +912,23 @@ pub enum EvalError<E = core::convert::Infallible> {
     Evidence(purrdf_core::evidence::EvidenceWorkspaceError),
     /// The full rule bundle violates an assessor-only declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
-    /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
+    /// A clause's head is existential, disjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
     ///
     /// The DL-clause IR ([`crate::clause`]) represents all five head forms in one type, so a
-    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential and
-    /// conjunctive forms, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
+    /// consumer of any of them needs no second IR: [`crate::chase`] takes the existential
+    /// form, `purrdf-entail`'s OWL-Direct hypertableau case-splits the
     /// disjunctive one (over its own concept-id atoms, through this crate's
     /// [`crate::clause::HeadForm`]), and both are refused by name HERE rather than
     /// parsed away. A semi-naive least-fixpoint evaluator computes the
-    /// least model of a set of DEFINITE clauses — exactly one head atom, no quantifier: an
-    /// existential mints witnesses, a disjunction has no single least model, a conjunction
-    /// abbreviates several clauses at once, and `false` derives nothing while asserting
-    /// its body is unsatisfiable. None of the four is a definite clause, so each is
+    /// least model of definite clauses: an existential mints witnesses, a disjunction
+    /// has no single least model, and `false` derives nothing while asserting
+    /// its body is unsatisfiable. Each is
     /// refused by its OWN name here rather than silently ignored, silently treated as
     /// atomic, or reported under a neighbouring form's name.
     ///
-    /// The conjunctive case deserves the emphasis: `→ p(x) ∧ q(x)` *is* equivalent to two
-    /// Datalog rules over one body, and this evaluator could have split it. It does not,
-    /// because a [`Derivation`] names its producing clause by authored index, so splitting
-    /// one clause into two would renumber the program and move an observable. A caller who
-    /// wants the split performs it before compiling.
+    /// A head conjunction without existential variables shares one body evaluation.
+    /// Its derivations retain both the authored clause index and head ordinal.
     NonDatalogHead {
         /// The clause's index in authored program order.
         rule: usize,
@@ -1197,7 +1193,7 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
             Self::NonDatalogHead { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
-                 clauses (one head atom, no existential) only",
+                 clauses (an atomic or conjunctive head, no existential) only",
                 form.article()
             ),
             Self::NonStratifiable {
@@ -1354,6 +1350,8 @@ where
     fact: ShapeFact<N>,
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The producing atom's position in the authored head conjunction.
+    head: usize,
     /// The matched positive body facts, in authored body order.
     sources: Vec<ShapeFact<N>>,
     /// `1 + max(source proof heights)`; a seeded fact has height 0.
@@ -1372,6 +1370,11 @@ where
     /// The producing rule's index in authored program order.
     pub fn rule(&self) -> usize {
         self.rule
+    }
+
+    /// The producing atom's position in the authored head conjunction.
+    pub fn head(&self) -> usize {
+        self.head
     }
 
     /// The matched positive body facts, in authored body order.
@@ -1434,7 +1437,7 @@ where
 {
     /// The least model: the seeded EDB plus every derived fact.
     facts: RelationStore<D, N>,
-    /// Every derivation, in lexical `(fact, rule, sources)` order.
+    /// Every derivation, in lexical `(fact, rule, head, sources)` order.
     derivations: Option<Vec<Derivation<N>>>,
     /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
@@ -1495,7 +1498,7 @@ where
 /// Compile a rule program into the executor's [`Executable`], or refuse it.
 ///
 /// This is [`crate::plan`]'s pipeline with three refusals attached: a clause whose head is
-/// not a single unquantified atom is reported by head form, a non-stratifiable program is
+/// existential, disjunctive or false is reported by head form, a non-stratifiable program is
 /// reported with the concrete cycle its negative edge sits in, and a clause whose head
 /// carries a variable no positive body atom can bind is reported as not range-restricted.
 /// All three are hard errors; none has a best-effort fallback.
@@ -1508,12 +1511,8 @@ pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>,
 where
     Arity<N>: StoreShape<N>,
 {
-    // The head form is decided FIRST, because the other two checks are both defined in
-    // terms of a single head atom: an existential, a disjunctive or an empty head has no
-    // "the head predicate" to stratify on and no "the head variables" to range-restrict.
-    // Reporting either of those instead would be reporting a consequence of the real
-    // defect. This is the same gate `Parsed::new` enforces below; it runs here so the
-    // diagnostic is an `EvalError` alongside the other two.
+    // Decide the fragment before stratification and safety: neither check supplies
+    // semantics for witnesses, branching or inconsistency.
     for (index, rule) in rules.iter().enumerate() {
         let form = rule.head_form();
         if !form.is_datalog() {
@@ -1547,7 +1546,7 @@ where
     check_range_restricted(&rules)?;
 
     Ok(Parsed::new(rules)
-        .expect("every head form was just established to be atomic on the same rules")
+        .expect("every head form was just established to be Datalog on the same rules")
         .stratify()
         .expect("stratifiability was just established on the same rules")
         .plan()
@@ -3568,8 +3567,8 @@ where
     /// Independent positive components, certified without opaque callbacks.
     factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
-    /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
-    /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
+    /// order. A conjunctive head asserts every conjunct from one body solution under
+    /// both the stratified fixpoint and the ordered schedule ([`crate::schedule`]).
     head: Vec<[ArgShape; N]>,
     /// The rule's negated body atoms, in authored order.
     negated: Vec<NegatedAtom<N>>,
@@ -3732,6 +3731,8 @@ where
 {
     /// The producing rule's index in authored program order.
     rule: usize,
+    /// The authored head ordinal, also distinguishing repeated head atoms.
+    head: usize,
     /// The matched body rows, in authored body order.
     sources: Vec<SourceRow<I, N>>,
     /// `1 + max(source proof heights)`.
@@ -3766,7 +3767,8 @@ where
     /// Whether this candidate beats `other` for the same head fact.
     ///
     /// A TOTAL order over observable provenance:
-    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts)`,
+    /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
+    /// head ordinal)`,
     /// smallest wins. Every component is content-derived — proof heights, lexical fact
     /// surfaces and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
@@ -3786,7 +3788,7 @@ where
             || source_preference(&self.sources, self.rule, &other.sources, other.rule, rel),
         )?;
         rel.interner().check_read()?;
-        Ok(order.is_lt())
+        Ok(order.then_with(|| self.head.cmp(&other.head)).is_lt())
     }
 }
 
@@ -3866,12 +3868,15 @@ where
             (other.derivation.proof_height, other.sum_source_height),
             (self.derivation.proof_height, self.sum_source_height),
             || {
-                Ok::<_, core::convert::Infallible>(fact_preference(
-                    &other.derivation.sources,
-                    other.derivation.rule,
-                    &self.derivation.sources,
-                    self.derivation.rule,
-                ))
+                Ok::<_, core::convert::Infallible>(
+                    fact_preference(
+                        &other.derivation.sources,
+                        other.derivation.rule,
+                        &self.derivation.sources,
+                        self.derivation.rule,
+                    )
+                    .then_with(|| other.derivation.head.cmp(&self.derivation.head)),
+                )
             },
         )
         .unwrap_or_else(|never| match never {})
@@ -4247,6 +4252,7 @@ where
                     snapshot,
                     &mut evidence,
                     HeadEvidence {
+                        head: position,
                         witness: None,
                         uses_absence: !runtime.negated.is_empty() || !runtime.negations.is_empty(),
                     },
@@ -4267,6 +4273,7 @@ where
 /// The witness and absence dependency of one emitted head.
 #[derive(Clone, Copy)]
 struct HeadEvidence {
+    head: usize,
     witness: Option<purrdf_core::evidence::EvidenceId>,
     uses_absence: bool,
 }
@@ -4319,6 +4326,7 @@ where
                 derivation: Derivation {
                     fact: key.fact(rel).map_err(EvalError::Source)?,
                     rule,
+                    head: head_evidence.head,
                     sources: solution
                         .sources
                         .iter()
@@ -4343,6 +4351,7 @@ where
             key,
             Candidate {
                 rule,
+                head: head_evidence.head,
                 sources: solution.sources.clone(),
                 proof_height: proof_height.saturating_add(1),
                 sum_source_height,
@@ -5151,6 +5160,7 @@ where
             state.derivations.push(Derivation {
                 fact,
                 rule: candidate.rule,
+                head: candidate.head,
                 sources,
                 proof_height: candidate.proof_height,
             });
@@ -5260,6 +5270,7 @@ mod tests {
                         key,
                         Candidate {
                             rule: 0,
+                            head: 0,
                             sources: solution.sources.clone(),
                             proof_height: 1,
                             sum_source_height: 0,
@@ -5354,6 +5365,7 @@ mod tests {
                 },
                 &mut Some(&mut capture),
                 HeadEvidence {
+                    head: 0,
                     witness: None,
                     uses_absence: false,
                 },
@@ -7406,6 +7418,7 @@ mod tests {
                 Derivation {
                     fact: fact.clone(),
                     rule: 0,
+                    head: 0,
                     sources: vec![
                         seed_fact(
                             &root,
@@ -8050,16 +8063,9 @@ mod tests {
         assert!(error.to_string().contains("a disjunctive head"));
     }
 
-    /// A CONJUNCTIVE head is refused by a name that is TRUE.
-    ///
-    /// `q(?x, ?y) ∧ r(?x, ?y) :- p(?x, ?y)` is not a Datalog rule — a definite clause has
-    /// exactly one head atom — but it is not a disjunction either, and there is no witness
-    /// to mint. Reporting it as "disjunctive" or "existential" would name a property the
-    /// clause does not have, so the refusal carries its own form. The clause IS equivalent
-    /// to two Datalog rules, and the evaluator still refuses it rather than splitting it:
-    /// the split would renumber the program that a derivation's clause index names.
+    /// A conjunction preserves its authored clause index and checks every head's safety.
     #[test]
-    fn a_conjunctive_head_is_refused_by_its_own_name() {
+    fn a_conjunctive_head_checks_every_authored_atom() {
         let rules = vec![DlClause::new(
             vec![HeadDisjunct::new(vec![
                 atom("?x", Q, "?y"),
@@ -8068,25 +8074,19 @@ mod tests {
             Vec::new(),
             vec![atom("?x", P, "?y")],
         )];
-        let error = compile(rules).expect_err("a conjunctive head is not a Datalog rule");
-        assert_eq!(
-            error,
-            EvalError::NonDatalogHead {
-                rule: 0,
-                form: HeadForm::Conjunctive,
-            }
+        let executable = compile(rules).expect("ordinary conjunction is Datalog");
+        assert_eq!(executable.rule_count(), 1);
+        assert_eq!(executable.rule_entry(0).0.head_atoms().count(), 2);
+        let unsafe_rule = DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("?x", Q, "?y"),
+                atom("?x", R, "?unbound"),
+            ])],
+            Vec::new(),
+            vec![atom("?x", P, "?y")],
         );
-        let rendered = error.to_string();
-        assert!(rendered.contains("a conjunctive head"), "{rendered}");
         assert!(
-            !rendered.contains("disjunctive"),
-            "the refusal must not name a property the clause lacks: {rendered}"
-        );
-        // The trailing "(one head atom, no existential)" states what a Datalog clause IS,
-        // so only the phrase that NAMES this clause's form is asserted against.
-        assert!(
-            !rendered.contains("an existential head"),
-            "the refusal must not name a property the clause lacks: {rendered}"
+            matches!(compile(vec![unsafe_rule]), Err(EvalError::UnboundHeadVariable { rule: 0, variable }) if variable == "?unbound")
         );
     }
 
