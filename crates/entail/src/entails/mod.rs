@@ -551,6 +551,11 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::Build(_)
         | EntailError::Dataset { .. }
         | EntailError::Parse(_)
+        | EntailError::OwlSyntax(_)
+        | EntailError::RifXml(_)
+        | EntailError::RifVariable(_)
+        | EntailError::Decision(_)
+        | EntailError::KeyMembership(_)
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)

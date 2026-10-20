@@ -899,6 +899,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				actual_collection_refusals_keep_original_terms_and_the_ordered_prefix \
 				empty_collection_admission_checks_nil_structure \
 				dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering \
+				authored_cardinality_refusals_retain_the_original_operands_and_integer_cause \
+				actual_rif_refusals_keep_original_scope_and_survive_the_document \
 				class_expression_role_refusals_retain_original_source_terms \
 				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
 				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \

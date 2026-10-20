@@ -38,7 +38,8 @@
 //! reading admits MORE models than the specification's and can therefore miss a clash but
 //! never invent one. A MALFORMED graph — a restriction with no `owl:onProperty`, a
 //! non-integer cardinality, a broken or cyclic RDF list — is still a hard
-//! [`EntailError::Parse`], because there is no sound reading of it at all.
+//! [`EntailError::OwlSyntax`] or [`EntailError::Collection`], retaining its original
+//! operands because there is no sound reading of it at all.
 //!
 //! The class-expression extraction is factored into [`CeExtractor`] — a reusable view
 //! over an interned `subject → predicate → objects` index plus the shared [`Vocab`] and
@@ -62,7 +63,7 @@
 //!
 //! So the depth is bounded where the tree is BUILT, by [`MAX_EXPRESSION_DEPTH`]: no
 //! over-deep tree is ever constructed, and every consumer of one is protected by the same
-//! single check. Exceeding it is an [`EntailError::Parse`] — a refusal every host already
+//! single check. Exceeding it is an [`EntailError::OwlSyntax`] — a refusal every host already
 //! propagates — rather than a stack overflow, which is not a refusal at all: the process
 //! aborts, nothing unwinds, and a host embedding this library dies with it.
 
@@ -76,6 +77,9 @@ use purrdf_core::{DatasetView, ListError, TermValue};
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet, TermSpace};
+
+mod error;
+pub use error::OwlSyntaxError;
 
 use crate::EntailError;
 use crate::interner::Interner;
@@ -500,9 +504,7 @@ impl<'a> CeExtractor<'a> {
         self.poll()?;
         let syntax = self.syntax.into_inner();
         if !syntax.complete() {
-            return Err(EntailError::Parse(
-                "native syntax capture did not complete".to_owned(),
-            ));
+            return Err(OwlSyntaxError::IncompleteCapture.into());
         }
         Ok(syntax)
     }
@@ -574,8 +576,9 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed class-expression graph or one nesting
-    /// past [`MAX_EXPRESSION_DEPTH`]. Finite cycles are exact defining equations.
+    /// [`EntailError::OwlSyntax`] on a malformed class expression or one nesting past
+    /// [`MAX_EXPRESSION_DEPTH`]; [`EntailError::Collection`] retains a malformed list.
+    /// Finite cycles are exact defining equations.
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
         self.poll()?;
         let recursive = self.in_progress.contains(&node);
@@ -601,9 +604,12 @@ impl<'a> CeExtractor<'a> {
         // this one — inserted on entry, removed on the way out — so its size IS the current
         // nesting depth. See this module's *How deep an expression may nest*.
         if self.in_progress.len() >= MAX_EXPRESSION_DEPTH {
-            return Err(EntailError::Parse(format!(
-                "OWL class expression nests deeper than {MAX_EXPRESSION_DEPTH}"
-            )));
+            return Err(OwlSyntaxError::ExpressionDepth {
+                node: self.interner.value(node).clone(),
+                active_depth: self.in_progress.len(),
+                limit: MAX_EXPRESSION_DEPTH,
+            }
+            .into());
         }
         self.in_progress.insert(node);
         let c = self.build_expr(node)?;
@@ -688,7 +694,7 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed `owl:oneOf` collection.
+    /// [`EntailError::Collection`] on a malformed `owl:oneOf` collection.
     fn is_data_range(&self, node: u32) -> Result<bool, EntailError> {
         if let TermValue::Iri(iri) = self.interner.value(node)
             && (iri.starts_with(XSD_NS)
@@ -743,8 +749,8 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed collection in a data-range position, on a cyclic
-    /// data range, and on one nesting past [`MAX_EXPRESSION_DEPTH`].
+    /// [`EntailError::Collection`] on a malformed collection in a data-range position;
+    /// [`EntailError::OwlSyntax`] on a cyclic or over-deep data range.
     fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         let token = self.syntax.borrow_mut().enter(SyntaxKind::Range(node));
         let result = self.data_range_scoped(node, path);
@@ -756,12 +762,18 @@ impl<'a> CeExtractor<'a> {
     fn data_range_scoped(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         self.poll()?;
         if path.contains(&node) {
-            return Err(EntailError::Parse("cyclic OWL data range".to_owned()));
+            return Err(OwlSyntaxError::DataRangeCycle {
+                node: self.interner.value(node).clone(),
+            }
+            .into());
         }
         if path.len() >= MAX_EXPRESSION_DEPTH {
-            return Err(EntailError::Parse(format!(
-                "OWL data range nests deeper than {MAX_EXPRESSION_DEPTH}"
-            )));
+            return Err(OwlSyntaxError::DataRangeDepth {
+                node: self.interner.value(node).clone(),
+                active_depth: path.len(),
+                limit: MAX_EXPRESSION_DEPTH,
+            }
+            .into());
         }
         path.push(node);
         let decoded = self.data_range_inner(node, path);
@@ -969,9 +981,11 @@ impl<'a> CeExtractor<'a> {
 
     /// Decode an `owl:Restriction` node.
     fn restriction(&mut self, node: u32) -> Result<Concept, EntailError> {
-        let r = self.get(node, self.v.on_property).ok_or_else(|| {
-            EntailError::Parse("owl:Restriction without owl:onProperty".to_owned())
-        })?;
+        let r =
+            self.get(node, self.v.on_property)
+                .ok_or_else(|| OwlSyntaxError::MissingProperty {
+                    node: self.interner.value(node).clone(),
+                })?;
         // A restriction over a BUILT-IN role (`owl:topObjectProperty`,
         // `owl:bottomObjectProperty`, …) reads it as an ordinary named role, which is
         // exactly what the built-in-role boundary is about. It is raised HERE as well as at
@@ -1080,10 +1094,8 @@ impl<'a> CeExtractor<'a> {
         let filler = self
             .get(node, self.v.on_class)
             .or_else(|| self.get(node, self.v.on_data_range))
-            .ok_or_else(|| {
-                EntailError::Parse(
-                    "qualified cardinality without owl:onClass or owl:onDataRange".to_owned(),
-                )
+            .ok_or_else(|| OwlSyntaxError::MissingQualifiedFiller {
+                node: self.interner.value(node).clone(),
             })?;
         self.expr(filler)
     }
@@ -1138,24 +1150,24 @@ impl<'a> CeExtractor<'a> {
                 // graph and a hard error, never a bound guessed from it.
                 let n = purrdf_iri::terminals::trim_ws(lexical_form)
                     .parse::<u32>()
-                    .map_err(|_| {
-                        EntailError::Parse(format!(
-                            "non-integer cardinality literal: {lexical_form:?}"
-                        ))
+                    .map_err(|cause| OwlSyntaxError::CardinalityLexical {
+                        literal: self.interner.value(lit).clone(),
+                        cause,
                     })?;
                 if n == u32::MAX {
-                    return Err(EntailError::Parse(format!(
-                        "cardinality {n} exceeds this reasoner's representable bound \
-                         ({} is the largest supported cardinality): refusing rather \
-                         than deciding wrongly",
-                        u32::MAX - 1
-                    )));
+                    return Err(OwlSyntaxError::CardinalityRange {
+                        literal: self.interner.value(lit).clone(),
+                        value: n,
+                        maximum: u32::MAX - 1,
+                    }
+                    .into());
                 }
                 Ok(n)
             }
-            other => Err(EntailError::Parse(format!(
-                "cardinality value is not a literal: {other:?}"
-            ))),
+            other => Err(OwlSyntaxError::CardinalityNotLiteral {
+                value: other.clone(),
+            }
+            .into()),
         }
     }
 
@@ -1220,8 +1232,8 @@ fn poll<E>(stop: Option<&dyn StopSignal>) -> Result<(), EntailError<E>> {
 ///
 /// # Errors
 ///
-/// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
-/// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
+/// [`EntailError::OwlSyntax`] retains malformed class-expression operands;
+/// [`EntailError::Collection`] retains malformed RDF lists.
 #[cfg(test)]
 pub(crate) fn build_until<D: DatasetView>(
     ds: &D,
@@ -2334,8 +2346,9 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("{unicode_ws:?} must not be read as a bound"));
             assert!(
-                matches!(err, EntailError::Parse(_)),
-                "{unicode_ws:?} must refuse as a parse error, got {err:?}"
+                matches!(err, EntailError::OwlSyntax(ref original)
+                    if matches!(original.as_ref(), crate::OwlSyntaxError::CardinalityLexical { .. })),
+                "{unicode_ws:?} must retain its native integer refusal, got {err:?}"
             );
         }
         // And a genuinely non-numeric bound is still refused, so the change narrowed the
