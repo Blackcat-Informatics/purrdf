@@ -89,6 +89,7 @@ mod evidence;
 mod factors;
 mod guards;
 mod join;
+mod negative;
 mod ordered;
 pub use evidence::NegationScope;
 use std::fmt;
@@ -2606,6 +2607,7 @@ where
     /// A ground term the store never interned — a constant it never saw, or a surface a
     /// guard computed — constrains to zero rows, so the atom is not satisfied and the
     /// rule fires.
+    #[cfg(test)]
     fn satisfied<D: TermDictionary>(
         &self,
         solution: &SlotSolution<D::Id, N>,
@@ -2624,57 +2626,19 @@ where
     /// Visit the original indexed probe, stopping only when its visitor requests it.
     /// Validate the source even on an empty, exhausted or early-match path; preserve
     /// an earlier visitor failure before inspecting the final source state.
+    #[cfg(test)]
     fn visit_matches<D: TermDictionary, E>(
         &self,
         solution: &SlotSolution<D::Id, N>,
         rel: &RelationStore<D, N>,
         governor: &mut StepGovernor,
-        mut visit: impl FnMut(RowId) -> Result<bool, E>,
+        visit: impl FnMut(RowId) -> Result<bool, E>,
         source_error: impl Fn(D::Error) -> E,
     ) -> Result<bool, E> {
-        let rel = rel.read_source(self.source);
-        rel.interner().check_read().map_err(&source_error)?;
-        let result = (|| -> Result<bool, E> {
-            if !governor.charge() {
-                return Ok(false);
-            }
-            let mut values = [None; N];
-            for (position, arg) in self.args.iter().enumerate() {
-                match arg.probe(solution, rel).map_err(&source_error)? {
-                    ProbeValue::Known(id) => values[position] = Some(id),
-                    ProbeValue::Free => {}
-                    // A ground position whose term is absent from the store matches nothing.
-                    ProbeValue::Absent => return Ok(false),
-                }
-            }
-            let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
-                (Some(subject), Some(object)) => Bound::Both(subject, object),
-                (Some(subject), None) => Bound::Subject(subject),
-                (None, Some(object)) => Bound::Object(object),
-                (None, None) => Bound::Any,
-            };
-            for (index, partition) in rel.partitions_for(values).enumerate() {
-                // The first probe was reserved above; broad predicate/graph scans also
-                // reserve every further partition, including an empty selected index.
-                if index != 0 && !governor.charge() {
-                    return Ok(false);
-                }
-                let mut cursor = partition.select(bound);
-                let mut first = true;
-                while let Some((_, _, row)) = cursor.next() {
-                    if !first && !governor.charge() {
-                        return Ok(false);
-                    }
-                    first = false;
-                    if visit(row)? {
-                        return Ok(true);
-                    }
-                }
-            }
-            Ok(false)
-        })()?;
-        rel.interner().check_read().map_err(&source_error)?;
-        Ok(result)
+        let mut probe = negative::Probe::new(self.source);
+        let found = probe.advance(self, solution, rel, governor, visit, source_error)?;
+        debug_assert!(probe.is_complete() || governor.spent());
+        Ok(found)
     }
 
     /// Retain signed witnesses on the native path; keep the ordinary boolean probe.
@@ -2685,33 +2649,10 @@ where
         governor: &mut StepGovernor,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
-        let Some(owner) = evidence.as_deref_mut() else {
-            return self
-                .satisfied(solution, rel, governor)
-                .map_err(EvalError::Source);
-        };
-        let mut witnesses = None;
-        self.visit_matches(
-            solution,
-            rel,
-            governor,
-            |row| {
-                let id = owner.source(row)?;
-                witnesses = Some(match witnesses {
-                    None => id,
-                    Some(previous) => owner.combine(
-                        previous,
-                        id,
-                        purrdf_core::evidence::EvidenceCombination::Alternatives,
-                    )?,
-                });
-                Ok::<_, EvalError<D::Error>>(false)
-            },
-            EvalError::Source,
-        )?;
-        let (negative, blocked) = owner.negative(witnesses)?;
-        solution.retain_negative(negative, owner)?;
-        Ok(blocked)
+        let mut frame = negative::Atom::new(self.source, evidence.is_some());
+        frame.advance(self, solution, rel, governor, evidence)?;
+        debug_assert!(frame.is_complete() || governor.spent());
+        Ok(frame.blocked())
     }
 }
 
