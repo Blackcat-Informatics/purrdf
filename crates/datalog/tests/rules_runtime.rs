@@ -1574,7 +1574,47 @@ fn public_sequential_execution_preserves_models_proofs_and_counters() {
     assert_eq!(parallel.work(), sequential.work());
 }
 
+fn predicate_rows_keep_native_identities_and_lexical_graph_order() {
+    use purrdf_datalog::store::TermInterner;
+
+    let mut triples = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    triples.insert_row(["s", "p", "o"]).unwrap();
+    triples.insert_row(["s", "q", "o"]).unwrap();
+    let predicate = triples.term_id("p").unwrap();
+    let selected = triples.rows_for_predicate(predicate).collect::<Vec<_>>();
+    assert_eq!(
+        selected,
+        triples
+            .rows_from(0)
+            .filter(|(_, row)| row[1] == predicate)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(selected.len(), 1);
+
+    let mut quads = RelationStore::default();
+    for (predicate, graph) in [("p", "z"), ("q", "b"), ("p", "a"), ("r", "c"), ("p", "m")] {
+        quads.insert("s", predicate, "o", graph).unwrap();
+    }
+    let predicate = quads.term_id("p").unwrap();
+    let selected = quads.rows_for_predicate(predicate).collect::<Vec<_>>();
+    assert_eq!(selected.len(), 3);
+    assert_eq!(
+        selected
+            .iter()
+            .map(|(_, row)| quads.interner().resolve(row[3]))
+            .collect::<Vec<_>>(),
+        ["a", "m", "z"]
+    );
+    for (row_id, row) in selected {
+        assert_eq!(
+            quads.rows_from(row_id.address().unwrap()).next(),
+            Some((row_id, row))
+        );
+    }
+}
+
 purrdf_testkit::harness_main!(
+    predicate_rows_keep_native_identities_and_lexical_graph_order,
     interrupted_guarded_commit_counts_only_completed_generating_rounds,
     model_only_and_recorded_models_have_explicit_evidence_and_equal_counts,
     term_arena_limits_are_caller_selected_and_reach_contracts,
