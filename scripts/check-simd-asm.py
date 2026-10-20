@@ -128,8 +128,8 @@ failing configuration does not cancel the others: every configuration runs to it
 verdict and the problems of all of them are reported together.
 ``--config`` runs a checked partial shard; only a full matrix may write the document.
 ``--fresh`` allocates new contexts (the external compiler cache remains enabled).
-``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
-matching reports and checks the full document without compiling again.
+``--report`` writes checked evidence; ``--merge-reports`` validates seven reports
+and their producer's ``compiler-receipt.txt`` without compiling assembly again.
 
 Document mode (``--doc``)
 -------------------------
@@ -2477,7 +2477,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=2, help="concurrent configurations sharing Cargo's total job budget (default: 2)")
     parser.add_argument("--fresh", action="store_true", help="use new isolated build contexts and reparse assembly")
     parser.add_argument("--report", type=Path, help="atomically write this run's checked evidence as JSON")
-    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and check complete document parity; builds nothing")
+    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and their producer receipt; check document parity without compiling assembly")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
