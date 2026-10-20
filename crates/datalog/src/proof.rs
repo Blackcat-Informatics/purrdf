@@ -117,6 +117,8 @@ where
 {
     /// Native capacity or allocation refused; this is not an invalid-proof verdict.
     Storage(StorageError),
+    /// The caller requested a proof from a model-only evaluation.
+    DerivationsNotRecorded,
     /// The proof is not a well-formed term: a reference outside the arena, a premise that
     /// does not precede the step it justifies, or — for a decoded proof — bytes that are
     /// truncated, mis-tagged, or carry an unknown node kind.
@@ -218,6 +220,9 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(f),
+            Self::DerivationsNotRecorded => {
+                f.write_str("derivations were not recorded; evaluate with DerivationMode::Record")
+            }
             Self::Malformed { detail } => write!(f, "malformed proof term: {detail}"),
             Self::NotAsserted { goal } => write!(
                 f,
@@ -303,6 +308,7 @@ where
 {
     purrdf_hash::error_visit! {
         Storage(cause) => "datalog-proof-storage" { "cause" => Cause(cause) },
+        DerivationsNotRecorded => "datalog-proof-derivations-not-recorded" {},
         Malformed { detail } => "datalog-proof-malformed" { "detail" => Cause(detail) },
         NotAsserted { goal } => "datalog-proof-not-asserted" { "goal" => Record(goal.as_ref()) },
         UnknownRule { rule } => "datalog-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
@@ -1112,8 +1118,13 @@ where
     /// height is strictly below its consumer's, by the definition of proof height. Both
     /// components are content-derived, so the interning sequence, and hence every arena id,
     /// is a pure function of the evaluation.
-    pub fn of(evaluation: &Evaluation<TermInterner, N>) -> Result<Self, StorageError> {
-        let derivations = evaluation.derivations();
+    /// # Errors
+    /// Returns [`ProofError::DerivationsNotRecorded`] for a model-only result,
+    /// or the original storage failure while building the proof arena.
+    pub fn of(evaluation: &Evaluation<TermInterner, N>) -> Result<Self, ProofError<N>> {
+        let derivations = evaluation
+            .derivations()
+            .ok_or(ProofError::DerivationsNotRecorded)?;
         let mut order: Vec<usize> = (0..derivations.len()).collect();
         order.sort_by(|&left, &right| {
             (derivations[left].proof_height(), derivations[left].fact())
@@ -1428,7 +1439,7 @@ mod tests {
     use crate::store::Fact;
 
     use crate::clause::HeadDisjunct;
-    use crate::seminaive::{compile, evaluate};
+    use crate::seminaive::compile;
     use crate::synth_corpus;
 
     const P: &str = "https://example.org/p";
@@ -1512,12 +1523,22 @@ mod tests {
         for workload in synth_corpus::all() {
             let name = workload.name;
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let evaluation =
-                evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &crate::guard::NoGuards,
+                &crate::seminaive::EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the corpus stays inside every ceiling");
             let proofs = EvaluationProofs::of(&evaluation).unwrap();
             assert_eq!(
                 proofs.roots().len(),
-                evaluation.derivations().len(),
+                evaluation
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
                 "{name}: one proof per derivation"
             );
 
@@ -1593,7 +1614,15 @@ mod tests {
             (0..exe.rule_count()).any(|index| exe.rule_entry(index).1.has_cyclic_subplan()),
             "the fixture must route through the triejoin, or it tests the binary join twice"
         );
-        let evaluation = evaluate(&exe, seed()).expect("the triangle stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the triangle stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         assert_eq!(proofs.roots().len(), n, "one derived fact per node");
 
@@ -1717,7 +1746,15 @@ mod tests {
             .by_rule(fact("a", T, "c"), 0, &[first, circular_premise])
             .unwrap();
         let exe = compile(rules.clone()).expect("the chain program compiles");
-        let evaluation = evaluate(&exe, chain_edb()).expect("the chain stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            chain_edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the chain stays inside every ceiling");
         assert!(
             evaluation.facts().contains(
                 &surface("a"),
@@ -1861,14 +1898,24 @@ mod tests {
     fn re_attributing_a_derivation_to_another_clause_is_rejected() {
         let workload = synth_corpus::transitive_closure(4);
         let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-        let evaluation =
-            evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            workload.edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the corpus stays inside every ceiling");
         let edb = workload.edb();
         let ctx = ProofContext::new(&workload.rules, &edb, evaluation.facts());
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
 
         let mut mutations = 0usize;
-        for derivation in evaluation.derivations() {
+        for derivation in evaluation
+            .derivations()
+            .expect("derivation recording was requested")
+        {
             for other in 0..workload.rules.len() {
                 if other == derivation.rule() {
                     continue;
@@ -2020,7 +2067,15 @@ mod tests {
         ];
         let seed = || store_of(&[("a", P, "b"), ("a", base, "b"), ("c", base, "d")]);
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2344,7 +2399,15 @@ mod tests {
             ])
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2380,7 +2443,15 @@ mod tests {
             store
         };
         let exe = compile(rules.clone()).expect("the fixture compiles");
-        let evaluation = evaluate(&exe, seed()).expect("the fixture stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            seed(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let edb = seed();
         let ctx = ProofContext::new(&rules, &edb, evaluation.facts());
@@ -2445,8 +2516,15 @@ mod tests {
     fn evaluation_proofs_are_addressable_and_lexically_ordered() {
         let workload = synth_corpus::transitive_closure(3);
         let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-        let evaluation =
-            evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+        let evaluation = crate::seminaive::evaluate_guarded(
+            &exe,
+            workload.edb(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("the corpus stays inside every ceiling");
         let proofs = EvaluationProofs::of(&evaluation).unwrap();
         let facts: Vec<&Fact> = proofs.roots().iter().map(|(fact, _)| fact).collect();
         let mut sorted = facts.clone();
@@ -2469,8 +2547,15 @@ mod tests {
         let workload = synth_corpus::same_generation(2);
         let build = || {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let evaluation =
-                evaluate(&exe, workload.edb()).expect("the corpus stays inside every ceiling");
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &crate::guard::NoGuards,
+                &crate::seminaive::EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the corpus stays inside every ceiling");
             let proofs = EvaluationProofs::of(&evaluation).unwrap();
             let encodings: Vec<(Fact, Vec<u8>, [u8; 32])> = proofs
                 .roots()

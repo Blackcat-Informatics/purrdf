@@ -98,7 +98,7 @@
 //! * [`ChaseError::UnboundHeadVariable`] — a head variable that is neither existentially
 //!   quantified nor bound by the body cannot be grounded without fabricating a term.
 //! * [`ChaseError::BudgetExhausted`] — the stored-fact or join-step limit in force
-//!   ([`EvalOptions`]), or the fixed term-arena ceiling, was passed.
+//!   ([`EvalOptions`]), or the caller-selected term-arena ceiling, was passed.
 //!
 //! The forms that DO fire are the atomic head (a Datalog rule), the conjunctive head
 //! (`m = 1`, several conjuncts, no existential) and the single-disjunct existential head.
@@ -129,9 +129,7 @@ use crate::id::TermId;
 use crate::plan::{
     ATOM_ARITY, POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT,
 };
-use crate::seminaive::{
-    BudgetReport, BudgetResource, EvalOptions, MAX_TERM_ARENA_BYTES, render_capacity_refusal,
-};
+use crate::seminaive::{BudgetReport, BudgetResource, EvalOptions, render_capacity_refusal};
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
 
@@ -856,7 +854,7 @@ pub enum ChaseError {
     ///
     /// The limits are the stored-fact and join-step limits of the caller's [`EvalOptions`]
     /// ([`chase_with`]; the target's defaults for [`chase`] and [`chase_until`]) and the
-    /// fixed [`MAX_TERM_ARENA_BYTES`], charged exactly as [`crate::seminaive::evaluate`]
+    /// caller-selected [`EvalOptions::max_term_arena_bytes`], charged exactly as [`crate::seminaive::evaluate`]
     /// charges them. There is never a truncated answer presented as complete.
     BudgetExhausted {
         /// Which ceiling.
@@ -958,7 +956,7 @@ impl fmt::Display for ChaseError {
                     Some(rendered) => write!(f, "the chase did not complete: {rendered}"),
                     None => write!(
                         f,
-                        "the chase exceeded a fixed ceiling ({resource:?}): {} join step(s), \
+                        "the chase exceeded a configured ceiling ({resource:?}): {} join step(s), \
                          {} stored fact(s), {} term arena byte(s)",
                         report.join_steps(),
                         report.stored_facts(),
@@ -1346,7 +1344,7 @@ where
                 report,
             });
         }
-        if report.term_arena_bytes() > MAX_TERM_ARENA_BYTES {
+        if report.term_arena_bytes() as u64 > report.term_arena_limit() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::TermArenaBytes,
                 report,
@@ -1503,8 +1501,8 @@ where
 /// # Budgets
 ///
 /// Consumption is charged against the target's default stored-fact and join-step limits
-/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the fixed
-/// [`MAX_TERM_ARENA_BYTES`], exactly as [`crate::seminaive::evaluate`] charges them, and
+/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the caller-selected
+/// [`EvalOptions::max_term_arena_bytes`], exactly as [`crate::seminaive::evaluate`] charges them, and
 /// passing one is a refusal ([`ChaseError::BudgetExhausted`]) carrying an accurate report —
 /// never a truncated answer.
 ///
@@ -1682,22 +1680,14 @@ where
         if fresh.is_empty() {
             break; // the natural fixpoint: this round derived nothing new
         }
-        // Every fact here is absent from the store and unique within the round, so the
-        // projection is exact rather than an over-estimate: the limit is decided before a
-        // single row is inserted.
-        let projected = state.store.row_count().saturating_add(fresh.len());
-        if u64::try_from(projected).unwrap_or(u64::MAX) > options.max_stored_facts() {
-            return Err(ChaseError::BudgetExhausted {
-                resource: BudgetResource::StoredFacts,
-                report: BudgetReport::new(
-                    state.meter.consumed,
-                    projected,
-                    state.store.term_bytes(),
-                )
-                .governed_by(options),
-            });
-        }
         for derivation in fresh {
+            state
+                .report()
+                .admit_fact()
+                .map_err(|report| ChaseError::BudgetExhausted {
+                    resource: BudgetResource::StoredFacts,
+                    report,
+                })?;
             let fact = &derivation.fact;
             state.store.insert_row(Arity::<N>::fact_terms(fact))?;
             state.derivations.push(derivation);

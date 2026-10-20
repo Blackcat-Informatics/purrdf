@@ -4,9 +4,9 @@
 //! Native/wasm execution of connected and genuinely independent production rules.
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
-use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator};
-use purrdf_datalog::seminaive::{EvalOptions, evaluate_guarded};
-use purrdf_datalog::seminaive::{compile, evaluate};
+use purrdf_datalog::guard::{Guard, GuardCall, GuardEvaluator, NoGuards};
+use purrdf_datalog::seminaive::compile;
+use purrdf_datalog::seminaive::{DerivationMode, EvalOptions, evaluate_guarded};
 use purrdf_datalog::store::RelationStore;
 use purrdf_datalog::{dictionary, seminaive};
 
@@ -62,9 +62,17 @@ fn later_partial_delta_keeps_both_productive_anchors() {
             )
             .unwrap();
     }
-    let evaluation = evaluate(&program, input).expect("later productive anchors complete");
+    let evaluation = evaluate_guarded(
+        &program,
+        input,
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .expect("later productive anchors complete");
     let proofs: Vec<_> = evaluation
         .derivations()
+        .expect("derivation recording was requested")
         .iter()
         .filter(|proof| proof.rule() == 2)
         .collect();
@@ -157,10 +165,21 @@ fn original_guarded_pair_has_exact_connected_work_and_authored_proofs() {
                     .unwrap();
             }
         }
-        let evaluation =
-            evaluate_guarded(&program, input, &Distinct, &EvalOptions::default(), None)
-                .expect("unchanged defaults admit the original pair");
-        assert_eq!(evaluation.derivations().len(), if two { 100 } else { 0 });
+        let evaluation = evaluate_guarded(
+            &program,
+            input,
+            &Distinct,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .expect("unchanged defaults admit the original pair");
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            if two { 100 } else { 0 }
+        );
         // The whole frozen store is initially delta, so only the last anchor
         // can have a nonempty OldOnly suffix. Its five connected expansions
         // cost (1+3+1+3+1)N, or (1+3+2+6+4)N with two Spools. The guard's
@@ -169,7 +188,10 @@ fn original_guarded_pair_has_exact_connected_work_and_authored_proofs() {
             evaluation.budget().join_steps(),
             if two { 1800 } else { 900 }
         );
-        for proof in evaluation.derivations() {
+        for proof in evaluation
+            .derivations()
+            .expect("derivation recording was requested")
+        {
             let sources = proof.sources();
             assert_eq!(sources.len(), 5);
             assert_eq!(proof.fact().predicate, format!("<{NS}hasTwoSpools>"));
@@ -248,14 +270,29 @@ fn connected_rule_restores_all_authored_premises() {
             )
             .unwrap();
     }
-    let evaluation =
-        evaluate(&program, input).expect("unchanged target defaults admit linear connected work");
-    assert_eq!(evaluation.derivations().len(), 100);
+    let evaluation = evaluate_guarded(
+        &program,
+        input,
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .expect("unchanged target defaults admit linear connected work");
+    assert_eq!(
+        evaluation
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        100
+    );
     // All seeds are new in round one. The first two decompositions have empty
     // OldOnly suffixes and are skipped; Full/Full/Delta admits 3N frames.
     // Round two's result delta addresses none of the three body predicates.
     assert_eq!(evaluation.budget().join_steps(), 300);
-    for proof in evaluation.derivations() {
+    for proof in evaluation
+        .derivations()
+        .expect("derivation recording was requested")
+    {
         let sources = proof.sources();
         assert_eq!(sources.len(), 3);
         assert_eq!(sources[0].predicate, format!("<{a}>"));
@@ -297,11 +334,26 @@ fn independent_head_projects_without_cartesian_work() {
                 .unwrap();
         }
     }
-    let evaluation =
-        evaluate(&program, input).expect("unchanged target defaults admit additive factors");
-    assert_eq!(evaluation.derivations().len(), 100);
+    let evaluation = evaluate_guarded(
+        &program,
+        input,
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .expect("unchanged target defaults admit additive factors");
+    assert_eq!(
+        evaluation
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        100
+    );
     assert_eq!(evaluation.budget().join_steps(), 300);
-    for proof in evaluation.derivations() {
+    for proof in evaluation
+        .derivations()
+        .expect("derivation recording was requested")
+    {
         assert_eq!(proof.sources().len(), 2);
         assert_eq!(proof.sources()[0].subject, "<https://example.org/x000>");
         assert_eq!(proof.sources()[0].predicate, "<https://example.org/b>");
@@ -311,7 +363,6 @@ fn independent_head_projects_without_cartesian_work() {
 }
 
 fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
-    use purrdf_datalog::guard::NoGuards;
     use purrdf_datalog::seminaive::{BudgetResource, EvalError};
 
     let reach = "https://example.org/reach";
@@ -357,19 +408,30 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
         &program,
         input.clone(),
         &NoGuards,
-        &EvalOptions::default(),
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
         None,
     )
     .expect("default limits admit recursion");
-    assert_eq!(reference.derivations().len(), (N - 1) * (N - 2) / 2);
+    assert_eq!(
+        reference
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        (N - 1) * (N - 2) / 2
+    );
     assert_eq!(
         reference.facts().row_count(),
-        input.row_count() + reference.derivations().len()
+        input.row_count()
+            + reference
+                .derivations()
+                .expect("derivation recording was requested")
+                .len()
     );
     for start in 0..N - 2 {
         for end in start + 2..N {
             let proof = reference
                 .derivations()
+                .expect("derivation recording was requested")
                 .iter()
                 .find(|proof| {
                     proof.fact().subject == node(start) && proof.fact().object == node(end)
@@ -402,7 +464,9 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
         &program,
         input.clone(),
         &NoGuards,
-        &EvalOptions::default().with_max_join_steps(expected),
+        &EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(expected),
         None,
     )
     .expect("exact credits admit partial factor rounds");
@@ -410,7 +474,14 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
         exact.facts().facts_sorted(),
         reference.facts().facts_sorted()
     );
-    assert_eq!(exact.derivations(), reference.derivations());
+    assert_eq!(
+        exact
+            .derivations()
+            .expect("derivation recording was requested"),
+        reference
+            .derivations()
+            .expect("derivation recording was requested")
+    );
     assert_eq!(exact.budget().join_steps(), expected);
     assert_eq!(
         exact.budget().stored_facts(),
@@ -421,7 +492,9 @@ fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
             &program,
             input.clone(),
             &NoGuards,
-            &EvalOptions::default().with_max_join_steps(ceiling),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(ceiling),
             None,
         )
         .expect_err("insufficient credits refuse without a partial result");
@@ -521,7 +594,7 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
         let result = evaluate_evidenced(
             &exe,
             store,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &producer,
             None,
             rows,
@@ -541,7 +614,14 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
         } else {
             let result = result.unwrap();
             assert_eq!(result.evaluation.facts().row_count(), 3);
-            assert_eq!(result.evaluation.derivations().len(), 2);
+            assert_eq!(
+                result
+                    .evaluation
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                2
+            );
             assert_eq!(result.evidence.row_count(), 3);
             for (row, ids) in result.evaluation.facts().rows_from(1) {
                 assert_eq!(ids[0], TRIPLE);
@@ -577,7 +657,6 @@ fn triple_compiler_preserves_static_arity_and_original_admission() {
         AdmissionRefusal, DeclarationLayer, DeclarationSource, NeverDeriveDeclarations,
     };
     use purrdf_datalog::cache::{PlanCache, canonical_rule_hash};
-    use purrdf_datalog::guard::NoGuards;
     use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext};
     use purrdf_datalog::schedule::{
         NoHooks, compile_scheduled, evaluate_scheduled, stratify_rules,
@@ -636,8 +715,22 @@ fn triple_compiler_preserves_static_arity_and_original_admission() {
             .insert(s, &p, o, RelationStore::DEFAULT_GRAPH)
             .unwrap();
     }
-    let triples = evaluate(&program, triple_input.clone()).unwrap();
-    let quads = evaluate(&compile(vec![quad]).unwrap(), quad_input).unwrap();
+    let triples = evaluate_guarded(
+        &program,
+        triple_input.clone(),
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
+    let quads = evaluate_guarded(
+        &compile(vec![quad]).unwrap(),
+        quad_input,
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
     assert_eq!(triples.facts().row_count(), 9);
     assert_eq!(triples.facts().partition_count(), 1);
     assert!(triples.facts().interner().lookup("").is_none());
@@ -655,8 +748,26 @@ fn triple_compiler_preserves_static_arity_and_original_admission() {
             .map(|fact| [fact.subject, fact.predicate, fact.object])
             .collect::<Vec<_>>()
     );
-    assert_eq!(triples.derivations().len(), quads.derivations().len());
-    for (triple, quad) in triples.derivations().iter().zip(quads.derivations()) {
+    assert_eq!(
+        triples
+            .derivations()
+            .expect("derivation recording was requested")
+            .len(),
+        quads
+            .derivations()
+            .expect("derivation recording was requested")
+            .len()
+    );
+    for (triple, quad) in triples
+        .derivations()
+        .expect("derivation recording was requested")
+        .iter()
+        .zip(
+            quads
+                .derivations()
+                .expect("derivation recording was requested"),
+        )
+    {
         assert_eq!(triple.rule(), quad.rule());
         assert_eq!(triple.proof_height(), quad.proof_height());
         assert_eq!(triple.sources().len(), 2);
@@ -699,7 +810,7 @@ fn triple_compiler_preserves_static_arity_and_original_admission() {
         triple_input,
         &NoGuards,
         &mut NoHooks,
-        &EvalOptions::default(),
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
         None,
     )
     .unwrap();
@@ -707,7 +818,14 @@ fn triple_compiler_preserves_static_arity_and_original_admission() {
         scheduled_result.facts().facts_sorted(),
         triples.facts().facts_sorted()
     );
-    assert_eq!(scheduled_result.derivations(), triples.derivations());
+    assert_eq!(
+        scheduled_result
+            .derivations()
+            .expect("derivation recording was requested"),
+        triples
+            .derivations()
+            .expect("derivation recording was requested")
+    );
     let mut declarations = NeverDeriveDeclarations::default();
     declarations.declare(
         predicate.into(),
@@ -835,7 +953,9 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
         input.clone(),
         &NoGuards,
         &mut NoHooks,
-        &EvalOptions::default().with_max_stored_facts(3),
+        &EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(3),
         None,
     );
     let Err(EvalError::BudgetExhausted {
@@ -857,7 +977,9 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
         input.clone(),
         &NoGuards,
         &mut NoHooks,
-        &EvalOptions::default().with_max_stored_facts(4),
+        &EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(4),
         None,
     )
     .expect("the exact retained-row boundary admits the fact");
@@ -870,7 +992,7 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
             missing_base,
             &NoGuards,
             &mut WithdrawOriginal,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             None
         ),
         Err(EvalError::MissingBase { rule: 1 })
@@ -880,7 +1002,7 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
         input.clone(),
         &NoGuards,
         &mut WithdrawOriginal,
-        &EvalOptions::default(),
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
         None,
     )
     .unwrap();
@@ -899,6 +1021,7 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
     assert!(model.interner().lookup("").is_none());
     let base_derivation = result
         .derivations()
+        .expect("derivation recording was requested")
         .iter()
         .find(|d| d.fact().predicate == "q")
         .unwrap();
@@ -993,7 +1116,7 @@ fn triple_negated_base_preserves_seminaive_work_and_limits() {
             quad,
             &NoGuards,
             &mut NoHooks,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             None,
         )
         .unwrap();
@@ -1003,7 +1126,9 @@ fn triple_negated_base_preserves_seminaive_work_and_limits() {
             compact,
             &NoGuards,
             &mut NoHooks,
-            &EvalOptions::default().with_max_join_steps(expected_steps),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(expected_steps),
             None,
         )
         .expect("immutable negative filters retain the quad semi-naive work bound");
@@ -1025,7 +1150,6 @@ fn triple_negated_base_preserves_seminaive_work_and_limits() {
 fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
     use purrdf_datalog::cache::canonical_rule_hash;
     use purrdf_datalog::clause::HeadForm;
-    use purrdf_datalog::guard::NoGuards;
     use purrdf_datalog::schedule::{
         Layer, NoHooks, Schedule, compile_scheduled, evaluate_scheduled,
     };
@@ -1060,12 +1184,17 @@ fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
         input.clone(),
         &NoGuards,
         &mut NoHooks,
-        &EvalOptions::default(),
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
         None,
     )
     .unwrap();
     assert_eq!(result.facts().facts_sorted(), input.facts_sorted());
-    assert_eq!(result.derivations(), []);
+    assert_eq!(
+        result
+            .derivations()
+            .expect("derivation recording was requested"),
+        []
+    );
     assert_eq!(result.facts().interner().len(), 3);
     assert!(matches!(
         evaluate_scheduled(
@@ -1073,7 +1202,9 @@ fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
             input.clone(),
             &NoGuards,
             &mut NoHooks,
-            &EvalOptions::default().with_max_join_steps(0),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(0),
             None,
         ),
         Err(EvalError::BudgetExhausted { .. })
@@ -1082,7 +1213,7 @@ fn triple_no_output_runs_the_body_without_fabricating_a_fact() {
     let program = compile_scheduled(vec![guarded], schedule).unwrap();
     assert!(matches!(
         evaluate_scheduled(
-            &program, input, &NoGuards, &mut NoHooks, &EvalOptions::default(), None,
+            &program, input, &NoGuards, &mut NoHooks, &EvalOptions::default().with_derivation_mode(DerivationMode::Record), None,
         ),
         Err(EvalError::Guard { guard, .. }) if guard == "must-run"
     ));
@@ -1154,7 +1285,237 @@ fn triple_store_has_predicate_only_keys_and_transactional_original_ids() {
     assert_eq!(host.row_count(), 1);
 }
 
+fn model_only_and_recorded_models_have_explicit_evidence_and_equal_counts() {
+    use purrdf_datalog::proof::{EvaluationProofs, ProofContext, ProofError};
+    use purrdf_datalog::seminaive::Executable;
+
+    let atom = |predicate: &str| {
+        ClauseAtom::positive(ClauseTerm::var("?s"), predicate, ClauseTerm::var("?o"))
+    };
+    let rules = vec![DlClause::datalog(
+        atom("https://example.org/q"),
+        vec![atom("https://example.org/p")],
+    )];
+    let program: Executable = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::new();
+    input
+        .insert(
+            "a",
+            "<https://example.org/p>",
+            "b",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
+    let model = seminaive::evaluate(&program, input.clone()).unwrap();
+    assert!(model.derivations().is_none());
+    assert!(matches!(
+        EvaluationProofs::of(&model),
+        Err(ProofError::DerivationsNotRecorded)
+    ));
+    let recorded = evaluate_guarded(
+        &program,
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        model.facts().facts_sorted(),
+        recorded.facts().facts_sorted()
+    );
+    assert_eq!(model.work(), recorded.work());
+    assert_eq!(model.work().input_facts(), 1);
+    assert_eq!(model.work().committed_facts(), 1);
+    assert_eq!(
+        model.work().candidates_per_committed_fact(),
+        Some((model.budget().join_steps(), 1))
+    );
+    assert_eq!(model.work().join_steps(), model.budget().join_steps());
+    assert_eq!(
+        model.work().planner_version(),
+        purrdf_datalog::cache::PLAN_SOLVER_VERSION
+    );
+    let proofs = EvaluationProofs::of(&recorded).unwrap();
+    for (fact, root) in proofs.roots() {
+        assert_eq!(
+            &proofs
+                .arena()
+                .check(*root, &ProofContext::new(&rules, &input, recorded.facts()))
+                .unwrap(),
+            fact
+        );
+    }
+    let empty = compile(Vec::<DlClause>::new()).unwrap();
+    let recorded_empty = evaluate_guarded(
+        &empty,
+        input,
+        &NoGuards,
+        &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+        None,
+    )
+    .unwrap();
+    assert_eq!(recorded_empty.derivations(), Some([].as_slice()));
+    assert_eq!(recorded_empty.work().candidates_per_committed_fact(), None);
+}
+
+fn term_arena_limits_are_caller_selected_and_reach_contracts() {
+    use purrdf_datalog::cache::contract_hash_with;
+    use purrdf_datalog::seminaive::{BudgetResource, DEFAULT_MAX_TERM_ARENA_BYTES, EvalError};
+
+    let rules: Vec<DlClause> = Vec::new();
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::new();
+    input
+        .insert(
+            &"x".repeat(DEFAULT_MAX_TERM_ARENA_BYTES + 1),
+            "p",
+            "o",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
+    let bytes = input.term_bytes() as u64;
+    let default = EvalOptions::default();
+    let refused = seminaive::evaluate(&program, input.clone()).unwrap_err();
+    let EvalError::BudgetExhausted { resource, report } = refused else {
+        panic!("arena refusal")
+    };
+    assert_eq!(resource, BudgetResource::TermArenaBytes);
+    assert_eq!(resource.limit(report), DEFAULT_MAX_TERM_ARENA_BYTES as u64);
+    assert!(!report.term_arena_limit_stated());
+    let raised = default.with_max_term_arena_bytes(bytes);
+    let admitted = evaluate_guarded(&program, input.clone(), &NoGuards, &raised, None).unwrap();
+    assert_eq!(admitted.budget().term_arena_limit(), bytes);
+    assert!(admitted.budget().term_arena_limit_stated());
+    let unlimited = default.without_term_arena_limit();
+    let admitted = evaluate_guarded(&program, input, &NoGuards, &unlimited, None).unwrap();
+    assert_eq!(admitted.budget().term_arena_limit(), u64::MAX);
+    assert_ne!(
+        contract_hash_with(&rules, &default),
+        contract_hash_with(&rules, &raised)
+    );
+    assert_ne!(
+        contract_hash_with(&rules, &raised),
+        contract_hash_with(&rules, &unlimited)
+    );
+    assert_eq!(
+        contract_hash_with(&rules, &default),
+        contract_hash_with(
+            &rules,
+            &default.with_max_term_arena_bytes(DEFAULT_MAX_TERM_ARENA_BYTES as u64)
+        )
+    );
+}
+
+fn stored_fact_admission_refuses_the_first_extra_fact_in_both_engines() {
+    use purrdf_datalog::chase::{ChaseError, chase_with};
+    use purrdf_datalog::seminaive::{BudgetResource, EvalError};
+
+    let atom = |predicate: &str| {
+        ClauseAtom::positive(ClauseTerm::var("?s"), predicate, ClauseTerm::var("?o"))
+    };
+    let rules = vec![
+        DlClause::datalog(
+            atom("https://example.org/q"),
+            vec![atom("https://example.org/p")],
+        ),
+        DlClause::datalog(
+            atom("https://example.org/q"),
+            vec![atom("https://example.org/p")],
+        ),
+        DlClause::datalog(
+            atom("https://example.org/r"),
+            vec![atom("https://example.org/p")],
+        ),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::new();
+    for subject in ["a", "b", "c"] {
+        input
+            .insert(
+                subject,
+                "<https://example.org/p>",
+                "o",
+                RelationStore::DEFAULT_GRAPH,
+            )
+            .unwrap();
+    }
+    let options = EvalOptions::default().with_max_stored_facts(4);
+    let error = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap_err();
+    let EvalError::BudgetExhausted { resource, report } = error else {
+        panic!("fact refusal")
+    };
+    assert_eq!(resource, BudgetResource::StoredFacts);
+    assert_eq!(report.stored_facts(), 4);
+    assert_eq!(report.observed_stored_facts(), 5);
+    assert_eq!(resource.observed(report), 5);
+    let error = chase_with(&rules, input.clone(), &options, None).unwrap_err();
+    let ChaseError::BudgetExhausted { resource, report } = error else {
+        panic!("chase fact refusal")
+    };
+    assert_eq!(resource, BudgetResource::StoredFacts);
+    assert_eq!(report.stored_facts(), 4);
+    assert_eq!(report.observed_stored_facts(), 5);
+    let exact = options.with_max_stored_facts(9);
+    let model = evaluate_guarded(&program, input, &NoGuards, &exact, None).unwrap();
+    assert_eq!(model.facts().row_count(), 9);
+    assert_eq!(
+        model.work().committed_facts(),
+        6,
+        "duplicate heads do not count twice"
+    );
+}
+
+fn public_sequential_execution_preserves_models_proofs_and_counters() {
+    use purrdf_datalog::seminaive::RoundExecution;
+
+    let atom = |predicate: &str| {
+        ClauseAtom::positive(ClauseTerm::var("?s"), predicate, ClauseTerm::var("?o"))
+    };
+    let program = compile(vec![
+        DlClause::datalog(
+            atom("https://example.org/q"),
+            vec![atom("https://example.org/p")],
+        ),
+        DlClause::datalog(
+            atom("https://example.org/r"),
+            vec![atom("https://example.org/p")],
+        ),
+    ])
+    .unwrap();
+    let mut input = RelationStore::new();
+    input
+        .insert(
+            "a",
+            "<https://example.org/p>",
+            "b",
+            RelationStore::DEFAULT_GRAPH,
+        )
+        .unwrap();
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let parallel = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+    let sequential = evaluate_guarded(
+        &program,
+        input,
+        &NoGuards,
+        &options.with_round_execution(RoundExecution::Sequential),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        parallel.facts().facts_sorted(),
+        sequential.facts().facts_sorted()
+    );
+    assert_eq!(parallel.derivations(), sequential.derivations());
+    assert_eq!(parallel.budget(), sequential.budget());
+    assert_eq!(parallel.work(), sequential.work());
+}
+
 purrdf_testkit::harness_main!(
+    model_only_and_recorded_models_have_explicit_evidence_and_equal_counts,
+    term_arena_limits_are_caller_selected_and_reach_contracts,
+    stored_fact_admission_refuses_the_first_extra_fact_in_both_engines,
+    public_sequential_execution_preserves_models_proofs_and_counters,
     triple_base_authority_survives_data_growth_and_layer_retraction,
     triple_negated_base_preserves_seminaive_work_and_limits,
     triple_no_output_runs_the_body_without_fabricating_a_fact,

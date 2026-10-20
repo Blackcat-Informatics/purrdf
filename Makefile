@@ -1028,6 +1028,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-datalog --test rules_runtime -- --exact \
+				model_only_and_recorded_models_have_explicit_evidence_and_equal_counts \
+				term_arena_limits_are_caller_selected_and_reach_contracts \
+				stored_fact_admission_refuses_the_first_extra_fact_in_both_engines \
+				public_sequential_execution_preserves_models_proofs_and_counters \
 				triple_base_authority_survives_data_growth_and_layer_retraction \
 				triple_negated_base_preserves_seminaive_work_and_limits \
 				triple_no_output_runs_the_body_without_fabricating_a_fact \

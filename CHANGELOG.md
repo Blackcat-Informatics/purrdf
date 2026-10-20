@@ -53,6 +53,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Explicit Datalog evidence and governors:** ordinary evaluation defaults to
+  model-only output. Request `DerivationMode::Record` for exported derivations;
+  `Evaluation::derivations` returns an `Option`, and proof construction returns
+  a typed refusal if recording was disabled. Entailment and SHACL proof callers
+  request recording explicitly. The term-arena ceiling is caller-selected through
+  `EvalOptions`, with a removable 16 MiB default named
+  `DEFAULT_MAX_TERM_ARENA_BYTES`. Stored-fact refusal reports distinguish the
+  admitted count from the first refused insertion. Semantic fact counts and
+  versioned candidate work are available through `Evaluation::work`, and each
+  call can select sequential rule execution without changing a global pool.
+
 - **One exact XSD numeric value API:** public `XsdValue::Integer` and
   `XsdValue::Decimal` carry the exact integer and decimal types at every size.
   The bounded `purrdf_xsd::Decimal`, bounded `owl:rational` module and decimal

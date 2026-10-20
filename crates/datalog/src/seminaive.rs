@@ -68,12 +68,13 @@
 //! strictly in program order; `par_sort`/`par_bridge` are never used, because they are not
 //! order-stable.
 //!
-//! # Limits are parameters; the arena ceiling is a constant
+//! # Limits and exported evidence are caller parameters
 //!
 //! The stored-fact limit and the join-step limit are the caller's, on [`EvalOptions`]
 //! ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]), with a
 //! default sized for the target ([`DEFAULT_MAX_STORED_FACTS`], [`DEFAULT_MAX_JOIN_STEPS`]).
-//! [`MAX_TERM_ARENA_BYTES`] stays a fixed `const`. Exceeding any of them returns
+//! The arena limit defaults to [`DEFAULT_MAX_TERM_ARENA_BYTES`] and can be raised
+//! or removed through [`EvalOptions`]. Exceeding any limit returns
 //! [`EvalError::BudgetExhausted`] carrying an accurate [`BudgetReport`] — never a panic,
 //! never a truncated answer presented as complete. [`EvalOptions`] also carries the two
 //! limits on term generation: term-generating rounds and generated terms.
@@ -100,9 +101,10 @@ use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
 
+pub use crate::plan::Executable;
 use crate::plan::{
-    AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup, POSITION_OBJECT,
-    POSITION_SUBJECT, Parsed, PositionPlan, RulePlan, predicate_symbol,
+    AtomOperator, AtomShape, CyclicPlan, IndexChoice, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT,
+    Parsed, PositionPlan, RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
@@ -150,7 +152,7 @@ pub const NATIVE_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 22;
 ///
 /// Shape rules re-execute only for focus nodes whose inputs changed. Term
 /// generation has its own guards: the term-generating round limit for bounded
-/// new-term lengths, and [`MAX_TERM_ARENA_BYTES`] when retained surfaces grow.
+/// new-term lengths, and [`DEFAULT_MAX_TERM_ARENA_BYTES`] when retained surfaces grow.
 pub const NATIVE_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
 
 /// The stored-fact limit in force when the caller states none
@@ -196,9 +198,21 @@ pub const DEFAULT_MAX_JOIN_STEPS: u64 = NATIVE_DEFAULT_MAX_JOIN_STEPS;
 /// arbitrarily large if its terms are: one relation of a thousand megabyte-long IRIs is a
 /// hundred-fold smaller in facts and a thousand-fold larger in bytes. This ceiling closes
 /// that gap. It is checked on the seeded store and again after every round, so no future
-/// term-minting extension can grow past it unobserved. Unlike the stored-fact and
-/// join-step limits it is not a parameter: it is the same on every target.
-pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
+/// term-minting extension can grow past it unobserved. The caller can raise or
+/// remove it through [`EvalOptions::with_max_term_arena_bytes`] and
+/// [`EvalOptions::without_term_arena_limit`].
+pub const DEFAULT_MAX_TERM_ARENA_BYTES: usize = 1 << 24;
+
+/// Whether a completed evaluation retains rendered derivation records.
+/// Internal row support and proof preference do not depend on this choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DerivationMode {
+    /// Return the least model without allocating exported derivation records.
+    #[default]
+    ModelOnly,
+    /// Retain the canonical derivation of every derived fact.
+    Record,
+}
 
 /// The default limit on TERM-GENERATING rounds ([`EvalOptions`]).
 ///
@@ -298,9 +312,68 @@ pub struct EvalOptions {
     term_generating_rounds: Option<u64>,
     /// The caller's generated-term budget, or `None` for the input-derived default.
     generated_terms: Option<u64>,
+    /// Interned surface bytes, or the default when unstated.
+    term_arena_bytes: Option<u64>,
+    /// Whether to retain exported derivations.
+    derivation_mode: DerivationMode,
+    /// The per-call rule scheduling policy.
+    execution: RoundExecution,
 }
 
 impl EvalOptions {
+    /// Select exported derivation recording. The default returns the model only.
+    #[must_use]
+    pub fn with_derivation_mode(mut self, mode: DerivationMode) -> Self {
+        self.derivation_mode = mode;
+        self
+    }
+
+    /// The exported evidence requested for this run.
+    #[must_use]
+    pub fn derivation_mode(&self) -> DerivationMode {
+        self.derivation_mode
+    }
+
+    /// Select rule scheduling for this call without changing the global Rayon pool.
+    #[must_use]
+    pub fn with_round_execution(mut self, execution: RoundExecution) -> Self {
+        self.execution = execution;
+        self
+    }
+
+    /// The per-call rule scheduling policy.
+    #[must_use]
+    pub fn round_execution(&self) -> RoundExecution {
+        self.execution
+    }
+
+    /// Permit exactly `bytes` interned surface bytes. `u64::MAX` removes the
+    /// logical ceiling; actual storage admission can still refuse allocation.
+    #[must_use]
+    pub fn with_max_term_arena_bytes(mut self, bytes: u64) -> Self {
+        self.term_arena_bytes = Some(bytes);
+        self
+    }
+
+    /// Remove the logical term-arena ceiling while retaining storage admission.
+    #[must_use]
+    pub fn without_term_arena_limit(self) -> Self {
+        self.with_max_term_arena_bytes(u64::MAX)
+    }
+
+    /// The effective surface-byte ceiling, defaulting to 16 MiB.
+    #[must_use]
+    pub fn max_term_arena_bytes(&self) -> u64 {
+        self.term_arena_bytes
+            .unwrap_or(DEFAULT_MAX_TERM_ARENA_BYTES as u64)
+    }
+
+    /// The caller's surface-byte ceiling, or `None` for the default.
+    #[must_use]
+    pub fn stated_max_term_arena_bytes(&self) -> Option<u64> {
+        self.term_arena_bytes
+    }
+
     /// Permit a store of exactly `facts` facts, seeded plus derived; one more is refused
     /// with [`EvalError::BudgetExhausted`] naming [`BudgetResource::StoredFacts`].
     #[must_use]
@@ -387,10 +460,8 @@ impl EvalOptions {
     }
 }
 
-/// The four limits one evaluation runs under, and which of them the caller stated.
-///
-/// The stated flags are one bit set rather than four `bool`s, which keeps a
-/// [`BudgetReport`] — carried by value in every [`EvalError`] — small.
+/// The five effective limits. Origins and refusal flags are packed separately
+/// in [`BudgetReport`] to keep operational errors inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Limits {
     /// The join-step limit.
@@ -401,60 +472,52 @@ struct Limits {
     term_generating_rounds: u64,
     /// The generated-term budget.
     generated_terms: u64,
-    /// Which limits the caller stated: the `STATED_*` bits.
-    stated: u8,
+    /// The interned surface-byte ceiling.
+    term_arena_bytes: u64,
 }
 
 impl purrdf_hash::error::StructuredError for Limits {
     purrdf_hash::error_visit! {
-        @record self { join_steps, stored_facts, term_generating_rounds, generated_terms, stated } => "datalog-limits" {
+        @record self { join_steps, stored_facts, term_generating_rounds, generated_terms, term_arena_bytes } => "datalog-limits" {
             "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(u128::from(self.stored_facts)),
             "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)), "generated_terms" => Unsigned(u128::from(self.generated_terms)),
-            "stated" => Unsigned(u128::from(self.stated))
+            "term_arena_bytes" => ByteCount(u128::from(self.term_arena_bytes)),
         }
     }
 }
 
-/// [`Limits::stated`]: the join-step limit is the caller's.
+/// [`BudgetReport::flags`]: the join-step limit is the caller's.
 const STATED_JOIN_STEPS: u8 = 1;
-/// [`Limits::stated`]: the stored-fact limit is the caller's.
+/// [`BudgetReport::flags`]: the stored-fact limit is the caller's.
 const STATED_STORED_FACTS: u8 = 1 << 1;
-/// [`Limits::stated`]: the term-generating round limit is the caller's.
+/// [`BudgetReport::flags`]: the term-generating round limit is the caller's.
 const STATED_TERM_GENERATING_ROUNDS: u8 = 1 << 2;
-/// [`Limits::stated`]: the generated-term budget is the caller's.
+/// [`BudgetReport::flags`]: the generated-term budget is the caller's.
 const STATED_GENERATED_TERMS: u8 = 1 << 3;
+/// [`BudgetReport::flags`]: the surface-byte ceiling is the caller's.
+const STATED_TERM_ARENA_BYTES: u8 = 1 << 4;
+/// The first unique stored-fact insertion was refused before mutation.
+const REFUSED_STORED_FACT: u8 = 1 << 7;
 
 impl Limits {
     /// The limits `options` states, over a seeded store of `input_terms` distinct terms.
     fn of(options: &EvalOptions, input_terms: u64) -> Self {
-        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
         Self {
             join_steps: options.max_join_steps(),
             stored_facts: options.max_stored_facts(),
             term_generating_rounds: options.max_term_generating_rounds(),
             generated_terms: options.generated_term_budget(input_terms),
-            stated: bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
-                | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
-                | bit(
-                    options.stated_max_term_generating_rounds(),
-                    STATED_TERM_GENERATING_ROUNDS,
-                )
-                | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS),
+            term_arena_bytes: options.max_term_arena_bytes(),
         }
-    }
-
-    /// Whether the caller stated the limit `flag` names.
-    const fn is_stated(self, flag: u8) -> bool {
-        self.stated & flag != 0
     }
 }
 
 /// What an evaluation actually consumed, against the limits it ran under.
 ///
 /// Returned on success ([`Evaluation::budget`]) and on failure
-/// ([`EvalError::BudgetExhausted`]) alike; on failure the field naming the exhausted
-/// resource holds the observation that proved the limit was passed, so the report is
-/// never rounded down to the limit it exceeded.
+/// ([`EvalError::BudgetExhausted`]) alike. Stored facts count actual admissions;
+/// [`Self::observed_stored_facts`] includes the first refused insertion. Each
+/// [`BudgetResource::observed`] names the observation proving the refusal.
 ///
 /// Every measurement is a deterministic function of the input: the same program over the
 /// same facts reports the same numbers on every target. The limits it carries are the ones
@@ -466,7 +529,9 @@ pub struct BudgetReport {
     join_steps: u64,
     /// Facts held by the store, against [`Self::stored_fact_limit`].
     stored_facts: usize,
-    /// Interned term surface bytes, against [`MAX_TERM_ARENA_BYTES`].
+    /// Caller-stated limits and the first refused fact admission.
+    flags: u8,
+    /// Interned term surface bytes, against [`DEFAULT_MAX_TERM_ARENA_BYTES`].
     term_arena_bytes: usize,
     /// Term-generating rounds run, against [`Self::term_generating_round_limit`].
     term_generating_rounds: u64,
@@ -481,8 +546,10 @@ pub struct BudgetReport {
 
 impl purrdf_hash::error::StructuredError for BudgetReport {
     purrdf_hash::error_visit! {
-        @record self { join_steps, stored_facts, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
+        @record self { join_steps, stored_facts, flags, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
             "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(self.stored_facts as u128),
+            "stored_fact_refused" => Boolean(self.flags & REFUSED_STORED_FACT != 0),
+            "stated_limits" => Unsigned(u128::from(self.flags & !REFUSED_STORED_FACT)),
             "term_arena_bytes" => ByteCount(self.term_arena_bytes as u128), "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)),
             "generated_terms" => Unsigned(u128::from(self.generated_terms)), "input_terms" => Unsigned(u128::from(self.input_terms)),
             "limits" => Record(&self.limits)
@@ -498,6 +565,25 @@ impl Default for BudgetReport {
 }
 
 impl BudgetReport {
+    /// Pack limit origins alongside refusal state without padding each limit record.
+    fn stated_limits(options: &EvalOptions) -> u8 {
+        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
+        bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
+            | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
+            | bit(
+                options.stated_max_term_generating_rounds(),
+                STATED_TERM_GENERATING_ROUNDS,
+            )
+            | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS)
+            | bit(
+                options.stated_max_term_arena_bytes(),
+                STATED_TERM_ARENA_BYTES,
+            )
+    }
+
+    const fn is_stated(self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
     /// A report over three already-measured coordinates.
     ///
     /// This crate's own evaluator fills the fields directly; the constructor exists so
@@ -516,6 +602,7 @@ impl BudgetReport {
         Self {
             join_steps,
             stored_facts,
+            flags: Self::stated_limits(&EvalOptions::default()),
             term_arena_bytes,
             term_generating_rounds: 0,
             generated_terms: 0,
@@ -529,12 +616,14 @@ impl BudgetReport {
     #[must_use]
     pub fn governed_by(self, options: &EvalOptions) -> Self {
         let capacity = Limits::of(options, 0);
-        let kept = self.limits.stated & !(STATED_JOIN_STEPS | STATED_STORED_FACTS);
+        let capacity_flags = STATED_JOIN_STEPS | STATED_STORED_FACTS | STATED_TERM_ARENA_BYTES;
+        let kept = self.flags & !capacity_flags;
         Self {
+            flags: kept | (Self::stated_limits(options) & capacity_flags),
             limits: Limits {
                 join_steps: capacity.join_steps,
                 stored_facts: capacity.stored_facts,
-                stated: kept | (capacity.stated & (STATED_JOIN_STEPS | STATED_STORED_FACTS)),
+                term_arena_bytes: capacity.term_arena_bytes,
                 ..self.limits
             },
             ..self
@@ -557,7 +646,7 @@ impl BudgetReport {
     /// Whether the join-step limit was the caller's rather than
     /// [`DEFAULT_MAX_JOIN_STEPS`].
     pub fn join_step_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_JOIN_STEPS)
+        self.is_stated(STATED_JOIN_STEPS)
     }
 
     /// The stored-fact limit the run was governed by ([`EvalOptions::max_stored_facts`]).
@@ -568,12 +657,42 @@ impl BudgetReport {
     /// Whether the stored-fact limit was the caller's rather than
     /// [`DEFAULT_MAX_STORED_FACTS`].
     pub fn stored_fact_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_STORED_FACTS)
+        self.is_stated(STATED_STORED_FACTS)
     }
 
     /// Facts held by the store when evaluation stopped (seeded plus derived).
     pub fn stored_facts(self) -> usize {
         self.stored_facts
+    }
+
+    /// The first refused insertion, or the retained count if none was refused.
+    /// Unlike a round projection, a refusal is exactly one past the admitted count.
+    pub fn observed_stored_facts(self) -> usize {
+        self.stored_facts
+            .saturating_add(usize::from(self.flags & REFUSED_STORED_FACT != 0))
+    }
+
+    /// Admit one absent fact before insertion, retaining the first refusal separately
+    /// from facts actually stored. Shared by ordinary, ordered and chase commits.
+    pub(crate) fn admit_fact(self) -> Result<(), Self> {
+        if self.stored_facts as u64 >= self.limits.stored_facts {
+            Err(Self {
+                flags: self.flags | REFUSED_STORED_FACT,
+                ..self
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The effective interned surface-byte ceiling.
+    pub fn term_arena_limit(self) -> u64 {
+        self.limits.term_arena_bytes
+    }
+
+    /// Whether the caller stated the interned surface-byte ceiling.
+    pub fn term_arena_limit_stated(self) -> bool {
+        self.is_stated(STATED_TERM_ARENA_BYTES)
     }
 
     /// Interned term surface bytes held by the store when evaluation stopped.
@@ -595,7 +714,7 @@ impl BudgetReport {
     /// Whether the term-generating round limit was the caller's rather than
     /// [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`].
     pub fn term_generating_round_limit_stated(self) -> bool {
-        self.limits.is_stated(STATED_TERM_GENERATING_ROUNDS)
+        self.is_stated(STATED_TERM_GENERATING_ROUNDS)
     }
 
     /// Terms the evaluation added to the store beyond the seeded ones ([`EvalOptions`]).
@@ -611,7 +730,7 @@ impl BudgetReport {
     /// Whether the generated-term budget was the caller's rather than the input-derived
     /// default.
     pub fn generated_term_budget_stated(self) -> bool {
-        self.limits.is_stated(STATED_GENERATED_TERMS)
+        self.is_stated(STATED_GENERATED_TERMS)
     }
 
     /// The distinct terms of the seeded store.
@@ -630,7 +749,7 @@ pub enum BudgetResource {
     /// The stored-fact limit ([`EvalOptions::with_max_stored_facts`]) — too many facts
     /// seeded or derived.
     StoredFacts,
-    /// [`MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
+    /// [`DEFAULT_MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
     TermArenaBytes,
     /// The term-generating round limit ([`EvalOptions`]) — too many rounds committed a
     /// guard-computed term.
@@ -656,7 +775,7 @@ impl BudgetResource {
         match self {
             Self::JoinSteps => report.limits.join_steps,
             Self::StoredFacts => report.limits.stored_facts,
-            Self::TermArenaBytes => MAX_TERM_ARENA_BYTES as u64,
+            Self::TermArenaBytes => report.limits.term_arena_bytes,
             Self::TermGeneratingRounds => report.limits.term_generating_rounds,
             Self::GeneratedTerms => report.limits.generated_terms,
         }
@@ -667,7 +786,7 @@ impl BudgetResource {
     pub fn observed(self, report: BudgetReport) -> u64 {
         match self {
             Self::JoinSteps => report.join_steps,
-            Self::StoredFacts => report.stored_facts as u64,
+            Self::StoredFacts => report.observed_stored_facts() as u64,
             Self::TermArenaBytes => report.term_arena_bytes as u64,
             Self::TermGeneratingRounds => report.term_generating_rounds,
             Self::GeneratedTerms => report.generated_terms,
@@ -864,8 +983,9 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// Which limit.
         resource: BudgetResource,
         /// The rules whose derivations committed a guard-computed term in the refused
-        /// round, in authored program order.
-        rules: Vec<usize>,
+        /// round, in authored program order. A fixed slice keeps the operational
+        /// error compact when embedded by entailment and host errors.
+        rules: Box<[usize]>,
         /// Consumption when evaluation stopped, the limit in force included.
         report: BudgetReport,
     },
@@ -963,7 +1083,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
 /// Where a report's stored-fact limit came from, for a diagnostic.
 #[must_use]
 pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
-    if report.limits.is_stated(STATED_STORED_FACTS) {
+    if report.is_stated(STATED_STORED_FACTS) {
         "the caller's limit"
     } else {
         "the default for this target"
@@ -973,7 +1093,7 @@ pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
 /// Where a report's join-step limit came from, for a diagnostic.
 #[must_use]
 pub fn join_step_limit_origin(report: BudgetReport) -> &'static str {
-    if report.limits.is_stated(STATED_JOIN_STEPS) {
+    if report.is_stated(STATED_JOIN_STEPS) {
         "the caller's limit"
     } else {
         "the default for this target"
@@ -994,7 +1114,7 @@ pub fn render_capacity_refusal(
         BudgetResource::StoredFacts => Some(format!(
             "evaluation exceeded the stored-fact limit: {} facts observed, {} permitted ({}); \
              raise it with {knob}",
-            report.stored_facts,
+            report.observed_stored_facts(),
             report.limits.stored_facts,
             stored_fact_limit_origin(report),
         )),
@@ -1024,7 +1144,7 @@ pub fn render_capacity_refusal(
 /// Where a report's term-generating round limit came from, for a diagnostic.
 #[must_use]
 pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
-    if report.limits.is_stated(STATED_TERM_GENERATING_ROUNDS) {
+    if report.is_stated(STATED_TERM_GENERATING_ROUNDS) {
         "the caller's limit".to_owned()
     } else {
         "the default".to_owned()
@@ -1034,7 +1154,7 @@ pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
 /// Where a report's generated-term budget came from, for a diagnostic.
 #[must_use]
 pub fn generated_term_budget_origin(report: BudgetReport) -> String {
-    if report.limits.is_stated(STATED_GENERATED_TERMS) {
+    if report.is_stated(STATED_GENERATED_TERMS) {
         "the caller's budget".to_owned()
     } else {
         format!(
@@ -1126,7 +1246,7 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
                     Some(rendered) => f.write_str(&rendered),
                     None => write!(
                         f,
-                        "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
+                        "evaluation exceeded the {} limit: {} observed, {} permitted; raise it with EvalOptions::with_max_term_arena_bytes",
                         resource.name(),
                         resource.observed(*report),
                         resource.limit(*report)
@@ -1251,7 +1371,48 @@ where
     }
 }
 
-/// A completed evaluation: the saturated store, its derivations and the budget report.
+/// Semantic output counts alongside the planner's physical candidate count.
+///
+/// For an ordinary completed stratified evaluation, seeded and newly committed
+/// fact counts are invariant under join planning and derivation recording.
+/// Scheduled retractions can cause another commit of a previously withdrawn fact;
+/// that is another commit event. Physical candidates may change between planners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkReport {
+    /// Unique seeded facts.
+    input_facts: usize,
+    /// Successful unique rule insertions.
+    committed_facts: usize,
+    /// Physical candidate admissions.
+    join_steps: u64,
+}
+
+impl WorkReport {
+    /// Unique facts in the seeded store.
+    pub fn input_facts(self) -> usize {
+        self.input_facts
+    }
+    /// Unique fact insertions performed by rule commits.
+    pub fn committed_facts(self) -> usize {
+        self.committed_facts
+    }
+    /// Physical candidate admissions; divide by committed facts to compare plans.
+    pub fn join_steps(self) -> u64 {
+        self.join_steps
+    }
+    /// Physical candidate admissions per committed fact, as an exact numerator
+    /// and denominator. No ratio is defined when nothing was committed.
+    pub fn candidates_per_committed_fact(self) -> Option<(u64, usize)> {
+        (self.committed_facts != 0).then_some((self.join_steps, self.committed_facts))
+    }
+
+    /// Version of the physical planner that produced the candidate count.
+    pub fn planner_version(self) -> &'static str {
+        crate::cache::PLAN_SOLVER_VERSION
+    }
+}
+
+/// A completed least model, optional derivations and measured consumption.
 #[derive(Debug, Clone)]
 pub struct Evaluation<D: TermDictionary = TermInterner, const N: usize = 4>
 where
@@ -1260,9 +1421,11 @@ where
     /// The least model: the seeded EDB plus every derived fact.
     facts: RelationStore<D, N>,
     /// Every derivation, in lexical `(fact, rule, sources)` order.
-    derivations: Vec<Derivation<N>>,
+    derivations: Option<Vec<Derivation<N>>>,
     /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
+    /// Stable semantic counts and plan-dependent candidate work.
+    work: WorkReport,
 }
 
 impl<D: TermDictionary, const N: usize> Evaluation<D, N>
@@ -1279,9 +1442,15 @@ where
         self.facts
     }
 
-    /// Every derivation, in a total lexical order.
-    pub fn derivations(&self) -> &[Derivation<N>] {
-        &self.derivations
+    /// Recorded derivations in lexical order; `None` means recording was disabled,
+    /// while `Some([])` means recording was enabled and no fact was derived.
+    pub fn derivations(&self) -> Option<&[Derivation<N>]> {
+        self.derivations.as_deref()
+    }
+
+    /// Semantic fact counts and the physical work of this execution.
+    pub fn work(&self) -> WorkReport {
+        self.work
     }
 
     /// What the run consumed, against the limits it ran under.
@@ -3878,21 +4047,20 @@ where
 /// Both policies feed the SAME program-order merge and the same sorted commit, so
 /// scheduling cannot affect an answer or a budget observation — which is exactly what
 /// `sequential_and_parallel_rounds_agree` asserts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RoundExecution {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RoundExecution {
     /// Evaluate rules into independent buffers, then merge them in program order.
     ///
-    /// Production's only policy. It already degrades to the direct in-order path for a
+    /// The default policy. It degrades to the direct in-order path for a
     /// single-rule round, for a round holding a guarded rule (a guard runs on the calling
     /// thread — see [`crate::guard`]) and for a one-worker pool — which is every `wasm32`
     /// build.
+    #[default]
     Parallel,
     /// Force the direct in-order path even where rayon would be used.
     ///
-    /// Test-only, for the same reason [`JoinStrategy::ForcedBinary`] is: scheduling may
-    /// not change an answer, so this exists to assert that it does not, never to let a
-    /// caller weaken production execution.
-    #[cfg(test)]
+    /// Selectable per call through [`EvalOptions::with_round_execution`]. The
+    /// same kernels and merge order run without activating a global worker pool.
     Sequential,
 }
 
@@ -4356,6 +4524,14 @@ where
     pub(crate) depth: Vec<u32>,
     /// Every committed derivation.
     pub(crate) derivations: Vec<Derivation<N>>,
+    /// Exported evidence requested by the caller.
+    pub(crate) derivation_mode: DerivationMode,
+    /// Per-call scheduling, also used by ordered execution.
+    pub(crate) execution: RoundExecution,
+    /// Unique input facts, before any schedule assumptions.
+    input_facts: usize,
+    /// Successful unique rule insertions.
+    committed_facts: usize,
     /// Candidate solutions enumerated so far.
     pub(crate) join_steps: u64,
     /// A refused reservation, including an observation past u64::MAX.
@@ -4364,6 +4540,8 @@ where
     pub(crate) term_generating_rounds: u64,
     /// The limits in force.
     limits: Limits,
+    /// Caller-stated limits, retained for budget reporting.
+    stated: u8,
     /// The distinct terms of the seeded store.
     input_terms: u64,
     /// The rules that generated a term in the latest term-generating round.
@@ -4378,14 +4556,20 @@ where
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
         let depth = vec![0u32; edb.row_count()];
         let input_terms = edb.interner().term_count();
+        let input_facts = edb.retained_rows();
         Self {
             rel: edb,
             depth,
             derivations: Vec::new(),
+            derivation_mode: options.derivation_mode(),
+            execution: options.round_execution(),
+            input_facts,
+            committed_facts: 0,
             join_steps: 0,
             join_refused: false,
             term_generating_rounds: 0,
             limits: Limits::of(&options, input_terms),
+            stated: BudgetReport::stated_limits(&options),
             input_terms,
             generating_rules: BTreeSet::new(),
         }
@@ -4396,6 +4580,7 @@ where
         BudgetReport {
             join_steps: self.join_steps,
             stored_facts: self.rel.retained_rows(),
+            flags: self.stated,
             term_arena_bytes: self.rel.term_bytes(),
             term_generating_rounds: self.term_generating_rounds,
             generated_terms: self
@@ -4408,14 +4593,6 @@ where
         }
     }
 
-    /// The report that would describe the state if it also held `extra` more facts.
-    fn projected_report(&self, extra: usize) -> BudgetReport {
-        BudgetReport {
-            stored_facts: self.rel.retained_rows().saturating_add(extra),
-            ..self.report()
-        }
-    }
-
     /// One round's shared remaining successful credits.
     pub(crate) fn allowance(&self) -> u64 {
         self.limits.join_steps.saturating_sub(self.join_steps)
@@ -4425,8 +4602,8 @@ where
     ///
     /// # Errors
     ///
-    /// [`EvalError::BudgetExhausted`] when the round passed a ceiling — decided before a
-    /// single surface is materialised where the fact count alone proves it.
+    /// [`EvalError::BudgetExhausted`] when work or an individual fact admission
+    /// passes a ceiling. Facts already admitted remain within the stated limit.
     pub(crate) fn absorb(
         &mut self,
         round: RoundBuffer<'_, D::Id, N>,
@@ -4436,16 +4613,6 @@ where
         check_budget(self)?;
         if round.entries.is_empty() {
             return Ok(());
-        }
-        // Every entry was gated on absence from the store when it was created, and the
-        // entries are unique by head fact, so this projection is exact rather than an
-        // over-estimate: the limit is decided before a single surface is materialised.
-        let projected = self.rel.retained_rows().saturating_add(round.entries.len());
-        if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
-            return Err(EvalError::BudgetExhausted {
-                resource: BudgetResource::StoredFacts,
-                report: self.projected_report(round.entries.len()),
-            });
         }
         if round.generates_terms {
             self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
@@ -4553,15 +4720,15 @@ where
         stop,
         guards,
         *options,
-        RoundExecution::Parallel,
+        options.round_execution(),
         JoinStrategy::Planned,
     )
 }
 
 /// The policy-selectable implementation behind [`evaluate`].
 ///
-/// The policies are private: a caller may neither weaken production scheduling nor
-/// override the planner's join choice. The tests use them to prove the alternatives agree.
+/// Scheduling is caller-selected; the join strategy remains planner-owned.
+/// Tests use the private join override to prove both kernels agree.
 fn evaluate_with<D: TermDictionary, const N: usize>(
     exe: &Executable<N>,
     edb: RelationStore<D, N>,
@@ -4642,7 +4809,7 @@ where
             stop,
             guards,
             *options,
-            RoundExecution::Parallel,
+            options.round_execution(),
             JoinStrategy::Planned,
         )?;
         for (row, _) in evaluation.facts.rows_from(rows.row_count()) {
@@ -4662,7 +4829,7 @@ where
         StratumRun {
             stop,
             guards,
-            execution: RoundExecution::Parallel,
+            execution: options.round_execution(),
             strategy: JoinStrategy::Planned,
         },
         &mut Some(&mut capture),
@@ -4728,8 +4895,14 @@ where
         self.derivations.sort();
         Evaluation {
             budget: self.report(),
+            work: WorkReport {
+                input_facts: self.input_facts,
+                committed_facts: self.committed_facts,
+                join_steps: self.join_steps,
+            },
             facts: self.rel,
-            derivations: self.derivations,
+            derivations: (self.derivation_mode == DerivationMode::Record)
+                .then_some(self.derivations),
         }
     }
 }
@@ -4759,7 +4932,7 @@ where
             report,
         });
     }
-    if report.term_arena_bytes > MAX_TERM_ARENA_BYTES {
+    if report.term_arena_bytes as u64 > report.limits.term_arena_bytes {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::TermArenaBytes,
             report,
@@ -4921,9 +5094,22 @@ where
     winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
 
     for (fact, key, candidate) in winners {
-        let sources = candidate
-            .source_facts(&state.rel)
-            .map_err(EvalError::Source)?;
+        state
+            .report()
+            .admit_fact()
+            .map_err(|report| EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                report,
+            })?;
+        let sources = if state.derivation_mode == DerivationMode::Record {
+            Some(
+                candidate
+                    .source_facts(&state.rel)
+                    .map_err(EvalError::Source)?,
+            )
+        } else {
+            None
+        };
         let terms = key.terms().map(|term| match term {
             HeadTerm::Interned(id) => DictionaryTerm::Id(*id),
             HeadTerm::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
@@ -4941,12 +5127,15 @@ where
             "depth tracks store rows"
         );
         state.depth.push(candidate.proof_height);
-        state.derivations.push(Derivation {
-            fact,
-            rule: candidate.rule,
-            sources,
-            proof_height: candidate.proof_height,
-        });
+        state.committed_facts = state.committed_facts.saturating_add(1);
+        if let Some(sources) = sources {
+            state.derivations.push(Derivation {
+                fact,
+                rule: candidate.rule,
+                sources,
+                proof_height: candidate.proof_height,
+            });
+        }
     }
     Ok(())
 }
@@ -5804,7 +5993,14 @@ mod tests {
 
     fn run(rules: Vec<DlClause>, edb: RelationStore) -> Evaluation {
         let exe = compile(rules).expect("the fixture program compiles");
-        evaluate(&exe, edb).expect("the fixture program stays inside every ceiling")
+        evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .expect("the fixture program stays inside every ceiling")
     }
 
     #[test]
@@ -5844,7 +6040,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -5879,7 +6075,12 @@ mod tests {
             result.evaluation.facts.row_count()
         );
         assert_eq!(
-            result.evaluation.derivations.len(),
+            result
+                .evaluation
+                .derivations
+                .as_deref()
+                .expect("recorded")
+                .len(),
             1,
             "evidence changes do not invent preferred provenance proofs for preexisting facts"
         );
@@ -5928,14 +6129,22 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
             evidence_scope(),
         )
         .unwrap();
-        assert_eq!(result.evaluation.derivations.len(), 1);
+        assert_eq!(
+            result
+                .evaluation
+                .derivations
+                .as_deref()
+                .expect("recorded")
+                .len(),
+            1
+        );
         let row = result.evaluation.facts.rows_from(3).next().unwrap().0;
         assert_eq!(
             result.evidence.record(row).unwrap().aggregate_bounds(),
@@ -6003,7 +6212,8 @@ mod tests {
                                 let result = evaluate_evidenced(
                                     &exe,
                                     edb,
-                                    &EvalOptions::default(),
+                                    &EvalOptions::default()
+                                        .with_derivation_mode(DerivationMode::Record),
                                     &NoGuards,
                                     None,
                                     rows,
@@ -6085,7 +6295,7 @@ mod tests {
             let result = evaluate_evidenced(
                 &exe,
                 edb,
-                &EvalOptions::default(),
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 &NoGuards,
                 None,
                 rows,
@@ -6163,7 +6373,7 @@ mod tests {
                         let result = evaluate_evidenced(
                             &exe,
                             edb,
-                            &EvalOptions::default(),
+                            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                             &NoGuards,
                             None,
                             rows,
@@ -6219,7 +6429,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -6246,7 +6456,7 @@ mod tests {
         let result = evaluate_evidenced(
             &exe,
             edb,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
             &NoGuards,
             None,
             rows,
@@ -6330,8 +6540,16 @@ mod tests {
         )];
         let edb = store_of(&[("a", P, "b"), ("b", Q, "c")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations().len(), 1);
-        let derivation = &evaluation.derivations()[0];
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let derivation = &evaluation
+            .derivations()
+            .expect("derivation recording was requested")[0];
         assert_eq!(derivation.rule(), 0);
         assert_eq!(derivation.proof_height(), 1);
         assert_eq!(
@@ -6412,7 +6630,13 @@ mod tests {
             relation(&evaluation, R),
             BTreeSet::from([(surface("https://example.org/new"), surface("b"))])
         );
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
     }
 
     /// A body with no positive atom is relational identity: it fires once and its head is
@@ -6428,7 +6652,13 @@ mod tests {
             Vec::new(),
         )];
         let evaluation = run(rules, RelationStore::new());
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
         assert_eq!(evaluation.facts().row_count(), 1);
     }
 
@@ -6443,8 +6673,16 @@ mod tests {
         ];
         let edb = store_of(&[("a", P, "b"), ("a", Q, "b")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations().len(), 1);
-        let derivation = &evaluation.derivations()[0];
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let derivation = &evaluation
+            .derivations()
+            .expect("derivation recording was requested")[0];
         // Equal proof heights and equal sums, so the sorted source facts decide: the
         // `p` fact sorts before the `q` fact, so rule 0 wins.
         assert_eq!(derivation.rule(), 0);
@@ -6540,7 +6778,10 @@ mod tests {
             "exactly the three typings prp-dom licenses"
         );
         assert_eq!(
-            evaluation.derivations().len(),
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
             3,
             "one derivation per derived typing"
         );
@@ -6548,6 +6789,7 @@ mod tests {
         // variable-predicate atom is data rather than rule text.
         let matched: BTreeSet<String> = evaluation
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .map(|derivation| derivation.sources()[1].predicate.clone())
             .collect();
@@ -6578,8 +6820,12 @@ mod tests {
                 "seed {seed}: facts"
             );
             assert_eq!(
-                again.derivations(),
-                reference.derivations(),
+                again
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                reference
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "seed {seed}: derivations"
             );
             assert_eq!(again.budget(), reference.budget(), "seed {seed}: budget");
@@ -6628,6 +6874,7 @@ mod tests {
         let evaluation = run(vec![rule], edb);
         let derived: BTreeSet<(String, String, String)> = evaluation
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .map(|derivation| {
                 let fact = derivation.fact();
@@ -6785,7 +7032,14 @@ mod tests {
         };
         for workload in synth_corpus::all() {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
-            let plain = evaluate(&exe, workload.edb()).expect("inside every ceiling");
+            let plain = evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &NoGuards,
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                None,
+            )
+            .expect("inside every ceiling");
             let watched =
                 evaluate_until(&exe, workload.edb(), Some(&never)).expect("inside every ceiling");
             assert_eq!(
@@ -6795,8 +7049,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                plain.derivations(),
-                watched.derivations(),
+                plain
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                watched
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: derivations",
                 workload.name
             );
@@ -6899,8 +7157,12 @@ mod tests {
                     workload.name
                 );
                 assert_eq!(
-                    again.derivations(),
-                    reference.derivations(),
+                    again
+                        .derivations()
+                        .expect("derivation recording was requested"),
+                    reference
+                        .derivations()
+                        .expect("derivation recording was requested"),
                     "{}: seed {seed} derivations",
                     workload.name
                 );
@@ -6937,7 +7199,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -6947,7 +7209,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::ForcedBinary,
             )
@@ -6960,8 +7222,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                planned.derivations(),
-                binary.derivations(),
+                planned
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                binary
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: the two joins must agree on provenance too",
                 workload.name
             );
@@ -7136,7 +7402,7 @@ mod tests {
                     shuffled.edb(),
                     None,
                     &NoGuards,
-                    EvalOptions::default(),
+                    EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                     RoundExecution::Parallel,
                     strategy,
                 )
@@ -7147,7 +7413,9 @@ mod tests {
                     "seed {seed}, {strategy:?}: analytic facts"
                 );
                 assert_eq!(
-                    evaluation.derivations(),
+                    evaluation
+                        .derivations()
+                        .expect("derivation recording was requested"),
                     expected_proofs,
                     "seed {seed}, {strategy:?}: exact canonical authored proofs"
                 );
@@ -7179,7 +7447,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -7189,7 +7457,7 @@ mod tests {
                 workload.edb(),
                 None,
                 &NoGuards,
-                EvalOptions::default(),
+                EvalOptions::default().with_derivation_mode(DerivationMode::Record),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -7201,8 +7469,12 @@ mod tests {
                 workload.name
             );
             assert_eq!(
-                sequential.derivations(),
-                parallel.derivations(),
+                sequential
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                parallel
+                    .derivations()
+                    .expect("derivation recording was requested"),
                 "{}: derivations",
                 workload.name
             );
@@ -7252,7 +7524,9 @@ mod tests {
                     &exe,
                     edb.clone(),
                     &NoGuards,
-                    &EvalOptions::default().with_max_join_steps(expected),
+                    &EvalOptions::default()
+                        .with_derivation_mode(DerivationMode::Record)
+                        .with_max_join_steps(expected),
                     None,
                 )
                 .expect("exact credits");
@@ -7260,7 +7534,10 @@ mod tests {
                 assert_eq!(exact.facts().row_count(), 2 * expected as usize);
                 let answer = (
                     exact.facts().facts_sorted(),
-                    exact.derivations().to_vec(),
+                    exact
+                        .derivations()
+                        .expect("derivation recording was requested")
+                        .to_vec(),
                     exact.budget(),
                 );
                 if let Some(prior) = &reference {
@@ -7273,7 +7550,9 @@ mod tests {
                         &exe,
                         edb.clone(),
                         &NoGuards,
-                        &EvalOptions::default().with_max_join_steps(ceiling),
+                        &EvalOptions::default()
+                            .with_derivation_mode(DerivationMode::Record)
+                            .with_max_join_steps(ceiling),
                         None,
                     )
                     .expect_err("total refusal");
@@ -7313,8 +7592,12 @@ mod tests {
             ("https://example.org/a", P, "https://example.org/o"),
             ("https://example.org/b", P, "https://example.org/o"),
         ]);
-        let mut state =
-            FixpointState::seeded(edb, EvalOptions::default().with_max_join_steps(u64::MAX));
+        let mut state = FixpointState::seeded(
+            edb,
+            EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(u64::MAX),
+        );
         state.join_steps = u64::MAX - 1;
         let entry = RuleEntry {
             index: 0,
@@ -7385,7 +7668,9 @@ mod tests {
             edb.clone(),
             &NoGuards,
             &mut NoHooks,
-            &EvalOptions::default().with_max_join_steps(128),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(128),
             None,
         )
         .expect("exact conjunctive credits");
@@ -7397,7 +7682,9 @@ mod tests {
                 edb.clone(),
                 &NoGuards,
                 &mut NoHooks,
-                &EvalOptions::default().with_max_join_steps(ceiling),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(ceiling),
                 None,
             )
             .expect_err("conjunctive total refusal");
@@ -7461,7 +7748,9 @@ mod tests {
                 edb.clone(),
                 &NoGuards,
                 &mut NoHooks,
-                &EvalOptions::default().with_max_join_steps(credits),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(credits),
                 None,
             )
             .expect("exact traversal credits");
@@ -7473,7 +7762,9 @@ mod tests {
                     edb.clone(),
                     &NoGuards,
                     &mut NoHooks,
-                    &EvalOptions::default().with_max_join_steps(ceiling),
+                    &EvalOptions::default()
+                        .with_derivation_mode(DerivationMode::Record)
+                        .with_max_join_steps(ceiling),
                     None,
                 )
                 .expect_err("empty-index traversal refused");
@@ -7538,7 +7829,9 @@ mod tests {
                 &exe,
                 edb.clone(),
                 &rows,
-                &EvalOptions::default().with_max_join_steps(limit),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(limit),
                 None,
             )
             .expect_err("producer refused");
@@ -7554,7 +7847,9 @@ mod tests {
             &exe,
             edb.clone(),
             &rows,
-            &EvalOptions::default().with_max_join_steps(10001),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(10001),
             None,
         )
         .expect("exact producer boundary");
@@ -7565,7 +7860,9 @@ mod tests {
                 &exe,
                 edb.clone(),
                 &rows,
-                &EvalOptions::default().with_max_join_steps(10000),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(10000),
                 None
             ),
             Err(EvalError::BudgetExhausted { .. })
@@ -7601,7 +7898,9 @@ mod tests {
             &exe,
             negative_edb.clone(),
             &multirow,
-            &EvalOptions::default().with_max_join_steps(17),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(17),
             None,
         )
         .expect_err("negative callback rows are admitted too");
@@ -7622,7 +7921,9 @@ mod tests {
                 &exe,
                 negative_edb.clone(),
                 &reject,
-                &EvalOptions::default().with_max_join_steps(limit),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(limit),
                 None,
             )
             .expect_err("negative traversal refused");
@@ -7637,7 +7938,9 @@ mod tests {
             &exe,
             negative_edb.clone(),
             &reject,
-            &EvalOptions::default().with_max_join_steps(203),
+            &EvalOptions::default()
+                .with_derivation_mode(DerivationMode::Record)
+                .with_max_join_steps(203),
             None,
         )
         .expect("one positive, group and partition admission, and two per negative row");
@@ -7648,7 +7951,9 @@ mod tests {
                 &exe,
                 negative_edb,
                 &reject,
-                &EvalOptions::default().with_max_join_steps(202),
+                &EvalOptions::default()
+                    .with_derivation_mode(DerivationMode::Record)
+                    .with_max_join_steps(202),
                 None
             ),
             Err(EvalError::BudgetExhausted { .. })
@@ -7943,7 +8248,9 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let limited = EvalOptions::default().with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        let limited = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
             .expect_err("the join-step limit must be passed");
         let EvalError::BudgetExhausted { resource, report } = error.clone() else {
@@ -7968,12 +8275,16 @@ mod tests {
 
         // The valid neighbour: the same program over the same store under a limit of
         // exactly the candidates it enumerates completes, with its one head fact.
-        let admitted = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED);
+        let admitted = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(JOIN_STEPS_OBSERVED);
         let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &admitted, None)
             .expect("a limit the run fits under admits it");
         assert_eq!(model.facts().row_count(), n + 1);
         assert_eq!(model.budget().join_steps(), JOIN_STEPS_OBSERVED);
-        let short = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
+        let short = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
         assert!(matches!(
             evaluate_guarded(&exe, edb, &NoGuards, &short, None),
             Err(EvalError::BudgetExhausted {
@@ -8006,7 +8317,9 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let limited = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let limited = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
             .expect_err("the stored-fact limit must be passed");
         let EvalError::BudgetExhausted { resource, report } = error.clone() else {
@@ -8015,25 +8328,29 @@ mod tests {
         assert_eq!(resource, BudgetResource::StoredFacts);
         assert_eq!(
             report.stored_facts(),
-            n + n * n,
-            "the report is the count the round would have produced"
+            WASM_DEFAULT_MAX_STORED_FACTS as usize,
+            "only admitted facts are stored"
         );
         assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
         assert!(report.join_steps() <= report.join_step_limit());
         let rendered = error.to_string();
         assert!(
-            rendered.contains("160400 facts observed, 131072 permitted (the caller's limit)")
+            rendered.contains("131073 facts observed, 131072 permitted (the caller's limit)")
                 && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
             "{rendered}"
         );
 
         // The valid neighbour: a limit of exactly the least model's size admits it, and
         // one fact fewer does not.
-        let exact = EvalOptions::default().with_max_stored_facts((n + n * n) as u64);
+        let exact = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts((n + n * n) as u64);
         let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &exact, None)
             .expect("a limit of exactly the model's size admits it");
         assert_eq!(model.facts().row_count(), n + n * n);
-        let short = EvalOptions::default().with_max_stored_facts((n + n * n - 1) as u64);
+        let short = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts((n + n * n - 1) as u64);
         assert!(matches!(
             evaluate_guarded(&exe, edb, &NoGuards, &short, None),
             Err(EvalError::BudgetExhausted {
@@ -8079,7 +8396,9 @@ mod tests {
         let seeded = (SIDE + 1) * SIDE + 1;
         assert!(seeded as u64 > NATIVE_DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
-        let native = EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let native = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &native, None)
             .expect_err("the native default is passed by the seeded store");
         assert_eq!(
@@ -8089,15 +8408,23 @@ mod tests {
         );
         if !cfg!(target_arch = "wasm32") {
             assert_eq!(
-                evaluate(&exe, edb.clone())
-                    .expect_err("the native default refuses it unstated too")
-                    .to_string(),
+                evaluate_guarded(
+                    &exe,
+                    edb.clone(),
+                    &NoGuards,
+                    &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                    None
+                )
+                .expect_err("the native default refuses it unstated too")
+                .to_string(),
                 "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
                  permitted (the default for this target); raise it with \
                  EvalOptions::with_max_stored_facts"
             );
         }
-        let raised = EvalOptions::default().with_max_stored_facts(seeded as u64 + 1);
+        let raised = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_max_stored_facts(seeded as u64 + 1);
         let model = evaluate_guarded(&exe, edb, &NoGuards, &raised, None)
             .expect("raised to exactly the model's size");
         assert_eq!(model.facts().row_count(), seeded + 1);
@@ -8120,7 +8447,7 @@ mod tests {
             assert_eq!(DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_STORED_FACTS);
             assert_eq!(DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_JOIN_STEPS);
         }
-        let options = EvalOptions::default();
+        let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
         assert_eq!(options.max_stored_facts(), DEFAULT_MAX_STORED_FACTS);
         assert_eq!(options.max_join_steps(), DEFAULT_MAX_JOIN_STEPS);
         assert_eq!(options.stated_max_stored_facts(), None);
@@ -8149,7 +8476,13 @@ mod tests {
             .unwrap();
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let outcome = evaluate(&exe, edb);
+        let outcome = evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        );
         if cfg!(target_arch = "wasm32") {
             assert!(outcome.is_err(), "the wasm32 default refuses 160,400 facts");
         } else {
@@ -8189,12 +8522,19 @@ mod tests {
         }
         assert!((edb.row_count() as u64) < DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the term-arena ceiling must be passed");
+        let error = evaluate_guarded(
+            &exe,
+            edb,
+            &NoGuards,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .expect_err("the term-arena ceiling must be passed");
         let EvalError::BudgetExhausted { resource, report } = error else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::TermArenaBytes);
-        assert!(report.term_arena_bytes() > MAX_TERM_ARENA_BYTES);
+        assert!(report.term_arena_bytes() > DEFAULT_MAX_TERM_ARENA_BYTES);
         assert_eq!(report.stored_facts(), 24);
     }
 
@@ -8266,7 +8606,14 @@ mod tests {
                 again.facts().facts_sorted(),
                 reference.facts().facts_sorted()
             );
-            assert_eq!(again.derivations(), reference.derivations());
+            assert_eq!(
+                again
+                    .derivations()
+                    .expect("derivation recording was requested"),
+                reference
+                    .derivations()
+                    .expect("derivation recording was requested")
+            );
             assert_eq!(again.budget(), reference.budget());
         }
     }
@@ -8310,11 +8657,13 @@ mod tests {
             assert_eq!(
                 again
                     .derivations()
+                    .expect("derivation recording was requested")
                     .iter()
                     .map(|d| (d.fact().clone(), d.sources().to_vec()))
                     .collect::<Vec<_>>(),
                 reference
                     .derivations()
+                    .expect("derivation recording was requested")
                     .iter()
                     .map(|d| (d.fact().clone(), d.sources().to_vec()))
                     .collect::<Vec<_>>(),
@@ -8413,7 +8762,12 @@ mod tests {
         )];
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(rules, edb);
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
     }
 
     /// A fully ground body atom is a membership probe.
@@ -8433,10 +8787,21 @@ mod tests {
         );
         let edb = store_of(&[("https://example.org/a", P, "https://example.org/b")]);
         let evaluation = run(vec![present.clone()], edb);
-        assert_eq!(evaluation.derivations().len(), 1);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
 
         let evaluation = run(vec![present], store_of(&[("x", P, "y")]));
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
     }
 
     /// An empty program over a seeded store is the store itself.
@@ -8444,7 +8809,12 @@ mod tests {
     fn an_empty_program_derives_nothing() {
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(Vec::new(), edb);
-        assert_eq!(evaluation.derivations(), []);
+        assert_eq!(
+            evaluation
+                .derivations()
+                .expect("derivation recording was requested"),
+            []
+        );
         assert_eq!(evaluation.facts().row_count(), 1);
         assert_eq!(evaluation.budget().join_steps(), 0);
     }

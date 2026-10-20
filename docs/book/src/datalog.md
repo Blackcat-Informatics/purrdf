@@ -62,14 +62,23 @@ Identical input yields byte-identical output, on every target.
 
 ## Limits refuse; they never truncate
 
-Three limits bound what every run holds and enumerates. Two are the caller's,
-on `EvalOptions`, with a default sized for the target; the third is a constant:
+Three limits bound what every run holds and enumerates. All are caller-selected
+through `EvalOptions`, with explicit defaults:
 
 | Limit | Bounds | Set with | Default on `wasm32` | Default elsewhere |
 | --- | --- | --- | --- | --- |
 | join steps | candidate solutions enumerated | `EvalOptions::with_max_join_steps` | 1,048,576 | 1,048,576 |
 | stored facts | facts seeded or derived | `EvalOptions::with_max_stored_facts` | 131,072 | 4,194,304 |
-| term arena bytes | interned term surface bytes | `MAX_TERM_ARENA_BYTES` (fixed) | 16,777,216 | 16,777,216 |
+| term arena bytes | interned term surface bytes | `EvalOptions::with_max_term_arena_bytes` | 16,777,216 | 16,777,216 |
+
+`EvalOptions::without_term_arena_limit` removes the logical surface-byte ceiling.
+Actual storage admission still applies. The effective ceiling is available in
+the budget report and participates in the contract hash.
+
+Stored-fact admission checks each unique insertion before changing the store.
+On refusal, `BudgetReport::stored_facts` reports the admitted count and
+`observed_stored_facts` reports the first refused insertion, exactly one higher.
+Duplicate candidates do not consume another stored-fact allowance.
 
 The stored-fact defaults differ because the memory the store lives in does: a
 `wasm32` evaluation shares one linear memory with the rest of its page, and its
@@ -105,6 +114,28 @@ completed answer.
 
 There is deliberately no wall-clock budget: it would break both `wasm32` and
 reproducibility.
+
+## Model output, proofs and measured work
+
+Ordinary evaluation defaults to `DerivationMode::ModelOnly`. Set
+`EvalOptions::with_derivation_mode(DerivationMode::Record)` when exported
+derivations are needed. `Evaluation::derivations` returns `None` when recording
+was disabled and `Some([])` when recording was enabled but derived nothing.
+Proof construction refuses a model-only result with
+`ProofError::DerivationsNotRecorded`. Recording does not change the least model,
+internal canonical witness preference or candidate accounting.
+
+`Evaluation::work` separates unique input facts and committed fact insertions
+from physical candidate admissions. For an ordinary completed stratified run,
+the fact counts are independent of the join plan. Candidate counts can change
+with the planner; the report names its version, and callers can compare
+candidates per committed fact. Scheduled withdrawals can cause a later commit
+of the same fact and therefore another commit event.
+
+`EvalOptions::with_round_execution(RoundExecution::Sequential)` selects the
+direct execution path for one call, without changing a global thread pool.
+Both scheduling policies use the same evaluator, program-order merge and sorted
+commit, and preserve the same model and recorded derivations.
 
 Passing a limit is a **total** refusal, not a truncation. There is no partial
 fixpoint to hand back with a note attached, and a truncated closure presented as

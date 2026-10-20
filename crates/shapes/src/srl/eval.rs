@@ -389,7 +389,9 @@ where
 {
     let _coordinates = options.coordinate_scope();
     let source_rules = options.source_rules();
-    let governors = options.eval_options();
+    let governors = options
+        .eval_options()
+        .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
     for rule in &set.rules {
         if let IrRuleBody::Elements(element_rule) = &rule.body {
             element_rule
@@ -524,7 +526,10 @@ where
     inferred.sort_by_cached_key(|triple| triple.each_ref().map(ToString::to_string));
 
     let mut explanations: FastMap<[Term; 3], Explanation> = FastMap::default();
-    for derivation in evaluation.derivations() {
+    for derivation in evaluation
+        .derivations()
+        .expect("SHACL rules requested derivation recording")
+    {
         if !Arity::<N>::is_output(derivation.fact()) {
             continue;
         }

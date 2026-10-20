@@ -61,7 +61,7 @@ use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::guard::{Guard, GuardReads};
 use crate::plan::Executable;
 use crate::schedule::Schedule;
-use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
+use crate::seminaive::{EvalError, EvalOptions, compile};
 
 /// Version of the planner and its executable-kernel shape.
 ///
@@ -360,8 +360,8 @@ impl fmt::Display for ContractHash {
 ///   contract hash inherits every order-sensitivity and every field separation that function
 ///   already proves;
 /// * the EFFECTIVE join-step and stored-fact limits
-///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the fixed
-///   [`MAX_TERM_ARENA_BYTES`] — a limit change turns an answer into a refusal or a refusal
+///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the
+///   effective [`EvalOptions::max_term_arena_bytes`] — a limit change turns an answer into a refusal or a refusal
 ///   into an answer, which is as large a difference as an answer can have. The effective
 ///   value is hashed, never "the default": the default differs by target
 ///   ([`DEFAULT_MAX_STORED_FACTS`](crate::seminaive::DEFAULT_MAX_STORED_FACTS)), so a
@@ -415,7 +415,7 @@ pub fn contract_hash_with<const N: usize>(
         CALCULUS_VERSION,
         options.max_join_steps(),
         options.max_stored_facts(),
-        MAX_TERM_ARENA_BYTES as u64,
+        options.max_term_arena_bytes(),
     );
     if !rules.iter().any(DlClause::is_guarded) {
         return digest;
@@ -475,7 +475,7 @@ pub fn scheduled_contract_hash<const N: usize>(
     frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&options.max_join_steps().to_le_bytes());
     hasher.update(&options.max_stored_facts().to_le_bytes());
-    hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
+    hasher.update(&options.max_term_arena_bytes().to_le_bytes());
     fold_term_generating_limit(&mut hasher, options);
     hasher.update(&canonical_rule_hash(rules));
     hasher.update(&(schedule.layers().len() as u64).to_le_bytes());
@@ -784,9 +784,9 @@ mod tests {
     use super::*;
     use crate::clause::HeadDisjunct;
     use crate::seminaive::{
-        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_JOIN_STEPS,
-        NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_JOIN_STEPS,
-        WASM_DEFAULT_MAX_STORED_FACTS, evaluate,
+        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, DEFAULT_MAX_TERM_ARENA_BYTES,
+        NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
+        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS,
     };
     use crate::store::RelationStore;
 
@@ -1154,8 +1154,18 @@ mod tests {
 
         let run = |rules: Vec<DlClause>| {
             let exe = compile(rules).expect("the fixture compiles");
-            let evaluation = evaluate(&exe, edb()).expect("the fixture stays inside every ceiling");
-            let derivation = &evaluation.derivations()[0];
+            let evaluation = crate::seminaive::evaluate_guarded(
+                &exe,
+                edb(),
+                &crate::guard::NoGuards,
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+                None,
+            )
+            .expect("the fixture stays inside every ceiling");
+            let derivation = &evaluation
+                .derivations()
+                .expect("derivation recording was requested")[0];
             (derivation.rule(), derivation.sources()[0].predicate.clone())
         };
         assert_eq!(run(forward), (0, format!("<{P}>")));
@@ -1325,10 +1335,11 @@ mod tests {
                 CALCULUS_VERSION,
                 DEFAULT_MAX_JOIN_STEPS,
                 DEFAULT_MAX_STORED_FACTS,
-                MAX_TERM_ARENA_BYTES as u64,
+                DEFAULT_MAX_TERM_ARENA_BYTES as u64,
             )
         );
         let stated = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(12_345)
             .with_max_stored_facts(678);
         assert_eq!(
@@ -1338,7 +1349,7 @@ mod tests {
                 CALCULUS_VERSION,
                 12_345,
                 678,
-                MAX_TERM_ARENA_BYTES as u64
+                DEFAULT_MAX_TERM_ARENA_BYTES as u64
             )
         );
     }
@@ -1352,13 +1363,16 @@ mod tests {
         let rules = transitive_step(Q);
         let default = contract_hash(&rules);
         let restated = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS);
         assert_eq!(contract_hash_with(&rules, &restated), default);
         let wasm = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         let native = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         assert_ne!(
@@ -1367,8 +1381,12 @@ mod tests {
             "a native result never shares an identity with a wasm32 one"
         );
         for options in [
-            EvalOptions::default().with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
-            EvalOptions::default().with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
+            EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
         ] {
             assert_ne!(contract_hash_with(&rules, &options), default, "{options:?}");
         }
@@ -1401,7 +1419,7 @@ mod tests {
         let real = (
             DEFAULT_MAX_JOIN_STEPS,
             DEFAULT_MAX_STORED_FACTS,
-            MAX_TERM_ARENA_BYTES as u64,
+            DEFAULT_MAX_TERM_ARENA_BYTES as u64,
         );
         assert_eq!(recipe(real.0, real.1, real.2), reference);
         assert_ne!(
@@ -1417,7 +1435,7 @@ mod tests {
         assert_ne!(
             reference,
             recipe(real.0, real.1, real.2 + 1),
-            "MAX_TERM_ARENA_BYTES must reach the digest"
+            "DEFAULT_MAX_TERM_ARENA_BYTES must reach the digest"
         );
 
         // The calculus version.
@@ -1451,6 +1469,7 @@ mod tests {
     #[test]
     fn the_contract_hash_is_frozen() {
         let wasm = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
@@ -1459,6 +1478,7 @@ mod tests {
             "the contract hash of the fixture program under the wasm32 defaults moved"
         );
         let native = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
             .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
@@ -1479,6 +1499,7 @@ mod tests {
     /// on every target.
     fn stated_options() -> EvalOptions {
         EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(1_000)
             .with_max_stored_facts(2_000)
             .with_max_term_generating_rounds(3)
