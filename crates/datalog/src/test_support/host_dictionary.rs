@@ -17,6 +17,7 @@ impl fmt::Display for SourceLost {
 }
 impl std::error::Error for SourceLost {}
 
+#[derive(Default)]
 pub(crate) struct HostDictionary {
     pub(crate) surfaces: BTreeMap<u64, String>,
     pub(crate) extra_terms: u64,
@@ -75,6 +76,13 @@ impl TermDictionary for HostDictionary {
             text,
             live: &self.pins,
         })
+    }
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, u64>,
+        right: DictionaryTerm<'_, u64>,
+    ) -> Result<core::cmp::Ordering, SourceLost> {
+        super::dictionary::compare_lexical_terms(self, left, right)
     }
     fn with_interned<T, const N: usize>(
         &mut self,

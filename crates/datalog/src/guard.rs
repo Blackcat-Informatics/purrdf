@@ -17,8 +17,8 @@
 //!
 //! A [`Guard`] names its INPUT variables (read from the solution, and required to be
 //! bound when it runs) and its OUTPUT variables (bound by it, and required to be
-//! fresh). The evaluator answers with zero or more OUTPUT ROWS, one lexical surface
-//! per output variable:
+//! fresh). The evaluator answers with zero or more OUTPUT ROWS, one original
+//! identity or owned lexical value per output variable:
 //!
 //! * a **filter** has no outputs, and answers one empty row to keep the solution or
 //!   no row to drop it;
@@ -62,7 +62,8 @@
 use std::fmt;
 
 use crate::clause::ClauseAtom;
-use crate::dictionary::TermDictionary;
+use crate::dictionary::{DictionaryTerm, DictionaryValue, TermDictionary};
+use crate::id::TermId;
 use crate::store::{Arity, RelationStore, StoreShape, TermInterner};
 
 /// What a [`Guard`] reads besides its declared inputs.
@@ -80,7 +81,7 @@ pub enum GuardReads {
 pub enum GuardOperation {
     /// Evaluate through the caller's [`GuardEvaluator`].
     Callback,
-    /// Keep a row when its two bound term surfaces differ exactly.
+    /// Keep a row when its two bound term identities differ exactly.
     NotEqual,
 }
 
@@ -93,7 +94,7 @@ impl purrdf_hash::error::StructuredError for GuardOperation {
 
 impl GuardOperation {
     /// Decide a native filter; callback guards have no built-in interpretation.
-    pub(crate) fn filter(self, inputs: &[&str]) -> Option<bool> {
+    pub(crate) fn filter<T: PartialEq>(self, inputs: &[T]) -> Option<bool> {
         match self {
             Self::Callback => None,
             Self::NotEqual => {
@@ -295,8 +296,8 @@ where
     pub site: GuardSite,
     /// The guard itself.
     pub guard: &'a Guard,
-    /// The lexical surfaces bound to [`Guard::inputs`], in the same order.
-    pub inputs: &'a [&'a str],
+    /// Original identities or fresh spellings bound to [`Guard::inputs`], in order.
+    pub inputs: &'a [DictionaryTerm<'a, D::Id>],
     /// The evaluation model at the point the rule runs.
     pub model: &'a RelationStore<D, N>,
 }
@@ -309,6 +310,38 @@ where
 {
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+/// Output rows preserve original identities and genuinely computed spellings.
+pub type GuardRows<I = TermId> = Vec<Vec<DictionaryValue<I>>>;
+
+impl<D: TermDictionary, const N: usize> GuardCall<'_, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Evaluate a guard whose meaning requires lexical values, retaining every
+    /// original dictionary pin through the callback. Native guards use `inputs`
+    /// and return original identities directly.
+    ///
+    /// # Errors
+    ///
+    /// Preserves original source failures and the callback's typed refusal.
+    pub fn evaluate_lexical(
+        &self,
+        evaluate: impl FnOnce(&[&str]) -> Result<GuardRows<D::Id>, CallbackError<D::Error>>,
+    ) -> Result<GuardRows<D::Id>, CallbackError<D::Error>> {
+        let dictionary = self.model.interner();
+        dictionary.check_read().map_err(CallbackError::Source)?;
+        let pinned = self
+            .inputs
+            .iter()
+            .map(|input| input.lexical(dictionary))
+            .collect::<Result<Vec<_>, D::Error>>()
+            .map_err(CallbackError::Source)?;
+        dictionary.check_read().map_err(CallbackError::Source)?;
+        let inputs = pinned.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        evaluate(&inputs)
     }
 }
 
@@ -330,7 +363,7 @@ where
     fn evaluate(
         &self,
         call: &GuardCall<'_, D, N>,
-    ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>>;
+    ) -> Result<GuardRows<D::Id>, CallbackError<D::Error>>;
 }
 
 /// A refusal from caller-supplied guard or layer-boundary evaluation.
@@ -459,7 +492,7 @@ where
     fn evaluate(
         &self,
         call: &GuardCall<'_, D, N>,
-    ) -> Result<Vec<Vec<String>>, CallbackError<D::Error>> {
+    ) -> Result<GuardRows<D::Id>, CallbackError<D::Error>> {
         Err(CallbackError::Native(CallbackDiagnostic::NoEvaluator {
             rule: call.rule,
             guard: call.guard.name().to_owned(),

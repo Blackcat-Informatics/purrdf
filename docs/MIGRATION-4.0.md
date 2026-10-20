@@ -42,6 +42,43 @@ includes its position; an equivalent body with all guards at the end keeps its
 existing clause identity. Callback guards still require the caller's evaluator
 and remain outside the independent proof checker's supported fragment.
 
+## Datalog guard values
+
+`GuardCall::inputs` now borrows `DictionaryTerm<Id>` values: original `Id` handles
+or newly computed `Surface` spellings. `GuardEvaluator::evaluate` returns
+`GuardRows<Id>`, whose cells are `DictionaryValue::Id` or owned
+`DictionaryValue::Surface`. A native callback can retain and return original
+identities directly, without rendering them or looking up a spelling.
+
+A callback that needs lexical values calls `call.evaluate_lexical(|inputs| ...)`.
+The helper pins the original dictionary owners throughout that callback and
+preserves typed source failures. Emit an owned string with `.into()` or an
+explicit `DictionaryValue::Surface`; the engine reuses an existing identity when
+the spelling is already known. Native inequality compares the original bindings.
+Guard declarations and clause identities retain their existing meaning.
+
+## Datalog dictionary order and native integers
+
+`TermDictionary` implementations now provide `compare_terms`. This defines the
+canonical total order used by partition scans, round publication and tied witness
+selection. An RDF dictionary calls `dictionary::compare_lexical_terms` to preserve
+canonical lexical order and original dictionary pins. A native dictionary may
+compare original IDs directly. `compare_rows` applies that contract in position
+order and preserves source errors.
+
+`dictionary::IntegerDictionary<u32>` and `IntegerDictionary<u64>` provide the
+native alternative. Construct one with an explicit `with_symbols` table for the
+program's named constants, insert `DictionaryTerm::Id` rows and return
+`DictionaryValue::Id` from native guards. No cell value is interned, formatted or
+resolved, including during recursive model-only evaluation and witness ties.
+Unknown symbols and explicitly requested lexical projection fail with typed
+errors; this dictionary supplies no fabricated numeric spellings. Recorded
+lexical derivations therefore require a dictionary with actual spellings.
+
+The rule evaluator continues to use triple or quad shapes. Separately,
+`RowColumns<I, N, R>` and `RowIndex` store and index caller-selected row widths;
+they do not add an arbitrary-arity rule language.
+
 ## Query-algebra projections
 
 Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`

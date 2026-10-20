@@ -95,7 +95,9 @@ use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
-use crate::dictionary::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity};
+use crate::dictionary::{
+    DictionaryError, DictionaryTerm, DictionaryValue, TermDictionary, TermIdentity,
+};
 use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuards};
 use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
@@ -1855,6 +1857,9 @@ where
     }
 }
 
+/// Inline width shared by binding frames and transient positive-guard input views.
+const INLINE_BINDING_SLOTS: usize = 8;
+
 /// A partial solution of one rule's positive body.
 ///
 /// Bindings live in a flat frame indexed by the plan's variable slots, and hold interned
@@ -1875,7 +1880,7 @@ where
     /// table and this workspace's own suites produce, so every real frame lives inline.
     /// The native identity keeps its NonZeroU64 niche in `Option`; a host identity
     /// determines its own inline footprint. A ninth variable spills to the heap.
-    bindings: SmallVec<[Option<I>; 8]>,
+    bindings: SmallVec<[Option<I>; INLINE_BINDING_SLOTS]>,
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
     sources: Vec<SourceRow<I, N>>,
@@ -1898,38 +1903,14 @@ enum SlotValue<'s, I: TermIdentity = TermId> {
     Unbound,
 }
 
-/// Keeps the original dictionary pin alive while a guard borrows its text.
-enum SlotSurface<'s, L: AsRef<str>> {
-    Pinned(L),
-    Computed(&'s str),
-}
-
-impl<L: AsRef<str>> AsRef<str> for SlotSurface<'_, L> {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Pinned(pin) => pin.as_ref(),
-            Self::Computed(surface) => surface,
-        }
-    }
-}
-
 impl<'s, I: TermIdentity> SlotValue<'s, I> {
-    /// Resolve only at the lexical boundary, retaining the supplied lexical owner.
-    fn surface<D: TermDictionary<Id = I>, const N: usize>(
-        self,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error>
-    where
-        Arity<N>: StoreShape<N>,
-    {
-        rel.interner().check_read()?;
-        let surface = match self {
-            Self::Interned(id) => Some(SlotSurface::Pinned(rel.interner().resolve_term(id)?)),
-            Self::Computed(surface) => Some(SlotSurface::Computed(surface)),
+    /// Carry a binding through the guard boundary without rendering an identity.
+    fn as_term(self) -> Option<DictionaryTerm<'s, I>> {
+        match self {
+            Self::Interned(id) => Some(DictionaryTerm::Id(id)),
+            Self::Computed(surface) => Some(DictionaryTerm::Surface(surface)),
             Self::Unbound => None,
-        };
-        rel.interner().check_read()?;
-        Ok(surface)
+        }
     }
 }
 
@@ -1988,29 +1969,16 @@ impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// The lexical surface bound in `slot`, if any.
-    fn surface<'s, D: TermDictionary<Id = I>>(
-        &'s self,
-        slot: usize,
-        rel: &'s RelationStore<D, N>,
-    ) -> Result<Option<SlotSurface<'s, D::Lexical<'s>>>, D::Error> {
-        self.value(slot).surface(rel)
-    }
-
-    /// Bind `slot` to `surface`: as an interned id when the store knows the term, as a
-    /// computed surface otherwise.
-    fn bind_surface<D: TermDictionary<Id = I>>(
+    /// Retain an original identity or canonicalize a genuinely computed spelling.
+    fn bind_value<D: TermDictionary<Id = I>>(
         &mut self,
         slot: usize,
-        surface: &str,
+        value: &DictionaryValue<I>,
         rel: &RelationStore<D, N>,
     ) -> Result<(), D::Error> {
-        rel.interner().check_read()?;
-        let id = rel.interner().lookup_term(surface)?;
-        rel.interner().check_read()?;
-        match id {
-            Some(id) => self.bindings[slot] = Some(id),
-            None => self.computed.push((slot, surface.into())),
+        match value.as_term().canonicalize(rel.interner())? {
+            DictionaryTerm::Id(id) => self.bindings[slot] = Some(id),
+            DictionaryTerm::Surface(surface) => self.computed.push((slot, surface.into())),
         }
         Ok(())
     }
@@ -3775,13 +3743,13 @@ where
             guard: j,
         };
         let rows = {
-            let mut pinned = Vec::with_capacity(guard.inputs.len());
+            let mut inputs = Vec::with_capacity(guard.inputs.len());
             for input in &guard.inputs {
-                let surface = match input {
+                let value = match input {
                     GroupArg::Outer(slot) => probe
                         .solution
-                        .surface(*slot, probe.rel)
-                        .map_err(EvalError::Source)?
+                        .value(*slot)
+                        .as_term()
                         .expect("an outer group variable is bound by the enclosing rule"),
                     GroupArg::Local(local) => match &locals[*local] {
                         Some(LocalValue::Interned(id)) => SlotValue::Interned(*id),
@@ -3790,14 +3758,14 @@ where
                             "a group guard input is bound before it (DlClause scoping)"
                         ),
                     }
-                    .surface(probe.rel)
-                    .map_err(EvalError::Source)?
+                    .as_term()
                     .expect("a local group input is bound before the guard"),
-                    GroupArg::Const(surface) => SlotSurface::Computed(surface),
+                    GroupArg::Const(surface) => DictionaryTerm::Surface(surface)
+                        .canonicalize(probe.rel.interner())
+                        .map_err(EvalError::Source)?,
                 };
-                pinned.push(surface);
+                inputs.push(value);
             }
-            let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
             call_guard(
                 probe.guards,
                 &GuardCall {
@@ -3814,16 +3782,15 @@ where
             if governor.spent() {
                 return Ok(false);
             }
-            for (&local, surface) in guard.outputs.iter().zip(&row) {
+            for (&local, value) in guard.outputs.iter().zip(&row) {
                 locals[local] = Some(
-                    match probe
-                        .rel
-                        .interner()
-                        .lookup_term(surface)
+                    match value
+                        .as_term()
+                        .canonicalize(probe.rel.interner())
                         .map_err(EvalError::Source)?
                     {
-                        Some(id) => LocalValue::Interned(id),
-                        None => LocalValue::Computed(surface.as_str().into()),
+                        DictionaryTerm::Id(id) => LocalValue::Interned(id),
+                        DictionaryTerm::Surface(surface) => LocalValue::Computed(surface.into()),
                     },
                 );
             }
@@ -3850,7 +3817,7 @@ fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
     governor: &mut StepGovernor,
-) -> Result<Vec<Vec<String>>, EvalError<D::Error>>
+) -> Result<crate::guard::GuardRows<D::Id>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -4018,15 +3985,15 @@ impl<I: TermIdentity> HeadTerm<'_, I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        let value = match self {
-            Self::Interned(id) => SlotValue::Interned(*id),
-            Self::Fresh(surface) => SlotValue::Computed(surface.as_ref()),
-        };
-        Ok(value
-            .surface(rel)?
-            .expect("a head term is bound")
-            .as_ref()
-            .to_owned())
+        Ok(self.as_term().lexical(rel.interner())?.as_ref().to_owned())
+    }
+
+    /// Borrow a publication argument without resolving its original identity.
+    fn as_term(&self) -> DictionaryTerm<'_, I> {
+        match self {
+            Self::Interned(id) => DictionaryTerm::Id(*id),
+            Self::Fresh(surface) => DictionaryTerm::Surface(surface.as_ref()),
+        }
     }
 }
 
@@ -4117,13 +4084,13 @@ where
     /// A TOTAL order over observable provenance:
     /// `(proof_height, sum_source_height, sorted source facts, rule index, source facts,
     /// head ordinal)`,
-    /// smallest wins. Every component is content-derived — proof heights, lexical fact
-    /// surfaces and the authored rule position — so the winner is a function of the
+    /// smallest wins. Every component is content-derived — proof heights, the
+    /// dictionary's canonical fact order and the authored rule position — so the winner is a function of the
     /// program and the data, never of which rule the scheduler happened to run first.
     ///
-    /// The comparison resolves lexical surfaces, so it is deliberately staged: the cheap
-    /// numeric prefix decides almost every real collision, and the allocating tail runs
-    /// only on an exact numeric tie.
+    /// The comparison is deliberately staged: the cheap numeric prefix decides
+    /// almost every real collision, and the dictionary-ordered source tail runs
+    /// only on an exact numeric tie. Native dictionaries need no lexical projection.
     fn preferred_over<D: TermDictionary<Id = I>>(
         &self,
         other: &Self,
@@ -4140,7 +4107,7 @@ where
     }
 }
 
-/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+/// The canonical numeric prefix, comparing the source tail only on a tie.
 fn witness_preference<E>(
     mine: (u32, u64),
     theirs: (u32, u64),
@@ -4152,7 +4119,7 @@ fn witness_preference<E>(
     }
 }
 
-/// The lexical tail of the canonical witness law, shared with projected frontiers.
+/// The dictionary-ordered tail of the canonical witness law.
 fn source_preference<D: TermDictionary, const N: usize>(
     mine: &[SourceRow<D::Id, N>],
     my_rule: usize,
@@ -4164,16 +4131,25 @@ where
     Arity<N>: StoreShape<N>,
 {
     rel.interner().check_read()?;
-    let mine: Vec<_> = mine
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
-    let theirs: Vec<_> = theirs
-        .iter()
-        .map(|source| source.fact(rel))
-        .collect::<Result<_, _>>()?;
+    let compare = |left: &SourceRow<D::Id, N>, right: &SourceRow<D::Id, N>| {
+        rel.interner().compare_rows(
+            &left.terms.map(DictionaryTerm::Id),
+            &right.terms.map(DictionaryTerm::Id),
+        )
+    };
+    let mut mine_sorted = mine.to_vec();
+    let mut theirs_sorted = theirs.to_vec();
+    purrdf_lex::walk::try_sort_unstable_by(&mut mine_sorted, compare)?;
+    purrdf_lex::walk::try_sort_unstable_by(&mut theirs_sorted, compare)?;
+    let mut order = crate::dictionary::compare_sequences(&mine_sorted, &theirs_sorted, compare)?;
+    if order.is_eq() {
+        order = my_rule.cmp(&their_rule);
+    }
+    if order.is_eq() {
+        order = crate::dictionary::compare_sequences(mine, theirs, compare)?;
+    }
     rel.interner().check_read()?;
-    Ok(fact_preference(&mine, my_rule, &theirs, their_rule))
+    Ok(order)
 }
 
 /// The lexical tail over owned surfaces, also valid after a store rebuild.
@@ -4492,17 +4468,16 @@ where
                 break;
             }
             let rows = {
-                let pinned = guard
+                let inputs = guard
                     .inputs
                     .iter()
                     .map(|&slot| {
-                        Ok(solution
-                            .surface(slot, rel)?
-                            .expect("a guard input is bound before the guard (DlClause scoping)"))
+                        solution
+                            .value(slot)
+                            .as_term()
+                            .expect("a guard input is bound before the guard (DlClause scoping)")
                     })
-                    .collect::<Result<Vec<_>, D::Error>>()
-                    .map_err(EvalError::Source)?;
-                let inputs: Vec<&str> = pinned.iter().map(AsRef::as_ref).collect();
+                    .collect::<SmallVec<[_; INLINE_BINDING_SLOTS]>>();
                 call_guard(
                     guards,
                     &GuardCall {
@@ -4517,8 +4492,8 @@ where
             };
             for row in rows {
                 let mut next = solution.clone();
-                for (&slot, surface) in guard.outputs.iter().zip(&row) {
-                    next.bind_surface(slot, surface, rel)
+                for (&slot, value) in guard.outputs.iter().zip(&row) {
+                    next.bind_value(slot, value, rel)
                         .map_err(EvalError::Source)?;
                 }
                 extended.push(next);
@@ -5783,16 +5758,30 @@ fn commit_round<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let mut winners = round
+    let mut winners: Vec<_> = round
         .entries
         .into_iter()
-        .map(|(key, candidate)| Ok::<_, D::Error>((key.fact(&state.rel)?, key, candidate)))
-        .collect::<Result<Vec<_>, _>>()
+        .map(|(key, candidate)| {
+            let fact = if state.derivation_mode == DerivationMode::Record {
+                Some(key.fact(&state.rel)?)
+            } else {
+                None
+            };
+            Ok::<_, D::Error>((key, candidate, fact))
+        })
+        .collect::<Result<_, _>>()
         .map_err(EvalError::Source)?;
-    // Head facts are unique in a round buffer, so the lexical order is total.
-    winners.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
+    // Head facts are unique in a round buffer. The dictionary supplies the
+    // canonical order without requiring a lexical projection of model-only rows.
+    purrdf_lex::walk::try_sort_unstable_by(&mut winners, |(left, _, _), (right, _, _)| {
+        state.rel.interner().compare_rows(
+            &left.terms().map(HeadTerm::as_term),
+            &right.terms().map(HeadTerm::as_term),
+        )
+    })
+    .map_err(EvalError::Source)?;
 
-    for (fact, key, candidate) in winners {
+    for (key, candidate, fact) in winners {
         state
             .report()
             .admit_fact()
@@ -5829,7 +5818,7 @@ where
         state.committed_facts = state.committed_facts.saturating_add(1);
         if let Some(sources) = sources {
             state.derivations.push(Derivation {
-                fact,
+                fact: fact.expect("recorded winners project their facts before publication"),
                 rule: candidate.rule,
                 head: candidate.head,
                 sources,
@@ -6403,20 +6392,22 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
-                self.calls.fetch_add(1, Ordering::Relaxed);
-                if call.guard.name() == "produce" {
-                    assert_eq!(call.inputs, ["triple", "member"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
-                    if self.lose_source {
-                        call.model.interner().lost.store(true, Ordering::Relaxed);
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
+                call.evaluate_lexical(|inputs| {
+                    self.calls.fetch_add(1, Ordering::Relaxed);
+                    if call.guard.name() == "produce" {
+                        assert_eq!(inputs, ["triple", "member"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 2);
+                        if self.lose_source {
+                            call.model.interner().lost.store(true, Ordering::Relaxed);
+                        }
+                        Ok(vec![vec!["fresh".into()]])
+                    } else {
+                        assert_eq!(inputs, ["fresh"]);
+                        assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
+                        Ok(vec![Vec::new()])
                     }
-                    Ok(vec![vec!["fresh".into()]])
-                } else {
-                    assert_eq!(call.inputs, ["fresh"]);
-                    assert_eq!(call.model.interner().pins.load(Ordering::Relaxed), 0);
-                    Ok(vec![Vec::new()])
-                }
+                })
             }
         }
         let rule = DlClause::datalog(atom("?a", R, "?b"), vec![atom("?a", P, "?b")])
@@ -6513,7 +6504,9 @@ mod tests {
             );
             store.interner().lost.store(false, Ordering::Relaxed);
             let mut binding = SlotSolution::empty(1);
-            binding.bind_surface(0, "triple", &store).unwrap();
+            binding
+                .bind_value(0, &DictionaryValue::from("triple"), &store)
+                .unwrap();
             assert_eq!(binding.get(0), Some(TRIPLE));
             let before = binding.clone();
             store
@@ -6521,7 +6514,7 @@ mod tests {
                 .lose_after_lookup
                 .store(true, Ordering::Relaxed);
             assert_eq!(
-                binding.bind_surface(0, "unknown", &store),
+                binding.bind_value(0, &DictionaryValue::from("unknown"), &store),
                 Err(SourceLost(99))
             );
             assert_eq!(
@@ -6529,6 +6522,71 @@ mod tests {
                 "a refused lexical lookup never publishes a frame mutation"
             );
         }
+    }
+
+    #[test]
+    fn native_guard_identity_flow_never_requests_lexical_values() {
+        use crate::guard::{CallbackError, GuardRows};
+        use crate::test_support::{HostDictionary, SourceLost};
+        use std::sync::atomic::Ordering;
+        const ORIGINAL: u64 = 0xf000_0000_0000_0001;
+        const OUTPUT: u64 = u64::MAX;
+        struct Identity;
+        impl GuardEvaluator<HostDictionary> for Identity {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_, HostDictionary>,
+            ) -> Result<GuardRows<u64>, CallbackError<SourceLost>> {
+                assert_eq!(call.inputs, [DictionaryTerm::Id(ORIGINAL)]);
+                Ok(vec![vec![DictionaryValue::Id(OUTPUT)]])
+            }
+        }
+        let store = RelationStore::with_dictionary(HostDictionary {
+            extra_terms: 2,
+            ..HostDictionary::default()
+        });
+        let guard = Guard::assign("identity", vec!["?in".into()], "?out");
+        let call = GuardCall {
+            rule: 0,
+            site: GuardSite::Body(0),
+            guard: &guard,
+            inputs: &[DictionaryTerm::Id(ORIGINAL)],
+            model: &store,
+        };
+        let rows = call_guard(&Identity, &call, &mut StepGovernor::new(10)).unwrap();
+        assert_eq!(rows, [vec![DictionaryValue::Id(OUTPUT)]]);
+        let mut frame = SlotSolution::empty(1);
+        frame.bind_value(0, &rows[0][0], &store).unwrap();
+        assert_eq!(frame.get(0), Some(OUTPUT));
+        let native = Guard::not_equal("?left", "?right");
+        for (right, kept) in [(ORIGINAL, 0), (OUTPUT, 1)] {
+            let call = GuardCall {
+                rule: 0,
+                site: GuardSite::Body(0),
+                guard: &native,
+                inputs: &[DictionaryTerm::Id(ORIGINAL), DictionaryTerm::Id(right)],
+                model: &store,
+            };
+            assert_eq!(
+                call_guard(&NoGuards, &call, &mut StepGovernor::new(10))
+                    .unwrap()
+                    .len(),
+                kept
+            );
+        }
+        assert_eq!(store.interner().lookups.load(Ordering::Relaxed), 0);
+        assert_eq!(store.interner().resolves.load(Ordering::Relaxed), 0);
+        store.interner().lost.store(true, Ordering::Relaxed);
+        let before = frame.clone();
+        assert_eq!(
+            frame.bind_value(0, &DictionaryValue::Id(ORIGINAL), &store),
+            Err(SourceLost(99))
+        );
+        assert_eq!(frame, before, "a source refusal never publishes a binding");
+        assert_eq!(
+            call_guard(&Identity, &call, &mut StepGovernor::new(10)),
+            Err(EvalError::Source(SourceLost(99)))
+        );
     }
 
     #[test]
@@ -6543,7 +6601,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_, HostDictionary>,
-            ) -> Result<Vec<Vec<String>>, CallbackError<SourceLost>> {
+            ) -> Result<crate::guard::GuardRows<u64>, CallbackError<SourceLost>> {
                 assert_eq!(
                     call.model.interner().lookup_term("original").unwrap(),
                     Some(u64::MAX)
@@ -8840,7 +8898,7 @@ mod tests {
             fn evaluate(
                 &self,
                 _call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
                 self.0.set(self.0.get() + 1);
                 Ok(Vec::new())
             }
@@ -8884,11 +8942,11 @@ mod tests {
             fn evaluate(
                 &self,
                 _call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
                 Ok(vec![
-                    vec![surface(R), surface(GRAPH)],
-                    vec![surface(MISSING_PREDICATE), surface(GRAPH)],
-                    vec![surface(R), surface(MISSING_GRAPH)],
+                    vec![surface(R).into(), surface(GRAPH).into()],
+                    vec![surface(MISSING_PREDICATE).into(), surface(GRAPH).into()],
+                    vec![surface(R).into(), surface(MISSING_GRAPH).into()],
                 ])
             }
         }
@@ -8973,7 +9031,7 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
                 self.calls.fetch_add(1, Ordering::Relaxed);
                 Ok(if !self.keep {
                     Vec::new()
@@ -8983,7 +9041,7 @@ mod tests {
                             call.guard
                                 .outputs()
                                 .iter()
-                                .map(|_| surface(&format!("https://example.org/fresh{row}")))
+                                .map(|_| surface(&format!("https://example.org/fresh{row}")).into())
                                 .collect()
                         })
                         .collect()

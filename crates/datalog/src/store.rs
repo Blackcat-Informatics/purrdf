@@ -95,6 +95,11 @@ use core::hash::Hasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
+mod columns;
+mod index;
+pub use columns::RowColumns;
+pub use index::{RowIndex, RowIndexError};
+
 use hashbrown::HashTable;
 
 use crate::cursor::{LendingIterator, RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
@@ -262,6 +267,13 @@ impl TermDictionary for TermInterner {
     }
     fn resolve_term(&self, id: TermId) -> Result<&str, Infallible> {
         Ok(self.resolve(id))
+    }
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, TermId>,
+        right: DictionaryTerm<'_, TermId>,
+    ) -> Result<Ordering, Infallible> {
+        crate::dictionary::compare_lexical_terms(self, left, right)
     }
     fn with_interned<T, const N: usize>(
         &mut self,
@@ -586,9 +598,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
                 // primary sort is key-disjoint), so no equal elements exist whose order
                 // would need preserving: the unstable sort is a pure win (no scratch
                 // allocation, lower constants) and cannot introduce nondeterminism.
-                perm.sort_unstable_by(|&a, &b| {
-                    (self.obj[a], self.subj[a]).cmp(&(self.obj[b], self.subj[b]))
-                });
+                index::sort_row_positions(&mut perm, &[&self.subj, &self.obj], &[1, 0]);
                 ObjectIndex {
                     perm: perm.into_boxed_slice(),
                 }
@@ -684,17 +694,13 @@ fn merge_batches<W: Weight, I: TermIdentity>(
 /// always have the same length.
 #[derive(Debug, Clone)]
 pub(crate) struct Tail<I: TermIdentity = TermId> {
-    subjects: Vec<I>,
-    objects: Vec<I>,
-    rows: Vec<RowId>,
+    data: RowColumns<I, 2>,
 }
 
 impl<I: TermIdentity> Default for Tail<I> {
     fn default() -> Self {
         Self {
-            subjects: Vec::new(),
-            objects: Vec::new(),
-            rows: Vec::new(),
+            data: RowColumns::default(),
         }
     }
 }
@@ -702,34 +708,24 @@ impl<I: TermIdentity> Default for Tail<I> {
 impl<I: TermIdentity> Tail<I> {
     /// Reserve all three columns before publishing any part of a row.
     fn reserve_row(&mut self) -> Result<(), StorageError> {
-        self.subjects
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        self.objects
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        self.rows
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)
+        self.data.reserve_rows(1)
     }
 
-    /// Append row `(subject, object, row)`.
+    /// Publish row `(subject, object, row)` after [`Self::reserve_row`] succeeds.
     fn push(&mut self, subject: I, object: I, row: RowId) {
-        self.subjects.push(subject);
-        self.objects.push(object);
-        self.rows.push(row);
+        self.data.push_reserved([subject, object], row);
     }
 
     /// The number of rows.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        self.rows.len()
+        self.data.len()
     }
 
     /// Whether the tail holds no row.
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        self.data.is_empty()
     }
 
     /// Row `position`, as `(subject, object, row)`.
@@ -739,20 +735,18 @@ impl<I: TermIdentity> Tail<I> {
     /// When `position` is not below [`Self::len`].
     #[inline]
     pub(crate) fn row(&self, position: usize) -> (I, I, RowId) {
-        (
-            self.subjects[position],
-            self.objects[position],
-            self.rows[position],
-        )
+        let ([subject, object], row) = self
+            .data
+            .row(position)
+            .expect("tail row position is occupied");
+        (subject, object, row)
     }
 
     /// The rows in insertion order, as `(subject, object, row)`.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (I, I, RowId)> + '_ {
-        self.subjects
+        self.data
             .iter()
-            .zip(&self.objects)
-            .zip(&self.rows)
-            .map(|((&s, &o), &r)| (s, o, r))
+            .map(|([subject, object], row)| (subject, object, row))
     }
 
     /// Whether some row has the key `(subject, object)`.
@@ -767,14 +761,14 @@ impl<I: TermIdentity> Tail<I> {
                   lane loop, and the compares of both key columns must be evaluated every row"
     )]
     fn contains(&self, subject: I, object: I) -> bool {
-        let len = self.subjects.len().min(self.objects.len());
+        let subjects = self.data.column(0);
+        let objects = self.data.column(1);
+        let len = subjects.len().min(objects.len());
         // The tail seals at 64 rows, so its match count fits in one u32 even
         // when each key's identity is wider than a machine word.
         let mut matches = 0u32;
         for position in 0..len {
-            matches += u32::from(
-                (self.subjects[position] == subject) & (self.objects[position] == object),
-            );
+            matches += u32::from((subjects[position] == subject) & (objects[position] == object));
         }
         matches != 0
     }
@@ -782,9 +776,7 @@ impl<I: TermIdentity> Tail<I> {
     /// Empty the tail, returning its rows in insertion order.
     fn take_rows(&mut self) -> Vec<(I, I, RowId)> {
         let rows = self.iter().collect();
-        self.subjects.clear();
-        self.objects.clear();
-        self.rows.clear();
+        self.data.clear();
         rows
     }
 }
@@ -1588,17 +1580,20 @@ fn partition_position<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let terms = resolve_key::<D, N>(dictionary, key)?;
     let (mut lo, mut hi) = (0, order.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         let (_, existing) = keys[order[mid]];
-        let other = resolve_key::<D, N>(dictionary, existing)?;
-        let ordering = other
-            .iter()
-            .flatten()
-            .map(AsRef::as_ref)
-            .cmp(terms.iter().flatten().map(AsRef::as_ref));
+        let mut ordering = Ordering::Equal;
+        for coordinate in 0..Arity::<N>::KEY_POSITIONS.len() {
+            ordering = dictionary.compare_terms(
+                DictionaryTerm::Id(Arity::<N>::key_term(existing, coordinate)),
+                DictionaryTerm::Id(Arity::<N>::key_term(key, coordinate)),
+            )?;
+            if !ordering.is_eq() {
+                break;
+            }
+        }
         if ordering.is_lt() {
             lo = mid + 1;
         } else {
@@ -3549,6 +3544,7 @@ mod tests {
             let s = TermId::from_address(rng.below_usize(24)).unwrap();
             let o = TermId::from_address(rng.below_usize(24)).unwrap();
             let r = RowId::from_address(i).unwrap();
+            tail.reserve_row().unwrap();
             tail.push(s, o, r);
             rows.push((s, o, r));
         }
@@ -3612,6 +3608,7 @@ mod tests {
                     } else {
                         (subject_low, object)
                     };
+                    tail.reserve_row().unwrap();
                     tail.push(row.0, row.1, RowId::from_address(i).unwrap());
                     rows.push((row.0, row.1, RowId::from_address(i).unwrap()));
                 }
@@ -3633,6 +3630,7 @@ mod tests {
                 } else {
                     (subject_low, object)
                 };
+                tail.reserve_row().unwrap();
                 tail.push(s, o, RowId::from_address(i).unwrap());
             }
             assert!(!tail.contains(subject, object), "len {len}: no hit");
