@@ -43,11 +43,8 @@ jobs:
           cargo test --locked -p purrdf-datalog --test structured_errors
       - name: Measure model-only allocation and factor growth
         run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
-      - name: Check independent proofs and scheduling parity
-        run: |
-          cargo test --locked -p purrdf-datalog --lib every_corpus_derivation_yields_a_checkable_proof
-          cargo test --locked -p purrdf-datalog --lib sequential_and_parallel_rounds_agree
-          cargo test --locked -p purrdf-datalog --lib store::tests::
+      - name: Check evaluator, proof, store and scheduling regressions
+        run: cargo test --locked -p purrdf-datalog --lib
 
   wasm:
     runs-on: ubuntu-latest

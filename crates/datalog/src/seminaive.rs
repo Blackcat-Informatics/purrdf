@@ -1739,6 +1739,8 @@ const INDEX_SUBJECT: u8 = 1;
 const INDEX_OBJECT: u8 = 2;
 /// Compile-time index code: both columns bound.
 const INDEX_BOTH: u8 = 3;
+/// Rebind a reordered operator against the current frame rather than its old prefix.
+const INDEX_REBOUND: u8 = 4;
 
 // ── The physical binding frame ──────────────────────────────────────────────────
 
@@ -2054,6 +2056,31 @@ where
     }
 }
 
+/// Probe a physically reordered atom while retaining its logical scan ordinal.
+fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
+    operator: &AtomOperator<N>,
+    rel: &RelationStore<D, N>,
+    delta: Delta,
+    scan: Scan,
+    solutions: &[SlotSolution<D::Id, N>],
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    match scan {
+        Scan::Delta => extend_atom::<SCAN_DELTA, INDEX_REBOUND, D, N>(
+            operator, rel, delta, solutions, governor,
+        ),
+        Scan::Full => {
+            extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(operator, rel, delta, solutions, governor)
+        }
+        Scan::OldOnly => extend_atom::<SCAN_OLD_ONLY, INDEX_REBOUND, D, N>(
+            operator, rel, delta, solutions, governor,
+        ),
+    }
+}
+
 /// The shared atom kernel: address the partitions the predicate and optional graph
 /// admit, and inside each one select exactly the rows the `(subject, object)` index admits.
 ///
@@ -2064,6 +2091,8 @@ where
 /// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
 /// names its predicate — and only degrades to a sweep of matching partitions when the rule
 /// genuinely quantifies over the predicate or the graph.
+/// Reordered delta probes use `INDEX_REBOUND`: the same kernel binds against the
+/// current frame and selects the subject/object arrangement from those bindings.
 fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2093,6 +2122,13 @@ where
                 (PositionPlan::Constant(_), None) => {
                     unreachable!("a constant position always has a hoisted resolution")
                 }
+                (PositionPlan::Bound(slot) | PositionPlan::Free(slot), _)
+                    if INDEX == INDEX_REBOUND =>
+                {
+                    solution
+                        .get(*slot)
+                        .map_or(PositionValue::Free, PositionValue::Known)
+                }
                 (PositionPlan::Bound(slot), _) => solution
                     .get(*slot)
                     .map_or(PositionValue::Missing, PositionValue::Known),
@@ -2107,6 +2143,15 @@ where
         // The `(subject, object)` index bound. `INDEX` is a compile-time constant, and the
         // planner only emits a bound index for a position it has proven known.
         let bound = match INDEX {
+            INDEX_REBOUND => match (
+                values[POSITION_SUBJECT].known(),
+                values[POSITION_OBJECT].known(),
+            ) {
+                (Some(subject), Some(object)) => Bound::Both(subject, object),
+                (Some(subject), None) => Bound::Subject(subject),
+                (None, Some(object)) => Bound::Object(object),
+                (None, None) => Bound::Any,
+            },
             INDEX_ANY => Bound::Any,
             INDEX_SUBJECT => match values[POSITION_SUBJECT].known() {
                 Some(subject) => Bound::Subject(subject),
@@ -2147,7 +2192,9 @@ where
                 }
                 let mut merged = solution.clone();
                 for (position, plan) in shape.positions().iter().enumerate() {
-                    if let PositionPlan::Free(slot) = plan {
+                    if let PositionPlan::Free(slot) | PositionPlan::Bound(slot) = plan
+                        && (INDEX == INDEX_REBOUND || matches!(plan, PositionPlan::Free(_)))
+                    {
                         merged.bindings[*slot] = Some(matched[position]);
                     }
                 }
@@ -2696,8 +2743,8 @@ where
         .any(|partition| partition.has_row_from(snapshot.delta.lo)))
 }
 
-/// The indexed binary positive join: every planned operator in execution order, for every
-/// semi-naive delta position whose delta atom can match ([`delta_can_match`]).
+/// The indexed binary positive join. Partial deltas seed each decomposition
+/// before the remaining planned operators; logical scan ordinals stay fixed.
 fn join_positive_binary<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
@@ -2722,9 +2769,22 @@ where
             continue;
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        for (position, operator) in operators.iter().enumerate() {
-            partial = extend_slot_solutions(
-                operator,
+        let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
+        for step in 0..operators.len() {
+            let position = if reordered && step == 0 {
+                delta_position
+            } else if reordered && step <= delta_position {
+                step - 1
+            } else {
+                step
+            };
+            let extend = if reordered {
+                extend_rebound_solutions
+            } else {
+                extend_slot_solutions
+            };
+            partial = extend(
+                &operators[position],
                 snapshot.rel,
                 snapshot.delta,
                 if base {
@@ -2737,6 +2797,11 @@ where
             )?;
             if partial.is_empty() {
                 break;
+            }
+        }
+        if reordered {
+            for solution in &mut partial {
+                solution.sources[..=delta_position].rotate_left(1);
             }
         }
         all.extend(partial);
@@ -2754,8 +2819,8 @@ where
 }
 
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, for every semi-naive delta position whose delta atom
-/// can match ([`delta_can_match`]).
+/// physical group in execution order, seeded by the partial delta before old
+/// prefixes. Cyclic components keep their certified leapfrog traversal.
 fn join_positive_leapfrog<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
@@ -2770,11 +2835,31 @@ where
             continue;
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
+        let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
+        if reordered {
+            partial = extend_rebound_solutions(
+                plan.operator_at(delta_position),
+                snapshot.rel,
+                snapshot.delta,
+                Scan::Delta,
+                &partial,
+                governor,
+            )?;
+        }
         for group in plan.join_groups() {
+            if partial.is_empty() || governor.spent() {
+                partial.clear();
+                break;
+            }
             partial = match group {
                 JoinGroup::Binary(planned) => {
                     let operator = plan.operator_at(planned.positive_position());
-                    extend_slot_solutions(
+                    let extend = if reordered {
+                        extend_rebound_solutions
+                    } else {
+                        extend_slot_solutions
+                    };
+                    extend(
                         operator,
                         snapshot.rel,
                         snapshot.delta,
@@ -2800,6 +2885,11 @@ where
             }
         }
         for solution in &mut partial {
+            if reordered {
+                // The seed fixes bindings before any old prefix. The original
+                // group still captures its source in the authored group order.
+                solution.sources.remove(0);
+            }
             for &(left, right) in plan.hybrid_source_order_swaps() {
                 solution.sources.swap(left, right);
             }
@@ -5157,6 +5247,73 @@ mod tests {
     use crate::test_support::permute;
 
     #[test]
+    fn late_delta_anchor_binds_before_a_large_old_prefix() {
+        for count in [100, 1000] {
+            let mut store = RelationStore::default();
+            for index in 0..count {
+                store
+                    .insert(
+                        &format!("s{index}"),
+                        "<https://example.org/p>",
+                        &format!("m{index}"),
+                        "",
+                    )
+                    .unwrap();
+            }
+            let lo = store.row_count();
+            store
+                .insert("m0", "<https://example.org/q>", "end", "")
+                .unwrap();
+            let atom = |subject: &str, predicate: &str, object: &str| {
+                ClauseAtom::positive(ClauseTerm::var(subject), predicate, ClauseTerm::var(object))
+            };
+            let program = compile(vec![DlClause::datalog(
+                atom("?s", "https://example.org/out", "?o"),
+                vec![
+                    atom("?s", "https://example.org/p", "?m"),
+                    atom("?m", "https://example.org/q", "?o"),
+                ],
+            )])
+            .unwrap();
+            let (_, plan) = program.rule_entry(0);
+            assert_eq!(
+                plan.operators()
+                    .iter()
+                    .map(AtomOperator::body_index)
+                    .collect::<Vec<_>>(),
+                [0, 1]
+            );
+            let mut governor = StepGovernor::new(10);
+            let solutions = join_positive_binary(
+                plan,
+                JoinSnapshot {
+                    rel: &store,
+                    delta: Delta {
+                        lo,
+                        hi: store.row_count(),
+                    },
+                },
+                &mut governor,
+            )
+            .unwrap();
+            assert_eq!(solutions.len(), 1);
+            assert_eq!(
+                governor.observed(),
+                2,
+                "old prefixes must not consume candidate credit"
+            );
+            assert_eq!(
+                solutions[0]
+                    .sources
+                    .iter()
+                    .map(|source| source.body_index)
+                    .collect::<Vec<_>>(),
+                [0, 1]
+            );
+        }
+    }
+
+    #[test]
     fn capacity_cause_stays_inline_without_inflating_the_operational_error() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         let cause = CapacityError::new(CapacitySpace::DatalogTerms, u128::MAX, u128::MAX - 1);
@@ -7045,8 +7202,22 @@ mod tests {
                 None,
             )
             .expect("inside every ceiling");
-            let watched =
+            let model_only =
                 evaluate_until(&exe, workload.edb(), Some(&never)).expect("inside every ceiling");
+            assert!(model_only.derivations().is_none());
+            assert_eq!(
+                plain.facts().facts_sorted(),
+                model_only.facts().facts_sorted()
+            );
+            assert_eq!(plain.budget(), model_only.budget());
+            let watched = evaluate_guarded(
+                &exe,
+                workload.edb(),
+                &NoGuards,
+                &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+                Some(&never),
+            )
+            .expect("inside every ceiling");
             assert_eq!(
                 plain.facts().facts_sorted(),
                 watched.facts().facts_sorted(),

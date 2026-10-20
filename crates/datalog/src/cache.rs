@@ -68,7 +68,7 @@ use crate::seminaive::{EvalError, EvalOptions, compile};
 /// Deliberately independent of the clause digest and the caller's contract hash: a change
 /// to index selection, to the sideways-information-passing order or to the cyclic
 /// certification invalidates every cached plan even though its logical input is unchanged.
-pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v2";
+pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v3";
 
 /// Domain-separation tag for [`canonical_rule_hash`].
 ///

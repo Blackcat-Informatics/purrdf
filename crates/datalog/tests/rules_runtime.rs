@@ -1613,7 +1613,60 @@ fn predicate_rows_keep_native_identities_and_lexical_graph_order() {
     }
 }
 
+fn late_delta_seed_completes_under_a_prefix_independent_work_limit() {
+    use purrdf_datalog::seminaive::RoundExecution;
+    let atom = |subject: &str, predicate: &str, object: &str| {
+        ClauseAtom::positive(
+            ClauseTerm::var(subject),
+            format!("https://example.org/{predicate}"),
+            ClauseTerm::var(object),
+        )
+    };
+    let program = compile(vec![
+        DlClause::datalog(atom("?m", "q", "?o"), vec![atom("?m", "seed", "?o")]),
+        DlClause::datalog(
+            atom("?s", "out", "?o"),
+            vec![atom("?s", "p", "?m"), atom("?m", "q", "?o")],
+        ),
+    ])
+    .unwrap();
+    for count in [100, 1000] {
+        let mut input = RelationStore::default();
+        for index in 0..count {
+            input
+                .insert(
+                    &format!("s{index}"),
+                    "<https://example.org/p>",
+                    &format!("m{index}"),
+                    "",
+                )
+                .unwrap();
+        }
+        input
+            .insert("m0", "<https://example.org/seed>", "end", "")
+            .unwrap();
+        let evaluation = evaluate_guarded(
+            &program,
+            input,
+            &NoGuards,
+            &EvalOptions::default()
+                .with_max_join_steps(10)
+                .with_round_execution(RoundExecution::Sequential),
+            None,
+        )
+        .unwrap();
+        assert!(
+            evaluation
+                .facts()
+                .contains("s0", "<https://example.org/out>", "end", "")
+        );
+        assert_eq!(evaluation.facts().row_count(), count + 3);
+        assert_eq!(evaluation.work().join_steps(), 3);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    late_delta_seed_completes_under_a_prefix_independent_work_limit,
     predicate_rows_keep_native_identities_and_lexical_graph_order,
     interrupted_guarded_commit_counts_only_completed_generating_rounds,
     model_only_and_recorded_models_have_explicit_evidence_and_equal_counts,

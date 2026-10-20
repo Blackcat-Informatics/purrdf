@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Delta-first rule joins:** partial Datalog rounds bind their new-row anchor
+  before visiting old join prefixes, including factored and cyclic bodies.
+  Dynamic probes constrain every already-bound position and retain authored
+  proof order. Physical planner version 3 identifies the changed candidate
+  accounting; completed models and semantic fact counts retain their meaning.
+
 - **Indexed predicate iteration:** bound-predicate, free-graph Datalog probes
   visit only that predicate's partitions. `RelationStore::rows_for_predicate`
   returns original row and term identities for triple and quad stores without

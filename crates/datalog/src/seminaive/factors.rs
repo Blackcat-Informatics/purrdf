@@ -16,8 +16,8 @@ use super::{
     ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, HeadEvidence, JoinGroup,
     JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
     RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_slot_solutions,
-    extend_solutions_leapfrog, source_heights, source_preference,
+    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, extend_rebound_solutions,
+    extend_slot_solutions, extend_solutions_leapfrog, source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -205,8 +205,30 @@ where
     Arity<N>: StoreShape<N>,
 {
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
+    let seed = match scan {
+        JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_count()) => {
+            Some(anchor)
+        }
+        _ => None,
+    };
+    if let Some(anchor) = seed {
+        partial = extend_rebound_solutions(
+            entry.plan.operator_at(anchor),
+            snapshot.rel,
+            entry.delta,
+            Scan::Delta,
+            &partial,
+            governor,
+        )
+        .map_err(EvalError::Source)?;
+    }
     let binary = |position, partial: &[SlotSolution<D::Id, N>], governor: &mut StepGovernor| {
-        extend_slot_solutions(
+        let extend = if seed.is_some() {
+            extend_rebound_solutions
+        } else {
+            extend_slot_solutions
+        };
+        extend(
             entry.plan.operator_at(position),
             snapshot.rel,
             entry.delta,
@@ -256,6 +278,9 @@ where
     for mut solution in partial {
         if governor.spent() {
             break;
+        }
+        if seed.is_some() {
+            solution.sources.remove(0);
         }
         solution.sources.sort_by_key(|source| source.body_index);
         let mut blocked = false;
