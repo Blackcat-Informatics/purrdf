@@ -4667,6 +4667,11 @@ where
     for anchor in anchors {
         // Even an empty later delta probe cannot suppress an earlier guard's
         // failure. Only the segment reaching that probe may discover it is empty.
+        // A guard-first body consumes the empty conjunction's unit binding
+        // before invoking opaque code, even when that code returns no rows.
+        if barriers.first() == Some(&0) && !governor.charge() {
+            break;
+        }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         let mut start = 0;
         for (position, end) in barriers
@@ -8883,6 +8888,133 @@ mod tests {
                 assert_eq!(report.stored_facts(), 1001);
             }
         }
+    }
+
+    #[test]
+    fn guard_first_empty_output_requires_unit_binding_credit() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        struct DropAll(std::cell::Cell<usize>);
+        impl GuardEvaluator for DropAll {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                self.0.set(self.0.get() + 1);
+                Ok(Vec::new())
+            }
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Compute(Guard::assign("drop", Vec::new(), "?s")),
+                Atom(atom("?s", P, "?o")),
+            ]),
+        ])
+        .unwrap();
+        for ceiling in [0, 1] {
+            let callback = DropAll(std::cell::Cell::new(0));
+            let result = evaluate_guarded(
+                &program,
+                store_of(&[("a", P, "b")]),
+                &callback,
+                &EvalOptions::default().with_max_join_steps(ceiling),
+                None,
+            );
+            assert_eq!(callback.0.get(), usize::from(ceiling != 0));
+            if ceiling == 0 {
+                assert!(matches!(result, Err(EvalError::BudgetExhausted { .. })));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.work().join_steps(), 1);
+                assert_eq!(result.work().committed_facts(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_guard_outputs_select_quad_predicate_and_graph_keys() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::GuardReads;
+        const GRAPH: &str = "https://example.org/selected-graph";
+        const MISSING_PREDICATE: &str = "https://example.org/absent-guard-predicate";
+        const MISSING_GRAPH: &str = "https://example.org/absent-guard-graph";
+        struct Partition;
+        impl GuardEvaluator for Partition {
+            fn evaluate(
+                &self,
+                _call: &GuardCall<'_>,
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                Ok(vec![
+                    vec![surface(R).into(), surface(GRAPH).into()],
+                    vec![surface(MISSING_PREDICATE).into(), surface(GRAPH).into()],
+                    vec![surface(R).into(), surface(MISSING_GRAPH).into()],
+                ])
+            }
+        }
+        let subject = "https://example.org/subject";
+        let winner = "https://example.org/selected-value";
+        let mut input = store_of(&[(subject, P, "https://example.org/seed")]);
+        for (predicate, object, graph) in [
+            (R, winner, GRAPH),
+            (
+                R,
+                "https://example.org/wrong-graph-value",
+                "https://example.org/other-graph",
+            ),
+            (
+                "https://example.org/other-predicate",
+                "https://example.org/wrong-predicate-value",
+                GRAPH,
+            ),
+        ] {
+            input
+                .insert(
+                    &surface(subject),
+                    &surface(predicate),
+                    &surface(object),
+                    &surface(graph),
+                )
+                .unwrap();
+        }
+        let program = compile(vec![
+            DlClause::datalog(atom("?s", Q, "?o"), Vec::new()).with_ordered_body(vec![
+                Atom(atom("?s", P, "?seed")),
+                Compute(Guard::new(
+                    "partition",
+                    Vec::new(),
+                    vec!["?p".into(), "?g".into()],
+                    GuardReads::Bindings,
+                )),
+                Atom(ClauseAtom::quad(v("?s"), v("?p"), v("?o"), v("?g"))),
+            ]),
+        ])
+        .unwrap();
+        let result = evaluate_guarded(
+            &program,
+            input,
+            &Partition,
+            &EvalOptions::default().with_derivation_mode(DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.work().committed_facts(), 1);
+        assert!(result.facts().contains_row([
+            &surface(subject),
+            &surface(Q),
+            &surface(winner),
+            RelationStore::DEFAULT_GRAPH
+        ]));
+        assert!(
+            result
+                .facts()
+                .term_id(&surface(MISSING_PREDICATE))
+                .is_none()
+        );
+        assert!(result.facts().term_id(&surface(MISSING_GRAPH)).is_none());
+        let derivations = result.derivations().unwrap();
+        assert_eq!(derivations.len(), 1);
+        assert_eq!(derivations[0].sources()[0].predicate, surface(P));
+        assert_eq!(derivations[0].sources()[1].predicate, surface(R));
+        assert_eq!(derivations[0].sources()[1].graph, surface(GRAPH));
     }
 
     /// Consumer admission bounds a large callback Vec before cloning bindings and

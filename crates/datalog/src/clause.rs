@@ -843,11 +843,13 @@ impl<const N: usize> DlClause<N> {
         self
     }
 
-    /// Replace the positive body with atoms and guards in authored evaluation order.
+    /// Replace the body's atoms and guards in authored evaluation order.
     ///
     /// A guard output is fresh when the guard runs and may be read by later atoms.
     /// Atoms between two guards may be reordered by the join planner; no atom may
-    /// cross a guard barrier. Existing negated conjunctions run after this body.
+    /// cross a guard barrier. Supplied atoms must be positive; attach negated
+    /// conjunctions with [`Self::with_negations`]. Existing attached conjunctions
+    /// run after this body.
     ///
     /// # Panics
     ///
