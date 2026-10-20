@@ -43,11 +43,8 @@ jobs:
         run: |
           cargo test --locked -p purrdf-datalog --test rules_runtime
           cargo test --locked -p purrdf-datalog --test structured_errors
-          cargo test --locked -p purrdf-shapes --test rule_capacity_limits
-          cargo test --locked -p purrdf-validate --test evaluation_limits
-          cargo test --locked -p purrdf-cli --test shapes_tools_cli
-          cargo test --locked -p purrdf-capi --lib capi_apply_rules_takes_the_capacity_limits
-          cargo test --locked -p purrdf-capi --lib the_dl_proof_golden_vector_matches
+      # Host-wide suites run in the complete pull-request CI matrix. Development
+      # pushes exercise the changed engine before paying for those host builds.
       - name: Measure model-only allocation and factor growth
         run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
       - name: Check evaluator, proof, store and scheduling regressions
