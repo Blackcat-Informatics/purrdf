@@ -296,8 +296,17 @@
  * admission refusal from a malformed shapes graph; error accessors retain the
  * diagnostic. No earlier status is renumbered, and the wildcard-free status test
  * pins the appended value.
+ *
+ * # `0.11.0` → `0.12.0`: caller-controlled regime term arenas
+ *
+ * Seven prototypes gain nullable `const uint64_t *max_term_arena_bytes` after
+ * `max_join_steps`: the four `purrdf_entail_` materialization/conclusion services
+ * and `purrdf_query_entailment_governed` with its XPath and geo variants. This
+ * inserts an argument before existing controls/out-pointers and requires every
+ * affected C caller to rebuild. Null retains the engine default; a supplied
+ * limit is enforced and arena refusals name the actual calling parameter.
  */
-#define PURRDF_ABI_MINOR 11
+#define PURRDF_ABI_MINOR 12
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.

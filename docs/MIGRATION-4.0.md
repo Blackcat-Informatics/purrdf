@@ -19,7 +19,7 @@ optional argument immediately after `maxJoinSteps`; query methods accept it
 in their options. An arena refusal preserves the observed and permitted byte
 counts and names the calling surface's control.
 
-The corresponding C entry points add a nullable `const uint64_t *` immediately
+The corresponding C entry points declare ABI 0.12.0 and add a nullable `const uint64_t *` immediately
 after `max_join_steps`. Rebuild C clients against the regenerated `purrdf.h`;
 pass `NULL` to retain the default. A refusal leaves result buffers untouched.
 

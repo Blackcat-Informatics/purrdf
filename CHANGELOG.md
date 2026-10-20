@@ -8,7 +8,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **Regime arena controls (breaking C ABI):** Rust, Python, JavaScript, C and
+- **Regime arena controls (C ABI 0.12.0):** Rust, Python, JavaScript, C and
   CLI callers can set the retained term-surface byte limit. Refusals preserve
   the original counts and name the calling surface's available control.
 
