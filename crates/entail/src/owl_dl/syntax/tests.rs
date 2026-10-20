@@ -135,8 +135,8 @@ fn native_syntax_keeps_source_and_query_scaffolding_separate_for_the_same_term()
 }
 
 #[test]
-fn malformed_native_list_keeps_its_parse_error_and_cannot_publish_syntax() {
-    use crate::{EntailError, interner::Interner, owl_dl::data::DataRangeTable};
+fn malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax() {
+    use crate::{CollectionPhase, EntailError, interner::Interner, owl_dl::data::DataRangeTable};
     let mut interner = Interner::default();
     let vocab = Vocab::intern(&mut interner);
     let class = interner.intern_iri("https://example.org/BadList");
@@ -147,9 +147,18 @@ fn malformed_native_list_keeps_its_parse_error_and_cannot_publish_syntax() {
     index_insert(&mut index, head, vocab.first, member);
     let mut ranges = DataRangeTable::default();
     let mut ce = CeExtractor::new(&index, &interner, &vocab, &mut ranges);
-    assert!(
-        matches!(ce.expr(class), Err(EntailError::Parse(message)) if message.starts_with("malformed RDF list:"))
+    let error = ce.expr(class).unwrap_err();
+    let EntailError::Collection(original) = error else {
+        panic!("expected the original collection refusal, got {error:?}");
+    };
+    assert_eq!(original.phase, CollectionPhase::OwlDirect);
+    assert_eq!(original.head, *interner.value(head));
+    assert_eq!(original.original.node, *interner.value(head));
+    assert_eq!(
+        original.original.kind,
+        purrdf_core::ListErrorKind::MissingRest
     );
+    assert_eq!(original.original.members, [interner.value(member).clone()]);
     assert!(
         matches!(ce.into_syntax(), Err(EntailError::Parse(message)) if message == "native syntax capture did not complete")
     );

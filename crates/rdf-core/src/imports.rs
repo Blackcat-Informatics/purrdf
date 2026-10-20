@@ -635,8 +635,8 @@ pub enum VersionConflictKind {
 impl purrdf_hash::error::StructuredError for VersionConflict {
     purrdf_hash::error_visit! {
         @record self { first, second, kind } => "imports-version-conflict" {
-            "first" => Value(self.first.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
-            "second" => Value(self.second.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "first" => Value(self.first.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "second" => Value(self.second.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
             "kind" => Record(&self.kind),
         }
     }
@@ -645,10 +645,10 @@ impl purrdf_hash::error::StructuredError for VersionConflict {
 impl purrdf_hash::error::StructuredError for VersionConflictKind {
     purrdf_hash::error_visit! {
         SameSeries { series, first_version, second_version } => "imports-same-series" {
-            "series" => Text(series), "first_version" => Text(first_version),
-            "second_version" => Text(second_version),
+            "series" => Iri(series), "first_version" => Iri(first_version),
+            "second_version" => Iri(second_version),
         },
-        IncompatibleWith { iri } => "imports-incompatible-with" { "iri" => Text(iri) },
+        IncompatibleWith { iri } => "imports-incompatible-with" { "iri" => Iri(iri) },
     }
 }
 

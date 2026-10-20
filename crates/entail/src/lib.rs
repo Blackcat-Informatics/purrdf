@@ -604,10 +604,10 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Inconsistent(run) => "entailment-inconsistent" { "run" => Record(run.as_ref()) },
         Unsatisfiable => "entailment-unsatisfiable" {},
         UnsupportedRegime(regime) => "entailment-unsupported-regime" { "regime" => Code(regime.name()) },
-        UnresolvedImport(iri) => "entailment-unresolved-import" { "iri" => Text(iri) },
+        UnresolvedImport(iri) => "entailment-unresolved-import" { "iri" => Iri(iri) },
         UnreachedImport { iris, unanchored } => "entailment-unreached-import" {
-            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Text(iri))),
-            "unanchored" => List(unanchored.iter().map(|iri| purrdf_hash::error::ErrorValue::Text(iri))),
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+            "unanchored" => List(unanchored.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
         },
         IncompatibleImports(conflicts) => "entailment-incompatible-imports" {
             "conflicts" => List(conflicts.iter().map(|conflict| purrdf_hash::error::ErrorValue::Record(conflict))),
@@ -816,26 +816,14 @@ impl<E> From<purrdf_core::TermLookupError<E>> for EntailError<E> {
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
-    /// The wrapped cause, for the variants that carry one.
+    /// The original native cause, when this variant wraps another failure.
     ///
-    /// Two of these variants exist ONLY to carry another crate's diagnostic —
-    /// `Evaluate` holds the evaluator's ceiling report, `Chase` holds the termination
-    /// analysis — and without this the standard chain stopped at the outermost message.
-    /// A caller printing `{:#}`, or walking `Error::source`, saw "the chase refused"
-    /// and could not reach WHICH ceiling refused it, though the value was right there;
-    /// the only way through was to match this enum's concrete variant, which is what a
-    /// trait-object error exists to avoid.
-    ///
-    /// The rest return `None` because they genuinely have no cause to name.
-    /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — `UnreachedImport` carries the unused table keys,
-    /// `IncompatibleImports` carries the conflicting
-    /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
-    /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
-    /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
-    /// that the premise has no model, and the run it describes succeeded at producing
-    /// it, so calling it the cause of this error would misdescribe both. `Canonicalization`
-    /// carries [`purrdf_core::CanonError`], which DOES have a cause to name.
+    /// `Build`, `Parse` and `MalformedList` retain diagnostic messages.
+    /// `UnresolvedImport` and `UnreachedImport` retain original IRI keys;
+    /// `IncompatibleImports` retains the conflicting document pairs. These
+    /// payloads describe the refusal itself rather than a nested error.
+    /// `Inconsistent` carries the original successful run's inconsistency
+    /// witness and report. Unit refusals also have no nested cause.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(inner) => Some(inner),

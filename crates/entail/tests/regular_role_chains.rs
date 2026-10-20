@@ -189,21 +189,21 @@ fn import_conflict_inspection_keeps_original_versions_and_default_graph() {
     assert!(matches!(conflicts[0].field("first"), ErrorValue::Absent));
     assert!(matches!(
         conflicts[0].field("second"),
-        ErrorValue::Text("https://example.org/imported")
+        ErrorValue::Iri("https://example.org/imported")
     ));
     let kind = conflicts[0].child("kind");
     assert_eq!(kind.code, "imports-same-series");
     assert!(matches!(
         kind.field("series"),
-        ErrorValue::Text("https://example.org/series")
+        ErrorValue::Iri("https://example.org/series")
     ));
     assert!(matches!(
         kind.field("first_version"),
-        ErrorValue::Text("https://example.org/old")
+        ErrorValue::Iri("https://example.org/old")
     ));
     assert!(matches!(
         kind.field("second_version"),
-        ErrorValue::Text("https://example.org/new")
+        ErrorValue::Iri("https://example.org/new")
     ));
     let kind = VersionConflictKind::IncompatibleWith {
         iri: "https://example.org/incompatible".into(),
@@ -212,8 +212,32 @@ fn import_conflict_inspection_keeps_original_versions_and_default_graph() {
     assert_eq!(fields.code, "imports-incompatible-with");
     assert!(matches!(
         fields.field("iri"),
-        ErrorValue::Text("https://example.org/incompatible")
+        ErrorValue::Iri("https://example.org/incompatible")
     ));
+
+    let unresolved: EntailError =
+        EntailError::UnresolvedImport("https://example.org/missing".into());
+    assert!(matches!(
+        Capture::read(&unresolved).field("iri"),
+        ErrorValue::Iri("https://example.org/missing")
+    ));
+    let unused: EntailError = EntailError::UnreachedImport {
+        iris: vec!["https://example.org/unused".into()],
+        unanchored: vec!["https://example.org/unused".into()],
+    };
+    let fields = Capture::read(&unused);
+    let iris: Vec<_> = fields
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            purrdf_testkit::error_capture::Event::Value(None, ErrorValue::Iri(iri)) => Some(*iri),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        iris,
+        ["https://example.org/unused", "https://example.org/unused"]
+    );
 }
 
 fn actual_collection_refusals_keep_original_terms_and_the_ordered_prefix() {

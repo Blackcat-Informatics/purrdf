@@ -67,7 +67,9 @@ jobs:
         run: |
           cargo test --locked -p purrdf-entail --lib -- --list > target/collection-unit-test-inventory.txt
           grep -Fq lists::tests:: target/collection-unit-test-inventory.txt
+          grep -Fq owl_dl::syntax::tests::malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax target/collection-unit-test-inventory.txt
           cargo test --locked -p purrdf-entail --lib lists::tests::
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::syntax::tests::malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax
           cargo test --locked -p purrdf-entail --test reasoner -- --exact malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals
       - name: Execute public reasoning facade inspection
         run: cargo test --locked -p purrdf --test reasoning_inspection
