@@ -110,6 +110,7 @@ struct Cursor<I: TermIdentity> {
 }
 
 impl<I: TermIdentity> Cursor<I> {
+    /// Retain subject-ordered progress in this original partition and scan mode.
     fn subject<const N: usize>(
         partition: PartitionRef<'_, I, N>,
         other: Option<I>,
@@ -132,6 +133,7 @@ impl<I: TermIdentity> Cursor<I> {
         }
     }
 
+    /// Retain object-ordered progress in this original partition and scan mode.
     fn object<const N: usize>(
         partition: PartitionRef<'_, I, N>,
         other: Option<I>,
@@ -154,6 +156,7 @@ impl<I: TermIdentity> Cursor<I> {
         }
     }
 
+    /// Inspect the retained distinct value without advancing or rendering it.
     fn current(&self) -> Option<I> {
         match &self.values {
             Values::DeltaSubject(cursor) => cursor.current,
@@ -235,6 +238,7 @@ struct Intersection<I: TermIdentity> {
 }
 
 impl<I: TermIdentity> Intersection<I> {
+    /// Find a common value, advancing the first cursor before returning it.
     fn next<D: TermDictionary<Id = I>, const N: usize>(
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
@@ -260,6 +264,7 @@ impl<I: TermIdentity> Intersection<I> {
         }
     }
 
+    /// Check an external binding against every original native value cursor.
     fn contains<D: TermDictionary<Id = I>, const N: usize>(
         &mut self,
         run: &LeapfrogRun<'_, D, N>,
@@ -315,6 +320,7 @@ impl<I: TermIdentity, const N: usize> Frame<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Move the existing substitutions into the component's initial descent state.
     pub(super) fn new(inputs: Vec<SlotSolution<I, N>>) -> Self {
         Self {
             inputs: inputs.into_iter(),
@@ -326,14 +332,17 @@ where
         }
     }
 
+    /// Every input is exhausted and no assigned leaf remains pending.
     pub(super) fn is_complete(&self) -> bool {
         self.inputs.len() == 0 && self.working.is_none()
     }
 
+    /// Move admitted substitutions and source rows without revisiting a cursor.
     pub(super) fn into_output(self) -> Vec<SlotSolution<I, N>> {
         self.output
     }
 
+    /// Clear only a binding introduced by this descent; keep external bindings.
     fn backtrack<D: TermDictionary<Id = I>>(&mut self, run: &LeapfrogRun<'_, D, N>) {
         if self.depth == 0 {
             self.working = None;
@@ -414,6 +423,7 @@ where
     }
 }
 
+/// Prepare the original level intersection, preserving an external binding as fixed.
 fn make_level<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
     variable_position: usize,
