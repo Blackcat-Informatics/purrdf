@@ -211,6 +211,9 @@ where
         }
         _ => None,
     };
+    let seed_in_cycle = seed.is_some_and(|anchor| entry.plan.join_groups().iter().any(|group| {
+        matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
+    }));
     if let Some(anchor) = seed {
         partial = extend_rebound_solutions(
             entry.plan.operator_at(anchor),
@@ -239,6 +242,9 @@ where
     };
     if !entry.plan.has_cyclic_subplan() {
         for &position in &factor.positions {
+            if seed == Some(position) {
+                continue;
+            }
             partial = binary(position, &partial, governor).map_err(EvalError::Source)?;
             if partial.is_empty() || governor.spent() {
                 break;
@@ -246,6 +252,9 @@ where
         }
     } else {
         for group in entry.plan.join_groups() {
+            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
+                continue;
+            }
             let position = match group {
                 JoinGroup::Binary(atom) => atom.positive_position(),
                 JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].positive_position(),
@@ -279,7 +288,7 @@ where
         if governor.spent() {
             break;
         }
-        if seed.is_some() {
+        if seed_in_cycle {
             solution.sources.remove(0);
         }
         solution.sources.sort_by_key(|source| source.body_index);

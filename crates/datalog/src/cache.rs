@@ -1544,7 +1544,8 @@ mod tests {
         );
         assert_eq!(
             hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
-            "bb5cee96a06449cb6d1655d96819d26a704f5d4bb375484c96f8644dd1f42a7b",
+            // Physical planner v3 binds partial-delta anchors before old prefixes.
+            "1a0716c77a60a0bcdb1a1235caa9ffd10450ff463a8d1f1a9359fd9accdbd08c",
             "the plan identity moved"
         );
     }

@@ -2836,6 +2836,9 @@ where
         }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
+        let seed_in_cycle = reordered && plan.join_groups().iter().any(|group| {
+            matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == delta_position))
+        });
         if reordered {
             partial = extend_rebound_solutions(
                 plan.operator_at(delta_position),
@@ -2847,6 +2850,11 @@ where
             )?;
         }
         for group in plan.join_groups() {
+            if reordered
+                && matches!(group, JoinGroup::Binary(atom) if atom.positive_position() == delta_position)
+            {
+                continue;
+            }
             if partial.is_empty() || governor.spent() {
                 partial.clear();
                 break;
@@ -2885,13 +2893,19 @@ where
             }
         }
         for solution in &mut partial {
-            if reordered {
+            if seed_in_cycle {
                 // The seed fixes bindings before any old prefix. The original
                 // group still captures its source in the authored group order.
                 solution.sources.remove(0);
             }
-            for &(left, right) in plan.hybrid_source_order_swaps() {
-                solution.sources.swap(left, right);
+            if reordered {
+                solution
+                    .sources
+                    .sort_unstable_by_key(|source| source.body_index);
+            } else {
+                for &(left, right) in plan.hybrid_source_order_swaps() {
+                    solution.sources.swap(left, right);
+                }
             }
         }
         all.extend(partial);
