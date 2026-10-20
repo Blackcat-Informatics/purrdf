@@ -30,8 +30,9 @@
 //!   each planned atom, in sideways-information-passing order, extends the partial
 //!   solutions by selecting exactly the rows its [`IndexChoice`] admits;
 //! - the **leapfrog triejoin**: for a planner-certified cyclic component, a multiway
-//!   intersection descends the component's variables through galloping
-//!   [`ValueCursor`]s, so no binary intermediate relation is ever materialised.
+//!   intersection descends the component's variables through the same galloping
+//!   positions as [`crate::cursor::ValueCursor`], so no binary intermediate relation is
+//!   ever materialised.
 //!
 //! Two implementations of one contract must not be allowed to diverge silently, so the
 //! binary fallback is retained as an executable oracle and
