@@ -11,7 +11,7 @@ use purrdf_core::{
 };
 
 use crate::column::Int64Column;
-use crate::error::ColumnarError;
+use crate::error::{ColumnarError, ColumnarWriteError};
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, Compression, TableData};
 use crate::schema::Table;
@@ -41,18 +41,20 @@ pub struct ColumnarWrite {
 ///
 /// # Errors
 ///
-/// Returns [`ColumnarError`] if the source view violates the `DatasetView`
-/// structural contract, a table exceeds the Parquet profile's bounds, the blob
-/// store fails integrity verification, or encoding fails.
+/// Returns the original source read failure, or a native [`ColumnarError`] if
+/// the view violates the `DatasetView` structural contract, a table exceeds the
+/// Parquet profile's bounds, blob verification fails, or encoding fails.
 pub fn write<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
     compression: Compression,
-) -> Result<ColumnarWrite, ColumnarError> {
-    project(view, blobs)?.to_parquet(compression)
+) -> Result<ColumnarWrite, ColumnarWriteError<D::ReadError>> {
+    project(view, blobs)?
+        .to_parquet(compression)
+        .map_err(Into::into)
 }
 
-/// Project a resident RDF view into the authoritative five-table schema.
+/// Project an RDF view into the authoritative five-table schema.
 ///
 /// This is the same canonical projection the Parquet writer uses. Relational
 /// hosts insert these rows directly rather than assigning their own term ids.
@@ -61,22 +63,21 @@ pub fn write<D: DatasetView>(
 ///
 /// # Errors
 ///
-/// Returns an error for malformed RDF structure, corrupt blob contents or a
-/// table exceeding the native v1 profile bounds.
+/// Preserves the original source read failure. Codec failures retain malformed
+/// RDF structure, corrupt blob contents and native v1 profile bounds.
 pub fn project<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
-) -> Result<crate::projection::ColumnarProjection, ColumnarError> {
+) -> Result<crate::projection::ColumnarProjection, ColumnarWriteError<D::ReadError>> {
     view.checked_read(|view| project_read(view, blobs))
-        .map_err(|error| ColumnarError::SourceRead {
-            detail: error.to_string(),
-        })?
+        .map_err(ColumnarWriteError::SourceRead)?
 }
 
+/// Build the fixed-schema tables inside the source's completed-read boundary.
 fn project_read<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
-) -> Result<crate::projection::ColumnarProjection, ColumnarError> {
+) -> Result<crate::projection::ColumnarProjection, ColumnarWriteError<D::ReadError>> {
     blobs
         .verify_all()
         .map_err(|error| ColumnarError::malformed("content store", error.to_string()))?;
@@ -124,7 +125,11 @@ impl<Id: purrdf_core::ViewTermId> SourceRows<Id> {
         }
     }
 
-    fn resolve_all<D>(&self, resolver: &mut Resolver<'_, D>) -> Result<(), ColumnarError>
+    /// Resolve every original RDF stream and graph through the same term memo.
+    fn resolve_all<D>(
+        &self,
+        resolver: &mut Resolver<'_, D>,
+    ) -> Result<(), ColumnarWriteError<D::ReadError>>
     where
         D: DatasetView<Id = Id>,
     {
@@ -146,11 +151,12 @@ impl<Id: purrdf_core::ViewTermId> SourceRows<Id> {
     }
 }
 
+/// Resolve original positions in subject, predicate, object and graph order.
 fn resolve_quad<D: DatasetView>(
     resolver: &mut Resolver<'_, D>,
     quad: &QuadIds<D::Id>,
     include_predicate: bool,
-) -> Result<(), ColumnarError> {
+) -> Result<(), ColumnarWriteError<D::ReadError>> {
     resolver.resolve(quad.s)?;
     if include_predicate {
         resolver.resolve(quad.p)?;
@@ -159,10 +165,11 @@ fn resolve_quad<D: DatasetView>(
     resolve_graph(resolver, quad.g)
 }
 
+/// Resolve a named graph without inventing a term for the default graph.
 fn resolve_graph<D: DatasetView>(
     resolver: &mut Resolver<'_, D>,
     graph: Option<D::Id>,
-) -> Result<(), ColumnarError> {
+) -> Result<(), ColumnarWriteError<D::ReadError>> {
     if let Some(graph) = graph {
         resolver.resolve(graph)?;
     }
@@ -193,7 +200,7 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
     /// and a triple term's subject, predicate and object each fully, in that order,
     /// before the triple is assembled. Every term is memoised as soon as its value
     /// exists, and the first refusal ends the walk.
-    fn resolve(&mut self, id: D::Id) -> Result<TermValue, ColumnarError> {
+    fn resolve(&mut self, id: D::Id) -> Result<TermValue, ColumnarWriteError<D::ReadError>> {
         /// A term being resolved, the terms it depends on in resolution order, and
         /// the values they resolved to so far.
         struct Frame<I, G> {
@@ -202,23 +209,20 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
             dependencies: ([I; 3], usize),
             resolved: Vec<TermValue>,
         }
-        type EnterResult<I, G> = Result<Result<TermValue, Frame<I, G>>, ColumnarError>;
+        type EnterResult<I, G, E> = Result<Result<TermValue, Frame<I, G>>, ColumnarWriteError<E>>;
         let view = self.view;
-        let enter = |this: &mut Self, id: D::Id| -> EnterResult<D::Id, D::TermGuard<'a>> {
+        let enter = |this: &mut Self,
+                     id: D::Id|
+         -> EnterResult<D::Id, D::TermGuard<'a>, D::ReadError> {
             if let Some(value) = this.values.get(&id) {
                 return Ok(Ok(value.clone()));
             }
             if !this.active.insert(id) {
-                return Err(ColumnarError::malformed(
-                    "term graph",
-                    "cyclic triple-term reference",
-                ));
+                return Err(
+                    ColumnarError::malformed("term graph", "cyclic triple-term reference").into(),
+                );
             }
-            let guard = view
-                .resolve(id)
-                .map_err(|error| ColumnarError::SourceRead {
-                    detail: error.to_string(),
-                })?;
+            let guard = view.resolve(id).map_err(ColumnarWriteError::SourceRead)?;
             let dependencies = match guard.term() {
                 TermRef::Literal { datatype, .. } => ([datatype, datatype, datatype], 1),
                 TermRef::Triple { s, p, o } => ([s, p, o], 3),
@@ -270,7 +274,8 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                         return Err(ColumnarError::malformed(
                             "literal datatype",
                             "datatype id does not resolve to an IRI",
-                        ));
+                        )
+                        .into());
                     };
                     TermValue::Literal {
                         lexical_form: lexical.to_owned(),
@@ -798,27 +803,23 @@ mod term_walk_tests {
         DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermGuard as _, TermRef, TermValue,
     };
 
-    use super::{ColumnarError, Resolver};
+    use super::{ColumnarError, ColumnarWriteError, Resolver};
 
+    /// The recursive oracle for original term order and source refusals.
     fn reference<D: DatasetView>(
         resolver: &mut Resolver<'_, D>,
         id: D::Id,
-    ) -> Result<TermValue, ColumnarError> {
+    ) -> Result<TermValue, ColumnarWriteError<D::ReadError>> {
         if let Some(value) = resolver.values.get(&id) {
             return Ok(value.clone());
         }
         if !resolver.active.insert(id) {
-            return Err(ColumnarError::malformed(
-                "term graph",
-                "cyclic triple-term reference",
-            ));
+            return Err(
+                ColumnarError::malformed("term graph", "cyclic triple-term reference").into(),
+            );
         }
         let view = resolver.view;
-        let guard = view
-            .resolve(id)
-            .map_err(|error| ColumnarError::SourceRead {
-                detail: error.to_string(),
-            })?;
+        let guard = view.resolve(id).map_err(ColumnarWriteError::SourceRead)?;
         let value = match guard.term() {
             TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
             TermRef::Blank { label, scope } => TermValue::Blank {
@@ -835,7 +836,8 @@ mod term_walk_tests {
                     return Err(ColumnarError::malformed(
                         "literal datatype",
                         "datatype id does not resolve to an IRI",
-                    ));
+                    )
+                    .into());
                 };
                 TermValue::Literal {
                     lexical_form: lexical.to_owned(),
