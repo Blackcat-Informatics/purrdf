@@ -53,6 +53,16 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
         &self.rows
     }
 
+    /// Replace the handle of an existing physical row, preserving its cells.
+    ///
+    /// Returns the old handle, or `None` when `position` is outside this buffer.
+    /// Membership and handle identity remain the owning relation's responsibility.
+    pub fn replace_handle(&mut self, position: usize, handle: R) -> Option<R> {
+        self.rows
+            .get_mut(position)
+            .map(|row| core::mem::replace(row, handle))
+    }
+
     /// The complete row at `position`, or `None` beyond the buffer.
     pub fn row(&self, position: usize) -> Option<([I; N], R)> {
         let handle = *self.rows.get(position)?;

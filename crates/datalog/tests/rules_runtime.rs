@@ -1011,6 +1011,17 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
     .unwrap();
     let model = result.facts();
     assert!(!model.contains_row(["a", "p", "b"]));
+    let original_survivor = input.rows_from(1).next().unwrap();
+    assert_eq!(
+        model
+            .rows_from(0)
+            .find(|(row, _)| *row == original_survivor.0),
+        Some(original_survivor),
+        "the actual layer retraction preserves the original survivor handle and cells"
+    );
+    for term in ["a", "p", "b", "c", "d"] {
+        assert_eq!(model.term_id(term), input.term_id(term));
+    }
     assert!(model.contains_row(["a", "q", "b"]));
     assert!(!model.contains_row(["c", "q", "d"]));
     assert!(!model.contains_row(["b", "q", "e"]));
@@ -1020,7 +1031,9 @@ fn triple_base_authority_survives_data_growth_and_layer_retraction() {
         assert!(!model.contains_row(["a", predicate, "b"]));
     }
     assert_eq!(model.row_count(), 9);
-    assert_eq!(result.budget().stored_facts(), 10); // nine live model rows plus one retained base row
+    assert_eq!(model.row_slots(), 10);
+    // Ten retained model slots (one vacant) plus the immutable base's one slot.
+    assert_eq!(result.budget().stored_facts(), 11);
     assert!(model.interner().lookup("").is_none());
     let base_derivation = result
         .derivations()
@@ -2896,7 +2909,118 @@ fn continuations_preserve_original_source_death_and_hard_guard_failures() {
     assert!(session.partial_model().is_err());
 }
 
+fn removed_append_slots_preserve_recursive_models_and_proofs() {
+    use purrdf_datalog::proof::{EvaluationProofs, ProofContext};
+    use purrdf_datalog::seminaive::RoundExecution;
+    use purrdf_datalog::store::TermInterner;
+    let rules = vec![
+        DlClause::datalog(
+            triple_pattern("s", "reach", "o"),
+            vec![triple_pattern("s", "edge", "o")],
+        ),
+        DlClause::datalog(
+            triple_pattern("s", "reach", "o"),
+            vec![
+                triple_pattern("s", "reach", "m"),
+                triple_pattern("m", "edge", "o"),
+            ],
+        ),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["ghost", "edge", "gone"],
+        ["a", "edge", "b"],
+        ["b", "edge", "c"],
+        ["c", "edge", "d"],
+        ["b", "edge", "e"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    assert!(input.remove_row(["ghost", "edge", "gone"]).is_some());
+    assert!(input.remove_row(["b", "edge", "c"]).is_some());
+    input.insert_row(["b", "edge", "c"]).unwrap();
+    assert!(input.remove_row(["b", "edge", "c"]).is_some());
+    assert_eq!(input.row_count(), 3);
+    assert_eq!(input.row_slots(), 6);
+    let mut cold = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [["a", "edge", "b"], ["c", "edge", "d"], ["b", "edge", "e"]] {
+        cold.insert_row(row).unwrap();
+    }
+    let chased = purrdf_datalog::chase::chase(&rules, input.clone()).unwrap();
+    let cold_chased = purrdf_datalog::chase::chase(&rules, cold.clone()).unwrap();
+    assert_eq!(
+        chased.facts().facts_sorted(),
+        cold_chased.facts().facts_sorted()
+    );
+    assert_eq!(chased.budget().stored_facts(), chased.facts().row_slots());
+    assert!(matches!(
+        purrdf_datalog::chase::chase_with(
+            &rules,
+            input.clone(),
+            &EvalOptions::default().with_max_stored_facts(5),
+            None,
+        ),
+        Err(purrdf_datalog::chase::ChaseError::BudgetExhausted {
+            resource: seminaive::BudgetResource::StoredFacts,
+            report,
+        }) if report.stored_facts() == 6 && report.join_steps() == 0
+    ));
+    for execution in [RoundExecution::Sequential, RoundExecution::Parallel] {
+        for mode in [DerivationMode::ModelOnly, DerivationMode::Record] {
+            let options = EvalOptions::default()
+                .with_derivation_mode(mode)
+                .with_round_execution(execution);
+            let actual =
+                evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+            let expected =
+                evaluate_guarded(&program, cold.clone(), &NoGuards, &options, None).unwrap();
+            assert_eq!(
+                actual.facts().facts_sorted(),
+                expected.facts().facts_sorted()
+            );
+            assert_eq!(actual.derivations(), expected.derivations());
+            assert_eq!(actual.work(), expected.work());
+            assert!(actual.facts().contains_row(["a", "reach", "e"]));
+            assert!(!actual.facts().contains_row(["a", "reach", "c"]));
+            if mode == DerivationMode::Record {
+                let proofs = EvaluationProofs::of(&actual).unwrap();
+                let context = ProofContext::new(&rules, &input, actual.facts());
+                for derivation in actual.derivations().unwrap() {
+                    let root = proofs.root_for(derivation.fact()).unwrap();
+                    assert_eq!(
+                        proofs.arena().check(root, &context).unwrap(),
+                        *derivation.fact()
+                    );
+                }
+            }
+        }
+    }
+    let live = input.rows_from(0).collect::<Vec<_>>();
+    for (row, ids) in live {
+        assert_eq!(input.remove_ids(ids), Ok(Some(row)));
+    }
+    assert_eq!(input.row_count(), 0);
+    assert_eq!(input.partition_count(), 0);
+    assert_eq!(input.partitions_for([None; 3]).count(), 0);
+    let constant = compile(vec![DlClause::datalog(
+        ClauseAtom::triple(
+            ClauseTerm::literal("new"),
+            ClauseTerm::literal("fixed"),
+            ClauseTerm::literal("fact"),
+        ),
+        Vec::new(),
+    )])
+    .unwrap();
+    let result =
+        evaluate_guarded(&constant, input, &NoGuards, &EvalOptions::default(), None).unwrap();
+    assert!(result.facts().contains_row(["new", "fixed", "fact"]));
+    assert_eq!(result.facts().partition_count(), 1);
+    assert_eq!(result.work().input_facts(), 0);
+}
+
 purrdf_testkit::harness_main!(
+    removed_append_slots_preserve_recursive_models_and_proofs,
     resumable_models_preserve_partial_proofs_work_and_bindings,
     continuations_preserve_original_source_death_and_hard_guard_failures,
     native_integer_dictionary_runs_recursive_models_without_lexical_projection,

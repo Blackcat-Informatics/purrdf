@@ -146,7 +146,7 @@
 //! - [`store`] — the columnar [`RelationStore`](store::RelationStore): ONE arity-4
 //!   relation `triple(subject, predicate, object, graph)` over one term dictionary,
 //!   physically partitioned by its `(predicate, graph)` positions. Each partition is a
-//!   shared arrangement held as sorted immutable batches plus a mutable tail, deduped by a
+//!   shared arrangement held as sorted sealed batches plus a mutable tail, deduped by a
 //!   galloping probe rather than by hashing, and generic over an abelian
 //!   [`Weight`](store::Weight) monoid so signed (Z-set) multiplicities — and hence
 //!   retraction — are a compiled property of the representation. A constant predicate

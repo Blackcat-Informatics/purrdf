@@ -839,7 +839,7 @@ impl Codec {
 struct LiveView {
     /// The store generation the view was built at.
     generation: u64,
-    /// The store row count the view reflects.
+    /// The retained append boundary the view reflects, including vacant slots.
     rows: usize,
     /// The surface bytes of the triples in the delta.
     delta_bytes: usize,
@@ -943,7 +943,7 @@ struct ProducerRecord {
     /// reifier turns the triples about its subject into that reifier's annotations, a
     /// different layer of the evaluation graph.
     reads: Vec<ReadPattern>,
-    /// The `(generation, row count)` of the store the rule last ran against; `None`
+    /// The `(generation, append boundary)` of the store the rule last ran against; `None`
     /// before its first execution.
     last: Option<(u64, usize)>,
     /// The focus nodes executed since.
@@ -1002,13 +1002,13 @@ where
     /// The view is extended rather than rebuilt when the store has only grown since the
     /// last one, by triples that change no triple's layer: a delta over the last
     /// compacted view, holding every triple committed since. The view is compacted — rebuilt
-    /// from the whole store — when a retraction rebuilt the store, when a new triple is
+    /// from the whole store — after a retraction, when a new triple is
     /// an `r rdf:reifies t` declaration or mentions a blank node (whose identity the
     /// compacted view keeps by label), and once re-freezing the delta has cost as much as
     /// a compaction would.
     fn view(&self, model: &RuleStore<N>) -> Result<Rc<ShaclData>, crate::error::ShapesError> {
         let generation = self.generation.get();
-        let rows = model.row_count();
+        let rows = model.row_slots();
         let mut live = self.view.borrow_mut();
         if let Some(view) = live.as_mut()
             && view.generation == generation
@@ -1053,7 +1053,7 @@ where
         let sparql = rules::build_round_base(&core, self.shapes, self.shapes_graph_iri.as_deref())?;
         Ok(LiveView::compacted(
             generation,
-            model.row_count(),
+            model.row_slots(),
             core,
             sparql,
             self,
@@ -1067,7 +1067,7 @@ where
         view: &mut LiveView,
         model: &RuleStore<N>,
     ) -> Result<Option<Rc<ShaclData>>, crate::error::ShapesError> {
-        let rows = model.row_count();
+        let rows = model.row_slots();
         let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
         let mut triples = self.new_triples(model, view.rows)?;
         if triples
@@ -1318,9 +1318,9 @@ where
         else {
             return Ok(rules::FocusSelection::Every);
         };
-        let now = (self.generation.get(), model.row_count());
+        let now = (self.generation.get(), model.row_slots());
         match record.last.replace(now) {
-            // A retraction rebuilt the store: nothing about the last run carries over.
+            // A retraction changes the generation: the old incremental selection is invalid.
             Some((generation, rows)) if generation == now.0 => {
                 Ok(rules::FocusSelection::Incremental {
                     gained: self.new_triples(model, rows)?,

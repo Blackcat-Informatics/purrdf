@@ -161,8 +161,9 @@ impl<'a, I: TermIdentity> RowCursor<'a, I> {
         self.next().is_some()
     }
 
-    /// Count the remaining matches from indexed run lengths and the bounded tail.
-    /// Sealed rows are never enumerated and no result buffer is allocated.
+    /// Count remaining matches without allocating a result buffer.
+    /// All-live batches use indexed run lengths; batches with vacant cells count
+    /// only occupied handles in the selected run. The bounded tail is scanned.
     pub(crate) fn remaining_count(self) -> usize {
         self.position.remaining_count(self.rel)
     }
@@ -185,10 +186,18 @@ impl<I: TermIdentity> RowPosition<I> {
     /// the tail is exhausted.
     fn enter(&mut self, rel: &Relation<I>, src: usize) {
         self.src = src;
+        if rel.row_count() == 0 {
+            self.inner = Inner::Done;
+            return;
+        }
         let batches = rel.batches();
         self.inner = match src.cmp(&batches.len()) {
             Ordering::Less => {
                 let b: &Batch<(), I> = &batches[src];
+                if !b.has_live_rows() {
+                    self.inner = Inner::Range { pos: 0, end: 0 };
+                    return;
+                }
                 match self.bound {
                     Bound::Any => Inner::Range {
                         pos: 0,
@@ -221,18 +230,33 @@ impl<I: TermIdentity> RowPosition<I> {
         }
     }
 
-    /// Count the remaining matches from indexed run lengths and the bounded tail.
-    /// Sealed rows are never enumerated and no result buffer is allocated.
+    /// Count remaining matches from indexed lengths or occupied handles.
+    /// All-live sealed runs use their lengths; vacant runs and the bounded tail
+    /// inspect handles without allocating a result buffer.
     fn remaining_count(mut self, rel: &Relation<I>) -> usize {
         let mut count = 0;
         loop {
             count += match &self.inner {
-                Inner::Range { pos, end } | Inner::Perm { pos, end } => end - pos,
-                Inner::One(position) => usize::from(position.is_some()),
-                Inner::Tail { pos } => rel
-                    .tail()
-                    .iter()
-                    .skip(*pos)
+                Inner::Range { pos, end } | Inner::Perm { pos, end }
+                    if rel.batches()[self.src].all_live() =>
+                {
+                    end - pos
+                }
+                Inner::Range { pos, end } => (*pos..*end)
+                    .filter(|&position| rel.batches()[self.src].is_live(position))
+                    .count(),
+                Inner::Perm { pos, end } => {
+                    let batch = &rel.batches()[self.src];
+                    batch.object_order()[*pos..*end]
+                        .iter()
+                        .filter(|&&position| batch.is_live(position))
+                        .count()
+                }
+                Inner::One(position) => usize::from(
+                    position.is_some_and(|position| rel.batches()[self.src].is_live(position)),
+                ),
+                Inner::Tail { pos } => (*pos..rel.tail().len())
+                    .filter_map(|position| rel.tail().live_row(position))
                     .filter(|&(subject, object, _)| Self::tail_matches(self.bound, subject, object))
                     .count(),
                 Inner::Done => return count,
@@ -250,27 +274,37 @@ impl<I: TermIdentity> RowPosition<I> {
                     if *pos < *end {
                         let p = *pos;
                         *pos += 1;
-                        return Some(rel.batches()[self.src].row_at(p));
+                        if let Some(row) = rel.batches()[self.src].row_at(p) {
+                            return Some(row);
+                        }
+                        continue;
                     }
                 }
                 Inner::Perm { pos, end } => {
                     if *pos < *end {
                         let p = rel.batches()[self.src].object_order()[*pos];
                         *pos += 1;
-                        return Some(rel.batches()[self.src].row_at(p));
+                        if let Some(row) = rel.batches()[self.src].row_at(p) {
+                            return Some(row);
+                        }
+                        continue;
                     }
                 }
                 Inner::One(slot) => {
-                    if let Some(p) = slot.take() {
-                        return Some(rel.batches()[self.src].row_at(p));
+                    if let Some(p) = slot.take()
+                        && let Some(row) = rel.batches()[self.src].row_at(p)
+                    {
+                        return Some(row);
                     }
                 }
                 Inner::Tail { pos } => {
                     let tail = rel.tail();
                     while *pos < tail.len() {
-                        let (s, o, r) = tail.row(*pos);
+                        let row = tail.live_row(*pos);
                         *pos += 1;
-                        if Self::tail_matches(bound, s, o) {
+                        if let Some((s, o, r)) = row
+                            && Self::tail_matches(bound, s, o)
+                        {
                             return Some((s, o, r));
                         }
                     }
@@ -362,9 +396,10 @@ impl OrderedSource {
     fn batch_row<const COLUMN: u8, I: TermIdentity>(
         batch: &Batch<(), I>,
         position: usize,
-    ) -> (I, RowId) {
-        let (subject, object, row) = batch.row_at(position);
-        (Self::project::<COLUMN, I>(subject, object), row)
+    ) -> Option<(I, RowId)> {
+        batch
+            .row_at(position)
+            .map(|(subject, object, row)| (Self::project::<COLUMN, I>(subject, object), row))
     }
 
     /// The projected `(value, row)` pair at a tail index.
@@ -375,18 +410,36 @@ impl OrderedSource {
     }
 
     /// The run's current pair, without advancing.
-    fn peek<const COLUMN: u8, I: TermIdentity>(&self, rel: &Relation<I>) -> Option<(I, RowId)> {
-        match self {
-            Self::Range { batch, pos, end } => {
-                (*pos < *end).then(|| Self::batch_row::<COLUMN, I>(&rel.batches()[*batch], *pos))
+    fn peek<const COLUMN: u8, I: TermIdentity>(&mut self, rel: &Relation<I>) -> Option<(I, RowId)> {
+        loop {
+            match self {
+                Self::Range { batch, pos, end } => {
+                    if *pos >= *end {
+                        return None;
+                    }
+                    if let Some(row) = Self::batch_row::<COLUMN, I>(&rel.batches()[*batch], *pos) {
+                        return Some(row);
+                    }
+                    *pos += 1;
+                }
+                Self::Perm { batch, pos, end } => {
+                    if *pos >= *end {
+                        return None;
+                    }
+                    let batch = &rel.batches()[*batch];
+                    if let Some(row) =
+                        Self::batch_row::<COLUMN, I>(batch, batch.object_order()[*pos])
+                    {
+                        return Some(row);
+                    }
+                    *pos += 1;
+                }
+                Self::Tail { positions, pos } => {
+                    return positions.get(*pos).map(|&position| {
+                        Self::tail_row::<COLUMN, I>(rel.tail(), position as usize)
+                    });
+                }
             }
-            Self::Perm { batch, pos, end } => (*pos < *end).then(|| {
-                let batch = &rel.batches()[*batch];
-                Self::batch_row::<COLUMN, I>(batch, batch.object_order()[*pos])
-            }),
-            Self::Tail { positions, pos } => positions
-                .get(*pos)
-                .map(|&position| Self::tail_row::<COLUMN, I>(rel.tail(), position as usize)),
         }
     }
 
@@ -409,7 +462,8 @@ impl OrderedSource {
                 let (mut lo, mut hi) = (*pos, *end);
                 while lo < hi {
                     let mid = lo + (hi - lo) / 2;
-                    if Self::batch_row::<COLUMN, I>(batch, mid).0 < target {
+                    let (subject, object) = batch.key_at(mid);
+                    if Self::project::<COLUMN, I>(subject, object) < target {
                         lo = mid + 1;
                     } else {
                         hi = mid;
@@ -420,7 +474,8 @@ impl OrderedSource {
             Self::Perm { batch, pos, end } => {
                 let batch = &rel.batches()[*batch];
                 let offset = batch.object_order()[*pos..*end].partition_point(|&position| {
-                    Self::batch_row::<COLUMN, I>(batch, position).0 < target
+                    let (subject, object) = batch.key_at(position);
+                    Self::project::<COLUMN, I>(subject, object) < target
                 });
                 *pos += offset;
             }
@@ -495,9 +550,18 @@ impl<'a, const COLUMN: u8, I: TermIdentity> ValueCursor<'a, COLUMN, I> {
 impl<const COLUMN: u8, I: TermIdentity> ValuePosition<COLUMN, I> {
     /// Build the existing merge frontier once against the original arrangement.
     pub(crate) fn new(rel: &Relation<I>, other: Option<I>) -> Self {
+        if rel.row_count() == 0 {
+            return Self {
+                sources: Vec::new(),
+                frontier: BinaryHeap::new(),
+            };
+        }
         let mut sources = Vec::with_capacity(rel.batches().len() + 1);
         for (index, batch) in rel.batches().iter().enumerate() {
-            let source = match (COLUMN, other) {
+            if !batch.has_live_rows() {
+                continue;
+            }
+            let mut source = match (COLUMN, other) {
                 (VALUE_SUBJECT, None) => OrderedSource::Range {
                     batch: index,
                     pos: 0,
@@ -532,11 +596,9 @@ impl<const COLUMN: u8, I: TermIdentity> ValuePosition<COLUMN, I> {
         }
 
         if !rel.tail().is_empty() {
-            let mut positions: Vec<u32> = rel
-                .tail()
-                .iter()
-                .enumerate()
-                .filter_map(|(position, (subject, object, _))| {
+            let mut positions: Vec<u32> = (0..rel.tail().len())
+                .filter_map(|position| {
+                    let (subject, object, _) = rel.tail().live_row(position)?;
                     other
                         .is_none_or(|bound| Self::other_matches(bound, subject, object))
                         .then_some(position as u32)
@@ -577,7 +639,7 @@ impl<const COLUMN: u8, I: TermIdentity> ValuePosition<COLUMN, I> {
     /// Refill the min-frontier from every source's current pair.
     fn rebuild_frontier(&mut self, rel: &Relation<I>) {
         self.frontier.clear();
-        for (source, run) in self.sources.iter().enumerate() {
+        for (source, run) in self.sources.iter_mut().enumerate() {
             if let Some((value, row)) = run.peek::<COLUMN, I>(rel) {
                 self.frontier.push(Reverse((value, row, source)));
             }
@@ -956,7 +1018,7 @@ mod tests {
             cursor
                 .position
                 .sources
-                .iter()
+                .iter_mut()
                 .all(|source| source.peek::<VALUE_OBJECT, _>(cursor.rel).is_none())
         );
     }

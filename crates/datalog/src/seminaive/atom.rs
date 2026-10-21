@@ -160,7 +160,7 @@ where
         let rel = rel.read_source(operator.shape().read_source());
         rel.interner().check_read()?;
         let run = if SCAN == SCAN_DELTA {
-            indexes.get(delta, rel.row_count())
+            indexes.get(delta, rel.row_slots())
         } else {
             None
         };
@@ -575,7 +575,7 @@ mod tests {
         let rule = DlClause::datalog(pattern.clone(), vec![pattern]);
         let plan = RulePlan::for_rule(&rule);
         let operator = &plan.operators()[0];
-        let delta = Delta::all(store.row_count());
+        let delta = Delta::all(store.row_slots());
         let indexes = DeltaIndexes { runs: Vec::new() };
         let input = vec![SlotSolution::empty(plan.variables().len())];
         let lookups = store.interner().lookups.load(Ordering::Relaxed);

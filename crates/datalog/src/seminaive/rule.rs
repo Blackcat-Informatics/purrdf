@@ -92,7 +92,7 @@ where
                 .delta_indexes
                 .expect("the round retains delta indexes"),
         };
-        let phase = if entry.delta != Delta::all(snapshot.rel.row_count())
+        let phase = if entry.delta != Delta::all(snapshot.rel.row_slots())
             && entry.rule.guard_positions().is_none()
             && entry.plan.operators().len() > 1
             && !entry.rule.reads_base()
