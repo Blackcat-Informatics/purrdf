@@ -127,8 +127,10 @@ also depends on the evaluator's plan, so a limit sized tightly against one
 release can refuse under the next; a limit with headroom cannot change a
 completed answer.
 
-There is deliberately no wall-clock budget: it would break both `wasm32` and
-reproducibility.
+The Datalog evaluator reads no clock. A host can adapt a wall-clock deadline or
+cancellation flag to the answer-blind `StopSignal` interface. The signal is polled
+at session entry and round boundaries. A stopped session can resume with a fresh
+signal; neither signal changes the completed model.
 
 ## Model output, proofs and measured work
 
