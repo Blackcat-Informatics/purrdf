@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! One ordered negative-filter owner for factor matches and ground preconditions.
+//! One ordered negative-filter owner for whole rules, factor matches and ground probes.
 
 use crate::dictionary::{TermDictionary, TermIdentity};
 use crate::seminaive::{
-    EvalError, GroupProbe, NoGuards, RelationStore, RuleEntry, SlotSolution, StepGovernor,
-    evidence::RuleEvidence, negation, negative,
+    EvalError, GroupProbe, GuardEvaluator, NoGuards, RelationStore, RuleEntry, SlotSolution,
+    StepGovernor, evidence::RuleEvidence, negation, negative,
 };
 use crate::store::{Arity, StoreShape};
 use purrdf_core::evidence::EvidenceId;
@@ -21,18 +21,19 @@ where
 }
 
 /// Authored filter indices belong to the unchanged enclosing rule and factor.
-pub(super) struct Selection<'a, const N: usize>
+pub(in crate::seminaive) struct Selection<'a, D: TermDictionary, const N: usize>
 where
     Arity<N>: StoreShape<N>,
 {
-    pub(super) atoms: &'a [usize],
-    pub(super) groups: &'a [usize],
-    pub(super) entry: RuleEntry<'a, N>,
+    pub(in crate::seminaive) atoms: &'a [usize],
+    pub(in crate::seminaive) groups: &'a [usize],
+    pub(in crate::seminaive) entry: RuleEntry<'a, N>,
+    pub(in crate::seminaive) guards: &'a dyn GuardEvaluator<D, N>,
 }
 
 /// Original atom/group positions and a pending signed or boolean witness search.
 #[derive(Debug)]
-pub(super) struct Frame<I: TermIdentity, const N: usize>
+pub(in crate::seminaive) struct Frame<I: TermIdentity, const N: usize>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -47,7 +48,7 @@ impl<I: TermIdentity, const N: usize> Frame<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    pub(super) fn new(evidenced: bool) -> Self {
+    pub(in crate::seminaive) fn new(evidenced: bool) -> Self {
         Self {
             atom: 0,
             group: 0,
@@ -57,18 +58,18 @@ where
         }
     }
 
-    pub(super) fn is_complete(&self) -> bool {
+    pub(in crate::seminaive) fn is_complete(&self) -> bool {
         self.outcome.is_some()
     }
 
-    pub(super) fn blocked(&self) -> bool {
+    pub(in crate::seminaive) fn blocked(&self) -> bool {
         self.outcome.unwrap_or(false)
     }
 
     /// Finish the original probe before attaching its evidence or advancing a filter.
-    pub(super) fn advance<D: TermDictionary<Id = I>>(
+    pub(in crate::seminaive) fn advance<D: TermDictionary<Id = I>>(
         &mut self,
-        selection: &Selection<'_, N>,
+        selection: &Selection<'_, D, N>,
         rel: &RelationStore<D, N>,
         solution: &mut SlotSolution<I, N>,
         governor: &mut StepGovernor,
@@ -106,7 +107,7 @@ where
                     GroupProbe {
                         solution,
                         rel,
-                        guards: &NoGuards,
+                        guards: selection.guards,
                         rule: selection.entry.index,
                         clause: selection.entry.rule,
                     },
@@ -194,6 +195,7 @@ where
                 atoms: &self.atoms,
                 groups: &self.groups,
                 entry,
+                guards: &NoGuards,
             },
             rel,
             &mut self.solution,

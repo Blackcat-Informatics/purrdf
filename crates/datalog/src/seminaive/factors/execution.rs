@@ -43,7 +43,7 @@ where
 /// The original factor rule and every pending winner, with no relation self-borrow.
 /// The enclosing execution retains the unchanged program and evidence workspace.
 #[derive(Debug)]
-pub(super) struct Frame<'r, I: TermIdentity = TermId, const N: usize = 4>
+pub(in crate::seminaive) struct Frame<'r, I: TermIdentity = TermId, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -55,24 +55,24 @@ impl<'r, I: TermIdentity, const N: usize> Frame<'r, I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    pub(super) fn new() -> Self {
+    pub(in crate::seminaive) fn new() -> Self {
         Self {
             phase: Phase::Eligibility,
             buffer: RoundBuffer::new(),
         }
     }
 
-    pub(super) fn is_complete(&self) -> bool {
+    pub(in crate::seminaive) fn is_complete(&self) -> bool {
         matches!(self.phase, Phase::Complete)
     }
 
     /// Pending output stays internal; the round owner decides publication and refusal.
-    pub(super) fn into_buffer(self) -> RoundBuffer<'r, I, N> {
+    pub(in crate::seminaive) fn into_buffer(self) -> RoundBuffer<'r, I, N> {
         self.buffer
     }
 
     /// Advance the original phase, head and anchor before considering any later work.
-    pub(super) fn advance<D: TermDictionary<Id = I>>(
+    pub(in crate::seminaive) fn advance<D: TermDictionary<Id = I>>(
         &mut self,
         entry: RuleEntry<'r, N>,
         snapshot: RoundSnapshot<'_, D, N>,

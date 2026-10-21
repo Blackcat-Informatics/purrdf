@@ -377,6 +377,15 @@ mod tests {
     {
         let mut store = RelationStore::with_dictionary(HostDictionary {
             surfaces: [
+                // Confirmed heads render original facts, unlike body-only probes.
+                (0, "<https://example.org/id/zero>".into()),
+                (u64::MAX, "<https://example.org/id/max>".into()),
+                (WIDE, "<https://example.org/id/wide>".into()),
+                (10, "<https://example.org/id/ten>".into()),
+                (11, "<https://example.org/id/eleven>".into()),
+                (20, "<https://example.org/id/twenty>".into()),
+                (21, "<https://example.org/id/twenty-one>".into()),
+                (77, "<https://example.org/id/root>".into()),
                 (7, "<https://example.org/p>".into()),
                 (8, "<https://example.org/q>".into()),
                 (9, "<https://example.org/r>".into()),
@@ -649,6 +658,24 @@ mod tests {
             .advance(entry, snapshot, &callbacks, &mut StepGovernor::new(0))
             .unwrap();
         assert!(callbacks.calls.lock().unwrap().is_empty());
+        let round = super::super::RoundSnapshot {
+            rel: &store,
+            depth: &[0; 10],
+            assumed: &[],
+            delta_indexes: Some(&indexes),
+        };
+        let counts = super::super::constant_pattern_counts(&plan, &store, delta).unwrap();
+        let mut whole =
+            super::super::rule::Frame::new(entry, round, JoinStrategy::Planned, &counts).unwrap();
+        whole
+            .advance(
+                entry,
+                round,
+                &callbacks,
+                &mut StepGovernor::new(0),
+                &mut None,
+            )
+            .unwrap();
         let lookups = store.interner().lookups.load(Ordering::Relaxed);
         store.interner().lost.store(true, Ordering::Relaxed);
         assert_eq!(
@@ -657,5 +684,305 @@ mod tests {
         );
         assert_eq!(store.interner().lookups.load(Ordering::Relaxed), lookups);
         assert!(callbacks.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            whole.advance(
+                entry,
+                round,
+                &callbacks,
+                &mut StepGovernor::new(0),
+                &mut None
+            ),
+            Err(EvalError::Source(SourceLost(99)))
+        );
+        assert_eq!(store.interner().lookups.load(Ordering::Relaxed), lookups);
+        assert!(callbacks.calls.lock().unwrap().is_empty());
+    }
+
+    /// Compare the original whole rule, including the barrier before head emission.
+    fn check_whole_rule<const N: usize>(
+        entry: RuleEntry<'_, N>,
+        snapshot: super::super::RoundSnapshot<'_, HostDictionary, N>,
+        strategy: JoinStrategy,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::{constant_pattern_counts, evidence, reference_evaluate_rule, rule};
+        use purrdf_lex::allocation::Resident;
+        let counts = constant_pattern_counts(entry.plan, snapshot.rel, entry.delta).unwrap();
+        let capture = || {
+            evidence::Capture::<_, u64, N>::new(
+                crate::evidence::DerivationEvidence::with_admission(
+                    snapshot.rel.row_count(),
+                    Resident,
+                ),
+                crate::test_support::evidence_scope(),
+            )
+        };
+        let probes = || {
+            (
+                snapshot.rel.interner().lookups.load(Ordering::Relaxed),
+                snapshot.rel.interner().resolves.load(Ordering::Relaxed),
+            )
+        };
+        let compare = |actual: &super::super::RoundBuffer<'_, u64, N>,
+                       expected: &super::super::RoundBuffer<'_, u64, N>| {
+            assert_eq!(actual.entries, expected.entries);
+            assert_eq!(actual.confirmed.len(), expected.confirmed.len());
+            for (row, confirmation) in &actual.confirmed {
+                assert_eq!(confirmation.derivation, expected.confirmed[row].derivation);
+                assert_eq!(
+                    confirmation.sum_source_height,
+                    expected.confirmed[row].sum_source_height
+                );
+            }
+            assert_eq!(actual.generates_terms, expected.generates_terms);
+            assert_eq!(actual.generating_rules, expected.generating_rules);
+        };
+        for evidenced in [false, true] {
+            let callbacks = Callbacks::default();
+            let mut original = capture();
+            let expected = reference_evaluate_rule(
+                entry,
+                snapshot,
+                strategy,
+                StepGovernor::new(u64::MAX),
+                &callbacks,
+                evidenced
+                    .then_some(&mut original as &mut dyn evidence::RuleEvidence<HostDictionary, N>),
+                &counts,
+            )
+            .unwrap();
+            let calls = callbacks.calls.into_inner().unwrap();
+            let callbacks = Callbacks::default();
+            let mut owner = capture();
+            let before = probes();
+            let mut frame = rule::Frame::new(entry, snapshot, strategy, &counts).unwrap();
+            let mut full = StepGovernor::new(u64::MAX);
+            frame
+                .advance(
+                    entry,
+                    snapshot,
+                    &callbacks,
+                    &mut full,
+                    &mut evidenced.then_some(
+                        &mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                    ),
+                )
+                .unwrap();
+            assert!(frame.is_complete());
+            assert_eq!(frame.into_buffer().entries, expected.entries);
+            let after = probes();
+            let probe_count = (after.0 - before.0, after.1 - before.1);
+            let steps = full.pool.used.load(Ordering::Relaxed);
+            assert_eq!(steps, expected.join_steps);
+            let visits = full.row_visits;
+            for cut in 0..=steps + 1 {
+                if cut <= steps {
+                    let reference_callbacks = Callbacks::default();
+                    let current_callbacks = Callbacks::default();
+                    let mut reference_owner = capture();
+                    let mut current_owner = capture();
+                    let reference = reference_evaluate_rule(
+                        entry,
+                        snapshot,
+                        strategy,
+                        StepGovernor::new(cut),
+                        &reference_callbacks,
+                        evidenced.then_some(
+                            &mut reference_owner
+                                as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                        ),
+                        &counts,
+                    )
+                    .unwrap();
+                    let current = super::super::evaluate_rule_with_evidence(
+                        entry,
+                        snapshot,
+                        strategy,
+                        StepGovernor::new(cut),
+                        &current_callbacks,
+                        evidenced.then_some(
+                            &mut current_owner
+                                as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                        ),
+                        Some(&counts),
+                    )
+                    .unwrap();
+                    compare(&current, &reference);
+                    assert_eq!(
+                        current.join_steps, reference.join_steps,
+                        "refusal work, cut {cut}"
+                    );
+                    assert_eq!(
+                        reference_callbacks.calls.into_inner().unwrap(),
+                        current_callbacks.calls.into_inner().unwrap()
+                    );
+                    if evidenced {
+                        assert_eq!(
+                            reference_owner.rows.workspace().canonical_index().unwrap(),
+                            current_owner.rows.workspace().canonical_index().unwrap()
+                        );
+                    }
+                }
+                let callbacks = Callbacks::default();
+                let mut owner = capture();
+                let before = probes();
+                let mut frame = rule::Frame::new(entry, snapshot, strategy, &counts).unwrap();
+                let mut credits = 0;
+                let mut rows = 0;
+                // The extra case resumes one credit at a time, rather than once.
+                let pages = if cut > steps {
+                    vec![1; usize::try_from(steps + 1).unwrap()]
+                } else {
+                    vec![cut, u64::MAX]
+                };
+                for credit in pages {
+                    if frame.is_complete() {
+                        break;
+                    }
+                    let mut governor = StepGovernor::new(credit);
+                    frame
+                        .advance(
+                            entry,
+                            snapshot,
+                            &callbacks,
+                            &mut governor,
+                            &mut evidenced.then_some(
+                                &mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                            ),
+                        )
+                        .unwrap();
+                    credits += governor.pool.used.load(Ordering::Relaxed);
+                    rows += governor.row_visits;
+                }
+                assert!(frame.is_complete(), "cut {cut}");
+                let buffer = frame.into_buffer();
+                compare(&buffer, &expected);
+                assert_eq!((credits, rows), (steps, visits), "work, cut {cut}");
+                let after = probes();
+                assert_eq!(
+                    (after.0 - before.0, after.1 - before.1),
+                    probe_count,
+                    "probes, cut {cut}"
+                );
+                assert_eq!(
+                    callbacks.calls.into_inner().unwrap(),
+                    calls,
+                    "callbacks, cut {cut}"
+                );
+                if evidenced {
+                    assert_eq!(
+                        owner.rows.workspace().canonical_index().unwrap(),
+                        original.rows.workspace().canonical_index().unwrap()
+                    );
+                }
+            }
+        }
+    }
+
+    fn check_rule_phases<const N: usize>(
+        atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>,
+        unit: ClauseAtom<N>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        use crate::clause::HeadDisjunct;
+        use crate::guard::Negation;
+        let store = fixture::<N>();
+        let rules = [
+            rule(false, &atom),
+            rule(true, &atom),
+            DlClause::new(
+                vec![HeadDisjunct::new(vec![
+                    atom("a", "https://example.org/result", "z"),
+                    atom("z", "https://example.org/generated", "a"),
+                    atom("a", "https://example.org/p", "b"),
+                ])],
+                Vec::new(),
+                vec![
+                    atom("a", "https://example.org/p", "b"),
+                    atom("a", "https://example.org/absent", "b").into_negated(),
+                ],
+            )
+            .with_guards(vec![Guard::assign("expand", vec!["b".into()], "z")]),
+            rule(true, &atom).with_negations(vec![Negation::new(
+                vec![atom("c", "https://example.org/r", "local")],
+                vec![Guard::filter("gate", vec!["local".into()])],
+            )]),
+            DlClause::datalog(
+                atom("a", "https://example.org/result", "d"),
+                vec![
+                    atom("a", "https://example.org/p", "b"),
+                    atom("c", "https://example.org/q", "d"),
+                ],
+            ),
+            DlClause::datalog(unit, Vec::new()),
+        ];
+        for rule in rules {
+            let plan = RulePlan::for_rule(&rule);
+            let runtime = RuleRuntime::new(&rule, &plan);
+            for delta in [
+                Delta::all(10),
+                Delta { lo: 0, hi: 1 },
+                Delta { lo: 6, hi: 8 },
+                Delta::all(0),
+            ] {
+                let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
+                let entry = RuleEntry {
+                    index: 2,
+                    rule: &rule,
+                    plan: &plan,
+                    runtime: &runtime,
+                    delta,
+                };
+                let snapshot = super::super::RoundSnapshot {
+                    rel: &store,
+                    depth: &[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3],
+                    assumed: &[true; 10],
+                    delta_indexes: Some(&indexes),
+                };
+                for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+                    check_whole_rule(entry, snapshot, strategy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn triple_whole_rules_resume_guards_signed_filters_and_conjunctive_heads() {
+        check_rule_phases(
+            |subject, predicate, object| {
+                ClauseAtom::triple(
+                    ClauseTerm::var(subject),
+                    ClauseTerm::iri(predicate),
+                    ClauseTerm::var(object),
+                )
+            },
+            ClauseAtom::triple(
+                ClauseTerm::iri("https://example.org/unit"),
+                ClauseTerm::iri("https://example.org/p"),
+                ClauseTerm::iri("https://example.org/unit"),
+            ),
+        );
+    }
+
+    #[test]
+    fn quad_whole_rules_resume_guards_signed_filters_and_conjunctive_heads() {
+        check_rule_phases(
+            |subject, predicate, object| {
+                ClauseAtom::quad(
+                    ClauseTerm::var(subject),
+                    ClauseTerm::iri(predicate),
+                    ClauseTerm::var(object),
+                    ClauseTerm::iri("https://example.org/g"),
+                )
+            },
+            ClauseAtom::quad(
+                ClauseTerm::iri("https://example.org/unit"),
+                ClauseTerm::iri("https://example.org/p"),
+                ClauseTerm::iri("https://example.org/unit"),
+                ClauseTerm::iri("https://example.org/g"),
+            ),
+        );
     }
 }
