@@ -1253,6 +1253,26 @@ where
         let derivations = evaluation
             .derivations()
             .ok_or(ProofError::DerivationsNotRecorded)?;
+        Self::from_derivations(derivations)
+    }
+
+    /// Build independently checkable proofs for every published partial derivation.
+    ///
+    /// # Errors
+    /// Refuses disabled recording or original proof-arena storage admission failure.
+    pub fn of_partial(
+        model: &crate::seminaive::PartialModel<'_, TermInterner, N>,
+    ) -> Result<Self, ProofError<N>> {
+        Self::from_derivations(
+            model
+                .derivations()
+                .ok_or(ProofError::DerivationsNotRecorded)?,
+        )
+    }
+
+    fn from_derivations(
+        derivations: &[crate::seminaive::Derivation<N>],
+    ) -> Result<Self, ProofError<N>> {
         let mut order: Vec<usize> = (0..derivations.len()).collect();
         order.sort_by(|&left, &right| {
             (derivations[left].proof_height(), derivations[left].fact())

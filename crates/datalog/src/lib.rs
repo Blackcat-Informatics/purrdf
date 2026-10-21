@@ -50,7 +50,9 @@
 //! A limit a caller can set could make the answer the caller's choice, and it does not
 //! here, for one reason: a limit can only REFUSE. A run inside its limits returns the
 //! program's least model, which is the same model under every limit that admits it and on
-//! every target; a run past one returns no model at all. Every caller passing the same
+//! every target. Complete-only entry points return no model past a limit;
+//! [`seminaive::EvaluationSession`] retains a separately typed certified partial
+//! model and the original continuation. Every caller passing the same
 //! options gets the same answer or the same refusal, and the effective values of the
 //! limits in force are folded into the result's contract hash
 //! ([`cache::contract_hash_with`]), so a result computed under one set of limits — or on
@@ -80,11 +82,11 @@
 //! **answer-blind**: it carries no number, prices nothing, and cannot be asked *where* to
 //! stop — only whether to. An
 //! unstopped run returns precisely what it would have returned with no signal attached,
-//! and a stopped one returns **nothing at all** — a typed refusal, never a truncated
-//! model. Because there is no third outcome, there is no schedule to version, no profile
-//! to pin and no partial closure a consumer could mistake for a complete one. The whole
-//! surface is a two-line trait polled at round boundaries the fixpoint was going to reach
-//! anyway; see [`stop`] for the contract an implementation is bound by.
+//! and a stopped complete-only call returns a typed refusal. A retained
+//! [`seminaive::EvaluationSession`] exposes certified facts through
+//! [`seminaive::PartialModel`] and can resume with a fresh signal. It cannot yield
+//! an [`Evaluation`](seminaive::Evaluation) before completion. Signals are polled
+//! at round boundaries and session entry; see [`stop`] for their contract.
 //!
 //! ## The wall clock, stated accurately
 //!

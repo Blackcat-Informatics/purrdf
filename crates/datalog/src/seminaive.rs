@@ -84,6 +84,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod atom;
+mod commit;
 mod cycle;
 mod evidence;
 mod factors;
@@ -92,14 +93,22 @@ mod join;
 mod negation;
 mod negative;
 mod ordered;
+mod round;
 mod rule;
+mod session;
+mod stratum;
 pub use evidence::NegationScope;
+pub use session::{
+    ContinuationBinding, EvaluationSession, PartialModel, ResumeProgress, SessionContext,
+    SessionError, StratumStatus,
+};
 use std::fmt;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+#[cfg(test)]
 use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
@@ -885,6 +894,7 @@ impl StepGovernor {
     }
 
     /// Saturated public observation; refusal remains explicit at full width.
+    #[cfg(test)]
     fn observed(&self) -> u64 {
         self.pool
             .used
@@ -908,8 +918,9 @@ impl StepGovernor {
 
 /// Why an evaluation could not run, or could not run to completion.
 ///
-/// Every variant is a hard refusal. There is no partial answer and no best-effort mode:
-/// an answer this crate returns is the complete least model of the program it was given.
+/// Complete-only entry points return these refusals without a model.
+/// [`EvaluationSession`] instead retains resource and stop refusals beside a typed
+/// [`PartialModel`]; source and guard failures remain hard execution failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError<E = core::convert::Infallible> {
@@ -1006,12 +1017,10 @@ pub enum EvalError<E = core::convert::Infallible> {
     },
     /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
     ///
-    /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
-    /// model here either, and the rounds already committed are not an answer to anything.
-    /// It is a DISTINCT variant because the two say different things to a caller — a limit
-    /// was passed by the program and the data, whereas this run was stopped by the host
-    /// that asked for it — and only one of them is a reason to change the input or the
-    /// limit.
+    /// Complete-only entry points return no model. [`EvaluationSession`] retains
+    /// certified published facts and can resume with a fresh signal. This remains
+    /// distinct from a numeric ceiling: the host stopped the run, rather than the
+    /// program and data exhausting an allowance.
     ///
     /// The report is accurate at the point evaluation stopped, so a host can say what the
     /// stopped run had already consumed rather than only that it was stopped.
@@ -3673,6 +3682,7 @@ impl RoundExecution {
 /// dropping each solution; then the negated atoms and negated conjunctions, each of which
 /// drops a solution it is satisfied under. Every surviving solution yields one candidate
 /// per head atom.
+#[cfg(test)]
 fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -3733,6 +3743,7 @@ where
     Ok(frame.into_output())
 }
 
+#[cfg(test)]
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -4119,6 +4130,33 @@ fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let mut frame = round::Frame::new(entries, snapshot)?;
+    frame.advance(
+        snapshot,
+        execution,
+        strategy,
+        allowance,
+        guards,
+        &mut evidence,
+    )?;
+    debug_assert!(frame.is_complete() || frame.refused());
+    frame.into_buffer(snapshot.rel)
+}
+
+/// The original call-stack round is the differential scheduling oracle.
+#[cfg(test)]
+fn reference_evaluate_round<'r, D: TermDictionary, const N: usize>(
+    entries: &[RuleEntry<'r, N>],
+    snapshot: RoundSnapshot<'_, D, N>,
+    execution: RoundExecution,
+    strategy: JoinStrategy,
+    allowance: u64,
+    guards: &dyn GuardEvaluator<D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     // Every task sees the same pre-task access-path state, including on the
     // sequential policy. An earlier task's lazy index cannot change a later
     // task's join order or candidate charges.
@@ -4307,7 +4345,7 @@ where
     /// passes a ceiling. Facts already admitted remain within the stated limit.
     pub(crate) fn absorb(
         &mut self,
-        mut round: RoundBuffer<'_, D::Id, N>,
+        round: RoundBuffer<'_, D::Id, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
@@ -4315,16 +4353,7 @@ where
         if round.entries.is_empty() {
             return Ok(());
         }
-        let generates_terms = round.generates_terms;
-        let generating_rules = std::mem::take(&mut round.generating_rules);
         commit_round(round, self)?;
-        // A fact-limit refusal may commit only a prefix. Count a generating
-        // round only once its whole commit completes; retained term bytes and
-        // generated terms already report the exact admitted prefix.
-        if generates_terms {
-            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
-            self.generating_rules = generating_rules;
-        }
         check_budget(self)
     }
 }
@@ -4689,6 +4718,25 @@ fn run_stratum<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let mut frame = stratum::Frame::new(exe, runtimes, stratum, state);
+    frame.advance(state, run, &mut evidence)?;
+    debug_assert!(frame.is_complete());
+    Ok(())
+}
+
+/// The original call-stack fixpoint is the differential stratum oracle.
+#[cfg(test)]
+fn reference_run_stratum<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    runtimes: &[RuleRuntime<N>],
+    stratum: usize,
+    state: &mut FixpointState<D, N>,
+    run: StratumRun<'_, D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     // Seed the delta with EVERY accumulated row, so this stratum's rules fire against the
     // whole accumulated store in round one. Row ids are dense, so "everything" is the
     // contiguous span `[0, row_count)` — no per-key materialisation and no bitset.
@@ -4778,6 +4826,21 @@ where
 /// derivation sequence are all byte-deterministic. Row-id assignment is a purely additive
 /// side effect of this sorted loop; it never orders the commit.
 fn commit_round<D: TermDictionary, const N: usize>(
+    round: RoundBuffer<'_, D::Id, N>,
+    state: &mut FixpointState<D, N>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut frame = commit::Frame::new(round, state)?;
+    frame.advance(state)?;
+    debug_assert!(frame.is_complete());
+    Ok(())
+}
+
+/// The original publication loop is a differential commit oracle.
+#[cfg(test)]
+fn reference_commit_round<D: TermDictionary, const N: usize>(
     round: RoundBuffer<'_, D::Id, N>,
     state: &mut FixpointState<D, N>,
 ) -> Result<(), EvalError<D::Error>>

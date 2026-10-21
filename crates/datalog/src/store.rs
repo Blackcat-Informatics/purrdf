@@ -2017,6 +2017,12 @@ impl<const N: usize> RelationStore<TermInterner, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Exercise the actual dependent-mint refusal from enclosing execution controls.
+    #[cfg(test)]
+    pub(crate) fn limit_terms_for_test(&mut self, maximum: Option<u64>) {
+        self.interner.term_limit = maximum;
+    }
+
     /// The interned id of a surface in any position. Never inserts.
     ///
     /// An unknown surface constrains a selection or membership probe to no rows.

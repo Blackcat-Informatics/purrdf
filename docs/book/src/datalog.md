@@ -117,8 +117,9 @@ guards: the term-generating round limit when new terms have bounded length,
 and the term-arena ceiling when retained surfaces grow.
 
 A limit can only refuse. A run inside its limits returns the program's least
-model, the same model under every limit that admits it; a run past one returns
-no model at all. Every caller passing the same options gets the same answer or
+model, the same model under every limit that admits it. Complete-only calls
+return a refusal past a limit. A retained `EvaluationSession` exposes certified
+facts through a separate `PartialModel`. Every caller passing the same options gets the same answer or
 the same refusal, and the effective limits are folded into the result's
 contract hash, so a closure computed under one set of limits, or on one target
 under its defaults, never claims the identity of another. A join-step count
@@ -126,8 +127,10 @@ also depends on the evaluator's plan, so a limit sized tightly against one
 release can refuse under the next; a limit with headroom cannot change a
 completed answer.
 
-There is deliberately no wall-clock budget: it would break both `wasm32` and
-reproducibility.
+The Datalog evaluator reads no clock. A host can adapt a wall-clock deadline or
+cancellation flag to the answer-blind `StopSignal` interface. The signal is polled
+at session entry and round boundaries. A stopped session can resume with a fresh
+signal; neither signal changes the completed model.
 
 ## Model output, proofs and measured work
 
@@ -151,9 +154,40 @@ direct execution path for one call, without changing a global thread pool.
 Both scheduling policies use the same evaluator, program-order merge and sorted
 commit, and preserve the same model and recorded derivations.
 
-Passing a limit is a **total** refusal, not a truncation. There is no partial
-fixpoint to hand back with a note attached, and a truncated closure presented as
-a complete one is exactly the failure a reasoning report exists to prevent. The
-error names the limit, the numbers observed and permitted, and the knob that
-raises it; in `purrdf-entail` that surfaces as `EntailError::Evaluate` or
+Complete-only entry points such as `evaluate_guarded` return no model on refusal.
+The error names the limit, the numbers observed and permitted, and the knob that
+raises it; entailment reports these through `EntailError::Evaluate` or
 `EntailError::Chase`.
+
+## Certified partial models and continuations
+
+`EvaluationSession::new` consumes the input store and borrows the immutable
+program and guard evaluator. Its `SessionContext` requires the caller's canonical
+snapshot, guard-semantics and evidence-regime identities. The session adds the
+canonical authored-program identity. Retain its `binding()` value and present
+that binding unchanged to `resume`, together with cumulative limits and an
+optional stop signal. Scheduling may change; derivation recording remains fixed.
+Changing any binding coordinate refuses before execution. The original dictionary
+checks its pinned source at every public read and resume boundary.
+
+`ResumeProgress::Paused` carries the original resource or stop refusal.
+`partial_model()` borrows the seeded and proved published facts, actual successful
+work, optional derivations and each stratum's `Complete`, `SoundLowerBound` or
+`Withheld` status. Execution never enters a stratum before all preceding strata
+finish, so negation cannot observe an incomplete lower extension. Later dependent
+conclusions are withheld. The partial identity includes the original canonical
+bindings, governors and consumption in a separate hash domain. Runtime term and
+row handles never participate in it.
+
+Raise a ceiling or supply a fresh stop signal to resume the retained joins,
+guards, rule/round work, sorted publication and current delta. Successful work
+is counted once; retrying the same refused allowance adds no successful work or
+guard calls. `EvaluationProofs::of_partial` builds proofs for recorded published
+derivations, checked by the same independent checker used for complete models.
+Source and guard failures stay hard failures and prevent further resumption.
+
+Only `ResumeProgress::Complete` enables `take_complete()` to return an
+`Evaluation`. An incomplete request leaves the session intact. The completed
+model, derivations and successful join count match uninterrupted execution under
+the final options; its calculus identity uses the ordinary `contract_hash_with`
+recipe. The continuation is an in-process owner and has no serialized token form.
