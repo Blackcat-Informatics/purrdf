@@ -51,9 +51,9 @@ where
             exe,
             runtimes,
             stratum,
-            delta: Delta::all(state.rel.row_count()),
+            delta: Delta::all(state.rel.row_slots()),
             first_round: true,
-            round_lo: state.rel.row_count(),
+            round_lo: state.rel.row_slots(),
             phase: Phase::Ready,
         }
     }
@@ -106,7 +106,7 @@ where
                             delta_indexes: None,
                         },
                     )?;
-                    self.round_lo = state.rel.row_count();
+                    self.round_lo = state.rel.row_slots();
                     self.first_round = false;
                     self.phase = Phase::Evaluating(frame);
                 }
@@ -158,12 +158,12 @@ where
                     if let Some(owner) = evidence.as_mut()
                         && owner.commit(&state.rel)?
                     {
-                        self.delta = Delta::all(state.rel.row_count());
+                        self.delta = Delta::all(state.rel.row_slots());
                         self.phase = Phase::Ready;
                     } else if *had_facts {
                         self.delta = Delta {
                             lo: self.round_lo,
-                            hi: state.rel.row_count(),
+                            hi: state.rel.row_slots(),
                         };
                         self.phase = Phase::Ready;
                     } else {

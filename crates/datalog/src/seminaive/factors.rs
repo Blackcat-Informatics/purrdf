@@ -263,7 +263,7 @@ where
     };
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
     let seed = match scan {
-        JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_count()) => {
+        JoinScan::DeltaPosition(anchor) if entry.delta != Delta::all(snapshot.rel.row_slots()) => {
             Some(anchor)
         }
         _ => None,
@@ -953,7 +953,7 @@ where
             buffer.join_steps = governor.consumed;
             return Ok(buffer);
         }
-        let mut relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
+        let mut relations = if entry.delta == Delta::all(snapshot.rel.row_slots()) {
             let mut relations = Vec::with_capacity(entry.runtime.factors.len());
             for factor in &entry.runtime.factors {
                 let matches = full_matches(factor, entry, snapshot, governor, &mut evidence)?;

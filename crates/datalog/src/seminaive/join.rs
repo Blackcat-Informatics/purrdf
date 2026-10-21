@@ -411,7 +411,7 @@ where
         let mut steps = Vec::new();
         let (reordered, seed_in_cycle) = match self.mode {
             Mode::Binary { base } => {
-                let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
+                let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_slots());
                 let seed = if reordered {
                     decomposition_seed(plan, snapshot, anchor, &self.full_counts)?
                 } else {
@@ -443,7 +443,7 @@ where
                 (reordered, false)
             }
             Mode::Hybrid => {
-                let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
+                let reordered = snapshot.delta != Delta::all(snapshot.rel.row_slots());
                 let selection = Selection {
                     scan: JoinScan::DeltaPosition(anchor),
                     seed: reordered.then_some(anchor),
@@ -610,7 +610,7 @@ mod tests {
             let plan = RulePlan::for_rule(&rule);
             saw_cycle |= plan.has_cyclic_subplan();
             for delta in [
-                Delta::all(store.row_count()),
+                Delta::all(store.row_slots()),
                 Delta { lo: 40, hi: 60 },
                 Delta { lo: 0, hi: 1 },
                 Delta {
@@ -640,7 +640,7 @@ mod tests {
                             (0..rule.body().len()).collect::<Vec<_>>()
                         );
                     }
-                    if delta == Delta::all(store.row_count()) {
+                    if delta == Delta::all(store.row_slots()) {
                         assert_eq!(output.len(), if plan.has_cyclic_subplan() { 7 } else { 49 });
                     }
                 }
@@ -737,7 +737,7 @@ mod tests {
             vec![],
         );
         let plan = RulePlan::for_rule(&unit);
-        let delta = Delta::all(store.row_count());
+        let delta = Delta::all(store.row_slots());
         let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
         let snapshot = JoinSnapshot {
             rel: &store,

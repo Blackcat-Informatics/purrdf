@@ -1319,7 +1319,7 @@ where
     fn report(&self) -> BudgetReport {
         BudgetReport::new(
             self.meter.consumed,
-            self.store.row_count(),
+            self.store.retained_rows(),
             self.store.term_bytes(),
         )
         .governed_by(&self.options)

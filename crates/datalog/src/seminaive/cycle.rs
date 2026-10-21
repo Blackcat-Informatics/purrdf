@@ -179,7 +179,7 @@ impl<I: TermIdentity> Cursor<I> {
         let partition = run.rel.partition_at(self.partition.resident_index());
         let partition = if self.delta_source {
             run.indexes
-                .get(run.delta, run.rel.row_count())
+                .get(run.delta, run.rel.row_slots())
                 .map_or(partition, |delta| {
                     delta
                         .project(partition)
@@ -572,13 +572,13 @@ mod tests {
             })
             .unwrap();
         let empty = SlotSolution::empty(plan.variables().len());
-        let indexes = DeltaIndexes::build(&store, [Delta::all(store.row_count())]).unwrap();
+        let indexes = DeltaIndexes::build(&store, [Delta::all(store.row_slots())]).unwrap();
         let full = LeapfrogRun {
             plan: &plan,
             cycle,
             scan: JoinScan::Uniform(Scan::Full),
             rel: &store,
-            delta: Delta::all(store.row_count()),
+            delta: Delta::all(store.row_slots()),
             indexes: &indexes,
         };
         let reference = check_cuts(&full, std::slice::from_ref(&empty));
@@ -604,7 +604,7 @@ mod tests {
         inputs.push(computed);
         check_cuts(&full, &inputs);
         for delta in [
-            Delta::all(store.row_count()),
+            Delta::all(store.row_slots()),
             Delta { lo: 70, hi: 150 },
             Delta::all(0),
         ] {
@@ -696,7 +696,7 @@ mod tests {
                 JoinGroup::Binary(_) => None,
             })
             .unwrap();
-        let delta = Delta::all(store.row_count());
+        let delta = Delta::all(store.row_slots());
         let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
         let run = LeapfrogRun {
             plan: &plan,

@@ -39,7 +39,7 @@ where
             && matches!(strategy, JoinStrategy::Planned);
         let seed = match scan {
             JoinScan::DeltaPosition(anchor)
-                if snapshot.delta != Delta::all(snapshot.rel.row_count())
+                if snapshot.delta != Delta::all(snapshot.rel.row_slots())
                     && body.contains(&plan.operator_at(anchor).body_index()) =>
             {
                 Some(anchor)
@@ -140,7 +140,7 @@ where
         } else {
             snapshot.delta_positions(entry.plan.positive().len())
         };
-        if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
+        if !base && snapshot.delta != Delta::all(snapshot.rel.row_slots()) {
             // An empty later anchor must not erase an earlier guard invocation.
             // Only an unchanged whole body removes the round's guard obligation.
             let mut changed = false;
@@ -730,7 +730,7 @@ mod tests {
     {
         super::super::evidence::Capture::new(
             crate::evidence::DerivationEvidence::with_admission(
-                snapshot.rel.row_count(),
+                snapshot.rel.row_slots(),
                 purrdf_lex::allocation::Resident,
             ),
             crate::test_support::evidence_scope(),
@@ -1477,7 +1477,7 @@ mod tests {
             rule: clause,
             plan,
             runtime,
-            delta: Delta::all(seed.row_count()),
+            delta: Delta::all(seed.row_slots()),
         };
         let round = |state: &FixpointState<TermInterner, N>| {
             evaluate_round_with_evidence(

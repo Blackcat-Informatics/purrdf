@@ -681,7 +681,9 @@ impl BudgetReport {
         self.is_stated(STATED_STORED_FACTS)
     }
 
-    /// Facts held by the store when evaluation stopped (seeded plus derived).
+    /// Retained row slots when evaluation stopped, including the captured base.
+    /// Vacant append slots remain charged after removal; live model cardinality
+    /// is available from [`RelationStore::row_count`].
     pub fn stored_facts(self) -> usize {
         self.stored_facts
     }
@@ -1721,7 +1723,7 @@ impl<I: TermIdentity> DeltaIndexes<I> {
         rel.interner().check_read().map_err(EvalError::Source)?;
         let mut ranges = Vec::new();
         for delta in deltas {
-            if delta != Delta::all(rel.row_count()) {
+            if delta != Delta::all(rel.row_slots()) {
                 ranges
                     .try_reserve(1)
                     .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
@@ -2201,7 +2203,7 @@ where
 {
     fn delta_run(&self, position: usize) -> Option<&DeltaRun<D::Id>> {
         if matches!(self.scan.at(position), Scan::Delta) {
-            self.indexes.get(self.delta, self.rel.row_count())
+            self.indexes.get(self.delta, self.rel.row_slots())
         } else {
             None
         }
@@ -2334,7 +2336,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     rel.interner().check_read()?;
-    if delta == Delta::all(rel.row_count())
+    if delta == Delta::all(rel.row_slots())
         || plan.operators().len() <= 1
         || plan
             .operators()
@@ -2367,7 +2369,7 @@ where
 {
     let delta = snapshot
         .indexes
-        .get(snapshot.delta, snapshot.rel.row_count());
+        .get(snapshot.delta, snapshot.rel.row_slots());
     let mut best = constant_pattern_count(&plan.operators()[anchor], snapshot.rel, delta)?
         .expect("a partial delta has native indexed runs");
     let mut seed = anchor;
@@ -2458,7 +2460,7 @@ where
     /// visiting its earlier prefixes can produce no solution. Partial deltas
     /// retain every position, including positions that become productive later.
     fn delta_positions(self, positive_count: usize) -> std::ops::Range<usize> {
-        let first = if self.delta == Delta::all(self.rel.row_count()) {
+        let first = if self.delta == Delta::all(self.rel.row_slots()) {
             positive_count.saturating_sub(1)
         } else {
             0
@@ -2498,7 +2500,7 @@ where
     }
     let run = snapshot
         .indexes
-        .get(snapshot.delta, snapshot.rel.row_count());
+        .get(snapshot.delta, snapshot.rel.row_slots());
     Ok(snapshot
         .rel
         .select_partitions(positions, run)
@@ -3424,7 +3426,7 @@ fn fact_preference<G: Clone + Ord>(
 }
 
 /// An assumed fact's best proof, retaining the otherwise unobservable sum needed
-/// across schedule groups. Owned facts survive the layer's retraction/rebuild.
+/// across schedule groups. Owned facts survive the layer's indexed retraction.
 #[derive(Debug, Clone)]
 pub(crate) struct Confirmation<const N: usize = 4>
 where
@@ -3805,7 +3807,7 @@ where
         .map_err(EvalError::Source)?;
     let result = (|| {
         let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
-        if entry.delta != Delta::all(rel.row_count())
+        if entry.delta != Delta::all(rel.row_slots())
             && entry.rule.guard_positions().is_none()
             && plan.operators().len() > 1
             && !entry.rule.reads_base()
@@ -4293,9 +4295,9 @@ where
 {
     /// A state over the seeded store `edb`, governed by `options`.
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
-        let depth = vec![0u32; edb.row_count()];
+        let depth = vec![0u32; edb.row_slots()];
         let input_terms = edb.interner().term_count();
-        let input_facts = edb.retained_rows() as u64;
+        let input_facts = edb.retained_live_rows() as u64;
         Self {
             rel: edb,
             depth,
@@ -4529,7 +4531,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     edb.interner().check_read().map_err(EvalError::Source)?;
-    if rows.row_count() != edb.row_count() {
+    if rows.row_count() != edb.row_slots() {
         return Err(EvalError::Evidence(
             purrdf_core::evidence::EvidenceWorkspaceError::Column(
                 purrdf_core::evidence::EvidenceColumnError::RowOutOfBounds,
@@ -4740,7 +4742,7 @@ where
     // Seed the delta with EVERY accumulated row, so this stratum's rules fire against the
     // whole accumulated store in round one. Row ids are dense, so "everything" is the
     // contiguous span `[0, row_count)` — no per-key materialisation and no bitset.
-    let mut delta = Delta::all(state.rel.row_count());
+    let mut delta = Delta::all(state.rel.row_slots());
     let mut first_round = true;
 
     loop {
@@ -4796,18 +4798,18 @@ where
             if let Some(owner) = evidence.as_mut()
                 && owner.commit(&state.rel)?
             {
-                delta = Delta::all(state.rel.row_count());
+                delta = Delta::all(state.rel.row_slots());
                 continue;
             }
             return Ok(()); // fact and evidence fixpoint
         }
 
-        let round_lo = state.rel.row_count();
+        let round_lo = state.rel.row_slots();
         state.absorb(round)?;
         if let Some(owner) = evidence.as_mut()
             && owner.commit(&state.rel)?
         {
-            delta = Delta::all(state.rel.row_count());
+            delta = Delta::all(state.rel.row_slots());
             continue;
         }
 
@@ -4815,7 +4817,7 @@ where
         // span, because the commit loop mints row ids densely in one sorted pass.
         delta = Delta {
             lo: round_lo,
-            hi: state.rel.row_count(),
+            hi: state.rel.row_slots(),
         };
     }
 }
@@ -5054,7 +5056,7 @@ mod tests {
                 rule: warmer,
                 plan: warmer_plan,
                 runtime: &warmer_runtime,
-                delta: Delta::all(store.row_count()),
+                delta: Delta::all(store.row_slots()),
             };
             let entries = if warm_first {
                 [warmer, target]
@@ -5139,7 +5141,7 @@ mod tests {
                 hi: store.row_count(),
             };
             let indexes =
-                DeltaIndexes::build(&store, [delta, delta, Delta::all(store.row_count())]).unwrap();
+                DeltaIndexes::build(&store, [delta, delta, Delta::all(store.row_slots())]).unwrap();
             assert_eq!(
                 indexes.runs.len(),
                 1,
@@ -6057,7 +6059,7 @@ mod tests {
             partial = extend_slot_solutions(
                 operator,
                 &store,
-                Delta::all(store.row_count()),
+                Delta::all(store.row_slots()),
                 &DeltaIndexes { runs: Vec::new() },
                 Scan::Full,
                 partial,
@@ -6105,7 +6107,7 @@ mod tests {
         let error = extend_slot_solutions(
             &plan.operators()[0],
             &store,
-            Delta::all(store.row_count()),
+            Delta::all(store.row_slots()),
             &DeltaIndexes { runs: Vec::new() },
             Scan::Full,
             vec![SlotSolution::empty(plan.variables().len())],

@@ -58,7 +58,7 @@ where
         snapshot.rel.interner().check_read()?;
         let seed = match scan {
             JoinScan::DeltaPosition(anchor)
-                if entry.delta != Delta::all(snapshot.rel.row_count()) =>
+                if entry.delta != Delta::all(snapshot.rel.row_slots()) =>
             {
                 Some(anchor)
             }
@@ -531,7 +531,7 @@ mod tests {
             assumed: &[],
             delta_indexes: Some(snapshot.indexes),
         };
-        let all = entry.delta == Delta::all(snapshot.rel.row_count());
+        let all = entry.delta == Delta::all(snapshot.rel.row_slots());
         let lookups = || snapshot.rel.interner().lookups.load(Ordering::Relaxed);
         let mut original = capture::<N>();
         let mut full = StepGovernor::new(u64::MAX);

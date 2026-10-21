@@ -119,7 +119,7 @@ where
                         Phase::Relations {
                             frame: Box::new(relations::Frame::new(
                                 entry.runtime.factors.len(),
-                                entry.delta == Delta::all(snapshot.rel.row_count()),
+                                entry.delta == Delta::all(snapshot.rel.row_slots()),
                             )),
                             ground,
                         }

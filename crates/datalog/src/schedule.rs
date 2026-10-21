@@ -52,9 +52,9 @@
 //! layer, and withdrawn at its end unless some rule of the layer derived them too — SHACL's
 //! expected derived triples. The hook then names further facts to retract with them
 //! ([`LayerHooks::retract`]; a derived triple's reifiers), and one more hook runs after the
-//! last layer ([`LayerHooks::finish`]; SHACL's temporary triples). Retraction rebuilds the
-//! store from the surviving rows in their original row order, so the relative order every
-//! observable is derived from is unchanged.
+//! last layer ([`LayerHooks::finish`]; SHACL's temporary triples). Retraction vacates
+//! the indexed native rows, preserving the original dictionary, surviving handles
+//! and immutable base. Removed rows' own derivations are dropped.
 //!
 //! # Termination
 //!
@@ -438,7 +438,7 @@ where
     // The layer's assumptions become rows like any other, flagged so a rule that derives
     // one again is recorded as having done so.
     let assumptions = hooks.assume(layer_index, &state.rel).map_err(hook_error)?;
-    let mut assumed = vec![false; state.rel.row_count()];
+    let mut assumed = vec![false; state.rel.row_slots()];
     for fact in &assumptions {
         if !state.rel.contains_row(Arity::<N>::fact_terms(fact)) {
             state
@@ -562,7 +562,7 @@ where
             report: state.report(),
         });
     }
-    let hi = state.rel.row_count();
+    let hi = state.rel.row_slots();
     let mut entries: Vec<RuleEntry<'_, N>> = Vec::with_capacity(group.len());
     let mut seen = run.seen;
     for &index in group {
@@ -624,12 +624,11 @@ where
     }
     let committed = !round.is_empty();
     state.absorb(round)?;
-    run.assumed.resize(state.rel.row_count(), false);
+    run.assumed.resize(state.rel.row_slots(), false);
     Ok(committed)
 }
 
-/// Retract `facts` from `state`, rebuilding the store from the surviving rows in their
-/// original row order and dropping the derivations of the retracted facts.
+/// Retract indexed native rows and drop their own derivations without copying survivors.
 fn retract<const N: usize>(
     state: &mut FixpointState<TermInterner, N>,
     facts: &[ShapeFact<N>],
@@ -640,23 +639,23 @@ where
     if facts.is_empty() {
         return Ok(());
     }
-    let doomed: BTreeSet<&ShapeFact<N>> = facts.iter().collect();
-    let mut rebuilt =
-        RelationStore::<TermInterner, N>::with_dictionary(state.rel.retraction_dictionary()?);
-    let mut depth = Vec::with_capacity(state.depth.len());
-    for (row, fact) in state.rel.facts_in_row_order() {
-        if doomed.contains(&fact) {
-            continue;
-        }
-        rebuilt.insert_row(Arity::<N>::fact_terms(&fact))?;
-        depth.push(state.depth[row.resident_index()]);
+    // Admit the optional proof-filter index before changing any membership. A
+    // model-only retraction needs no new storage, regardless of model size.
+    let mut doomed = Vec::new();
+    if !state.derivations.is_empty() {
+        doomed
+            .try_reserve_exact(facts.len())
+            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+        doomed.extend(facts);
+        doomed.sort_unstable();
+        doomed.dedup();
     }
-    state.rel.transfer_base(&mut rebuilt);
-    state.rel = rebuilt;
-    state.depth = depth;
+    for fact in facts {
+        state.rel.remove_row(Arity::<N>::fact_terms(fact));
+    }
     state
         .derivations
-        .retain(|derivation| !doomed.contains(derivation.fact()));
+        .retain(|derivation| doomed.binary_search(&derivation.fact()).is_err());
     Ok(())
 }
 
