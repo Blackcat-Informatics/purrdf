@@ -676,10 +676,34 @@ mod tests {
                 &mut None,
             )
             .unwrap();
+        let mut rounds = super::super::round::Frame::new(&[entry], round).unwrap();
+        rounds
+            .advance(
+                round,
+                super::super::RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                0,
+                &callbacks,
+                &mut None,
+            )
+            .unwrap();
         let lookups = store.interner().lookups.load(Ordering::Relaxed);
         store.interner().lost.store(true, Ordering::Relaxed);
         assert_eq!(
             frame.advance(entry, snapshot, &callbacks, &mut StepGovernor::new(0)),
+            Err(EvalError::Source(SourceLost(99)))
+        );
+        assert_eq!(store.interner().lookups.load(Ordering::Relaxed), lookups);
+        assert!(callbacks.calls.lock().unwrap().is_empty());
+        assert_eq!(
+            rounds.advance(
+                round,
+                super::super::RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                0,
+                &callbacks,
+                &mut None
+            ),
             Err(EvalError::Source(SourceLost(99)))
         );
         assert_eq!(store.interner().lookups.load(Ordering::Relaxed), lookups);
@@ -698,6 +722,50 @@ mod tests {
         assert!(callbacks.calls.lock().unwrap().is_empty());
     }
 
+    fn capture_rows<const N: usize>(
+        snapshot: super::super::RoundSnapshot<'_, HostDictionary, N>,
+    ) -> super::super::evidence::Capture<purrdf_lex::allocation::Resident, u64, N>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        super::super::evidence::Capture::new(
+            crate::evidence::DerivationEvidence::with_admission(
+                snapshot.rel.row_count(),
+                purrdf_lex::allocation::Resident,
+            ),
+            crate::test_support::evidence_scope(),
+        )
+    }
+
+    fn probe_counts<const N: usize>(store: &RelationStore<HostDictionary, N>) -> (usize, usize)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        (
+            store.interner().lookups.load(Ordering::Relaxed),
+            store.interner().resolves.load(Ordering::Relaxed),
+        )
+    }
+
+    fn compare_buffers<const N: usize>(
+        actual: &super::super::RoundBuffer<'_, u64, N>,
+        expected: &super::super::RoundBuffer<'_, u64, N>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        assert_eq!(actual.entries, expected.entries);
+        assert_eq!(actual.confirmed.len(), expected.confirmed.len());
+        for (row, confirmation) in &actual.confirmed {
+            assert_eq!(confirmation.derivation, expected.confirmed[row].derivation);
+            assert_eq!(
+                confirmation.sum_source_height,
+                expected.confirmed[row].sum_source_height
+            );
+        }
+        assert_eq!(actual.generates_terms, expected.generates_terms);
+        assert_eq!(actual.generating_rules, expected.generating_rules);
+    }
+
     /// Compare the original whole rule, including the barrier before head emission.
     fn check_whole_rule<const N: usize>(
         entry: RuleEntry<'_, N>,
@@ -707,37 +775,9 @@ mod tests {
         Arity<N>: StoreShape<N>,
     {
         use super::super::{constant_pattern_counts, evidence, reference_evaluate_rule, rule};
-        use purrdf_lex::allocation::Resident;
         let counts = constant_pattern_counts(entry.plan, snapshot.rel, entry.delta).unwrap();
-        let capture = || {
-            evidence::Capture::<_, u64, N>::new(
-                crate::evidence::DerivationEvidence::with_admission(
-                    snapshot.rel.row_count(),
-                    Resident,
-                ),
-                crate::test_support::evidence_scope(),
-            )
-        };
-        let probes = || {
-            (
-                snapshot.rel.interner().lookups.load(Ordering::Relaxed),
-                snapshot.rel.interner().resolves.load(Ordering::Relaxed),
-            )
-        };
-        let compare = |actual: &super::super::RoundBuffer<'_, u64, N>,
-                       expected: &super::super::RoundBuffer<'_, u64, N>| {
-            assert_eq!(actual.entries, expected.entries);
-            assert_eq!(actual.confirmed.len(), expected.confirmed.len());
-            for (row, confirmation) in &actual.confirmed {
-                assert_eq!(confirmation.derivation, expected.confirmed[row].derivation);
-                assert_eq!(
-                    confirmation.sum_source_height,
-                    expected.confirmed[row].sum_source_height
-                );
-            }
-            assert_eq!(actual.generates_terms, expected.generates_terms);
-            assert_eq!(actual.generating_rules, expected.generating_rules);
-        };
+        let capture = || capture_rows(snapshot);
+        let probes = || probe_counts(snapshot.rel);
         for evidenced in [false, true] {
             let callbacks = Callbacks::default();
             let mut original = capture();
@@ -808,7 +848,7 @@ mod tests {
                         Some(&counts),
                     )
                     .unwrap();
-                    compare(&current, &reference);
+                    compare_buffers(&current, &reference);
                     assert_eq!(
                         current.join_steps, reference.join_steps,
                         "refusal work, cut {cut}"
@@ -857,7 +897,7 @@ mod tests {
                 }
                 assert!(frame.is_complete(), "cut {cut}");
                 let buffer = frame.into_buffer();
-                compare(&buffer, &expected);
+                compare_buffers(&buffer, &expected);
                 assert_eq!((credits, rows), (steps, visits), "work, cut {cut}");
                 let after = probes();
                 assert_eq!(
@@ -880,16 +920,16 @@ mod tests {
         }
     }
 
-    fn check_rule_phases<const N: usize>(
+    fn phase_rules<const N: usize>(
         atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>,
         unit: ClauseAtom<N>,
-    ) where
+    ) -> [DlClause<N>; 6]
+    where
         Arity<N>: StoreShape<N>,
     {
         use crate::clause::HeadDisjunct;
         use crate::guard::Negation;
-        let store = fixture::<N>();
-        let rules = [
+        [
             rule(false, &atom),
             rule(true, &atom),
             DlClause::new(
@@ -917,7 +957,18 @@ mod tests {
                 ],
             ),
             DlClause::datalog(unit, Vec::new()),
-        ];
+        ]
+    }
+
+    fn check_rule_phases<const N: usize>(
+        atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>,
+        unit: ClauseAtom<N>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        let store = fixture::<N>();
+        let rules = phase_rules(atom, unit);
+        check_round_phases(&rules, &store);
         for rule in rules {
             let plan = RulePlan::for_rule(&rule);
             let runtime = RuleRuntime::new(&rule, &plan);
@@ -946,6 +997,277 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn check_whole_round<const N: usize>(
+        entries: &[RuleEntry<'_, N>],
+        snapshot: super::super::RoundSnapshot<'_, HostDictionary, N>,
+        strategy: JoinStrategy,
+        execution: super::super::RoundExecution,
+        evidenced: bool,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::{RoundExecution, evidence, reference_evaluate_round, round};
+        let callbacks = Callbacks::default();
+        let mut original = capture_rows(snapshot);
+        let expected = reference_evaluate_round(
+            entries,
+            snapshot,
+            execution,
+            strategy,
+            u64::MAX,
+            &callbacks,
+            evidenced
+                .then_some(&mut original as &mut dyn evidence::RuleEvidence<HostDictionary, N>),
+        )
+        .unwrap();
+        let calls = callbacks.calls.into_inner().unwrap();
+        let mut owner = capture_rows(snapshot);
+        let callbacks = Callbacks::default();
+        let before = probe_counts(snapshot.rel);
+        let mut frame = round::Frame::new(entries, snapshot).unwrap();
+        frame
+            .advance(
+                snapshot,
+                execution,
+                strategy,
+                u64::MAX,
+                &callbacks,
+                &mut evidenced
+                    .then_some(&mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>),
+            )
+            .unwrap();
+        assert!(frame.is_complete());
+        let visits = frame.row_visits();
+        let current = frame.into_buffer(snapshot.rel).unwrap();
+        compare_buffers(&current, &expected);
+        assert_eq!(current.join_steps, expected.join_steps);
+        let after = probe_counts(snapshot.rel);
+        let probes = (after.0 - before.0, after.1 - before.1);
+        let steps = expected.join_steps;
+        let serial = evidenced
+            || matches!(execution, RoundExecution::Sequential)
+            || entries.iter().any(|entry| entry.rule.is_guarded());
+        for cut in 0..=steps + 1 {
+            if serial && cut <= steps {
+                let original_callbacks = Callbacks::default();
+                let current_callbacks = Callbacks::default();
+                let mut original_owner = capture_rows(snapshot);
+                let mut current_owner = capture_rows(snapshot);
+                let original = reference_evaluate_round(
+                    entries,
+                    snapshot,
+                    execution,
+                    strategy,
+                    cut,
+                    &original_callbacks,
+                    evidenced.then_some(
+                        &mut original_owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                    ),
+                )
+                .unwrap();
+                let current = super::super::evaluate_round_with_evidence(
+                    entries,
+                    snapshot,
+                    execution,
+                    strategy,
+                    cut,
+                    &current_callbacks,
+                    evidenced.then_some(
+                        &mut current_owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                    ),
+                )
+                .unwrap();
+                compare_buffers(&current, &original);
+                assert_eq!(current.join_steps, original.join_steps);
+                assert_eq!(current.join_refused, original.join_refused);
+                assert_eq!(
+                    current_callbacks.calls.into_inner().unwrap(),
+                    original_callbacks.calls.into_inner().unwrap()
+                );
+                if evidenced {
+                    assert_eq!(
+                        current_owner.rows.workspace().canonical_index().unwrap(),
+                        original_owner.rows.workspace().canonical_index().unwrap()
+                    );
+                }
+            }
+            let callbacks = Callbacks::default();
+            let mut owner = capture_rows(snapshot);
+            let before = probe_counts(snapshot.rel);
+            let mut frame = round::Frame::new(entries, snapshot).unwrap();
+            let pages = if cut > steps {
+                vec![1; usize::try_from(steps + 1).unwrap()]
+            } else {
+                vec![cut, u64::MAX]
+            };
+            for (page, allowance) in pages.into_iter().enumerate() {
+                if frame.is_complete() {
+                    break;
+                }
+                // In particular, serial resumption skips later parallel-complete rules.
+                let scheduling = if page == 0 {
+                    execution
+                } else {
+                    match execution {
+                        RoundExecution::Parallel => RoundExecution::Sequential,
+                        RoundExecution::Sequential => RoundExecution::Parallel,
+                    }
+                };
+                frame
+                    .advance(
+                        snapshot,
+                        scheduling,
+                        strategy,
+                        allowance,
+                        &callbacks,
+                        &mut evidenced.then_some(
+                            &mut owner as &mut dyn evidence::RuleEvidence<HostDictionary, N>,
+                        ),
+                    )
+                    .unwrap();
+            }
+            assert!(frame.is_complete(), "round cut {cut}");
+            assert_eq!(frame.row_visits(), visits, "round visits, cut {cut}");
+            let actual = frame.into_buffer(snapshot.rel).unwrap();
+            compare_buffers(&actual, &expected);
+            assert_eq!(actual.join_steps, steps, "round work, cut {cut}");
+            assert!(!actual.join_refused);
+            let after = probe_counts(snapshot.rel);
+            assert_eq!(
+                (after.0 - before.0, after.1 - before.1),
+                probes,
+                "round dictionary probes, cut {cut}"
+            );
+            assert_eq!(callbacks.calls.into_inner().unwrap(), calls);
+            if evidenced {
+                assert_eq!(
+                    owner.rows.workspace().canonical_index().unwrap(),
+                    original.rows.workspace().canonical_index().unwrap()
+                );
+            }
+        }
+    }
+
+    fn check_round_phases<const N: usize>(
+        rules: &[DlClause<N>; 6],
+        store: &RelationStore<HostDictionary, N>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::RoundExecution;
+        let plans: Vec<_> = rules.iter().map(RulePlan::for_rule).collect();
+        let runtimes: Vec<_> = rules
+            .iter()
+            .zip(&plans)
+            .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+            .collect();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            check_round_callback_failure(rules, &plans, &runtimes, store);
+            for selection in [&[0, 1, 2, 3, 4, 5][..], &[4, 5, 4][..]] {
+                for delta in [Delta::all(10), Delta { lo: 6, hi: 8 }, Delta::all(0)] {
+                    let entries: Vec<_> = selection
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &selected)| RuleEntry {
+                            index,
+                            rule: &rules[selected],
+                            plan: &plans[selected],
+                            runtime: &runtimes[selected],
+                            delta,
+                        })
+                        .collect();
+                    let snapshot = super::super::RoundSnapshot {
+                        rel: store,
+                        depth: &[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3],
+                        assumed: &[true; 10],
+                        delta_indexes: None,
+                    };
+                    for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+                        for execution in [RoundExecution::Sequential, RoundExecution::Parallel] {
+                            for evidenced in [false, true] {
+                                check_whole_round(
+                                    &entries, snapshot, strategy, execution, evidenced,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn check_round_callback_failure<const N: usize>(
+        rules: &[DlClause<N>],
+        plans: &[RulePlan<N>],
+        runtimes: &[RuleRuntime<N>],
+        store: &RelationStore<HostDictionary, N>,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::{RoundExecution, reference_evaluate_round, round};
+        let entries = [0, 1].map(|index| RuleEntry {
+            index,
+            rule: &rules[0],
+            plan: &plans[0],
+            runtime: &runtimes[0],
+            delta: Delta::all(10),
+        });
+        let snapshot = super::super::RoundSnapshot {
+            rel: store,
+            depth: &[0; 10],
+            assumed: &[],
+            delta_indexes: None,
+        };
+        let callbacks = || Callbacks {
+            fail_seed: Some(2),
+            ..Callbacks::default()
+        };
+        let original = callbacks();
+        assert_eq!(
+            reference_evaluate_round(
+                &entries,
+                snapshot,
+                RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                u64::MAX,
+                &original,
+                None
+            )
+            .unwrap_err(),
+            EvalError::Source(SourceLost(17))
+        );
+        let resumed = callbacks();
+        let mut frame = round::Frame::new(&entries, snapshot).unwrap();
+        let error = (0..1000)
+            .find_map(|page| {
+                match frame.advance(
+                    snapshot,
+                    RoundExecution::Parallel,
+                    JoinStrategy::Planned,
+                    u64::from(page != 0),
+                    &resumed,
+                    &mut None,
+                ) {
+                    Err(error) => Some(error),
+                    Ok(()) => {
+                        assert!(!frame.is_complete(), "the second callback must refuse");
+                        None
+                    }
+                }
+            })
+            .expect("one-credit progress must reach the second callback");
+        assert_eq!(error, EvalError::Source(SourceLost(17)));
+        assert_eq!(resumed.seeds.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            resumed.calls.into_inner().unwrap(),
+            original.calls.into_inner().unwrap()
+        );
     }
 
     #[test]

@@ -92,6 +92,7 @@ mod join;
 mod negation;
 mod negative;
 mod ordered;
+mod round;
 mod rule;
 pub use evidence::NegationScope;
 use std::fmt;
@@ -100,6 +101,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+#[cfg(test)]
 use rayon::prelude::*;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
@@ -885,6 +887,7 @@ impl StepGovernor {
     }
 
     /// Saturated public observation; refusal remains explicit at full width.
+    #[cfg(test)]
     fn observed(&self) -> u64 {
         self.pool
             .used
@@ -3673,6 +3676,7 @@ impl RoundExecution {
 /// dropping each solution; then the negated atoms and negated conjunctions, each of which
 /// drops a solution it is satisfied under. Every surviving solution yields one candidate
 /// per head atom.
+#[cfg(test)]
 fn evaluate_rule<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -3733,6 +3737,7 @@ where
     Ok(frame.into_output())
 }
 
+#[cfg(test)]
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -4108,6 +4113,33 @@ where
 }
 
 fn evaluate_round_with_evidence<'r, D: TermDictionary, const N: usize>(
+    entries: &[RuleEntry<'r, N>],
+    snapshot: RoundSnapshot<'_, D, N>,
+    execution: RoundExecution,
+    strategy: JoinStrategy,
+    allowance: u64,
+    guards: &dyn GuardEvaluator<D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut frame = round::Frame::new(entries, snapshot)?;
+    frame.advance(
+        snapshot,
+        execution,
+        strategy,
+        allowance,
+        guards,
+        &mut evidence,
+    )?;
+    debug_assert!(frame.is_complete() || frame.refused());
+    frame.into_buffer(snapshot.rel)
+}
+
+/// The original call-stack round is the differential scheduling oracle.
+#[cfg(test)]
+fn reference_evaluate_round<'r, D: TermDictionary, const N: usize>(
     entries: &[RuleEntry<'r, N>],
     snapshot: RoundSnapshot<'_, D, N>,
     execution: RoundExecution,
