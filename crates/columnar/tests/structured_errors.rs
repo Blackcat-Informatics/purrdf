@@ -123,6 +123,7 @@ enum Phase {
     Initial,
     Completed,
     Resolution,
+    UnlatchedResolution,
     NestedResolution,
     CompletedWithCodec,
 }
@@ -134,6 +135,7 @@ impl Phase {
             Self::Initial => "initial",
             Self::Completed => "completed",
             Self::Resolution => "resolution",
+            Self::UnlatchedResolution => "unlatched-resolution",
             Self::NestedResolution => "nested-resolution",
             Self::CompletedWithCodec => "completed-with-codec",
         }
@@ -206,10 +208,12 @@ impl DatasetView for FaultView {
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
         self.resolutions.set(self.resolutions.get() + 1);
         let value = match self.phase {
-            Phase::Resolution | Phase::NestedResolution
-                if self.phase == Phase::Resolution || self.resolutions.get() == 3 =>
+            Phase::Resolution | Phase::UnlatchedResolution | Phase::NestedResolution
+                if self.phase != Phase::NestedResolution || self.resolutions.get() == 3 =>
             {
-                self.failed.set(true);
+                if self.phase != Phase::UnlatchedResolution {
+                    self.failed.set(true);
+                }
                 return Err(self.failure());
             }
             // The completed-read refusal must still precede an inner codec
@@ -275,7 +279,10 @@ fn fault_view(phase: Phase) -> (FaultView, Weak<Owner>, Arc<Counts>) {
     let mut builder = RdfDatasetBuilder::new();
     if matches!(
         phase,
-        Phase::Resolution | Phase::NestedResolution | Phase::CompletedWithCodec
+        Phase::Resolution
+            | Phase::UnlatchedResolution
+            | Phase::NestedResolution
+            | Phase::CompletedWithCodec
     ) {
         let term = builder.intern_iri("https://example.org/source").unwrap();
         let object = if phase == Phase::NestedResolution {
@@ -360,6 +367,7 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
         Phase::Initial,
         Phase::Completed,
         Phase::Resolution,
+        Phase::UnlatchedResolution,
         Phase::NestedResolution,
         Phase::CompletedWithCodec,
     ] {
@@ -391,7 +399,7 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
                 view.resolutions.get(),
                 match phase {
                     Phase::NestedResolution => 3,
-                    Phase::Resolution | Phase::CompletedWithCodec => 1,
+                    Phase::Resolution | Phase::UnlatchedResolution | Phase::CompletedWithCodec => 1,
                     Phase::Initial | Phase::Completed => 0,
                 }
             );
@@ -401,7 +409,10 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
                 match phase {
                     Phase::NestedResolution => 2,
                     Phase::CompletedWithCodec => 1,
-                    Phase::Initial | Phase::Completed | Phase::Resolution => 0,
+                    Phase::Initial
+                    | Phase::Completed
+                    | Phase::Resolution
+                    | Phase::UnlatchedResolution => 0,
                 }
             );
             drop(view);
