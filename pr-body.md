@@ -1,0 +1,9 @@
+Scheduled withdrawal previously rebuilt the relation store and reminted survivor handles. Route it through indexed native removal, preserve original source and survivor identities, and give reinsertions fresh append handles. Row-indexed Datalog and Shapes callers use retained append extent; governors charge vacant retained slots. Empty partitions leave live enumeration without losing reactivation coordinates.
+
+Tail membership uses existing live counts to select the occupied two-column kernel or handle-checked vacant kernel. Local seven-configuration generation passed under compiler 21b707e3f. Hosted compiler 19833af72 also met every kernel floor and mnemonic requirement, but produced 23 different catalogue cells across ten other rows. The existing catalogue writer projected those exact hosted measurements at a7dd78521; fresh hosted catalogue parity now passes in all seven configurations. No floor or instruction requirement changed.
+
+Current local validation passes 435 Datalog library tests, 48 integration cases, one doctest and all 32 actual Node/WASM runtime cases, plus strict Datalog/Shapes all-target Clippy, rustdoc and helper hygiene. Native removal plus a warmed object scan allocates zero bytes. All 36 Shapes rules-engine controls also pass. Normal signed hooks pass. Independent review covers substantive repair 5063401f6; its confirmed spacing finding is corrected in prose-only d6d98f765. The subsequent hosted-data projection changes documentation only. Run 39686049488 on a7dd78521 has passed all seven SIMD configurations; final library, integration and Python qualification remains running.
+
+Vacant slots and terms remain retained. Full signed maintenance, witness repair, negative/recursive updates and affected-part work remain required by parent #493; this storage prerequisite does not close that contract.
+
+Closes #669.

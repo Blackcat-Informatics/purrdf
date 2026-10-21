@@ -1,0 +1,5 @@
+The revised tail dispatch now passes the prescribed x86_64 assembly shard: all 112 sites measured successfully, with `datalog.relation-contains` reporting SSE2 v25 and all four required instructions present (`pcmpeqd`, `pshufd`, `pand`, `paddd`).
+
+The correction reuses the existing relation and sealed-batch live counts to prove an occupied tail can use the original packed key-count kernel. Vacant tails retain handle checks. It adds no per-partition flag, survivor scan or allocation. Focused native tuple, removal/dispatch and shrinking mutation controls pass. The earlier bounds-only attempt failed and is superseded; no vector floor or required instruction was weakened.
+
+The repair is still local and uncommitted. The full seven-configuration catalogue generator is running with the normal build configuration. Settled regression/portable checks, normal commit/push hooks, independent review of this delta, current hosted CI and final integration still remain before merge. The earlier review does not cover this correction. This storage delivery does not complete the signed-maintenance parent.

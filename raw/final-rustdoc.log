@@ -1,0 +1,11 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/hash)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/rdf-core)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/lex)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/rdf-events)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/deflate)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/cdt)
+ Documenting purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/669-native-indexed-datalog-removal-and/crates/datalog)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 27.03s
+   Generated /home/paudley/Active/purrdf/.worktrees/.build-cache/datalog-join-state/target/doc/purrdf_datalog/index.html

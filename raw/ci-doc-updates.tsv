@@ -1,0 +1,24 @@
+site	config	previous	measured
+entail.classify	aarch64	decide v0·f0·r0<br>saturate v0·f0·r0	decide v0·f0·r0<br>saturate v10·f0·r0
+entail.classify	aarch64-neoverse-v1	decide v0·f0·r0<br>saturate v0·f0·r0	decide v0·f0·r0<br>saturate v10·f0·r0
+eval.bgp-join-probe	aarch64	v20·f0·r0	v23·f0·r0
+eval.bgp-join-probe	x86_64-v4	v14·f0·r0	v18·f0·r0
+hnsw.search-build	x86_64-v3	search v0·f0·r0<br>build v132·f0·r0<br>search reassociated v0·f0·r0<br>build reassociated v132·f0·r0	search v0·f0·r0<br>build v133·f0·r0<br>search reassociated v0·f0·r0<br>build reassociated v133·f0·r0
+hnsw.search-build	x86_64-v4	search v0·f0·r0<br>build v46·f0·r0<br>search reassociated v0·f0·r0<br>build reassociated v46·f0·r0	search v0·f0·r0<br>build v47·f0·r0<br>search reassociated v0·f0·r0<br>build reassociated v47·f0·r0
+rdf.projections	x86_64-v3	v28·f0·r0	v30·f0·r0
+rdf.projections	x86_64-v4	v27·f0·r0	v29·f0·r0
+rdf.sort-canonical	aarch64	v0·f0·r0	v10·f0·r0
+rdf.sort-canonical	aarch64-neoverse-v1	v0·f0·r0	v10·f0·r0
+shapes.frontier-dedup	aarch64	neon v138·f0·r0·req✓	neon v150·f0·r0·req✓
+shapes.instance-projection	aarch64	graph v4·f0·r0<br>subject v0·f0·r0<br>list index v12·f0·r0	graph v4·f0·r0<br>subject v0·f0·r0<br>list index v50·f0·r0
+slice.ownership	aarch64	analyze v27·f0·r0<br>iri refs v0·f0·r0	analyze v29·f0·r0<br>iri refs v0·f0·r0
+slice.ownership	aarch64-neoverse-v1	analyze v59·f0·r0<br>iri refs v0·f0·r0	analyze v61·f0·r0<br>iri refs v0·f0·r0
+slice.ownership	x86_64-v3	analyze v32·f0·r0<br>iri refs v19·f0·r0	analyze v32·f0·r0<br>iri refs v33·f0·r0
+slice.ownership	x86_64-v4	analyze v24·f0·r0<br>iri refs v22·f0·r0	analyze v24·f0·r0<br>iri refs v27·f0·r0
+text.phonetic-distance	aarch64	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v0·f0·r0<br>Myers v0·f0·r0	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v10·f0·r0<br>Myers v0·f0·r0
+text.phonetic-distance	aarch64-neoverse-v1	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v0·f0·r0<br>Myers v0·f0·r0	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v10·f0·r0<br>Myers v0·f0·r0
+text.phonetic-distance	x86_64	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v0·f0·r0<br>Myers v0·f0·r0	prepare band v0·f0·r0<br>band v2·f0·r0<br>prepare Myers v12·f0·r0<br>Myers v0·f0·r0
+text.phonetic-distance	x86_64-v3	prepare band v0·f0·r0<br>band v6·f0·r0<br>prepare Myers v0·f0·r0<br>Myers v0·f0·r0	prepare band v0·f0·r0<br>band v6·f0·r0<br>prepare Myers v4·f0·r0<br>Myers v0·f0·r0
+text.phonetic-distance	x86_64-v4	prepare band v0·f0·r0<br>band v6·f0·r0<br>prepare Myers v0·f0·r0<br>Myers v0·f0·r0	prepare band v0·f0·r0<br>band v6·f0·r0<br>prepare Myers v2·f0·r0<br>Myers v0·f0·r0
+xsd.exact-arith	wasm32-simd128	mul_fast v0·f0·r0<br>div_rem v0·f0·r0<br>transform v18·f0·r0<br>decimal tree v0·f0·r0	mul_fast v0·f0·r0<br>div_rem v0·f0·r0<br>transform v10·f0·r0<br>decimal tree v0·f0·r0
+xsd.exact-arith	x86_64-v4	mul_fast v0·f0·r0<br>div_rem v0·f0·r0<br>transform v27·f0·r0<br>decimal tree v0·f0·r0	mul_fast v0·f0·r0<br>div_rem v0·f0·r0<br>transform v16·f0·r0<br>decimal tree v0·f0·r0

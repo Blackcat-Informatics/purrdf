@@ -1,0 +1,21 @@
+{
+  "scope": "Paginated review submissions and inline comments exhausted; GraphQL reviewThreads pageInfo retained. Reviewer/application metadata, UI links and allowance boilerplate omitted; every material comment preserved.",
+  "reviews": [
+    {
+      "id": 5606475346,
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/670#pullrequestreview-5606475346",
+      "commit": "5063401f657b4c366415b9a33d20e7e0393cfddf",
+      "state": "COMMENTED",
+      "submitted_at": "2026-10-21T21:29:16Z",
+      "body": "<details>\n<summary>🔇 Additional comments: 3</summary><blockquote>\n\n<details>\n<summary>docs/design/purrdf-simd.md: 1</summary><blockquote>\n\n`747-749`: LGTM!\n\n\n\nAlso applies to: 763-763, 786-787, 792-798, 809-809, 817-817, 836-836\n\n<!-- cr-comment:v1:acd2fcd169afc3d55eebaf66 -->\n\n</blockquote></details>\n<details>\n<summary>crates/datalog/src/store.rs: 1</summary><blockquote>\n\n`800-804`: LGTM!\n\n\n\nAlso applies to: 810-810, 813-817, 825-825, 904-928, 4251-4251, 4255-4258, 4261-4264, 4266-4269, 4274-4343, 4369-4372, 4375-4375, 4379-4379, 4393-4393\n\n<!-- cr-comment:v1:ad612163b43921ea1de14b88 -->\n\n</blockquote></details>\n<details>\n<summary>docs/design/purrdf-simd.md-788-788: 1</summary><blockquote>\n\n`788-788`: **📐 Maintainability & Code Quality** | **🟡 Minor** | **⚡ Quick win**\n\n⚠️ **Unverified finding**\nVerification ran but could not confirm this finding. It is shown for review, not as a verified issue.\n\n**Correct the spacing in the relation-containment description.**\n\nReplace `both32-bit` with `both 32-bit` and `each64-bit` with `each 64-bit`.\n\n_Source: Linters/SAST tools_\n\n</blockquote></details>\n\n</blockquote></details>\n"
+    }
+  ],
+  "inline": [],
+  "threads": {
+    "nodes": [],
+    "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": null
+    }
+  }
+}
