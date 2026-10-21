@@ -1651,6 +1651,11 @@ where
         self.rules.len()
     }
 
+    /// The immutable authored program, including its original clause order.
+    pub fn rules(&self) -> &[DlClause<N>] {
+        &self.rules
+    }
+
     /// Whether stratum `k` has no rules (a trivially-saturated empty stratum).
     ///
     /// # Panics

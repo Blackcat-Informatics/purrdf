@@ -598,6 +598,7 @@ source on every run.
 | `b"purrdf-datalog-guarded-triple-clause-ir-v2"` | `NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-ordered-dl-clause-ir-v3"` | `ORDERED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-ordered-triple-clause-ir-v3"` | `ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-partial-model-v1"` | `PARTIAL_MODEL_DOMAIN` | `crates/datalog/src/seminaive/session.rs` |
 | `b"purrdf-datalog-plan-identity-v1"` | `PLAN_IDENTITY_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-proof-v2"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |

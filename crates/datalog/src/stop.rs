@@ -15,12 +15,13 @@
 //! because it changes no answer. A run that is not stopped returns precisely the answer
 //! it would have returned with no signal attached — the poll is a load and a branch at a
 //! round boundary, and the rounds are the ones the fixpoint was going to run anyway — and a
-//! run that IS stopped returns **no answer at all**: a typed refusal
+//! complete-only call that IS stopped returns a typed refusal
 //! ([`EvalError::Stopped`](crate::seminaive::EvalError::Stopped),
 //! [`ChaseError::Stopped`](crate::chase::ChaseError::Stopped)) carrying the consumption
-//! measured up to that point. There is no third outcome, so there is no partial closure a
-//! consumer could mistake for a complete one and no schedule of charges that would have to
-//! be versioned, frozen or pinned.
+//! measured up to that point. [`crate::seminaive::EvaluationSession`] retains a
+//! stopped execution, exposes its certified facts through a distinct
+//! [`crate::seminaive::PartialModel`], and accepts a fresh signal on resume.
+//! It cannot return a complete model before the original execution finishes.
 //!
 //! What this buys is the honesty of a host's wall deadline. A materialized closure is
 //! routinely the expensive half of an entailment-regime query, so a deadline that bounds

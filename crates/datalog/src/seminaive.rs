@@ -95,8 +95,13 @@ mod negative;
 mod ordered;
 mod round;
 mod rule;
+mod session;
 mod stratum;
 pub use evidence::NegationScope;
+pub use session::{
+    ContinuationBinding, EvaluationSession, PartialModel, ResumeProgress, SessionContext,
+    SessionError, StratumStatus,
+};
 use std::fmt;
 use std::sync::{
     Arc,
@@ -913,8 +918,9 @@ impl StepGovernor {
 
 /// Why an evaluation could not run, or could not run to completion.
 ///
-/// Every variant is a hard refusal. There is no partial answer and no best-effort mode:
-/// an answer this crate returns is the complete least model of the program it was given.
+/// Complete-only entry points return these refusals without a model.
+/// [`EvaluationSession`] instead retains resource and stop refusals beside a typed
+/// [`PartialModel`]; source and guard failures remain hard execution failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError<E = core::convert::Infallible> {
@@ -1011,12 +1017,10 @@ pub enum EvalError<E = core::convert::Infallible> {
     },
     /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
     ///
-    /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
-    /// model here either, and the rounds already committed are not an answer to anything.
-    /// It is a DISTINCT variant because the two say different things to a caller — a limit
-    /// was passed by the program and the data, whereas this run was stopped by the host
-    /// that asked for it — and only one of them is a reason to change the input or the
-    /// limit.
+    /// Complete-only entry points return no model. [`EvaluationSession`] retains
+    /// certified published facts and can resume with a fresh signal. This remains
+    /// distinct from a numeric ceiling: the host stopped the run, rather than the
+    /// program and data exhausting an allowance.
     ///
     /// The report is accurate at the point evaluation stopped, so a host can say what the
     /// stopped run had already consumed rather than only that it was stopped.
