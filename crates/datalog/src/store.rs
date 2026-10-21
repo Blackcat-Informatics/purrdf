@@ -641,11 +641,11 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
 ///
 /// A streaming two-way merge over the `(subject_id, object_id)` key: O(1) scratch
 /// beyond the output, never a whole-relation re-sort, so there is no transient
-/// allocation spike. On a key COLLISION — only reachable for a signed weight monoid,
-/// since set-semantics inserts keep batches key-disjoint — the weights
-/// [`combine`](Weight::combine) and the surviving row keeps the LOWER [`RowId`]
-/// (deterministic, independent of which run it came from); an annihilated weight drops
-/// the row. For `W = ()` the collision arm is dead and this is a plain interleave.
+/// allocation spike. A live key collision combines the weights through
+/// [`Weight::combine`] and keeps the lower [`RowId`]; an annihilated weight drops
+/// the row. Set-semantics insertion keeps live keys disjoint, but reinsertion
+/// can collide with a retired cell. Vacant cells carry no weight into the merge
+/// and cannot replace the fresh reinsertion handle.
 fn merge_batches<W: Weight, I: TermIdentity>(
     left: &Batch<W, I>,
     right: &Batch<W, I>,
@@ -682,8 +682,8 @@ fn merge_batches<W: Weight, I: TermIdentity>(
                 j += 1;
             }
             Ordering::Equal => {
-                // Key collision (signed-weight only): combine, keep the lower RowId,
-                // drop the row if annihilated. Never reached under `W = ()`.
+                // Combine live weights; a retired copy cannot compete with a
+                // fresh reinsertion or retain its old handle.
                 match (left.row_id[i], right.row_id[j]) {
                     (Some(left_row), Some(right_row)) => {
                         let w = left.weight[i].combine(right.weight[j])?;

@@ -230,8 +230,9 @@ impl<I: TermIdentity> RowPosition<I> {
         }
     }
 
-    /// Count the remaining matches from indexed run lengths and the bounded tail.
-    /// Sealed rows are never enumerated and no result buffer is allocated.
+    /// Count remaining matches from indexed lengths or occupied handles.
+    /// All-live sealed runs use their lengths; vacant runs and the bounded tail
+    /// inspect handles without allocating a result buffer.
     fn remaining_count(mut self, rel: &Relation<I>) -> usize {
         let mut count = 0;
         loop {
