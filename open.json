@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "issue": 488,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/488-datalog-join-state",
+  "branch": "delivery/488-datalog-factor-state",
+  "slug": "datalog-join-state",
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/488-datalog-join-state/.stage/datalog-join-state",
+  "stage_tracked": false,
+  "base": "origin/main",
+  "reused": true,
+  "setup_mode": "manual-legacy-adoption",
+  "warnings": [
+    "stagectl open --dry-run returned this exact existing worktree and artifact path but inferred a deleted historical branch from the directory name; this routing record explicitly names the actual development branch without switching or rewriting source",
+    "the dry-run stage_tracked flag disagreed with git check-ignore; this directory is untracked and ignored by the existing common info/exclude policy"
+  ]
+}
