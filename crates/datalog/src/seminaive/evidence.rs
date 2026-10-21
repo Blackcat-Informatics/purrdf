@@ -8,7 +8,7 @@ use purrdf_core::evidence::{
 };
 use purrdf_lex::allocation::Admission;
 
-use super::{Cow, EvalError, HeadKey, HeadTerm, RelationStore, SourceRow, factors::Frontier};
+use super::{Cow, EvalError, HeadKey, HeadTerm, RelationStore, SourceRow, factors::Witnesses};
 use crate::dictionary::{TermDictionary, TermIdentity};
 use crate::evidence::DerivationEvidence;
 use crate::id::TermId;
@@ -49,7 +49,7 @@ where
     ) -> Result<EvidenceId, EvalError<D::Error>>;
     fn product(
         &mut self,
-        factors: &[&Frontier<'_, D::Id, N>],
+        factors: &[Witnesses<'_, D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>>;
     fn emit(
         &mut self,
@@ -191,7 +191,7 @@ where
 
     fn product_native(
         &mut self,
-        factors: &[&Frontier<'_, I, N>],
+        factors: &[Witnesses<'_, I, N>],
     ) -> Result<EvidenceId, EvidenceWorkspaceError> {
         let mut groups = Vec::new();
         for factor in factors {
@@ -361,7 +361,7 @@ where
 
     fn product(
         &mut self,
-        factors: &[&Frontier<'_, D::Id, N>],
+        factors: &[Witnesses<'_, D::Id, N>],
     ) -> Result<EvidenceId, EvalError<D::Error>> {
         self.product_native(factors).map_err(EvalError::Evidence)
     }
