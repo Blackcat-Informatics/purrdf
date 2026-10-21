@@ -6,12 +6,20 @@
 use super::{
     AtomOperator, AtomShape, Bound, ConstantPositions, Delta, DeltaIndexes, INDEX_ANY, INDEX_BOTH,
     INDEX_OBJECT, INDEX_REBOUND, INDEX_SUBJECT, POSITION_OBJECT, POSITION_SUBJECT, PositionPlan,
-    PositionValue, RelationStore, SCAN_DELTA, SlotSolution, SlotValue, SourceRow, StepGovernor,
-    TermDictionary, TermId, TermIdentity, constant_positions, keep_row,
+    PositionValue, RelationStore, SCAN_DELTA, SCAN_FULL, SCAN_OLD_ONLY, SlotSolution, SlotValue,
+    SourceRow, StepGovernor, TermDictionary, TermId, TermIdentity, constant_positions, keep_row,
 };
 use crate::cursor::RowPosition;
 use crate::id::{PartitionId, RowId};
+use crate::plan::IndexChoice;
 use crate::store::{Arity, DeltaRun, PartitionPosition, StoreShape};
+
+/// Original planned bounds or bounds rebound after a physical reordering.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Access {
+    Planned(super::Scan),
+    Rebound(super::Scan),
+}
 
 /// A matched row whose reservation may have paused before solution expansion.
 type Pending<I, const N: usize> = ([I; N], RowId);
@@ -82,6 +90,60 @@ where
     /// Move the original output buffer; the round owner retains refusal evidence.
     pub(super) fn into_output(self) -> Vec<SlotSolution<I, N>> {
         self.output
+    }
+
+    /// Select the existing const-specialized kernel once per drive, never per row.
+    pub(super) fn advance_selected<D: TermDictionary<Id = I>>(
+        &mut self,
+        operator: &AtomOperator<N>,
+        rel: &RelationStore<D, N>,
+        delta: Delta,
+        indexes: &DeltaIndexes<I>,
+        access: Access,
+        governor: &mut StepGovernor,
+    ) -> Result<(), D::Error> {
+        let (scan, rebound) = match access {
+            Access::Planned(scan) => (scan, false),
+            Access::Rebound(scan) => (scan, true),
+        };
+        match scan {
+            super::Scan::Delta => self
+                .advance_index::<SCAN_DELTA, D>(operator, rel, delta, indexes, rebound, governor),
+            super::Scan::Full => {
+                self.advance_index::<SCAN_FULL, D>(operator, rel, delta, indexes, rebound, governor)
+            }
+            super::Scan::OldOnly => self.advance_index::<SCAN_OLD_ONLY, D>(
+                operator, rel, delta, indexes, rebound, governor,
+            ),
+        }
+    }
+
+    fn advance_index<const SCAN: u8, D: TermDictionary<Id = I>>(
+        &mut self,
+        operator: &AtomOperator<N>,
+        rel: &RelationStore<D, N>,
+        delta: Delta,
+        indexes: &DeltaIndexes<I>,
+        rebound: bool,
+        governor: &mut StepGovernor,
+    ) -> Result<(), D::Error> {
+        if rebound {
+            return self.advance::<SCAN, INDEX_REBOUND, D>(operator, rel, delta, indexes, governor);
+        }
+        match operator.index() {
+            IndexChoice::Any => {
+                self.advance::<SCAN, INDEX_ANY, D>(operator, rel, delta, indexes, governor)
+            }
+            IndexChoice::Subject => {
+                self.advance::<SCAN, INDEX_SUBJECT, D>(operator, rel, delta, indexes, governor)
+            }
+            IndexChoice::Object => {
+                self.advance::<SCAN, INDEX_OBJECT, D>(operator, rel, delta, indexes, governor)
+            }
+            IndexChoice::Both => {
+                self.advance::<SCAN, INDEX_BOTH, D>(operator, rel, delta, indexes, governor)
+            }
+        }
     }
 
     /// Drive the same operator until completion or a refused candidate credit.

@@ -28,7 +28,7 @@
 //!
 //! - the **indexed binary join** (the fallback, and the only path for an acyclic body):
 //!   each planned atom, in sideways-information-passing order, extends the partial
-//!   solutions by selecting exactly the rows its [`IndexChoice`] admits;
+//!   solutions by selecting exactly the rows its [`crate::plan::IndexChoice`] admits;
 //! - the **leapfrog triejoin**: for a planner-certified cyclic component, a multiway
 //!   intersection descends the component's variables through the same galloping
 //!   positions as [`crate::cursor::ValueCursor`], so no binary intermediate relation is
@@ -87,6 +87,11 @@ mod atom;
 mod cycle;
 mod evidence;
 mod factors;
+mod guards;
+mod join;
+mod negation;
+mod negative;
+mod ordered;
 pub use evidence::NegationScope;
 use std::fmt;
 use std::sync::{
@@ -109,8 +114,8 @@ use purrdf_lex::allocation::StorageError;
 
 pub use crate::plan::Executable;
 use crate::plan::{
-    AtomOperator, AtomShape, CyclicPlan, IndexChoice, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT,
-    Parsed, PositionPlan, RulePlan, predicate_symbol,
+    AtomOperator, AtomShape, CyclicPlan, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT, Parsed,
+    PositionPlan, RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
@@ -1875,7 +1880,7 @@ where
     /// One slot per plan variable, `None` until an atom binds it.
     ///
     /// Inline rather than heap. This frame is CLONED once per surviving candidate row
-    /// in [`extend_atom`], so a heap frame is one allocation per intermediate solution
+    /// in the indexed atom frame, so a heap frame is one allocation per intermediate solution
     /// — the join's most frequent allocation by a wide margin, and one the evaluator
     /// paid unconditionally.
     ///
@@ -2049,6 +2054,7 @@ where
 /// This is the ONE-TIME scan-mode dispatch: once per operator invocation — not per row —
 /// the scan mode is lifted to a `const SCAN` monomorphization parameter, so the per-row
 /// delta filter has no runtime branch.
+#[cfg(test)]
 fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2061,48 +2067,19 @@ fn extend_slot_solutions<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    match scan {
-        Scan::Delta => extend_slot_operator::<SCAN_DELTA, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::Full => extend_slot_operator::<SCAN_FULL, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::OldOnly => extend_slot_operator::<SCAN_OLD_ONLY, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
-}
-
-/// Dispatch one operator to its statically-shaped index kernel.
-fn extend_slot_operator<const SCAN: u8, D: TermDictionary, const N: usize>(
-    operator: &AtomOperator<N>,
-    rel: &RelationStore<D, N>,
-    delta: Delta,
-    indexes: &DeltaIndexes<D::Id>,
-    solutions: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    match operator.index() {
-        IndexChoice::Any => {
-            extend_atom::<SCAN, INDEX_ANY, D, N>(operator, rel, delta, indexes, solutions, governor)
-        }
-        IndexChoice::Subject => extend_atom::<SCAN, INDEX_SUBJECT, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        IndexChoice::Object => extend_atom::<SCAN, INDEX_OBJECT, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        IndexChoice::Both => extend_atom::<SCAN, INDEX_BOTH, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
+    extend_selected_atom(
+        operator,
+        rel,
+        delta,
+        indexes,
+        atom::Access::Planned(scan),
+        solutions,
+        governor,
+    )
 }
 
 /// Probe a physically reordered atom while retaining its logical scan ordinal.
+#[cfg(test)]
 fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2115,36 +2092,25 @@ fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    match scan {
-        Scan::Delta => extend_atom::<SCAN_DELTA, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::Full => extend_atom::<SCAN_FULL, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-        Scan::OldOnly => extend_atom::<SCAN_OLD_ONLY, INDEX_REBOUND, D, N>(
-            operator, rel, delta, indexes, solutions, governor,
-        ),
-    }
+    extend_selected_atom(
+        operator,
+        rel,
+        delta,
+        indexes,
+        atom::Access::Rebound(scan),
+        solutions,
+        governor,
+    )
 }
 
-/// The shared atom kernel: address the partitions the predicate and optional graph
-/// admit, and inside each one select exactly the rows the `(subject, object)` index admits.
-///
-/// The two halves are independent, which is the whole performance argument. `INDEX` is a
-/// monomorphization parameter, so the subject/object access path is decided at compile
-/// time and is the SAME path a predicate-keyed store would have taken. The partition half
-/// is a single ordered-map probe whenever the predicate and graph are known
-/// ([`AtomShape::addresses_one_partition`]) — which is every atom of every rule that
-/// names its predicate — and only degrades to a sweep of matching partitions when the rule
-/// genuinely quantifies over the predicate or the graph.
-/// Reordered delta probes use `INDEX_REBOUND`: the same kernel binds against the
-/// current frame and selects the subject/object arrangement from those bindings.
-fn extend_atom<const SCAN: u8, const INDEX: u8, D: TermDictionary, const N: usize>(
+/// Drive one original native atom frame through the shared mode dispatch.
+#[cfg(test)]
+fn extend_selected_atom<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Delta,
     indexes: &DeltaIndexes<D::Id>,
+    access: atom::Access,
     solutions: Vec<SlotSolution<D::Id, N>>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
@@ -2152,7 +2118,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     let mut frame = atom::Frame::new(operator, rel, solutions)?;
-    frame.advance::<SCAN, INDEX, D>(operator, rel, delta, indexes, governor)?;
+    frame.advance_selected(operator, rel, delta, indexes, access, governor)?;
     // The existing round owner observes this same refusal flag and returns no
     // complete model. The resumable owner retains the frame instead of dropping it.
     debug_assert!(frame.is_complete() || governor.spent());
@@ -2283,6 +2249,7 @@ where
 }
 
 /// Extend the certified component through its one owned traversal frame.
+#[cfg(test)]
 fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
     solutions: Vec<SlotSolution<D::Id, N>>,
@@ -2440,36 +2407,10 @@ fn join_body<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    snapshot.rel.interner().check_read()?;
-    let owned_counts = if full_counts.is_none() {
-        Some(constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?)
-    } else {
-        None
-    };
-    let full_counts = full_counts
-        .or(owned_counts.as_deref())
-        .expect("the join's metadata advice was prepared");
-    let leapfrog = plan.has_cyclic_subplan()
-        && matches!(strategy, JoinStrategy::Planned)
-        && plan.operators().iter().all(|operator| {
-            operator.shape().read_source() == crate::clause::ReadSource::Evaluation
-        });
-    let joined = if plan.positive().is_empty() {
-        // The empty conjunction is relational identity: one empty substitution, so an
-        // unconditional or NAF-only rule fires exactly once. Its head is suppressed on the
-        // following round by the store's own membership test.
-        if governor.charge() {
-            Ok(vec![SlotSolution::empty(plan.variables().len())])
-        } else {
-            Ok(Vec::new())
-        }
-    } else if leapfrog {
-        join_positive_leapfrog(plan, snapshot, governor)
-    } else {
-        join_positive_binary(plan, snapshot, governor, full_counts)
-    }?;
-    snapshot.rel.interner().check_read()?;
-    Ok(joined)
+    let mut frame = join::Frame::new(plan, snapshot, strategy, full_counts)?;
+    frame.advance(plan, snapshot, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 /// What a positive join reads: the accumulated store and the delta it is decomposed over.
@@ -2552,194 +2493,6 @@ where
         .select_partitions(positions, run)
         .next()
         .is_some())
-}
-
-/// The indexed binary positive join. Partial deltas seed each decomposition
-/// before the remaining planned operators; logical scan ordinals stay fixed.
-fn join_positive_binary<D: TermDictionary, const N: usize>(
-    plan: &RulePlan<N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
-    full_counts: &[Option<usize>],
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    snapshot.rel.interner().check_read()?;
-    let operators = plan.operators();
-    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
-    let base = operators
-        .iter()
-        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
-    let anchors = if base {
-        0..1
-    } else {
-        snapshot.delta_positions(operators.len())
-    };
-    for delta_position in anchors {
-        if !base && !delta_can_match(&operators[delta_position], snapshot)? {
-            continue;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_count());
-        let seed = if reordered {
-            decomposition_seed(plan, snapshot, delta_position, full_counts)?
-        } else {
-            delta_position
-        };
-        let order = [seed, delta_position]
-            .into_iter()
-            .enumerate()
-            .filter(|&(index, position)| reordered && (index == 0 || position != seed))
-            .map(|(_, position)| position)
-            .chain((0..operators.len()).filter(|&position| {
-                !reordered || (position != seed && position != delta_position)
-            }));
-        for position in order {
-            let extend = if reordered {
-                extend_rebound_solutions
-            } else {
-                extend_slot_solutions
-            };
-            partial = extend(
-                &operators[position],
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                if base {
-                    Scan::Full
-                } else {
-                    scan_for(position, delta_position)
-                },
-                partial,
-                governor,
-            )?;
-            if partial.is_empty() {
-                break;
-            }
-        }
-        if reordered {
-            for solution in &mut partial {
-                solution
-                    .sources
-                    .sort_unstable_by_key(|source| source.body_index);
-            }
-        } else {
-            for solution in &mut partial {
-                for &(left, right) in plan.operator_source_order_swaps() {
-                    solution.sources.swap(left, right);
-                }
-            }
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    snapshot.rel.interner().check_read()?;
-    Ok(all)
-}
-
-/// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, seeded by the partial delta before old
-/// prefixes. Cyclic components keep their certified leapfrog traversal.
-fn join_positive_leapfrog<D: TermDictionary, const N: usize>(
-    plan: &RulePlan<N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, D::Error>
-where
-    Arity<N>: StoreShape<N>,
-{
-    let mut all: Vec<SlotSolution<D::Id, N>> = Vec::new();
-    for delta_position in snapshot.delta_positions(plan.positive().len()) {
-        if !delta_can_match(plan.operator_at(delta_position), snapshot)? {
-            continue;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let reordered = snapshot.delta != Delta::all(snapshot.rel.row_count());
-        let seed_in_cycle = reordered && plan.join_groups().iter().any(|group| {
-            matches!(group, JoinGroup::Leapfrog(cycle) if cycle.atoms().iter().any(|atom| atom.positive_position() == delta_position))
-        });
-        if reordered {
-            partial = extend_rebound_solutions(
-                plan.operator_at(delta_position),
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                Scan::Delta,
-                partial,
-                governor,
-            )?;
-        }
-        for group in plan.join_groups() {
-            if reordered
-                && matches!(group, JoinGroup::Binary(atom) if atom.positive_position() == delta_position)
-            {
-                continue;
-            }
-            if partial.is_empty() || governor.spent() {
-                partial.clear();
-                break;
-            }
-            partial = match group {
-                JoinGroup::Binary(planned) => {
-                    let operator = plan.operator_at(planned.positive_position());
-                    let extend = if reordered {
-                        extend_rebound_solutions
-                    } else {
-                        extend_slot_solutions
-                    };
-                    extend(
-                        operator,
-                        snapshot.rel,
-                        snapshot.delta,
-                        snapshot.indexes,
-                        scan_for(planned.positive_position(), delta_position),
-                        partial,
-                        governor,
-                    )?
-                }
-                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    &LeapfrogRun {
-                        plan,
-                        cycle,
-                        scan: JoinScan::DeltaPosition(delta_position),
-                        rel: snapshot.rel,
-                        delta: snapshot.delta,
-                        indexes: snapshot.indexes,
-                    },
-                    partial,
-                    governor,
-                )?,
-            };
-            if partial.is_empty() {
-                break;
-            }
-        }
-        for solution in &mut partial {
-            if seed_in_cycle {
-                // The seed fixes bindings before any old prefix. The original
-                // group still captures its source in the authored group order.
-                solution.sources.remove(0);
-            }
-            if reordered {
-                solution
-                    .sources
-                    .sort_unstable_by_key(|source| source.body_index);
-            } else {
-                for &(left, right) in plan.hybrid_source_order_swaps() {
-                    solution.sources.swap(left, right);
-                }
-            }
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    snapshot.rel.interner().check_read()?;
-    Ok(all)
 }
 
 // ── Per-rule runtime shapes ─────────────────────────────────────────────────────
@@ -2859,6 +2612,7 @@ where
     /// A ground term the store never interned — a constant it never saw, or a surface a
     /// guard computed — constrains to zero rows, so the atom is not satisfied and the
     /// rule fires.
+    #[cfg(test)]
     fn satisfied<D: TermDictionary>(
         &self,
         solution: &SlotSolution<D::Id, N>,
@@ -2877,57 +2631,19 @@ where
     /// Visit the original indexed probe, stopping only when its visitor requests it.
     /// Validate the source even on an empty, exhausted or early-match path; preserve
     /// an earlier visitor failure before inspecting the final source state.
+    #[cfg(test)]
     fn visit_matches<D: TermDictionary, E>(
         &self,
         solution: &SlotSolution<D::Id, N>,
         rel: &RelationStore<D, N>,
         governor: &mut StepGovernor,
-        mut visit: impl FnMut(RowId) -> Result<bool, E>,
+        visit: impl FnMut(RowId) -> Result<bool, E>,
         source_error: impl Fn(D::Error) -> E,
     ) -> Result<bool, E> {
-        let rel = rel.read_source(self.source);
-        rel.interner().check_read().map_err(&source_error)?;
-        let result = (|| -> Result<bool, E> {
-            if !governor.charge() {
-                return Ok(false);
-            }
-            let mut values = [None; N];
-            for (position, arg) in self.args.iter().enumerate() {
-                match arg.probe(solution, rel).map_err(&source_error)? {
-                    ProbeValue::Known(id) => values[position] = Some(id),
-                    ProbeValue::Free => {}
-                    // A ground position whose term is absent from the store matches nothing.
-                    ProbeValue::Absent => return Ok(false),
-                }
-            }
-            let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
-                (Some(subject), Some(object)) => Bound::Both(subject, object),
-                (Some(subject), None) => Bound::Subject(subject),
-                (None, Some(object)) => Bound::Object(object),
-                (None, None) => Bound::Any,
-            };
-            for (index, partition) in rel.partitions_for(values).enumerate() {
-                // The first probe was reserved above; broad predicate/graph scans also
-                // reserve every further partition, including an empty selected index.
-                if index != 0 && !governor.charge() {
-                    return Ok(false);
-                }
-                let mut cursor = partition.select(bound);
-                let mut first = true;
-                while let Some((_, _, row)) = cursor.next() {
-                    if !first && !governor.charge() {
-                        return Ok(false);
-                    }
-                    first = false;
-                    if visit(row)? {
-                        return Ok(true);
-                    }
-                }
-            }
-            Ok(false)
-        })()?;
-        rel.interner().check_read().map_err(&source_error)?;
-        Ok(result)
+        let mut probe = negative::Probe::new(self.source);
+        let found = probe.advance(self, solution, rel, governor, visit, source_error)?;
+        debug_assert!(probe.is_complete() || governor.spent());
+        Ok(found)
     }
 
     /// Retain signed witnesses on the native path; keep the ordinary boolean probe.
@@ -2938,33 +2654,10 @@ where
         governor: &mut StepGovernor,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<bool, EvalError<D::Error>> {
-        let Some(owner) = evidence.as_deref_mut() else {
-            return self
-                .satisfied(solution, rel, governor)
-                .map_err(EvalError::Source);
-        };
-        let mut witnesses = None;
-        self.visit_matches(
-            solution,
-            rel,
-            governor,
-            |row| {
-                let id = owner.source(row)?;
-                witnesses = Some(match witnesses {
-                    None => id,
-                    Some(previous) => owner.combine(
-                        previous,
-                        id,
-                        purrdf_core::evidence::EvidenceCombination::Alternatives,
-                    )?,
-                });
-                Ok::<_, EvalError<D::Error>>(false)
-            },
-            EvalError::Source,
-        )?;
-        let (negative, blocked) = owner.negative(witnesses)?;
-        solution.retain_negative(negative, owner)?;
-        Ok(blocked)
+        let mut frame = negative::Atom::new(self.source, evidence.is_some());
+        frame.advance(self, solution, rel, governor, evidence)?;
+        debug_assert!(frame.is_complete() || governor.spent());
+        Ok(frame.blocked())
     }
 }
 
@@ -3043,7 +2736,8 @@ where
     }
 }
 
-/// Evidence accumulated by the original conjunction search, without replaying it.
+/// Independent recursive test oracle; shipping execution uses the owned heap DFS.
+#[cfg(test)]
 struct GroupEvidence<'a, D: TermDictionary = TermInterner, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
@@ -3128,6 +2822,8 @@ where
 {
     /// Whether the group HOLDS under `probe.solution`: some extension of its local
     /// variables matches every atom and passes every guard.
+    /// Retained only as an independent oracle for the owned production search.
+    #[cfg(test)]
     fn holds<D: TermDictionary>(
         &self,
         probe: GroupProbe<'_, D, N>,
@@ -3159,36 +2855,10 @@ where
         governor: &mut StepGovernor,
         evidence: &mut Option<&mut dyn evidence::RuleEvidence<D, N>>,
     ) -> Result<(bool, Option<purrdf_core::evidence::EvidenceId>), EvalError<D::Error>> {
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        let Some(owner) = evidence.as_deref_mut() else {
-            return Ok((self.holds(probe, governor)?, None));
-        };
-        let mut trace = Some(GroupEvidence {
-            owner,
-            current: purrdf_core::evidence::EvidenceId::DEFAULT,
-            witnesses: None,
-        });
-        if governor.charge() {
-            let mut locals = vec![None; self.locals];
-            self.match_atom(0, probe, &mut locals, governor, &mut trace)?;
-        }
-        let trace = trace.expect("the original search retains its evidence owner");
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        let (id, blocked) = trace.owner.negative(trace.witnesses)?;
-        probe
-            .rel
-            .interner()
-            .check_read()
-            .map_err(EvalError::Source)?;
-        Ok((blocked, Some(id)))
+        let mut frame = negation::Frame::new(evidence.is_some());
+        frame.advance(self, probe, governor, evidence)?;
+        debug_assert!(frame.is_complete() || governor.spent());
+        Ok(frame.outcome())
     }
 
     /// The store probe value of `arg` under the current bindings.
@@ -3219,6 +2889,7 @@ where
     }
 
     /// Match atom `k` onward.
+    #[cfg(test)]
     fn match_atom<D: TermDictionary>(
         &self,
         k: usize,
@@ -3316,6 +2987,7 @@ where
     }
 
     /// Evaluate guard `j` onward, every atom having matched.
+    #[cfg(test)]
     fn match_guard<D: TermDictionary>(
         &self,
         j: usize,
@@ -3417,6 +3089,7 @@ where
 /// [`EvalError::Guard`] when the evaluator reports an error, or answers a row whose
 /// width is not the guard's output count — a malformed answer is not read as some
 /// answer.
+#[cfg(test)]
 fn call_guard<D: TermDictionary, const N: usize>(
     guards: &dyn GuardEvaluator<D, N>,
     call: &GuardCall<'_, D, N>,
@@ -3425,43 +3098,10 @@ fn call_guard<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    call.model
-        .interner()
-        .check_read()
-        .map_err(EvalError::Source)?;
-    let result = (|| {
-        let refuse = |message: crate::guard::CallbackDiagnostic| EvalError::Guard {
-            rule: call.rule,
-            site: call.site,
-            guard: call.guard.name().to_owned(),
-            message,
-        };
-        let rows = match call.guard.operation().filter(call.inputs) {
-            Some(true) => vec![Vec::new()],
-            Some(false) => Vec::new(),
-            None => guards
-                .evaluate(call)
-                .map_err(|error| error.into_eval_error(refuse))?,
-        };
-        let width = call.guard.outputs().len();
-        for row in &rows {
-            if !governor.charge() {
-                return Ok(Vec::new());
-            }
-            if row.len() != width {
-                return Err(refuse(crate::guard::CallbackDiagnostic::RowWidth {
-                    actual: row.len(),
-                    expected: width,
-                }));
-            }
-        }
-        Ok(rows)
-    })()?;
-    call.model
-        .interner()
-        .check_read()
-        .map_err(EvalError::Source)?;
-    Ok(result)
+    let mut invocation = guards::Invocation::Uncalled;
+    invocation.advance(guards, call, governor)?;
+    debug_assert!(invocation.is_complete() || governor.spent());
+    Ok(invocation.into_rows())
 }
 
 /// A body guard, lowered once per evaluation.
@@ -4055,7 +3695,7 @@ where
 fn apply_body_guards<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     rel: &RelationStore<D, N>,
-    mut solutions: Vec<SlotSolution<D::Id, N>>,
+    solutions: Vec<SlotSolution<D::Id, N>>,
     positions: std::ops::Range<usize>,
     guards: &dyn GuardEvaluator<D, N>,
     governor: &mut StepGovernor,
@@ -4063,167 +3703,10 @@ fn apply_body_guards<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    for position in positions {
-        let guard = &entry.runtime.guards[position];
-        let declared = &entry.rule.guards()[position];
-        let mut extended = Vec::with_capacity(solutions.len());
-        for solution in solutions {
-            if governor.spent() {
-                break;
-            }
-            let rows = {
-                let inputs = guard
-                    .inputs
-                    .iter()
-                    .map(|&slot| {
-                        solution
-                            .value(slot)
-                            .as_term()
-                            .expect("a guard input is bound before the guard (DlClause scoping)")
-                    })
-                    .collect::<SmallVec<[_; INLINE_BINDING_SLOTS]>>();
-                call_guard(
-                    guards,
-                    &GuardCall {
-                        rule: entry.index,
-                        site: GuardSite::Body(position),
-                        guard: declared,
-                        inputs: &inputs,
-                        model: rel,
-                    },
-                    governor,
-                )?
-            };
-            for row in rows {
-                let mut next = solution.clone();
-                for (&slot, value) in guard.outputs.iter().zip(&row) {
-                    next.bind_value(slot, value, rel)
-                        .map_err(EvalError::Source)?;
-                }
-                extended.push(next);
-            }
-        }
-        solutions = extended;
-    }
-    Ok(solutions)
-}
-
-/// Extend one movable positive segment through the shared native join kernels.
-/// A partial delta can lead inside its segment, but cannot cross an authored
-/// guard barrier. The original scan ordinals and premise order remain logical.
-fn extend_ordered_segment<D: TermDictionary, const N: usize>(
-    entry: RuleEntry<'_, N>,
-    snapshot: JoinSnapshot<'_, D, N>,
-    strategy: JoinStrategy,
-    scan: JoinScan,
-    body: std::ops::Range<usize>,
-    mut partial: Vec<SlotSolution<D::Id, N>>,
-    governor: &mut StepGovernor,
-) -> Result<Vec<SlotSolution<D::Id, N>>, EvalError<D::Error>>
-where
-    Arity<N>: StoreShape<N>,
-{
-    let plan = entry.plan;
-    let cyclic = !matches!(scan, JoinScan::Uniform(_))
-        && plan.has_cyclic_subplan()
-        && matches!(strategy, JoinStrategy::Planned);
-    let seed = match scan {
-        JoinScan::DeltaPosition(anchor)
-            if snapshot.delta != Delta::all(snapshot.rel.row_count())
-                && body.contains(&plan.operator_at(anchor).body_index()) =>
-        {
-            Some(anchor)
-        }
-        _ => None,
-    };
-    let seed_in_cycle = cyclic
-        && seed.is_some_and(|anchor| {
-            plan.join_groups().iter().any(|group| {
-                matches!(group, JoinGroup::Leapfrog(cycle)
-                if cycle.atoms().iter().any(|atom| atom.positive_position() == anchor))
-            })
-        });
-    if let Some(anchor) = seed {
-        partial = extend_rebound_solutions(
-            plan.operator_at(anchor),
-            snapshot.rel,
-            snapshot.delta,
-            snapshot.indexes,
-            Scan::Delta,
-            partial,
-            governor,
-        )
-        .map_err(EvalError::Source)?;
-    }
-    if cyclic {
-        for group in plan.join_groups().iter().filter(|group| {
-            let first = match group {
-                JoinGroup::Binary(atom) => atom.body_index(),
-                JoinGroup::Leapfrog(cycle) => cycle.atoms()[0].body_index(),
-            };
-            body.contains(&first)
-        }) {
-            if matches!(group, JoinGroup::Binary(atom) if seed == Some(atom.positive_position())) {
-                continue;
-            }
-            partial = match group {
-                JoinGroup::Binary(atom) => extend_rebound_solutions(
-                    plan.operator_at(atom.positive_position()),
-                    snapshot.rel,
-                    snapshot.delta,
-                    snapshot.indexes,
-                    scan.at(atom.positive_position()),
-                    partial,
-                    governor,
-                ),
-                JoinGroup::Leapfrog(cycle) => extend_solutions_leapfrog(
-                    &LeapfrogRun {
-                        plan,
-                        cycle,
-                        scan,
-                        rel: snapshot.rel,
-                        delta: snapshot.delta,
-                        indexes: snapshot.indexes,
-                    },
-                    partial,
-                    governor,
-                ),
-            }
-            .map_err(EvalError::Source)?;
-            if partial.is_empty() || governor.spent() {
-                break;
-            }
-        }
-    } else {
-        for operator in plan
-            .operators()
-            .iter()
-            .filter(|operator| body.contains(&operator.body_index()))
-        {
-            if seed == Some(operator.positive_position()) {
-                continue;
-            }
-            partial = extend_rebound_solutions(
-                operator,
-                snapshot.rel,
-                snapshot.delta,
-                snapshot.indexes,
-                scan.at(operator.positive_position()),
-                partial,
-                governor,
-            )
-            .map_err(EvalError::Source)?;
-            if partial.is_empty() || governor.spent() {
-                break;
-            }
-        }
-    }
-    if seed_in_cycle {
-        for solution in &mut partial {
-            solution.sources.remove(body.start);
-        }
-    }
-    Ok(partial)
+    let mut frame = guards::Body::new(positions, solutions);
+    frame.advance(entry, rel, guards, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 /// Join authored positive segments, applying each guard before later probes.
@@ -4238,92 +3721,10 @@ fn join_ordered_body<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let plan = entry.plan;
-    let barriers = entry
-        .rule
-        .guard_positions()
-        .expect("ordered execution has authored guard barriers");
-    let base = plan
-        .operators()
-        .iter()
-        .any(|operator| operator.shape().read_source() == crate::clause::ReadSource::Base);
-    if !base && snapshot.delta != Delta::all(snapshot.rel.row_count()) {
-        // No body relation changed: this round creates no new obligation to run
-        // guards. Test the whole body, because an empty later atom cannot erase
-        // a guard reached through a changed earlier prefix.
-        let mut changed = false;
-        for operator in plan.operators() {
-            if delta_can_match(operator, snapshot).map_err(EvalError::Source)? {
-                changed = true;
-                break;
-            }
-        }
-        if !changed {
-            return Ok(Vec::new());
-        }
-    }
-    let anchors = if base {
-        0..1
-    } else {
-        snapshot.delta_positions(plan.positive().len())
-    };
-    let mut all = Vec::new();
-    for anchor in anchors {
-        // Even an empty later delta probe cannot suppress an earlier guard's
-        // failure. Only the segment reaching that probe may discover it is empty.
-        // A guard-first body consumes the empty conjunction's unit binding
-        // before invoking opaque code, even when that code returns no rows.
-        if barriers.first() == Some(&0) && !governor.charge() {
-            break;
-        }
-        let mut partial = vec![SlotSolution::empty(plan.variables().len())];
-        let mut start = 0;
-        for (position, end) in barriers
-            .iter()
-            .copied()
-            .chain(std::iter::once(entry.rule.body().len()))
-            .enumerate()
-        {
-            partial = extend_ordered_segment(
-                entry,
-                snapshot,
-                strategy,
-                if base {
-                    JoinScan::Uniform(Scan::Full)
-                } else {
-                    JoinScan::DeltaPosition(anchor)
-                },
-                start..end,
-                partial,
-                governor,
-            )?;
-            if partial.is_empty() || governor.spent() {
-                partial.clear();
-                break;
-            }
-            if position < barriers.len() {
-                partial = apply_body_guards(
-                    entry,
-                    snapshot.rel,
-                    partial,
-                    position..position + 1,
-                    guards,
-                    governor,
-                )?;
-            }
-            start = end;
-        }
-        for solution in &mut partial {
-            solution
-                .sources
-                .sort_unstable_by_key(|source| source.body_index);
-        }
-        all.extend(partial);
-        if governor.spent() {
-            break;
-        }
-    }
-    Ok(all)
+    let mut frame = ordered::Frame::new(entry, snapshot, strategy)?;
+    frame.advance(entry, snapshot, guards, governor)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    Ok(frame.into_output())
 }
 
 fn evaluate_rule_with_evidence<'r, D: TermDictionary, const N: usize>(
@@ -5732,15 +5133,16 @@ mod tests {
                 hi: store.row_count(),
             };
             let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
-            let solutions = join_positive_binary(
+            let solutions = join_body(
                 plan,
                 JoinSnapshot {
                     rel: &store,
                     delta,
                     indexes: &indexes,
                 },
+                JoinStrategy::ForcedBinary,
                 &mut governor,
-                &constant_pattern_counts(plan, &store, delta).unwrap(),
+                Some(&constant_pattern_counts(plan, &store, delta).unwrap()),
             )
             .unwrap();
             assert_eq!(solutions.len(), 1);
