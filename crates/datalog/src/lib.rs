@@ -299,6 +299,7 @@ pub mod dictionary;
 pub mod evidence;
 pub mod guard;
 pub mod id;
+pub mod maintenance;
 pub(crate) mod paths;
 pub mod plan;
 pub mod proof;

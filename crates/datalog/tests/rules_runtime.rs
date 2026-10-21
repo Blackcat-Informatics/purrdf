@@ -3019,7 +3019,46 @@ fn removed_append_slots_preserve_recursive_models_and_proofs() {
     assert_eq!(result.work().input_facts(), 0);
 }
 
+fn native_signed_transactions_preserve_watermarks_and_exact_cancellation() {
+    use purrdf_datalog::maintenance::{ChangeBatch, ChangeError};
+    use purrdf_lex::allocation::Resident;
+
+    let row = [u128::MAX, 7, 3];
+    let superseded = [u128::MAX - 1, 7, 4];
+    let batch = ChangeBatch::new(
+        [0x51_u8; 32],
+        [
+            (row, i64::MAX),
+            (row, 1),
+            (row, -i64::MAX),
+            (superseded, -1),
+        ],
+        Resident,
+    )
+    .unwrap();
+    assert_eq!(batch.watermark(), &[0x51; 32]);
+    assert_eq!(batch.changes(), &[(superseded, -1), (row, 1)]);
+    assert!(batch.admitted_bytes() >= 4 * size_of::<([u128; 3], i64)>());
+    let cancelled = ChangeBatch::new(
+        [0x52_u8; 32],
+        [
+            ([1_u64, 2, 3, 4], i64::MIN),
+            ([1, 2, 3, 4], i64::MAX),
+            ([1, 2, 3, 4], 1),
+        ],
+        Resident,
+    )
+    .unwrap();
+    assert_eq!(cancelled.changes(), []);
+    assert_eq!(cancelled.watermark(), &[0x52; 32]);
+    assert!(matches!(
+        ChangeBatch::new((), [(row, i64::MIN), (row, -1)], Resident),
+        Err(ChangeError::MultiplicityOutOfRange { weight }) if weight == i128::from(i64::MIN) - 1
+    ));
+}
+
 purrdf_testkit::harness_main!(
+    native_signed_transactions_preserve_watermarks_and_exact_cancellation,
     removed_append_slots_preserve_recursive_models_and_proofs,
     resumable_models_preserve_partial_proofs_work_and_bindings,
     continuations_preserve_original_source_death_and_hard_guard_failures,
