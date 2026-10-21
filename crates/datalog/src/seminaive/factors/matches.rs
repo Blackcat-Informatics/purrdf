@@ -3,23 +3,11 @@
 
 //! One factor's owned native positive sequence and negative-filter progress.
 
-use super::{Factor, JoinScan, JoinSnapshot, RuleEntry, SlotSolution};
+use super::{Factor, JoinScan, JoinSnapshot, RuleEntry, SlotSolution, filters};
 use crate::dictionary::{TermDictionary, TermIdentity};
 use crate::id::TermId;
-use crate::seminaive::{
-    Delta, EvalError, GroupProbe, NoGuards, StepGovernor, evidence::RuleEvidence, join, negation,
-    negative,
-};
+use crate::seminaive::{Delta, EvalError, StepGovernor, evidence::RuleEvidence, join};
 use crate::store::{Arity, StoreShape};
-
-#[derive(Debug)]
-enum Probe<I: TermIdentity, const N: usize>
-where
-    Arity<N>: StoreShape<N>,
-{
-    Atom(negative::Atom<I, N>),
-    Group(negation::Frame<I, N>),
-}
 
 #[derive(Debug)]
 struct Input<I: TermIdentity, const N: usize>
@@ -27,9 +15,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     solution: SlotSolution<I, N>,
-    atom: usize,
-    group: usize,
-    pending: Option<Probe<I, N>>,
+    filters: filters::Frame<I, N>,
 }
 
 #[derive(Debug)]
@@ -168,77 +154,35 @@ where
                         }
                         *active = Some(Input {
                             solution: inputs.next().expect("an original input remains"),
-                            atom: 0,
-                            group: 0,
-                            pending: None,
+                            filters: filters::Frame::new(evidence.is_some()),
                         });
                     }
                     let input = active
                         .as_mut()
                         .expect("the original substitution is active");
-                    if let Some(&index) = factor.negated.get(input.atom) {
-                        let atom = &entry.runtime.negated[index];
-                        let pending = input.pending.get_or_insert_with(|| {
-                            Probe::Atom(negative::Atom::new(atom.source, evidence.is_some()))
-                        });
-                        let Probe::Atom(frame) = pending else {
-                            unreachable!("the original atom probe remains active")
-                        };
-                        frame.advance(
-                            atom,
-                            &mut input.solution,
-                            snapshot.rel,
-                            governor,
-                            evidence,
-                        )?;
-                        if !frame.is_complete() {
-                            break;
-                        }
-                        if frame.blocked() {
-                            *active = None;
-                            continue;
-                        }
-                        input.atom += 1;
-                        input.pending = None;
-                    } else if let Some(&index) = factor.negations.get(input.group) {
-                        let pending = input.pending.get_or_insert_with(|| {
-                            Probe::Group(negation::Frame::new(evidence.is_some()))
-                        });
-                        let Probe::Group(frame) = pending else {
-                            unreachable!("the original conjunction probe remains active")
-                        };
-                        frame.advance(
-                            &entry.runtime.negations[index],
-                            GroupProbe {
-                                solution: &input.solution,
-                                rel: snapshot.rel,
-                                guards: &NoGuards,
-                                rule: entry.index,
-                                clause: entry.rule,
-                            },
-                            governor,
-                            evidence,
-                        )?;
-                        if !frame.is_complete() {
-                            break;
-                        }
-                        let (blocked, negative) = frame.outcome();
-                        if let (Some(id), Some(owner)) = (negative, evidence.as_deref_mut()) {
-                            input.solution.retain_negative(id, owner)?;
-                        }
-                        if blocked {
-                            *active = None;
-                            continue;
-                        }
-                        input.group += 1;
-                        input.pending = None;
-                    } else {
+                    input.filters.advance(
+                        &filters::Selection {
+                            atoms: &factor.negated,
+                            groups: &factor.negations,
+                            entry,
+                        },
+                        snapshot.rel,
+                        &mut input.solution,
+                        governor,
+                        evidence,
+                    )?;
+                    if !input.filters.is_complete() {
+                        break;
+                    }
+                    if !input.filters.blocked() {
                         self.output.push(
                             active
                                 .take()
                                 .expect("all original filters completed")
                                 .solution,
                         );
+                    } else {
+                        *active = None;
                     }
                 }
             }
@@ -259,7 +203,8 @@ mod tests {
     use crate::id::RowId;
     use crate::plan::RulePlan;
     use crate::seminaive::factors::{
-        Product, Projection, full_matches, product, project, reference_matches,
+        Frame as WholeFactor, Product, Projection, full_matches, partial_relations, product,
+        project, reference_evaluate_with_evidence, reference_matches, relations,
     };
     use crate::seminaive::{
         ArgShape, DeltaIndexes, RoundBuffer, RoundSnapshot, RuleRuntime, Scan, evidence,
@@ -572,11 +517,453 @@ mod tests {
         assert_eq!(rel.interner().resolves.load(Ordering::Relaxed), resolves);
     }
 
+    fn compare_relations<const N: usize>(
+        entry: RuleEntry<'_, N>,
+        snapshot: JoinSnapshot<'_, HostDictionary, N>,
+        evidenced: bool,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        let round = RoundSnapshot {
+            rel: snapshot.rel,
+            depth: &[0; 14],
+            assumed: &[],
+            delta_indexes: Some(snapshot.indexes),
+        };
+        let all = entry.delta == Delta::all(snapshot.rel.row_count());
+        let lookups = || snapshot.rel.interner().lookups.load(Ordering::Relaxed);
+        let mut original = capture::<N>();
+        let mut full = StepGovernor::new(u64::MAX);
+        let before = lookups();
+        let mut evidence =
+            evidenced.then_some(&mut original as &mut dyn RuleEvidence<HostDictionary, N>);
+        let expected = if all {
+            let mut relations = Vec::new();
+            for factor in &entry.runtime.factors {
+                let rows = full_matches(factor, entry, round, &mut full, &mut evidence).unwrap();
+                if rows.is_empty() {
+                    relations.clear();
+                    break;
+                }
+                relations.push(rows);
+            }
+            relations
+        } else {
+            partial_relations(entry, round, &mut full, &mut evidence).unwrap()
+        };
+        let probes = lookups() - before;
+        let steps = full.pool.used.load(Ordering::Relaxed);
+        let visits = full.row_visits;
+        for cut in 0..=steps {
+            let mut frame = relations::Frame::new(entry.runtime.factors.len(), all);
+            let mut owner = capture::<N>();
+            let before = lookups();
+            let mut first = StepGovernor::new(cut);
+            frame
+                .advance(
+                    entry,
+                    snapshot,
+                    &mut first,
+                    &mut evidenced
+                        .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                )
+                .unwrap();
+            let mut rest = StepGovernor::new(u64::MAX);
+            if !frame.is_complete() {
+                assert!(first.spent());
+                frame
+                    .advance(
+                        entry,
+                        snapshot,
+                        &mut rest,
+                        &mut evidenced
+                            .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                    )
+                    .unwrap();
+            }
+            assert!(frame.is_complete());
+            assert_eq!(
+                frame.into_output(),
+                expected,
+                "original modes and relation order, cut {cut}"
+            );
+            assert_eq!(
+                first.pool.used.load(Ordering::Relaxed) + rest.pool.used.load(Ordering::Relaxed),
+                steps,
+                "successful credits, cut {cut}"
+            );
+            assert_eq!(
+                first.row_visits + rest.row_visits,
+                visits,
+                "original row work, cut {cut}"
+            );
+            assert_eq!(
+                lookups() - before,
+                probes,
+                "original delta eligibility and mode probes, cut {cut}"
+            );
+            if evidenced {
+                assert_eq!(
+                    owner.rows.workspace().canonical_index().unwrap(),
+                    original.rows.workspace().canonical_index().unwrap()
+                );
+            }
+        }
+        let mut frame = relations::Frame::new(entry.runtime.factors.len(), all);
+        let mut owner = capture::<N>();
+        let before = lookups();
+        let (mut credits, mut rows) = (0, 0);
+        while !frame.is_complete() {
+            let mut page = StepGovernor::new(1);
+            frame
+                .advance(
+                    entry,
+                    snapshot,
+                    &mut page,
+                    &mut evidenced
+                        .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                )
+                .unwrap();
+            let admitted = page.pool.used.load(Ordering::Relaxed);
+            assert!(admitted > 0 || frame.is_complete());
+            credits += admitted;
+            rows += page.row_visits;
+        }
+        assert_eq!(frame.into_output(), expected);
+        assert_eq!((credits, rows), (steps, visits));
+        assert_eq!(lookups() - before, probes);
+        if evidenced {
+            assert_eq!(
+                owner.rows.workspace().canonical_index().unwrap(),
+                original.rows.workspace().canonical_index().unwrap()
+            );
+        }
+    }
+
+    fn check_relation_modes<const N: usize>(atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        let rel = fixture::<N>();
+        for rule in [
+            rule(&atom),
+            DlClause::datalog(
+                atom("?a", "https://example.org/result", "?u"),
+                vec![
+                    atom("?a", "https://example.org/p", "?b"),
+                    atom("?u", "https://example.org/absent", "?v"),
+                ],
+            ),
+        ] {
+            let plan = RulePlan::for_rule(&rule);
+            let runtime = RuleRuntime::new(&rule, &plan);
+            assert_eq!(runtime.factors.len(), 2);
+            for delta in [
+                Delta::all(14),
+                Delta { lo: 0, hi: 1 },
+                Delta { lo: 3, hi: 5 },
+                Delta { lo: 9, hi: 10 },
+                Delta { lo: 10, hi: 14 },
+                Delta::all(0),
+            ] {
+                let indexes = DeltaIndexes::build(&rel, [delta]).unwrap();
+                let entry = RuleEntry {
+                    index: 3,
+                    rule: &rule,
+                    plan: &plan,
+                    runtime: &runtime,
+                    delta,
+                };
+                let snapshot = JoinSnapshot {
+                    rel: &rel,
+                    delta,
+                    indexes: &indexes,
+                };
+                for evidenced in [false, true] {
+                    compare_relations(entry, snapshot, evidenced);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn triple_relation_modes_resume_productive_anchors_without_probing_again() {
+        check_relation_modes(|subject, predicate, object| {
+            ClauseAtom::triple(
+                ClauseTerm::var(subject),
+                ClauseTerm::iri(predicate),
+                ClauseTerm::var(object),
+            )
+        });
+    }
+
+    #[test]
+    fn quad_relation_modes_resume_productive_anchors_without_probing_again() {
+        check_relation_modes(|subject, predicate, object| {
+            ClauseAtom::quad(
+                ClauseTerm::var(subject),
+                ClauseTerm::iri(predicate),
+                ClauseTerm::var(object),
+                ClauseTerm::iri("https://example.org/g"),
+            )
+        });
+    }
+
     /// Force a different allocation while the original buffer remains live.
     fn relocate<T>(original: Vec<T>) -> Vec<T> {
         let mut moved = Vec::with_capacity(original.len() + 1);
         moved.extend(original);
         moved
+    }
+
+    fn compare_whole_factor<const N: usize>(
+        entry: RuleEntry<'_, N>,
+        snapshot: RoundSnapshot<'_, HostDictionary, N>,
+        evidenced: bool,
+    ) where
+        Arity<N>: StoreShape<N>,
+    {
+        let counters = || {
+            (
+                snapshot.rel.interner().lookups.load(Ordering::Relaxed),
+                snapshot.rel.interner().resolves.load(Ordering::Relaxed),
+            )
+        };
+        let mut original = capture::<N>();
+        let mut full = StepGovernor::new(u64::MAX);
+        let before = counters();
+        let expected = reference_evaluate_with_evidence(
+            entry,
+            snapshot,
+            &mut full,
+            evidenced.then_some(&mut original as &mut dyn RuleEvidence<HostDictionary, N>),
+        )
+        .unwrap();
+        let after = counters();
+        let probes = (after.0 - before.0, after.1 - before.1);
+        let steps = full.pool.used.load(Ordering::Relaxed);
+        let visits = full.row_visits;
+        for cut in 0..=steps {
+            let mut frame = WholeFactor::new();
+            let mut owner = capture::<N>();
+            let before = counters();
+            let mut first = StepGovernor::new(cut);
+            frame
+                .advance(
+                    entry,
+                    snapshot,
+                    &mut first,
+                    &mut evidenced
+                        .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                )
+                .unwrap();
+            let mut rest = StepGovernor::new(u64::MAX);
+            if !frame.is_complete() {
+                assert!(first.spent());
+                frame
+                    .advance(
+                        entry,
+                        snapshot,
+                        &mut rest,
+                        &mut evidenced
+                            .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                    )
+                    .unwrap();
+            }
+            assert!(frame.is_complete());
+            let buffer = frame.into_buffer();
+            assert_eq!(
+                buffer.entries, expected.entries,
+                "original whole-factor candidates, cut {cut}"
+            );
+            assert_eq!(buffer.confirmed.len(), expected.confirmed.len());
+            for (row, confirmation) in &buffer.confirmed {
+                assert_eq!(confirmation.derivation, expected.confirmed[row].derivation);
+                assert_eq!(
+                    confirmation.sum_source_height,
+                    expected.confirmed[row].sum_source_height
+                );
+            }
+            assert_eq!(buffer.generates_terms, expected.generates_terms);
+            assert_eq!(buffer.generating_rules, expected.generating_rules);
+            assert_eq!(
+                first.pool.used.load(Ordering::Relaxed) + rest.pool.used.load(Ordering::Relaxed),
+                steps,
+                "whole-factor successful work, cut {cut}"
+            );
+            assert_eq!(first.row_visits + rest.row_visits, visits);
+            let after = counters();
+            assert_eq!(
+                (after.0 - before.0, after.1 - before.1),
+                probes,
+                "no eligibility, filter or projection replay, cut {cut}"
+            );
+            if evidenced {
+                assert_eq!(
+                    owner.rows.workspace().canonical_index().unwrap(),
+                    original.rows.workspace().canonical_index().unwrap()
+                );
+            }
+        }
+        let mut frame = WholeFactor::new();
+        let mut owner = capture::<N>();
+        let before = counters();
+        let (mut credits, mut rows) = (0, 0);
+        while !frame.is_complete() {
+            let mut page = StepGovernor::new(1);
+            frame
+                .advance(
+                    entry,
+                    snapshot,
+                    &mut page,
+                    &mut evidenced
+                        .then_some(&mut owner as &mut dyn RuleEvidence<HostDictionary, N>),
+                )
+                .unwrap();
+            let admitted = page.pool.used.load(Ordering::Relaxed);
+            assert!(admitted > 0 || frame.is_complete());
+            credits += admitted;
+            rows += page.row_visits;
+        }
+        assert_eq!(frame.into_buffer().entries, expected.entries);
+        assert_eq!((credits, rows), (steps, visits));
+        let after = counters();
+        assert_eq!((after.0 - before.0, after.1 - before.1), probes);
+        if evidenced {
+            assert_eq!(
+                owner.rows.workspace().canonical_index().unwrap(),
+                original.rows.workspace().canonical_index().unwrap()
+            );
+        }
+    }
+
+    fn check_whole_factors<const N: usize>(atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        let rel = fixture::<N>();
+        let body = vec![
+            atom("?a", "https://example.org/p", "?b"),
+            atom("?u", "https://example.org/enabled", "?v"),
+        ];
+        let mut blocked = body.clone();
+        blocked.push(atom("?ground", "https://example.org/block", "?other").into_negated());
+        let mut missing = body.clone();
+        missing.push(atom("?ground", "https://example.org/absent", "?other").into_negated());
+        let rules = [
+            rule(&atom),
+            DlClause::new(
+                vec![HeadDisjunct::new(vec![
+                    atom("?a", "https://example.org/result", "?u"),
+                    atom("?b", "https://example.org/result", "?v"),
+                ])],
+                Vec::new(),
+                body.clone(),
+            ),
+            DlClause::datalog(atom("?a", "https://example.org/result", "?u"), blocked)
+                .with_negations(vec![Negation::new(
+                    vec![atom("?x", "https://example.org/deny", "?y")],
+                    Vec::new(),
+                )]),
+            DlClause::datalog(atom("?a", "https://example.org/result", "?u"), missing)
+                .with_negations(vec![Negation::new(
+                    vec![
+                        atom("?x", "https://example.org/block", "?y"),
+                        atom("?y", "https://example.org/absent", "?z"),
+                    ],
+                    Vec::new(),
+                )]),
+            DlClause::datalog(atom("?a", "https://example.org/result", "?u"), body).with_negations(
+                vec![Negation::new(
+                    vec![atom("?x", "https://example.org/deny", "?y")],
+                    Vec::new(),
+                )],
+            ),
+        ];
+        for rule in rules {
+            let plan = RulePlan::for_rule(&rule);
+            let runtime = RuleRuntime::new(&rule, &plan);
+            assert_eq!(runtime.factors.len(), 2);
+            for delta in [
+                Delta::all(14),
+                Delta { lo: 0, hi: 1 },
+                Delta { lo: 3, hi: 5 },
+                Delta { lo: 9, hi: 10 },
+                Delta { lo: 10, hi: 14 },
+                Delta::all(0),
+            ] {
+                let indexes = DeltaIndexes::build(&rel, [delta]).unwrap();
+                let entry = RuleEntry {
+                    index: 3,
+                    rule: &rule,
+                    plan: &plan,
+                    runtime: &runtime,
+                    delta,
+                };
+                let snapshot = RoundSnapshot {
+                    rel: &rel,
+                    depth: &[0, 2, u32::MAX - 1, 1, 3, u32::MAX, 4, 1, 0, 0, 2, 5, 0, 4],
+                    assumed: &[],
+                    delta_indexes: Some(&indexes),
+                };
+                for evidenced in [false, true] {
+                    compare_whole_factor(entry, snapshot, evidenced);
+                }
+            }
+        }
+        let rule = rule(&atom);
+        let plan = RulePlan::for_rule(&rule);
+        let runtime = RuleRuntime::new(&rule, &plan);
+        let delta = Delta::all(14);
+        let indexes = DeltaIndexes::build(&rel, [delta]).unwrap();
+        let entry = RuleEntry {
+            index: 3,
+            rule: &rule,
+            plan: &plan,
+            runtime: &runtime,
+            delta,
+        };
+        let snapshot = RoundSnapshot {
+            rel: &rel,
+            depth: &[0; 14],
+            assumed: &[],
+            delta_indexes: Some(&indexes),
+        };
+        let mut frame = WholeFactor::new();
+        frame
+            .advance(entry, snapshot, &mut StepGovernor::new(0), &mut None)
+            .unwrap();
+        assert!(!frame.is_complete());
+        let before = rel.interner().lookups.load(Ordering::Relaxed);
+        rel.interner().lost.store(true, Ordering::Relaxed);
+        assert_eq!(
+            frame.advance(entry, snapshot, &mut StepGovernor::new(0), &mut None),
+            Err(EvalError::Source(SourceLost(99)))
+        );
+        assert_eq!(rel.interner().lookups.load(Ordering::Relaxed), before);
+    }
+
+    #[test]
+    fn triple_whole_factors_resume_ground_modes_heads_and_products_at_every_cut() {
+        check_whole_factors(|subject, predicate, object| {
+            ClauseAtom::triple(
+                ClauseTerm::var(subject),
+                ClauseTerm::iri(predicate),
+                ClauseTerm::var(object),
+            )
+        });
+    }
+
+    #[test]
+    fn quad_whole_factors_resume_ground_modes_heads_and_products_at_every_cut() {
+        check_whole_factors(|subject, predicate, object| {
+            ClauseAtom::quad(
+                ClauseTerm::var(subject),
+                ClauseTerm::iri(predicate),
+                ClauseTerm::var(object),
+                ClauseTerm::iri("https://example.org/g"),
+            )
+        });
     }
 
     fn compare_product<const N: usize>(

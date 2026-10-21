@@ -12,21 +12,25 @@
 
 use crate::store::{Arity, StoreShape};
 
+mod execution;
+mod filters;
 mod matches;
 mod product;
+mod relations;
+
+use execution::Frame;
 
 #[cfg(test)]
 use super::{
-    JoinGroup, LeapfrogRun, extend_rebound_solutions, extend_slot_solutions,
-    extend_solutions_leapfrog,
+    GroupProbe, JoinGroup, LeapfrogRun, NoGuards, Scan, delta_can_match, extend_rebound_solutions,
+    extend_slot_solutions, extend_solutions_leapfrog,
 };
 
 use super::{
-    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, GroupProbe,
-    HeadEvidence, JoinScan, JoinSnapshot, NoGuards, PositionPlan, RelationStore, RoundBuffer,
-    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor,
-    TermDictionary, TermId, TermIdentity, delta_can_match, emit_solution, source_heights,
-    source_preference,
+    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, HeadEvidence, JoinScan,
+    JoinSnapshot, PositionPlan, RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan,
+    RuleRuntime, SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, emit_solution,
+    source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -181,6 +185,7 @@ where
 }
 
 /// Evaluate one factor Full with the existing indexed and certified cyclic kernels.
+#[cfg(test)]
 fn full_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
@@ -202,6 +207,7 @@ where
 }
 
 /// Match one factor using the existing scan-aware binary and cyclic kernels.
+#[cfg(test)]
 fn factor_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
@@ -408,6 +414,7 @@ struct Witness {
 }
 
 /// Match only tuples containing a delta source, using disjoint last-new-atom anchors.
+#[cfg(test)]
 fn new_matches<D: TermDictionary, const N: usize>(
     factor: &Factor,
     entry: RuleEntry<'_, N>,
@@ -449,6 +456,7 @@ where
 type FactorRelations<I, const N: usize> = Vec<Vec<SlotSolution<I, N>>>;
 
 /// Discover productive anchors before building the old/full context they actually need.
+#[cfg(test)]
 fn partial_relations<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
@@ -746,6 +754,7 @@ where
     }
 
     /// Stream necessary projected combinations through the owned coordinate cursor.
+    #[cfg(test)]
     fn visit(
         &self,
         buffer: &mut RoundBuffer<'r, D::Id, N>,
@@ -886,6 +895,34 @@ where
         delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
         ..snapshot
     };
+    let mut frame = Frame::new();
+    frame.advance(entry, snapshot, governor, &mut evidence)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    let mut buffer = frame.into_buffer();
+    buffer.join_steps = governor.consumed;
+    Ok(buffer)
+}
+
+/// Original whole-factor orchestration, retained only as a full-run test oracle.
+#[cfg(test)]
+fn reference_evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
+    governor: &mut StepGovernor,
+    mut evidence: Option<&mut dyn super::evidence::RuleEvidence<D, N>>,
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let owned_indexes = if snapshot.delta_indexes.is_none() {
+        Some(DeltaIndexes::build(snapshot.rel, [entry.delta])?)
+    } else {
+        None
+    };
+    let snapshot = RoundSnapshot {
+        delta_indexes: snapshot.delta_indexes.or(owned_indexes.as_ref()),
+        ..snapshot
+    };
     snapshot
         .rel
         .interner()
@@ -998,6 +1035,7 @@ where
 
 /// Negative predicates with no positive outer slot are round-wide preconditions.
 /// Local variables remain local even when their authored name appears in another group.
+#[cfg(test)]
 fn ground_blocked<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     snapshot: RoundSnapshot<'_, D, N>,
