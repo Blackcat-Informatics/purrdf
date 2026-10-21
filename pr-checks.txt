@@ -1,0 +1,50 @@
+$ stagectl pr-checks 659
+SUCCESS    test
+SUCCESS    simd-asm
+SUCCESS    conformance
+SUCCESS    conformance (shapes)
+SUCCESS    avx512-sde
+SUCCESS    test (integration-4)
+SUCCESS    simd-asm-config (x86_64-v3)
+SUCCESS    simd-asm-config (x86_64)
+SUCCESS    cross-arch-riscv64 (suites)
+SUCCESS    cross-arch
+SUCCESS    test (lib)
+SUCCESS    test (integration-1)
+SUCCESS    test (doc)
+SUCCESS    python-publisher
+SUCCESS    simd-asm-config (aarch64)
+SUCCESS    simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    wasm
+SUCCESS    workspace
+SUCCESS    geo-determinism
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)
+SUCCESS    simd-asm-config (wasm32)
+SUCCESS    projection-oracles
+SUCCESS    wasm-exec
+SUCCESS    test (integration-2)
+SUCCESS    test (integration-3)
+SUCCESS    wasm-package
+SUCCESS    conformance (sparql)
+SUCCESS    doc
+SUCCESS    aarch64
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)
+SUCCESS    windows-mtime
+SUCCESS    cross-arch-riscv64 (determinism-serial)
+SUCCESS    conformance (python)
+SUCCESS    pytest
+SUCCESS    test (integration-5)
+SUCCESS    miri
+SUCCESS    simd-asm-config (x86_64-v4)
+SUCCESS    conformance (core)
+SUCCESS    simd-asm-config (wasm32-simd128)
+SUCCESS    wasm-schema-oracles
+SUCCESS    msrv
+SUCCESS    capi
+SKIPPED    simd-asm-projection
+SKIPPED    native-profile-admission
+SKIPPED    native-profile
+SKIPPED    native-profile-comparison
+NEUTRAL    CodeQL
+SUCCESS    CodeRabbit
+state: pass

@@ -1,0 +1,10 @@
+{
+  "source_url": "https://github.com/Blackcat-Informatics/purrdf/pull/659",
+  "number": 659,
+  "title": "Bump certifi from 2026.6.17 to 2026.10.19 in /bindings/python",
+  "state_at_capture": "OPEN",
+  "labels": ["dependencies", "python:uv"],
+  "requested_change": {"package": "certifi", "previous": "2026.6.17", "new": "2026.10.19", "lock": "bindings/python/uv.lock"},
+  "comments": [{"source_url": "https://github.com/Blackcat-Informatics/purrdf/pull/659#issuecomment-6300435331", "material_body": "Review skipped\n\nBot user detected.", "substantive_findings": []}],
+  "projection": "Retains requested dependency change, issue identity, labels, all material feedback and source links. Omits unrelated upstream commit listings, compatibility badge, automation command catalogue, service attribution markers, configuration and UI/help boilerplate. Originals remain at the source URLs. Empty complete review/inline/thread responses are captured separately."
+}
