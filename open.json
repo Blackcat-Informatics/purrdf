@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 667,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/667-deliver-bound-datalog-continuations-and",
+  "branch": "paudley/667-deliver-bound-datalog-continuations-and",
+  "slug": "deliver-bound-datalog-continuations-and",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/667-deliver-bound-datalog-continuations-and/.stage/deliver-bound-datalog-continuations-and",
+  "stage_tracked": true,
+  "base": "delivery/488-datalog-round-owner",
+  "base_oid": "f774a862402192c74e0acaef45135cf70b005078",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/667-deliver-bound-datalog-continuations-and",
+    "branch:paudley/667-deliver-bound-datalog-continuations-and",
+    "stage:/home/paudley/Active/purrdf/.worktrees/667-deliver-bound-datalog-continuations-and/.stage/deliver-bound-datalog-continuations-and",
+    "issue:/home/paudley/Active/purrdf/.worktrees/667-deliver-bound-datalog-continuations-and/.stage/deliver-bound-datalog-continuations-and/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-20T21:41:00-0600"
+}

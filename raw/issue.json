@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Behavior\n\nDeliver the ordinary stratified Datalog portion of #488 as one public behavior unit: a snapshot-bound in-process continuation and a certified partial model that cannot be mistaken for `Evaluation`. This shares the retained native join/rule implementation from #665 and completes round, sorted publication and stratum/delta ownership for this entry point.\n\n## Acceptance\n\n- `EvaluationSession` retains the original store, immutable program and pure guard evaluator. Resume validates canonical program, snapshot, guard and evidence identities before doing work; recording mode remains fixed. Source invalidation and guard failures retain their original typed errors and prevent further execution.\n- `PartialModel` exposes only seeded/proved published facts, optional recorded derivations, successful consumption and explicit `Complete`, `SoundLowerBound` and `Withheld` stratum statuses. Negative dependent execution waits for lower fixpoints. The partial identity is domain-separated and includes canonical input bindings, governors and consumption, never runtime term/row IDs.\n- Every recorded partial proof checks with the independent proof checker. Transitive-closure and stratified-negation fixtures cover triples and quads, sequential and parallel scheduling, ModelOnly and Record, every credit/fact cut, repeated one-credit progress and stopped-run resumption.\n- Retain pending winners and original guard work across all five governor refusals. Repeating an unchanged refusal adds no callbacks or successful work. Resumption returns the same complete facts, derivations, successful join count and ordinary final calculus contract as uninterrupted execution.\n- Native wide integer handles resume without lexical projection or remapping. A complete `Evaluation` can be taken only after successful completion, once; premature requests preserve the continuation.\n- Preserve existing complete-only callers through the same execution owners. Run actual native and WASM public controls, relevant compiler/hygiene/documentation gates, hosted qualification, feedback review and clean integration.\n\n## Parent mapping\n\n#488 remains open for the chase, typed entailment materialization partial closures and actual governed-SPARQL continuation/pages, together with their original acceptance. #486 remains open for common measured admission, spill and complete allocation/lifetime accounting. #501 retains its reusable proof-query/revision contract. This child closes only when the public Datalog behavior above is delivered; internal preparation or green compilation alone does not complete it. The portfolio queue retains every parent requirement and the subsequent signed-maintenance/demand/proof/chase order.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-21T03:40:33Z",
+  "labels": [],
+  "milestone": null,
+  "number": 667,
+  "state": "OPEN",
+  "title": "Deliver bound Datalog continuations and certified partial models",
+  "updatedAt": "2026-10-21T03:40:33Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/667"
+}
