@@ -312,12 +312,23 @@ puts requested bytes and peak memory below main in all tested numeric fuel and
 scratch lanes at 1, 4 and 32 workers. It trades block setup against shorter-lived
 worker allocations; both quantities are reported.
 
-Plain grouped numeric queries request an additional 199,960 bytes per query
-in the numeric fixture, with unchanged allocation-call and retained-byte counts.
-Their typed fallible output allocation cannot reuse the differently typed
-minted-row vector. Retaining the larger input vector would increase returned
-result capacity instead. This round preserves fallible admission and releases
-oversized input buffers; cross-stage buffer reduction is a separate optimization.
+Grouped output now retains the original ordered worker buffers until fallible
+typed admission consumes them. It avoids a full concatenated minted-row buffer;
+checked sizing, first-error selection and ordered governor replay still use
+their existing homes. Oversized input buffers are released rather than retained
+in the result.
+
+Against the flat-minted-buffer baseline, the 5,000-group numeric fixture requests
+399,904, 399,592 and 396,904 fewer bytes per ungoverned query at 1, 4 and 32 workers.
+Every numeric governor lane reduces requested bytes with identical retained
+bytes and unchanged or lower median allocation-call counts. Original worker
+capacity overlaps parent admission, so peak memory is an explicit tradeoff:
+numeric median peak changes range from -329,780 to +259,096 bytes, with a largest
+relative increase of 1.69%. Numeric instruction changes range from approximately
+-0.016% to +0.082%. The public BIND controls preserve all four allocation
+quantities; their instruction changes range from approximately -0.084% to
++0.365%. All quantities come from instruction and allocation measurements with
+ten samples per lane, complete typed answers and governor receipts.
 
 The hash-workload frontend projects the current testkit into each selected
 production source graph. Its manifest generator binds the testkit hash dependency

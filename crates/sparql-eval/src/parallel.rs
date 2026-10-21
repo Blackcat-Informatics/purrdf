@@ -1211,6 +1211,7 @@ pub(crate) struct OrderedRows<R> {
 }
 
 impl<R> OrderedRows<R> {
+    /// Keep a sequential worker's allocation in the inline chunk slot.
     fn single(rows: Vec<R>) -> Self {
         Self {
             len: rows.len(),
@@ -1218,6 +1219,7 @@ impl<R> OrderedRows<R> {
         }
     }
 
+    /// The checked number of rows across all original worker buffers.
     pub(crate) const fn len(&self) -> usize {
         self.len
     }
@@ -1232,12 +1234,14 @@ pub(crate) struct OrderedRowIter<R> {
 impl<R> Iterator for OrderedRowIter<R> {
     type Item = R;
 
+    /// Yield the next source row and reduce the exact remaining count.
     fn next(&mut self) -> Option<R> {
         let row = self.rows.next()?;
         self.remaining -= 1;
         Some(row)
     }
 
+    /// Report the same checked remaining count as both bounds.
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
     }
@@ -1249,6 +1253,7 @@ impl<R> IntoIterator for OrderedRows<R> {
     type Item = R;
     type IntoIter = OrderedRowIter<R>;
 
+    /// Consume original buffers in worker order without joining their storage.
     fn into_iter(self) -> Self::IntoIter {
         OrderedRowIter {
             rows: self.chunks.into_iter().flatten(),
@@ -1287,6 +1292,7 @@ fn ordered_chunks<R, H>(
     Ok((rows, harvests))
 }
 
+/// Return the first worker error before sizing or admitting output storage.
 fn check_chunk_errors<R, H>(
     chunks: &mut Vec<Result<(Vec<R>, H), EvalError>>,
 ) -> Result<(), EvalError> {
@@ -1324,18 +1330,22 @@ fn concatenate_chunks<R, H>(
 
 /// A scheduler's output ownership, chosen before running the shared workers.
 pub(crate) trait WorkerRows<R>: Sized {
+    /// Retain a sequential worker's rows in this adapter's ownership form.
     fn single(rows: Vec<R>) -> Self;
 
+    /// Select worker errors, then retain successful outputs in source order.
     fn from_chunks<H>(
         chunks: Vec<Result<(Vec<R>, H), EvalError>>,
     ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError>;
 }
 
 impl<R> WorkerRows<R> for Vec<R> {
+    /// Keep the worker's already-flat allocation.
     fn single(rows: Self) -> Self {
         rows
     }
 
+    /// Use the existing fallible concatenation for flat-output callers.
     fn from_chunks<H>(
         chunks: Vec<Result<(Self, H), EvalError>>,
     ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError> {
@@ -1344,10 +1354,12 @@ impl<R> WorkerRows<R> for Vec<R> {
 }
 
 impl<R> WorkerRows<R> for OrderedRows<R> {
+    /// Place the original worker allocation in the inline descriptor slot.
     fn single(rows: Vec<R>) -> Self {
         Self::single(rows)
     }
 
+    /// Retain successful original buffers and their checked total length.
     fn from_chunks<H>(
         chunks: Vec<Result<(Vec<R>, H), EvalError>>,
     ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError> {
@@ -1372,6 +1384,7 @@ pub(crate) fn reserve_concatenated_rows<R>(
     Ok(out)
 }
 
+/// Sum worker cardinalities, returning typed overflow before any reservation.
 fn checked_row_count(lengths: impl IntoIterator<Item = usize>) -> Result<usize, EvalError> {
     lengths.into_iter().try_fold(0_usize, |total, len| {
         total.checked_add(len).ok_or(EvalError::AllocationFailed {
