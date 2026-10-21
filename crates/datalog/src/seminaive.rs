@@ -92,6 +92,7 @@ mod join;
 mod negation;
 mod negative;
 mod ordered;
+mod rule;
 pub use evidence::NegationScope;
 use std::fmt;
 use std::sync::{
@@ -2397,6 +2398,7 @@ pub(crate) enum JoinStrategy {
 /// negated conjunctions are applied AFTER it by [`evaluate_rule`], against the
 /// accumulated store — which, under the stratified fixpoint, stratification guarantees
 /// holds every negated relation's final extension.
+#[cfg(test)]
 fn join_body<D: TermDictionary, const N: usize>(
     plan: &RulePlan<N>,
     snapshot: JoinSnapshot<'_, D, N>,
@@ -2647,6 +2649,7 @@ where
     }
 
     /// Retain signed witnesses on the native path; keep the ordinary boolean probe.
+    #[cfg(test)]
     fn blocks<D: TermDictionary>(
         &self,
         solution: &mut SlotSolution<D::Id, N>,
@@ -2849,6 +2852,7 @@ where
     }
 
     /// Probe all signed conjunction witnesses through the same atom/guard traversal.
+    #[cfg(test)]
     fn blocks<D: TermDictionary>(
         &self,
         probe: GroupProbe<'_, D, N>,
@@ -3692,6 +3696,7 @@ where
 }
 
 /// Apply an authored guard range through the one production callback/filter path.
+#[cfg(test)]
 fn apply_body_guards<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     rel: &RelationStore<D, N>,
@@ -3711,6 +3716,7 @@ where
 
 /// Join authored positive segments, applying each guard before later probes.
 /// Binary and certified cyclic segments use the existing join kernels.
+#[cfg(test)]
 fn join_ordered_body<D: TermDictionary, const N: usize>(
     entry: RuleEntry<'_, N>,
     snapshot: JoinSnapshot<'_, D, N>,
@@ -3759,6 +3765,28 @@ where
     let full_counts = full_counts
         .or(owned_counts.as_deref())
         .expect("the rule's metadata advice was prepared");
+    let mut frame = rule::Frame::new(entry, snapshot, strategy, full_counts)?;
+    frame.advance(entry, snapshot, guards, &mut governor, &mut evidence)?;
+    debug_assert!(frame.is_complete() || governor.spent());
+    let mut buffer = frame.into_buffer();
+    buffer.join_steps = governor.consumed;
+    Ok(buffer)
+}
+
+/// Original call-stack phase ordering, retained only as a differential rule oracle.
+#[cfg(test)]
+fn reference_evaluate_rule<'r, D: TermDictionary, const N: usize>(
+    entry: RuleEntry<'r, N>,
+    snapshot: RoundSnapshot<'_, D, N>,
+    strategy: JoinStrategy,
+    mut governor: StepGovernor,
+    guards: &dyn GuardEvaluator<D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+    full_counts: &[Option<usize>],
+) -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     snapshot
         .rel
         .interner()
@@ -4532,13 +4560,6 @@ where
         return Err(EvalError::BaseReadRequiresSchedule { rule });
     }
     edb.interner().check_read().map_err(EvalError::Source)?;
-    let runtimes: Vec<RuleRuntime<N>> = (0..exe.rule_count())
-        .map(|index| {
-            let (rule, plan) = exe.rule_entry(index);
-            RuleRuntime::new(rule, plan)
-        })
-        .collect();
-
     let mut state = FixpointState::seeded(edb, options);
     check_budget(&state)?;
 
@@ -4549,7 +4570,7 @@ where
         let owner = evidence
             .as_mut()
             .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D, N>);
-        run_stratum(exe, &runtimes, stratum, &mut state, run, owner)?;
+        run_stratum(exe, exe.runtimes(), stratum, &mut state, run, owner)?;
     }
 
     state

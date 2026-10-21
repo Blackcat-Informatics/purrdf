@@ -642,7 +642,10 @@ fn static_planning_units<const N: usize>(rules: &[DlClause<N>]) -> u64 {
 /// reports one build and the exact number of static IR nodes inspected, a warm lookup
 /// reports zero for both. Neither observes a clock.
 #[derive(Debug, Clone)]
-pub struct PlanLookup<const N: usize = 4> {
+pub struct PlanLookup<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The compiled program, or the refusal that compiling it produced.
     plan: Result<Arc<Executable<N>>, EvalError>,
     /// Whether the entry was already cached.
@@ -653,7 +656,10 @@ pub struct PlanLookup<const N: usize = 4> {
     planning_units: u64,
 }
 
-impl<const N: usize> PlanLookup<N> {
+impl<const N: usize> PlanLookup<N>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The compiled program, or the refusal that compiling it produced.
     pub fn plan(&self) -> Result<&Arc<Executable<N>>, &EvalError> {
         self.plan.as_ref()
@@ -682,7 +688,10 @@ impl<const N: usize> PlanLookup<N> {
 
 /// One cached compilation.
 #[derive(Debug)]
-struct CachedPlan<const N: usize = 4> {
+struct CachedPlan<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The compiled program, or the refusal — a refused program is cached too, so a
     /// repeatedly-presented bad program is diagnosed once rather than recompiled forever.
     plan: Result<Arc<Executable<N>>, EvalError>,
@@ -699,7 +708,10 @@ struct CachedPlan<const N: usize = 4> {
 /// use stamp, which is O(n) in a capacity the caller chose and bounded by it — the linear
 /// cost is on the rare install path, never on the hit path a hot loop takes.
 #[derive(Debug)]
-pub struct PlanCache<const N: usize = 4> {
+pub struct PlanCache<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// The most entries retained; the least recently used is evicted beyond it.
     capacity: usize,
     /// The entries, keyed by content address. A `BTreeMap` rather than a hash table

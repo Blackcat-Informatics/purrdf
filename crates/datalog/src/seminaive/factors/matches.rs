@@ -165,6 +165,7 @@ where
                             atoms: &factor.negated,
                             groups: &factor.negations,
                             entry,
+                            guards: &super::super::NoGuards,
                         },
                         snapshot.rel,
                         &mut input.solution,

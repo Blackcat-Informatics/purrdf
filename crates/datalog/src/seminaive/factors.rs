@@ -13,23 +13,23 @@
 use crate::store::{Arity, StoreShape};
 
 mod execution;
-mod filters;
+pub(super) mod filters;
 mod matches;
 mod product;
 mod relations;
 
-use execution::Frame;
+pub(super) use execution::Frame;
 
 #[cfg(test)]
 use super::{
-    GroupProbe, JoinGroup, LeapfrogRun, NoGuards, Scan, delta_can_match, extend_rebound_solutions,
-    extend_slot_solutions, extend_solutions_leapfrog,
+    DeltaIndexes, GroupProbe, JoinGroup, LeapfrogRun, NoGuards, Scan, delta_can_match,
+    extend_rebound_solutions, extend_slot_solutions, extend_solutions_leapfrog,
 };
 
 use super::{
-    ArgShape, BTreeMap, BTreeSet, Delta, DeltaIndexes, EvalError, GroupArg, HeadEvidence, JoinScan,
-    JoinSnapshot, PositionPlan, RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan,
-    RuleRuntime, SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, emit_solution,
+    ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, HeadEvidence, JoinScan, JoinSnapshot,
+    PositionPlan, RelationStore, RoundBuffer, RoundSnapshot, RuleEntry, RulePlan, RuleRuntime,
+    SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, emit_solution,
     source_heights, source_preference,
 };
 
@@ -877,6 +877,7 @@ where
     evaluate_with_evidence(entry, snapshot, governor, None)
 }
 
+#[cfg(test)]
 pub(super) fn evaluate_with_evidence<'r, D: TermDictionary, const N: usize>(
     entry: RuleEntry<'r, N>,
     snapshot: RoundSnapshot<'_, D, N>,
