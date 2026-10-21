@@ -84,6 +84,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod atom;
+mod commit;
 mod cycle;
 mod evidence;
 mod factors;
@@ -94,6 +95,7 @@ mod negative;
 mod ordered;
 mod round;
 mod rule;
+mod stratum;
 pub use evidence::NegationScope;
 use std::fmt;
 use std::sync::{
@@ -4339,7 +4341,7 @@ where
     /// passes a ceiling. Facts already admitted remain within the stated limit.
     pub(crate) fn absorb(
         &mut self,
-        mut round: RoundBuffer<'_, D::Id, N>,
+        round: RoundBuffer<'_, D::Id, N>,
     ) -> Result<(), EvalError<D::Error>> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
         self.join_refused |= round.join_refused;
@@ -4347,16 +4349,7 @@ where
         if round.entries.is_empty() {
             return Ok(());
         }
-        let generates_terms = round.generates_terms;
-        let generating_rules = std::mem::take(&mut round.generating_rules);
         commit_round(round, self)?;
-        // A fact-limit refusal may commit only a prefix. Count a generating
-        // round only once its whole commit completes; retained term bytes and
-        // generated terms already report the exact admitted prefix.
-        if generates_terms {
-            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
-            self.generating_rules = generating_rules;
-        }
         check_budget(self)
     }
 }
@@ -4721,6 +4714,25 @@ fn run_stratum<D: TermDictionary, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
+    let mut frame = stratum::Frame::new(exe, runtimes, stratum, state);
+    frame.advance(state, run, &mut evidence)?;
+    debug_assert!(frame.is_complete());
+    Ok(())
+}
+
+/// The original call-stack fixpoint is the differential stratum oracle.
+#[cfg(test)]
+fn reference_run_stratum<D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    runtimes: &[RuleRuntime<N>],
+    stratum: usize,
+    state: &mut FixpointState<D, N>,
+    run: StratumRun<'_, D, N>,
+    mut evidence: Option<&mut dyn evidence::RuleEvidence<D, N>>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
     // Seed the delta with EVERY accumulated row, so this stratum's rules fire against the
     // whole accumulated store in round one. Row ids are dense, so "everything" is the
     // contiguous span `[0, row_count)` — no per-key materialisation and no bitset.
@@ -4810,6 +4822,21 @@ where
 /// derivation sequence are all byte-deterministic. Row-id assignment is a purely additive
 /// side effect of this sorted loop; it never orders the commit.
 fn commit_round<D: TermDictionary, const N: usize>(
+    round: RoundBuffer<'_, D::Id, N>,
+    state: &mut FixpointState<D, N>,
+) -> Result<(), EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut frame = commit::Frame::new(round, state)?;
+    frame.advance(state)?;
+    debug_assert!(frame.is_complete());
+    Ok(())
+}
+
+/// The original publication loop is a differential commit oracle.
+#[cfg(test)]
+fn reference_commit_round<D: TermDictionary, const N: usize>(
     round: RoundBuffer<'_, D::Id, N>,
     state: &mut FixpointState<D, N>,
 ) -> Result<(), EvalError<D::Error>>

@@ -967,6 +967,8 @@ mod tests {
         Arity<N>: StoreShape<N>,
     {
         let store = fixture::<N>();
+        check_commit_phases(&atom);
+        check_stratum_phases(&atom);
         let rules = phase_rules(atom, unit);
         check_round_phases(&rules, &store);
         for rule in rules {
@@ -1268,6 +1270,311 @@ mod tests {
             resumed.calls.into_inner().unwrap(),
             original.calls.into_inner().unwrap()
         );
+    }
+
+    fn check_stratum_phases<const N: usize>(atom: &impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::{
+            BudgetResource, DerivationMode, EvalOptions, FixpointState, NoGuards, RoundExecution,
+            StratumRun, compile, reference_run_stratum, stratum,
+        };
+        use crate::store::TermInterner;
+        let program = compile(vec![
+            DlClause::datalog(
+                atom("x", "https://example.org/reach", "y"),
+                vec![atom("x", "https://example.org/p", "y")],
+            ),
+            DlClause::datalog(
+                atom("x", "https://example.org/reach", "z"),
+                vec![
+                    atom("x", "https://example.org/reach", "y"),
+                    atom("y", "https://example.org/p", "z"),
+                ],
+            ),
+            DlClause::datalog(
+                atom("x", "https://example.org/safe", "y"),
+                vec![
+                    atom("x", "https://example.org/p", "y"),
+                    atom("y", "https://example.org/reach", "x").into_negated(),
+                ],
+            ),
+        ])
+        .unwrap();
+        assert!(program.stratum_count() >= 2);
+        let mut seed = RelationStore::<TermInterner, N>::with_dictionary(TermInterner::default());
+        for (left, right) in [("c", "d"), ("b", "c"), ("a", "b"), ("c", "b")] {
+            let left = format!("<https://example.org/{left}>");
+            let right = format!("<https://example.org/{right}>");
+            let row = [
+                left.as_str(),
+                "<https://example.org/p>",
+                right.as_str(),
+                "<https://example.org/g>",
+            ];
+            seed.insert_row(std::array::from_fn(|position| row[position]))
+                .unwrap();
+        }
+        for mode in [DerivationMode::ModelOnly, DerivationMode::Record] {
+            let options = EvalOptions::default()
+                .with_derivation_mode(mode)
+                .with_max_join_steps(u64::MAX)
+                .with_max_stored_facts(u64::MAX);
+            let run = StratumRun {
+                stop: None,
+                guards: &NoGuards,
+                execution: RoundExecution::Sequential,
+                strategy: JoinStrategy::Planned,
+            };
+            let mut expected = FixpointState::seeded(seed.clone(), options);
+            for index in 0..program.stratum_count() {
+                reference_run_stratum(
+                    &program,
+                    program.runtimes(),
+                    index,
+                    &mut expected,
+                    run,
+                    None,
+                )
+                .unwrap();
+            }
+            let expected = expected.finish();
+            for execution in [RoundExecution::Sequential, RoundExecution::Parallel] {
+                for resource in [BudgetResource::JoinSteps, BudgetResource::StoredFacts] {
+                    let end = match resource {
+                        BudgetResource::JoinSteps => expected.work().join_steps(),
+                        BudgetResource::StoredFacts => {
+                            u64::try_from(expected.facts().row_count()).unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    let start = if resource == BudgetResource::StoredFacts {
+                        u64::try_from(seed.row_count()).unwrap()
+                    } else {
+                        0
+                    };
+                    for cut in start..=end {
+                        let mut state = FixpointState::seeded(seed.clone(), options);
+                        if resource == BudgetResource::JoinSteps {
+                            state.limits.join_steps = cut;
+                        } else {
+                            state.limits.stored_facts = cut;
+                        }
+                        let mut pauses = 0;
+                        for index in 0..program.stratum_count() {
+                            let mut frame =
+                                stratum::Frame::new(&program, program.runtimes(), index, &state);
+                            while !frame.is_complete() {
+                                match frame.advance(
+                                    &mut state,
+                                    StratumRun { execution, ..run },
+                                    &mut None,
+                                ) {
+                                    Ok(()) => assert!(frame.is_complete()),
+                                    Err(EvalError::BudgetExhausted {
+                                        resource: actual,
+                                        report,
+                                    }) => {
+                                        assert_eq!(actual, resource);
+                                        pauses += 1;
+                                        assert!(pauses <= end + 1);
+                                        // Cut zero walks every subsequent credit boundary;
+                                        // the other cuts resume directly to completion.
+                                        if resource == BudgetResource::JoinSteps {
+                                            assert_eq!(report.join_steps(), state.join_steps + 1);
+                                            assert_eq!(state.join_steps, state.limits.join_steps);
+                                            state.limits.join_steps = if cut == start {
+                                                state.join_steps + 1
+                                            } else {
+                                                u64::MAX
+                                            };
+                                        } else {
+                                            assert_eq!(
+                                                report.observed_stored_facts(),
+                                                state.rel.row_count() + 1
+                                            );
+                                            state.limits.stored_facts = if cut == start {
+                                                state.limits.stored_facts + 1
+                                            } else {
+                                                u64::MAX
+                                            };
+                                        }
+                                        if index == 0 {
+                                            assert!(state.rel.facts_sorted().iter().all(|fact| {
+                                                fact.predicate != "<https://example.org/safe>"
+                                            }));
+                                        }
+                                    }
+                                    Err(error) => panic!("unexpected refusal: {error:?}"),
+                                }
+                            }
+                        }
+                        state.limits.join_steps = u64::MAX;
+                        state.limits.stored_facts = u64::MAX;
+                        let actual = state.finish();
+                        assert_eq!(
+                            actual.facts().facts_sorted(),
+                            expected.facts().facts_sorted()
+                        );
+                        assert_eq!(actual.derivations(), expected.derivations());
+                        assert_eq!(actual.work(), expected.work());
+                        assert_eq!(actual.budget(), expected.budget());
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_commit_phases<const N: usize>(atom: &impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        use super::super::{
+            DerivationMode, EvalOptions, FixpointState, RoundExecution, RoundSnapshot, commit,
+            compile, evaluate_round_with_evidence, reference_commit_round,
+        };
+        use crate::dictionary::DictionaryValue;
+        use crate::store::TermInterner;
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        struct Fixed;
+        impl<const N: usize> GuardEvaluator<TermInterner, N> for Fixed
+        where
+            Arity<N>: StoreShape<N>,
+        {
+            fn evaluate(
+                &self,
+                call: &GuardCall<'_, TermInterner, N>,
+            ) -> Result<GuardRows, CallbackError> {
+                assert_eq!(call.guard.name(), "fixed");
+                Ok(vec![vec![DictionaryValue::Surface("\"generated\"".into())]])
+            }
+        }
+        let program = compile(vec![
+            DlClause::datalog(
+                atom("a", "https://example.org/generated", "z"),
+                vec![atom("a", "https://example.org/p", "b")],
+            )
+            .with_guards(vec![Guard::assign("fixed", Vec::new(), "z")]),
+        ])
+        .unwrap();
+        let mut seed = RelationStore::<TermInterner, N>::with_dictionary(TermInterner::default());
+        for subject in ["z", "a", "m"] {
+            let subject = format!("<https://example.org/{subject}>");
+            let row = [
+                subject.as_str(),
+                "<https://example.org/p>",
+                "<https://example.org/value>",
+                "<https://example.org/g>",
+            ];
+            seed.insert_row(std::array::from_fn(|position| row[position]))
+                .unwrap();
+        }
+        let (clause, plan) = program.rule_entry(0);
+        let runtime = &program.runtimes()[0];
+        let entry = RuleEntry {
+            index: 0,
+            rule: clause,
+            plan,
+            runtime,
+            delta: Delta::all(seed.row_count()),
+        };
+        let round = |state: &FixpointState<TermInterner, N>| {
+            evaluate_round_with_evidence(
+                &[entry],
+                RoundSnapshot {
+                    rel: &state.rel,
+                    depth: &state.depth,
+                    assumed: &[],
+                    delta_indexes: None,
+                },
+                RoundExecution::Sequential,
+                JoinStrategy::Planned,
+                u64::MAX,
+                &Fixed,
+                None,
+            )
+            .unwrap()
+        };
+        let compare = |actual: &FixpointState<TermInterner, N>,
+                       expected: &FixpointState<TermInterner, N>| {
+            assert_eq!(
+                actual.rel.facts_in_row_order(),
+                expected.rel.facts_in_row_order()
+            );
+            assert_eq!(actual.depth, expected.depth);
+            assert_eq!(actual.derivations, expected.derivations);
+            assert_eq!(actual.committed_facts, expected.committed_facts);
+            assert_eq!(actual.report(), expected.report());
+            assert_eq!(actual.generating_rules, expected.generating_rules);
+        };
+        for mode in [DerivationMode::ModelOnly, DerivationMode::Record] {
+            let options = EvalOptions::default()
+                .with_derivation_mode(mode)
+                .with_max_stored_facts(6);
+            let mut expected = FixpointState::seeded(seed.clone(), options);
+            let original = round(&expected);
+            assert_eq!(original.entries.len(), 3);
+            assert!(original.generates_terms);
+            expected.join_steps = original.join_steps;
+            let generating = original.generating_rules.clone();
+            reference_commit_round(original, &mut expected).unwrap();
+            expected.term_generating_rounds += 1;
+            expected.generating_rules = generating;
+            for cut in 0..=3 {
+                let mut state = FixpointState::seeded(seed.clone(), options);
+                let original = round(&state);
+                state.join_steps = original.join_steps;
+                let mut frame = commit::Frame::new(original, &state).unwrap();
+                state.limits.stored_facts = 3 + cut;
+                let result = frame.advance(&mut state);
+                assert_eq!(state.rel.row_count(), usize::try_from(3 + cut).unwrap());
+                if cut < 3 {
+                    let EvalError::BudgetExhausted { resource, report } = result.unwrap_err()
+                    else {
+                        panic!("the first unadmitted winner must retain its fact refusal")
+                    };
+                    assert_eq!(resource, super::super::BudgetResource::StoredFacts);
+                    assert_eq!(
+                        report.observed_stored_facts(),
+                        usize::try_from(4 + cut).unwrap()
+                    );
+                    assert!(!frame.is_complete());
+                    assert_eq!(state.term_generating_rounds, 0);
+                    state.limits.stored_facts = 6;
+                    frame.advance(&mut state).unwrap();
+                } else {
+                    result.unwrap();
+                }
+                assert!(frame.is_complete());
+                compare(&state, &expected);
+                frame.advance(&mut state).unwrap();
+                compare(&state, &expected);
+            }
+            let mut state = FixpointState::seeded(seed.clone(), options);
+            let original = round(&state);
+            state.join_steps = original.join_steps;
+            let mut frame = commit::Frame::new(original, &state).unwrap();
+            let terms = state.rel.interner().term_count();
+            state.rel.limit_terms_for_test(Some(terms + 1));
+            assert_eq!(
+                frame.advance(&mut state),
+                Err(EvalError::Storage(StorageError::Capacity(
+                    CapacityError::new(
+                        CapacitySpace::DatalogTerms,
+                        u128::from(terms) + 2,
+                        u128::from(terms) + 1,
+                    )
+                )))
+            );
+            assert_eq!(state.rel.row_count(), 3);
+            assert_eq!(state.rel.interner().term_count(), terms);
+            assert_eq!(state.term_generating_rounds, 0);
+            assert!(!frame.is_complete());
+            state.rel.limit_terms_for_test(None);
+            frame.advance(&mut state).unwrap();
+            compare(&state, &expected);
+        }
     }
 
     #[test]

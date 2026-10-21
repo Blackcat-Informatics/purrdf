@@ -107,6 +107,11 @@ where
         self.refused
     }
 
+    /// Successful cumulative credits; a page's refusal sentinel is not work.
+    pub(super) fn successful_steps(&self) -> u64 {
+        self.steps
+    }
+
     #[cfg(test)]
     pub(super) fn row_visits(&self) -> u64 {
         self.row_visits
