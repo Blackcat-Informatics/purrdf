@@ -4532,13 +4532,6 @@ where
         return Err(EvalError::BaseReadRequiresSchedule { rule });
     }
     edb.interner().check_read().map_err(EvalError::Source)?;
-    let runtimes: Vec<RuleRuntime<N>> = (0..exe.rule_count())
-        .map(|index| {
-            let (rule, plan) = exe.rule_entry(index);
-            RuleRuntime::new(rule, plan)
-        })
-        .collect();
-
     let mut state = FixpointState::seeded(edb, options);
     check_budget(&state)?;
 
@@ -4549,7 +4542,7 @@ where
         let owner = evidence
             .as_mut()
             .map(|owner| &mut **owner as &mut dyn evidence::RuleEvidence<D, N>);
-        run_stratum(exe, &runtimes, stratum, &mut state, run, owner)?;
+        run_stratum(exe, exe.runtimes(), stratum, &mut state, run, owner)?;
     }
 
     state

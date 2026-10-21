@@ -65,7 +65,8 @@ use crate::guard::Negation;
 #[cfg(test)]
 use crate::id::TermId;
 use crate::paths::relax_strata;
-use crate::store::Bound;
+use crate::seminaive::RuleRuntime;
+use crate::store::{Arity, Bound, StoreShape};
 
 // ── Stratification ──────────────────────────────────────────────────────────────
 
@@ -1564,15 +1565,24 @@ pub struct Planned<const N: usize = 4> {
 }
 
 impl<const N: usize> Planned<N> {
-    /// Seal the plan into the terminal [`Executable`], memoizing the head-predicate set a
-    /// completion frontier reads.
-    pub fn into_executable(self) -> Executable<N> {
+    /// Seal the plan into the terminal [`Executable`], preparing immutable rule shapes
+    /// once and memoizing the head-predicate set a completion frontier reads.
+    pub fn into_executable(self) -> Executable<N>
+    where
+        Arity<N>: StoreShape<N>,
+    {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
             .flat_map(DlClause::head_atoms)
             .map(predicate_symbol)
             .collect();
+        let runtimes = self
+            .rules
+            .iter()
+            .zip(&self.plans)
+            .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+            .collect::<Arc<[_]>>();
         Executable {
             settled_predicates: self.settled_predicates,
             admission: self.admission,
@@ -1580,6 +1590,7 @@ impl<const N: usize> Planned<N> {
             strata: self.strata,
             plans: self.plans,
             head_predicates,
+            runtimes,
         }
     }
 }
@@ -1590,7 +1601,10 @@ impl<const N: usize> Planned<N> {
 /// constructor is [`Planned::into_executable`], so a value of this type is a proof that
 /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
 #[derive(Debug, Clone)]
-pub struct Executable<const N: usize = 4> {
+pub struct Executable<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
     /// Predicates complete after each stratum.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
@@ -1602,9 +1616,20 @@ pub struct Executable<const N: usize = 4> {
     plans: Vec<RulePlan<N>>,
     /// The IDB-derivable (rule-head) predicates, in lexical order.
     head_predicates: BTreeSet<String>,
+    /// Immutable lowered shapes shared by executions and clones of this program.
+    /// Pending round keys may borrow authored constants here for the program's lifetime.
+    runtimes: Arc<[RuleRuntime<N>]>,
 }
 
-impl<const N: usize> Executable<N> {
+impl<const N: usize> Executable<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The same prepared rule metadata for every evaluation of this immutable program.
+    pub(crate) fn runtimes(&self) -> &[RuleRuntime<N>] {
+        &self.runtimes
+    }
+
     /// Every declaration source admitted with this immutable program.
     #[must_use]
     pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
