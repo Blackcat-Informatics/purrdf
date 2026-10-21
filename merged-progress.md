@@ -1,0 +1,5 @@
+The factor execution ownership unit is merged in PR #664 through ghprsq. Production retains eligibility, ground signed filters, productive delta relations, projected head products and candidate winners across pauses, using original row coordinates and deterministic witness ordering.
+
+Qualification: 427 native library +44 integration cases, actual supported WASM29, allocator controls, strict static checks and normal hooks pass. Full CI39523976522 and focused native/WASM39523862730 pass. Final-head automated review covered all8 changed files and reported no actionable findings.
+
+This parent remains open. Public source/program/guard/evidence-bound continuations, typed certified partial models, whole round/commit/stratum/delta ownership, shared memory admission/spill and cross-engine acceptance remain mandatory. The next implementation retains whole-rule joins, guards, negative filtering and head ordinals; its new targeted triple/quad controls pass, but it is not yet submitted or fully qualified. Datalog remains the first work stream.

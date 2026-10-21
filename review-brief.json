@@ -1,0 +1,29 @@
+{
+  "issue": 488,
+  "branch": "delivery/488-datalog-round-state",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "f0c2963849555bf2d2052e7badf1b406d56fc4bf",
+      "subject": "Retain complete Datalog rule phases across budget pauses",
+      "date": "2026-10-20"
+    },
+    {
+      "oid": "610f3f425d46217e4c2bbddaad2d9bf899e3c7cc",
+      "subject": "Prepare immutable Datalog rule metadata with compiled programs",
+      "date": "2026-10-20"
+    }
+  ],
+  "files": [
+    "crates/datalog/src/cache.rs",
+    "crates/datalog/src/plan.rs",
+    "crates/datalog/src/seminaive.rs",
+    "crates/datalog/src/seminaive/factors.rs",
+    "crates/datalog/src/seminaive/factors/execution.rs",
+    "crates/datalog/src/seminaive/factors/filters.rs",
+    "crates/datalog/src/seminaive/factors/matches.rs",
+    "crates/datalog/src/seminaive/ordered.rs",
+    "crates/datalog/src/seminaive/rule.rs"
+  ],
+  "adrs_touched": []
+}
