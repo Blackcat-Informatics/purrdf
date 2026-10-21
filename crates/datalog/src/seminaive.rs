@@ -2054,6 +2054,7 @@ where
 /// This is the ONE-TIME scan-mode dispatch: once per operator invocation — not per row —
 /// the scan mode is lifted to a `const SCAN` monomorphization parameter, so the per-row
 /// delta filter has no runtime branch.
+#[cfg(test)]
 fn extend_slot_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2078,6 +2079,7 @@ where
 }
 
 /// Probe a physically reordered atom while retaining its logical scan ordinal.
+#[cfg(test)]
 fn extend_rebound_solutions<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2102,6 +2104,7 @@ where
 }
 
 /// Drive one original native atom frame through the shared mode dispatch.
+#[cfg(test)]
 fn extend_selected_atom<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
@@ -2246,6 +2249,7 @@ where
 }
 
 /// Extend the certified component through its one owned traversal frame.
+#[cfg(test)]
 fn extend_solutions_leapfrog<D: TermDictionary, const N: usize>(
     run: &LeapfrogRun<'_, D, N>,
     solutions: Vec<SlotSolution<D::Id, N>>,
