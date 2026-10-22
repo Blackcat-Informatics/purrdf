@@ -1,0 +1,9 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 40.74s
+     Running tests/exact_governance.rs (/opt/.cargo/3b/38177d1af43954/debug/build/purrdf-xsd/16332b79e4471f84/out/exact_governance-16332b79e4471f84)
+
+running 1 test
+test canonical_decimal_reserves_one_exact_output_destination ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+

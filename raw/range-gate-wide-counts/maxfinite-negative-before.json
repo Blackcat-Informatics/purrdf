@@ -1,0 +1,19 @@
+{
+  "schema": 2,
+  "unit": "instructions",
+  "bootstrap_seed": 4470389,
+  "threads": 1,
+  "fixture": "decimal-binary64-maxfinite/negative-nearest-even-v1",
+  "boundary": "prepared-source-1024-or32-retained-float-results-validation-and-drop-excluded",
+  "raw_samples": [6942114, 6942113, 6942116, 6942126, 6942147, 6942157, 6942148, 6942148, 6942115, 6942169],
+  "median": 6779.43017578125,
+  "mad": 0.02001953125,
+  "ci_low": 6779.4091796875,
+  "ci_high": 6779.44580078125,
+  "confidence": 0.95,
+  "resamples": 10000,
+  "iterations_per_sample": 1024,
+  "samples": [6779.408203125, 6779.4072265625, 6779.41015625, 6779.419921875, 6779.4404296875, 6779.4501953125, 6779.44140625, 6779.44140625, 6779.4091796875, 6779.4619140625],
+  "outliers": {"low_severe": 0, "low_mild": 0, "high_mild": 0, "high_severe": 0},
+  "throughput": null
+}

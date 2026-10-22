@@ -1,0 +1,17 @@
+Part of #443. This is an independently shippable exact-decimal boundary unit; #443 retains its complete original contract and stays open.
+
+Canonical text currently grows an output String through generic formatting despite already having its complete prepared length. Small binary64 conversion also pays the register frame for wide conversion before checking the inline path. Correct the actual public callers using their existing prepared-text and rounding homes.
+
+Requirements:
+
+- Reserve canonical text's complete prepared length once, using the existing writer and unchanged canonical bytes. Cover zero, normalized fractions, the minimum signed coefficient and large fractional padding with one exact-sized output allocation.
+- Inline the small coefficient/scale binary64 gate and keep wide conversion's frame in its private cold path, preserving exact rounding, signs, subnormals, infinities and all wide behavior.
+- Refuse broken binary32-width and generated-float-lexical invariants explicitly rather than substituting infinity or a default number.
+- Correct obsolete benchmark labels: current public value operators already use the exact tower, and both scale18/scale20 products have inline coefficients. A division error must fail visibly.
+- Validate actual public native and packaged-WASM paths with existing frozen/oracle bytes and bit patterns, allocation controls and exact test selection. Preserve governor/physical-owner behavior and all original arithmetic homes.
+- Collect before/after fixed-work instructions and all four allocation quantities for the boundary fixtures, with complete counter coverage, every returned answer checked outside the window and explicit retention/drop scope. Compare matching precision laws: historical bounded truncation differs from current exact-or-18/half-even. Preserve failed evidence and report remaining regressions honestly.
+- Pass strict source/hygiene checks, normal commit/push hooks, independent substantive review and required hosted qualification before the supported merge/archive workflow.
+
+No new runtime dependency, semantic feature, compiler/profile/cache exception, rounding-default change or numeric owner. Use the existing parent checkout `.worktrees/443-optimize-the-exact-numeric-tower-small` and its exact stage directory as the surviving implementation/evidence owner; no additional copy or implementation lane is needed for this decomposition.
+
+The complete #443 requirements remain unchanged: all seven rows at bounded parity or better; native/WASM large algorithm and threshold curves; SIMD architecture acceptance; medium-value allocation and balanced/chained rational work; and no-regression before/after SPARQL arithmetic, ORDER BY, SUM/AVG and FILTER lanes. This child does not close those requirements or claim complete-query performance. No wall-clock requirement.

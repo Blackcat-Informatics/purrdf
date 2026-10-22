@@ -1,0 +1,15 @@
+[package]
+name = "bounded-xsd"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Original clean donor source, not copied or edited. Shared foundation is held
+# at current source on both sides: this is an arithmetic-source comparison,
+# not a historical whole-binary/whole-query measurement.
+[lib]
+path = "../../../../../422-bounded-numerics/crates/xsd/src/lib.rs"
+
+[dependencies]
+purrdf-hash = { path = "../../../../crates/hash" }
+purrdf-lex = { path = "../../../../crates/lex" }

@@ -1,0 +1,22 @@
+row family before after relative-change interval
+integer_add bounded 89.4062 89.4062 0.00000% [0.00000%,0.00000%] NoChange
+integer_add exact 85.4062 85.4062 0.00000% [-0.00057%,0.00000%] NoChange
+integer_add value 167.4067 167.4062 -0.00029% [-0.00117%,0.02538%] NoChange
+integer_mul bounded 119.4062 119.4062 0.00000% [-0.00164%,0.00000%] NoChange
+integer_mul exact 109.4072 109.4062 -0.00089% [-0.00179%,0.08569%] NoChange
+integer_mul value 188.4067 188.4062 -0.00026% [-0.00130%,0.00000%] NoChange
+decimal_add bounded 202.3408 202.3408 0.00000% [-0.00048%,0.00000%] NoChange
+decimal_add exact 178.9902 178.9902 0.00000% [-0.00027%,0.00000%] NoChange
+decimal_add value 288.9912 288.9902 -0.00034% [-0.00068%,0.00017%] NoChange
+decimal_mul bounded 170.4062 170.4062 0.00000% [-0.00057%,0.00029%] NoChange
+decimal_mul exact 194.7305 194.7305 0.00000% [-0.00050%,0.00000%] NoChange
+decimal_mul value 282.2109 282.2109 0.00000% [0.00000%,0.00035%] NoChange
+decimal_div bounded 250.9365 250.9365 0.00000% [0.00000%,0.00000%] NoChange
+decimal_div exact 374.5312 374.5312 0.00000% [-0.00039%,0.00013%] NoChange
+decimal_div value 609.5312 609.5312 0.00000% [-0.00016%,0.00016%] NoChange
+parse_render bounded 1770.3447 1770.3604 0.00088% [0.00088%,0.00097%] WithinNoise
+parse_render exact 2579.1909 2228.2842 -13.60530% [-13.60796%,-13.60515%] Improved
+parse_render value 2593.1870 2242.2852 -13.53168% [-13.53194%,-13.53167%] Improved
+to_f64 bounded 130.7344 130.7344 0.00000% [-0.00037%,0.00000%] NoChange
+to_f64 exact 149.3594 144.3594 -3.34763% [-3.34763%,-3.34698%] Improved
+to_f64 value 151.3594 146.3594 -3.30340% [-3.30371%,-3.26243%] Improved

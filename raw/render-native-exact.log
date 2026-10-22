@@ -1,0 +1,58 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 3.04s
+     Running tests/exact_governance.rs (/opt/.cargo/3b/38177d1af43954/debug/build/purrdf-xsd/16332b79e4471f84/out/exact_governance-16332b79e4471f84)
+
+running 35 tests
+test admitted_datetime_refusal_precedes_any_copy_allocation ... ok
+test temporal_comparison_admits_wide_alignment_before_allocating ... ok
+test admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs ... ok
+test duration_subtype_cast_admits_kept_seconds_and_drops_other_component ... ok
+test calendar_text_prepares_wide_seconds_under_original_admission ... ok
+test duration_add_sub_admit_seconds_before_allocation ... ok
+test duration_unary_minus_admits_wide_seconds_before_copy ... ok
+test duration_scale_and_ratio_admit_borrowed_exact_parts ... ok
+test wide_temporal_parse_admits_native_peak_and_releases_retained_owner ... ok
+test named_duration_calendar_operations_use_the_exact_general_path ... ok
+test instant_difference_borrows_wide_seconds_and_admits_each_total ... ok
+test gregorian_whole_days_admits_wide_duration_before_division ... ok
+test calendar_exact_work_cost_tracks_wide_seconds_and_keeps_tiny_zero ... ok
+test calendar_exact_work_bounds_actual_native_traffic ... ok
+test invalid_temporal_pairs_keep_type_error_ahead_of_admission ... ok
+test timezone_adjustment_admits_wide_seconds_before_copy_or_shift ... ok
+test admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal ... ok
+test wide_gap_gcd_stays_within_its_work_and_physical_cost ... ok
+test duration_text_prepares_wide_days_and_fraction_without_quotient_owner ... ok
+test calendar_duration_arithmetic_admits_exact_seconds_before_allocation ... ok
+test a_vast_scale_is_charged_where_it_is_paid ... ok
+test full_native_parser_preserves_all_value_families_and_original_heap_owners ... ok
+test balanced_large_products_fit_their_admitted_peak ... ok
+test unary_functions_are_linear ... ok
+test a_long_integer_converts_to_a_float_from_its_length ... ok
+test exact_division_positive_scale_gap_covers_retained_result ... ok
+test rounded_division_prices_a_long_scaled_dividend ... ok
+test rounded_division_prices_a_long_scaled_divisor ... ok
+test temporal_native_values_and_deferred_refusals_allocate_no_heap ... ok
+test inline_ieee_text_preserves_extreme_values_without_heap_traffic ... ok
+test inline_ieee_append_refuses_before_mutation_and_never_grows ... ok
+test canonical_decimal_reserves_one_exact_output_destination ... ok
+test a_lopsided_product_costs_what_it_is_charged ... ok
+test division_is_charged_at_its_policy ... ok
+test alignment_is_charged_at_the_scale_gap ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.57s
+
+     Running tests/exact_wasm_determinism.rs (/opt/.cargo/3b/38177d1af43954/debug/build/purrdf-xsd/5f3e9de096508a12/out/exact_wasm_determinism-5f3e9de096508a12)
+
+running 7 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+test the_transcript_digest_is_reproduced_on_this_target ... ok
+test the_oracle_vectors_replay_on_this_target ... ok
+test wide_gap_gcd_replays_on_this_target ... ok
+test large_decimal_group_parse_replays_on_this_target ... ok
+test large_binary_division_replays_exact_shift_equations ... ok
+determinism-digest case=exact-large-products digest=601791f97aa1152f corpus_len=325271
+test large_binary_products_match_the_schoolbook_oracle ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+

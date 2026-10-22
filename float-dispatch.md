@@ -1,0 +1,27 @@
+# Next measured gap: inline decimal to binary64
+
+The complete small source comparison reports 149.3594 exact versus 130.7344 bounded instructions/value, with all 1024 binary64 bit patterns checked and zero four-quantity allocation traffic. Canonical output reservation changes neither float figure.
+
+Inspecting the actual measured bench executable explains avoidable dispatch work. The exact sample calls Decimal::to_f64 out of line. Its emitted entry saves six callee-saved registers and reserves a stack frame before checking inline coefficient/scale. Even the small success path then restores all six registers and tail-jumps to the existing decimal_float::decimal_to_f64 home. The register saves serve the later wide-coefficient/scale path. raw/float-call-boundary.asm preserves the actual emitted method, derived from render-comparison-build.jsonl's executable; no alternate compiler/profile/cache configuration was used.
+
+Next candidate: keep the inline coefficient/scale gate in a small inline public method and move only the existing wide fallback into a private cold method. Reuse both native rounding homes verbatim. No precision, sign, infinity, subnormal, storage admission or governor change is intended. This is a proposal pending the current normal commit hook and a real source/counter comparison, not an established improvement. Reuse existing exact/frozen/float-bit oracles; run native and packaged WASM after changing the method. Preserve the prior failed evidence and bounded-law distinctions.
+
+The candidate compiles (session 50111 exit 0), and the fresh complete 210-sample matrix passes all answer/coverage guards (session 86108 exit 0). Exact small binary64 instructions/value move 149.3594 to 131.3594; public value path 151.3594 to 132.3594. Bounded remains about 130.7358, so exact strict parity is still not established. The emitted exact public wrapper is now inlined; the named wide method remains out of line. Initial complete native 35+7 oracles pass, session 24104 exit 0. These receipts precede the invariant correction below.
+
+Reading the shared float home also exposed two silent defaults on broken invariants: binary32 width conversion could become infinity, and refusal of an always-valid generated scientific lexical could become Default. Both now hard-fail with actionable expectations; no valid output or rounding formula changes. The module's stale scale18-only statement is corrected for the actual exact-tower scale38 caller. Existing comprehensive decimal_float unit oracle controls are compiling before final native/portable and counter refresh. No synthetic failure-injection test mirrors the private parser implementation.
+
+Final guard changes pass seven native leaf oracle cases (session 76727 exit0) and all seven public native plus seven actual packaged-WASM exact/oracle cases (session94519 exit0). Final small210-sample matrix session18209 exits0 with full checked outputs and complete coverage. Strict all-target Clippy session65038 exits0.
+
+## Rejected first wide split
+
+Source4777f7dc0 is imported unchanged for the before side, with current shared foundations and a single same-profile wide comparison executable. The independent oracle uses full Rational parsing for registered40/400-digit growth rows, mathematically certified overflow at4000/40000, certified equal-rounded38-digit prefix endpoints for directed finite fractions, and exact signed-zero/subnormal/maxfinite constants. Every returned float is checked outside the counter window.
+
+All22fixtures x2sources x10fresh processes run successfully with complete counter coverage and correct bits, session32429 exit0. However this is **failed performance acceptance**, not a passed optimization: original4000/40000 growth exits add four instructions (+1.406%); extreme-scale underflow adds five (+2.599%). Other directed wide paths retain their exact positive/negative changes in raw/wide-float-counts.log. Those results remain preserved; the first split is rejected despite its small-value win.
+
+The first split outlined range checks as well as ratio conversion, losing field facts shared with the inline gate. The corrected candidate keeps original beyond/range checks with the public gate and outlines only the unchanged ratio conversion. This avoids introducing another numerical bound or algorithm. It is compiling before repeating small and wide comparisons; no corrected win is claimed yet.
+
+## Settled ratio-only split
+
+Range-gate comparison build session9509 exits0. Complete small210-sample collection session72587 exits0: exact/public small binary64 medians144.3594/146.3594 versus reservation-source149.3594/151.3594. The safer split keeps a five-instruction saving rather than the rejected eighteen-instruction saving. Parent strict parity remains open.
+
+All22wide fixtures x2sources x10samples pass full independent answer and exact counter-coverage guards, session4013 exits0. Shared report comparisons have no Regressed verdict. Underflow medians improve192.4033->188.4043 (+/-raw observation details in range-gate-wide-counts.log); registered growth, directed finite, signed subnormal and maximum-finite cells preserve all exact deltas and intervals. No wall-clock or whole-query result is inferred. The wider arithmetic kernels and bounds are unchanged. Final native/WASM, strict gates and normal hooks are running on this settled source; the earlier complete floating kernel oracle result remains valid because decimal_float bodies are unchanged after that check.

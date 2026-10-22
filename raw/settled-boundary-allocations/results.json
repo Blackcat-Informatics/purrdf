@@ -1,0 +1,717 @@
+[
+  {
+    "case": "integer_add",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "integer_add",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "integer_add",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "integer_mul",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "integer_mul",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "integer_mul",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_add",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_add",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_add",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_mul",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_mul",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_mul",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_div",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_div",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "decimal_div",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "parse_render",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      3952,
+      55473,
+      18121,
+      18133
+    ]
+  },
+  {
+    "case": "parse_render",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      1024,
+      13359,
+      13359,
+      13359
+    ]
+  },
+  {
+    "case": "parse_render",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      1024,
+      13359,
+      13359,
+      13359
+    ]
+  },
+  {
+    "case": "to_f64",
+    "family": "bounded",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "to_f64",
+    "family": "exact",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "to_f64",
+    "family": "value",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/400/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      16384,
+      1769472,
+      0,
+      1008
+    ]
+  },
+  {
+    "case": "growth/400/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      16384,
+      1769472,
+      0,
+      1008
+    ]
+  },
+  {
+    "case": "growth/400/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      16384,
+      1769472,
+      0,
+      1008
+    ]
+  },
+  {
+    "case": "growth/400/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      16384,
+      1769472,
+      0,
+      1008
+    ]
+  },
+  {
+    "case": "growth/4000/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/4000/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/4000/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/4000/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40000/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40000/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40000/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "growth/40000/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "finite/40/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "finite/40/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "finite/40/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "finite/40/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "finite/400/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      27648,
+      3424256,
+      0,
+      1208
+    ]
+  },
+  {
+    "case": "finite/400/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      27648,
+      3424256,
+      0,
+      1208
+    ]
+  },
+  {
+    "case": "finite/400/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      27648,
+      3424256,
+      0,
+      1208
+    ]
+  },
+  {
+    "case": "finite/400/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      27648,
+      3424256,
+      0,
+      1208
+    ]
+  },
+  {
+    "case": "finite/4000/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      6912,
+      6098688,
+      0,
+      11680
+    ]
+  },
+  {
+    "case": "finite/4000/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      6912,
+      6098688,
+      0,
+      11680
+    ]
+  },
+  {
+    "case": "finite/4000/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      6912,
+      6098688,
+      0,
+      11680
+    ]
+  },
+  {
+    "case": "finite/4000/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      6912,
+      6098688,
+      0,
+      11680
+    ]
+  },
+  {
+    "case": "finite/40000/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      67552,
+      564669184,
+      0,
+      116320
+    ]
+  },
+  {
+    "case": "finite/40000/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      67552,
+      564669184,
+      0,
+      116320
+    ]
+  },
+  {
+    "case": "finite/40000/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      67552,
+      564669184,
+      0,
+      116320
+    ]
+  },
+  {
+    "case": "finite/40000/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      67552,
+      564669184,
+      0,
+      116320
+    ]
+  },
+  {
+    "case": "underflow/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "underflow/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "underflow/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "underflow/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "case": "subnormal/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      21504,
+      2187264,
+      0,
+      824
+    ]
+  },
+  {
+    "case": "subnormal/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      21504,
+      2187264,
+      0,
+      824
+    ]
+  },
+  {
+    "case": "subnormal/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      21504,
+      2187264,
+      0,
+      824
+    ]
+  },
+  {
+    "case": "subnormal/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      21504,
+      2187264,
+      0,
+      824
+    ]
+  },
+  {
+    "case": "maxfinite/positive",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      6144,
+      786432,
+      0,
+      512
+    ]
+  },
+  {
+    "case": "maxfinite/positive",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      6144,
+      786432,
+      0,
+      512
+    ]
+  },
+  {
+    "case": "maxfinite/negative",
+    "family": "before",
+    "exit_code": 0,
+    "quantities": [
+      6144,
+      786432,
+      0,
+      512
+    ]
+  },
+  {
+    "case": "maxfinite/negative",
+    "family": "after",
+    "exit_code": 0,
+    "quantities": [
+      6144,
+      786432,
+      0,
+      512
+    ]
+  }
+]

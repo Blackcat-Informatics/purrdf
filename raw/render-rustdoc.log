@@ -1,0 +1,5 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/lex)
+ Documenting purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 5.74s
+   Generated /opt/.cargo/target/443-optimize-the-exact-numeric-tower-small-8b292f44/doc/purrdf_xsd/index.html

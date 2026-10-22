@@ -1,0 +1,15 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 23.27s
+     Running unittests src/lib.rs (/opt/.cargo/3b/38177d1af43954/debug/build/purrdf-xsd/1faeafff57fb3cc8/out/purrdf_xsd-1faeafff57fb3cc8)
+
+running 7 tests
+test decimal_float::tests::pinned_two_rounding_witness_rounds_correctly ... ok
+test decimal_float::tests::f32_rounds_once_where_narrowing_f64_rounds_twice ... ok
+test decimal_float::tests::the_old_two_rounding_conversion_is_refused_and_the_new_one_matches ... ok
+test decimal_float::tests::zero_is_positive_zero_at_every_scale ... ok
+test decimal_float::tests::f32_subnormals_round_once ... ok
+test decimal_float::tests::random_decimals_match_the_oracle_across_mantissa_sizes_and_scales ... ok
+test decimal_float::tests::exact_ties_and_their_neighbours_round_to_even ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 419 filtered out; finished in 0.03s
+

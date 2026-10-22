@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.38s
+     Running benches/exact.rs (/opt/.cargo/3b/38177d1af43954/debug/build/purrdf-xsd/98c5aa7232fac7ff/out/exact-98c5aa7232fac7ff)
+Testing xsd_exact_fine_products/scale18
+Success
+Testing xsd_exact_fine_products/scale20
+Success
+
+2 benchmarks tested; 0 failed

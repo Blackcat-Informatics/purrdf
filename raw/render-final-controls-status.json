@@ -1,0 +1,39 @@
+[
+  {
+    "gate": "render-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "gate": "render-rustdoc",
+    "command": [
+      "cargo",
+      "doc",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--no-deps"
+    ],
+    "environment": {
+      "RUSTDOCFLAGS": "-D warnings"
+    },
+    "exit_code": 0
+  },
+  {
+    "gate": "render-wasm-route",
+    "command": [
+      "make",
+      "-n",
+      "wasm-test"
+    ],
+    "environment": {},
+    "exit_code": 0
+  }
+]

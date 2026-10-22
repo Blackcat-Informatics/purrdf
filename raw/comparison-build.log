@@ -1,0 +1,17 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/hash)
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/testkit)
+   Compiling bounded-xsd v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison/bounded)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+   Compiling numeric-source-comparison v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison)
+    Finished `bench` profile [optimized] target(s) in 1m 01s

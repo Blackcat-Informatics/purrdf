@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 443,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small",
+  "branch": "paudley/443-optimize-the-exact-numeric-tower-small",
+  "slug": "optimize-the-exact-numeric-tower-small",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "09e344f7338a1ec4ac312d5feb9f469ceb7234e3",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small",
+    "branch:paudley/443-optimize-the-exact-numeric-tower-small",
+    "stage:/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small",
+    "issue:/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-21T18:15:12-0600"
+}

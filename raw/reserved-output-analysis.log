@@ -1,0 +1,25 @@
+   Compiling numeric-source-comparison v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison)
+    Finished `bench` profile [optimized] target(s) in 7.72s
+     Running `/opt/.cargo/target/comparison-666b5c3f/release/analyze .stage/optimize-the-exact-numeric-tower-small/raw/reserved-output-counts .stage/optimize-the-exact-numeric-tower-small/raw/matched-laws-counts`
+row family before after relative-change interval
+integer_add bounded 89.4062 89.4062 0.00000% [0.00000%,0.00055%] NoChange
+integer_add exact 85.4062 85.4062 0.00000% [-0.00057%,0.00057%] NoChange
+integer_add value 167.4067 167.4067 0.00000% [-0.00088%,0.00058%] NoChange
+integer_mul bounded 119.4062 119.4062 0.00000% [-0.00164%,0.00000%] NoChange
+integer_mul exact 109.4072 109.4062 -0.00089% [-0.00179%,0.04999%] NoChange
+integer_mul value 188.4067 188.4062 -0.00026% [-0.00130%,0.00000%] NoChange
+decimal_add bounded 202.3408 202.3408 0.00000% [-0.00048%,0.00048%] NoChange
+decimal_add exact 178.9902 178.9902 0.00000% [-0.00027%,0.00027%] NoChange
+decimal_add value 288.9912 288.9902 -0.00034% [-0.00068%,0.00068%] NoChange
+decimal_mul bounded 170.4062 170.4062 0.00000% [-0.00057%,0.00057%] NoChange
+decimal_mul exact 194.7305 194.7310 0.00025% [-0.00025%,0.00075%] NoChange
+decimal_mul value 282.2109 282.2114 0.00017% [0.00000%,0.00052%] NoChange
+decimal_div bounded 250.9365 250.9370 0.00019% [0.00000%,0.00078%] NoChange
+decimal_div exact 374.5312 374.5312 0.00000% [-0.00026%,0.00052%] NoChange
+decimal_div value 609.5312 609.5342 0.00048% [0.00000%,0.00104%] NoChange
+parse_render bounded 1770.3447 1770.3462 0.00008% [0.00003%,0.00025%] WithinNoise
+parse_render exact 2579.1909 2228.2861 -13.60523% [-13.60783%,-13.60486%] Improved
+parse_render value 2593.1870 2242.2852 -13.53168% [-13.53193%,-13.53147%] Improved
+to_f64 bounded 130.7344 130.7344 0.00000% [-0.00037%,0.00000%] NoChange
+to_f64 exact 149.3594 149.3594 0.00000% [0.00000%,0.00000%] NoChange
+to_f64 value 151.3594 151.3594 0.00000% [0.00000%,0.00065%] NoChange

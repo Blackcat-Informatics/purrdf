@@ -1,0 +1,5 @@
+error: failed to parse manifest at `/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison/Cargo.toml`
+
+Caused by:
+  no targets specified in the manifest
+  either src/lib.rs, src/main.rs, a [lib] section, or [[bin]] section must be present

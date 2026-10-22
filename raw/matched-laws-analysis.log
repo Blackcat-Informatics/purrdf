@@ -1,0 +1,11 @@
+   Compiling numeric-source-comparison v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison)
+    Finished `bench` profile [optimized] target(s) in 39.38s
+     Running `/opt/.cargo/target/comparison-666b5c3f/release/analyze .stage/optimize-the-exact-numeric-tower-small/raw/matched-laws-counts`
+row bounded exact value exact-relative-to-bounded interval
+integer_add 89.4062 85.4062 167.4067 -4.47396% [-4.47396%,-4.47341%] Improved
+integer_mul 119.4062 109.4072 188.4067 -8.37395% [-8.37583%,-8.37314%] Improved
+decimal_add 202.3408 178.9902 288.9912 -11.54023% [-11.54065%,-11.54020%] Improved
+decimal_mul 170.4062 194.7305 282.2109 14.27425% [14.27360%,14.27483%] Regressed
+decimal_div 250.9365 374.5312 609.5312 49.25338% [49.25338%,49.25397%] Regressed
+parse_render 1770.3447 2579.1909 2593.1870 45.68863% [45.68841%,45.69309%] Regressed
+to_f64 130.7344 149.3594 151.3594 14.24644% [14.24602%,14.24644%] Regressed

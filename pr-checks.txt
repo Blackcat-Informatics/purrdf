@@ -1,0 +1,56 @@
+Head: 007584c86e422c8dc98854180588ab9c565e932d
+workspace: SUCCESS
+Analyze (actions): SUCCESS
+Build The PurRDF Book: SUCCESS
+Analyze (c-cpp): SUCCESS
+Analyze (javascript-typescript): SUCCESS
+Analyze (python): SUCCESS
+Analyze (rust): SUCCESS
+Deploy to GitHub Pages: SKIPPED
+test (lib): SUCCESS
+test (doc): SUCCESS
+test (integration-1): SUCCESS
+test (integration-2): SUCCESS
+test (integration-3): SUCCESS
+test (integration-4): SUCCESS
+test (integration-5): SUCCESS
+projection-oracles: SUCCESS
+capi: SUCCESS
+doc: SUCCESS
+msrv: SUCCESS
+wasm: SUCCESS
+wasm-package: SUCCESS
+wasm-exec: SUCCESS
+geo-determinism: SUCCESS
+wasm-schema-oracles: SUCCESS
+simd-asm-config (x86_64): SUCCESS
+simd-asm-config (x86_64-v3): SUCCESS
+simd-asm-config (x86_64-v4): SUCCESS
+simd-asm-config (aarch64): SUCCESS
+simd-asm-config (aarch64-neoverse-v1): SUCCESS
+simd-asm-config (wasm32): SUCCESS
+simd-asm-config (wasm32-simd128): SUCCESS
+simd-asm-projection: SKIPPED
+aarch64: SUCCESS
+cross-arch: SUCCESS
+windows-mtime: SUCCESS
+cross-arch-riscv64 (suites): SUCCESS
+cross-arch-riscv64 (determinism-serial): SUCCESS
+cross-arch-riscv64 (determinism-one-worker): SUCCESS
+cross-arch-riscv64 (determinism-more-workers): SUCCESS
+avx512-sde: SUCCESS
+pytest: SUCCESS
+python-publisher: SUCCESS
+miri: SUCCESS
+conformance (core): SUCCESS
+conformance (sparql): SUCCESS
+conformance (shapes): SUCCESS
+conformance (python): SUCCESS
+native-profile-admission: SKIPPED
+test: SUCCESS
+simd-asm: SUCCESS
+conformance: SUCCESS
+native-profile: SKIPPED
+native-profile-comparison: SKIPPED
+CodeQL: SUCCESS
+CodeRabbit: SUCCESS

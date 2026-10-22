@@ -1,0 +1,45 @@
+[
+  {
+    "gate": "review-product-scales",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--bench",
+      "exact",
+      "--",
+      "xsd_exact_fine_products",
+      "--test"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "review-bench-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--bench",
+      "exact",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "review-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0
+  }
+]

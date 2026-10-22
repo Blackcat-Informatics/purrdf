@@ -1,0 +1,9 @@
+# Selected replay sources
+
+The clean historical bounded source at 92ceebafa is used directly by comparison/bounded/Cargo.toml. Its exact tracked crates/xsd/src snapshot is additionally preserved read-only in comparison/bounded/source (20 files, 949230 bytes). A portable replay can set that manifest's lib path to source/lib.rs; the actual measured manifest retains its original donor path. Source bytes are unchanged, and both routes use the current shared hash/lex foundations. The donor remains clean and preserved.
+
+The pre-float-split source at signed/pushed4777f7dc0 is imported read-only into comparison/reserved/source (59 files, 2045941 bytes), with its small evidence-only renamed manifest. This imports only the XSD library's required source tree, not a checkout or target cache. Its original native to_f64 method retains the observed register frame. A new wide-path comparison links that source and current source against the same current foundations to check the original registered growth fixtures and directed finite/underflow/subnormal cases. It is a source comparison, not a whole historical shipping binary comparison.
+
+Snapshots are produced by git archive of the named tracked directory, preserving every regular source byte without hand edits. Original/current benchmark manifests and raw outputs remain separate. No source package is added to the shipping workspace, no donor is edited, and no profile/compiler/feature setting is changed. Generated Cargo evidence lock updates only these evidence-package edges. Both snapshots are required replay inputs, not a separate memory store.
+
+The exact pre-float native measurement executable is also preserved as raw/reserved-output-workload. Its original to_f64 symbol at0x91dc0 has size0x21b and no wide_to_f64 symbol, matching raw/float-call-boundary.asm. This copy was taken before the float build published its replacement; it supports the earlier source/assembly/counter evidence.

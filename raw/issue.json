@@ -1,0 +1,123 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Goal\n\nMake the exact numeric tower (`purrdf_xsd::exact::{Integer, Decimal, Rational}`, added in #441) at least as fast as the bounded types for in-range values, and competitive with dedicated bignum libraries for large ones. The tower becomes the default numeric path once #441 lands, so its speed is query speed.\n\nThis is separate from #441 on purpose: #441 keeps in-range values on the existing bounded fast path, so it ships with no regression. This issue is about making the tower itself fast.\n\n## Measured starting point\n\nInstructions per operation on small values, from #441's `crates/xsd/benches/exact.rs`:\n\n| Operation | Exact tower | Bounded |\n|---|---:|---:|\n| integer `+` | 49.7 | 66.4 |\n| integer `\u00d7` | 78.0 | 95.4 |\n| decimal `+` | 138.7 | 131.2 |\n| decimal `\u00d7` | 158.9 | 105.4 |\n| decimal `\u00f7` | 346.5 | 231.7 |\n| decimal parse + render | 1,469 | 1,459 |\n| decimal \u2192 `f64` | 100.4 | 97.8 |\n\nFor large values, addition, parse and render scale linearly from 40 to 40,000 digits. Multiplication uses Karatsuba above 64 limbs; the threshold came from an instruction-count sweep. Division costs quotient length \u00d7 divisor length.\n\n## Scope\n\n1. **Small-value decimal `\u00d7`/`\u00f7`:** reach parity with bounded or better. The likely cause is canonicalising (stripping trailing zeros) after every operation. Try lazy canonicalisation, normalising only at render, compare, hash and equality.\n2. **Use the tower wherever it wins:** integer `+` and `\u00d7` are already faster than bounded. Measure end-to-end in the SPARQL evaluator, and switch the in-range hybrid path per operation wherever the tower wins.\n3. **Large multiplication:** Toom-3 (and possibly Toom-4) above the Karatsuba range, with an FFT or NTT-based multiply for very large operands. Tune each threshold by an instruction-count sweep on native and wasm32.\n4. **Large division:** Burnikel\u2013Ziegler recursive division, or Newton reciprocal division, so division costs about the same as multiplication.\n5. **Decimal \u2194 string:** subquadratic radix conversion (divide-and-conquer with cached powers of ten) for parse and render past a few hundred digits.\n6. **SIMD:** limb loops (add/sub carry chains, schoolbook inner loop) on x86_64-v3/v4, aarch64 NEON and wasm32 simd128, wherever `make simd-asm` shows they vectorize or can be written to. Each new kernel needs a portable reference, a goldens test and a `scripts/simd-asm-manifest.toml` site.\n7. **Allocation:** cut allocations for medium values, for example inline storage for 2\u20134 limbs and reusing scratch buffers in division, and prove the reduction with the alloc probes.\n8. **Rational:** cheaper GCD reduction (binary or Lehmer GCD) and fewer reductions in chained operations.\n\n## Constraints\n\n- **Exactness:** results stay exact and bit-identical across native and wasm32. The `purrdf_testkit::exact` oracle properties and the wasm determinism digest must still pass.\n- **Governor:** cost estimates (`exact::Cost`) must keep bounding the real work after every algorithm change, without over-refusing. A cost must never under-report.\n- **Benches:** every change needs a bench row (`purrdf_testkit::bench`, `docs/BENCHMARKS.md`, `docs/design/purrdf-simd.md`). Measure with instructions:u, not wall time.\n- **Dependencies:** no new external dependency without approval. The tower is first-party by design.\n\n## Acceptance\n\n- Every row in the table above is at parity with bounded or better.\n- Large-value curves show the new asymptotics (Toom, subquadratic division and radix conversion), with sweep-tuned thresholds recorded.\n- Before/after tables for the SPARQL arithmetic, ORDER BY, SUM/AVG and FILTER lanes, with no regression anywhere.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABbxTjww",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Three scoped #443 checkpoints are now committed and pushed on the existing numeric worktree:\n\n- Decimal parsing keeps the 19-digit Horner path through 256 groups and uses an admitted balanced tree above that boundary (`3bce6955c`). Native boundary/governor and actual wasm32/Node parse controls pass, including the 4,882/4,883/4,884-digit boundary. On the registered 4,000/40,000-digit parse rows, setup-subtracted instruction counts changed from 1,637,975/118,768,495 to 1,341,090/94,537,459. These are selected parser observations, not complete-query results.\n- Large balanced multiplication uses one Toom-3 home at a conservative 1,024-limb cutoff (`fdb0c563f`). Native differential and governed-peak controls pass, as do the same 325,271-byte product oracle on native and actual wasm32/Node. The registered 40,000-digit multiplication row changed from 50,141,184 to 37,859,932 setup-subtracted instructions; the 479- and 957-limb rows remain on Karatsuba and were also measured. This does not establish all large-value or architecture performance.\n- Initial GCD operands with a limb-width ratio of at least 2:1 take one division remainder before the existing binary loop (`6596591cf`). Native exactness, governed work/physical accounting, original rational controls, actual wasm32/Node replay, affected strict checks and the normal commit hook pass. A **newly added directed** 4,000-digit known-factor wide-gap GCD row changed from 347,063,107 to 1,667,428 setup-subtracted instructions. That row is not an original registered acceptance lane and does not prove balanced GCD performance.\n\nThe fixed-width Newton reciprocal division candidate was rejected and removed from production: on the original registered 40,000-digit division row it used 1,464,850,296 versus 65,485,726 setup-subtracted instructions, and its correction loop lacked a proven work bound. The current block-recursive division design is not yet an implementation or qualification.\n\nIssue #443 remains **open**. Large division, radix rendering, the very-large multiplication route, SIMD/architecture coverage, medium-value allocation, balanced/chained rational behavior, small-value parity, evaluator before/after lanes, required documentation and complete gates/host evidence remain to be implemented or qualified against the original acceptance contract. These are scoped checkpoints only; no PR or closure claim is made.\n",
+      "createdAt": "2026-10-14T01:09:27Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6158607299",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABbx_avw",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "The decimal-output checkpoint is committed and pushed as `9e183d11d`. Rendering now copies the magnitude once into an admitted quotient destination, mutates it through the existing 10^19 grouping loop, and retains only that quotient beside the group destination. The checked native layout reflects one quotient plus groups; the conservative work bound and exact output/refusal behavior remain intact.\n\nThe focused native control passed with exact 400-digit output, two default preparation allocations, zero allocations for preadmitted scratch success/refusal, returned scratch ownership, and a bounded public output allocation count. The existing decimal group/output refusal control passed; actual wasm32 exact determinism passed 6/6, including large decimal group replay; warning-denied XSD all-target Clippy and the normal commit hook passed. The material arithmetic/ownership review is scoped PASS. Fixed-work 40,000-digit render instruction comparisons were recorded, but their dispersion exceeds the nominal difference, so they establish no instruction win. No timing result is used.\n\nTwo block-recursive division trials were rejected and removed from production. On the original registered 40,000-digit division row, the base-128 and base-272 versions remained 31.7% and 19.3% above published long division in setup-subtracted instructions. A removed diagnostic on the original input counted 30 quotient-by-low-divisor product sites and 16 base divisions in the base-136 tree, identifying concrete product/copy work for the next correction. The inputs, criteria and current long-division production route were preserved.\n\nIssue #443 remains open. This checkpoint does not qualify large division, very-large multiplication, architecture paths, complete-query performance, or the final gates/hosts. Those requirements remain active in the existing survivor.\n",
+      "createdAt": "2026-10-14T02:10:24Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6159325887",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABbyFWuA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Correction to my preceding #443 renderer update: I misread the `perf stat -r 5 -x,` CSV. Its fourth field (`0.00%`) is instruction-count repeat variation. The following numeric field is elapsed time, **not** instruction dispersion; elapsed time is excluded from acceptance here.\n\nThe same-source, same-fixture fixed-work instruction comparison does show a selected renderer improvement. The original registered `parse_canonical/40000` row changed from 94,495,466 to 91,024,630 setup-subtracted instructions (3.67% fewer). The added `render_canonical_fixed100/40000` row runs exactly 100 canonical renders of the original prepared 40,000-digit decimal fixture in one test-mode routine: 4,625,398,193 to 4,274,128,677 setup-subtracted instructions (7.59% fewer). All relevant operation and no-match counts reported 0.00% instruction-count variation across five repetitions. Raw receipts and the corrected derivation are in `tasks/T4-render-in-place-evidence.md` in the existing Stage.\n\nThese selected fixed-work instruction results support the scoped decimal-output checkpoint at `9e183d11d`; they do not establish complete-query performance or the remaining #443 division/architecture/host acceptance. No timing measurement is used.\n",
+      "createdAt": "2026-10-14T02:18:43Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6159423160",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcBTdpg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Commit `64e991dfc` publishes a bounded correction in the existing magnitude\nstorage helper: native heap initialization is bulk, and inline growth/shrink\npreserves the original zeroed slots and spill/shrink ownership behavior. Normal\ncommit and push hooks pass. Recursive division and its shared byte-bound changes\nremain a separate local batch; they are not represented as published here.\n\nThe current local kernel batch passes 62 integer controls, strict all-target XSD\ncompilation and all seven actual portable exact controls. On the original\n80,000-by-40,000-digit division row, five fixed-work repetitions use 26.987%\nfewer setup-subtracted user-mode instructions. The first trial was rejected at\n19.341% more instructions; that failed measurement remains retained. These\nmeasurements bind to the full local batch, not the storage commit alone.\n\nSmall point estimates and uncertainty still need reconciliation. Thresholds,\nother large-value algorithms, SIMD registration and consumer acceptance remain\nopen. No timing or complete optimization claim is made, and the issue remains\nopen. No additional implementation branch or follow-up issue was created.\n",
+      "createdAt": "2026-10-14T18:26:12Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6175382950",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcLumfA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Exact transform multiplication is pushed in `f4fd04e52`. It uses one iterative\nforward/inverse kernel, exact integer field arithmetic and the existing explicit\nstorage owner. The same checked shape drives dispatch, peak bytes and work;\nrecursive multiplication/division admission includes transform descendants.\n\nAll 61 affected integer controls pass, including dense recursive-division\nadmission. Field/root differentials, a full-carry golden, threshold/sign cases,\nexact peak/retention and zero-allocation supplied-scratch refusal/recovery/release\npass. The public product replay passes native, scalar wasm32 and wasm simd128,\nwith the original frozen digest unchanged. Strict affected Clippy and the\nunchanged helper census pass; normal hooks and push completed.\n\nAt the appended 640000-digit row, five fixed-work repetitions with same-source\nsetup controls report 35.51% fewer native and 4.71% fewer scalar-wasm user-mode\ninstructions. These are selected points, not complete threshold curves or\nwhole-query qualification. No timing acceptance is used. The 32768-limb cutoff\nremains provisional, and the new butterfly is registered for all seven assembly\nconfigurations without claiming those measurements have completed.\n\nThe whole optimization issue remains open: full thresholds/architecture review,\nsmall-value parity, query comparisons, subquadratic rendering, remaining rational\nwork and final delivery acceptance are still required. No follow-up issue or\nadditional implementation branch replaces that work.\n",
+      "createdAt": "2026-10-15T06:52:36Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6186313340",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABcMntAg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "The cached-power decimal renderer is committed as `1e216aaec` after normal\nhooks. It reuses the parser's powers, existing recursive division and the single\nmutable quotient leaf. Small renders retain their original route through 8192\ngroups. Exact physical ownership includes cached powers and recursive buffers.\n\nForty focused decimal library checks, strict affected-package Clippy, native\nfrozen replay, actual scalar/SIMD WASM 160000-digit lexical replay and the actual\nhelper gate pass. No duplicate body or ledger exemption was added.\n\nFive-repeat fixed-work comparisons on the unchanged 160000/320000/640000-digit\nfixtures reduce native instructions by 28/47/60 percent and scalar WASM\ninstructions by 86/91/94 percent. The original 40000-digit fixed100 row remains\neffectively unchanged. Same-source no-match setup is subtracted; raw variation\nand all counts are retained. No timing acceptance is used. An earlier tree trial\nlost 9.23 percent; its instruction profile led to the corrected root dispatch.\n\nThis is a published implementation unit, not completion of the numeric issue.\nRemaining work includes complete threshold and architecture sweeps, seven-way\nassembly projection, small-value parity, rational work, query acceptance and\nfinal review/gates. The new critical segmented-stack issue is next in the queue.\n",
+      "createdAt": "2026-10-15T07:51:36Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443#issuecomment-6187248898",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-05T16:19:06Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpxmCHQ",
+      "name": "performance",
+      "description": "Performance and size budgets",
+      "color": "D93F0B"
+    }
+  ],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 443,
+  "state": "OPEN",
+  "title": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic",
+  "updatedAt": "2026-10-18T20:59:30Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/443"
+}

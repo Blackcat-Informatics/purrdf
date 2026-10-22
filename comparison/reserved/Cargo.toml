@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "reserved-xsd"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "source/lib.rs"
+
+[dependencies]
+purrdf-hash = { path = "../../../../crates/hash" }
+purrdf-lex = { path = "../../../../crates/lex" }

@@ -1,0 +1,25 @@
+[package]
+name = "numeric-source-comparison"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["bounded"]
+
+[dependencies]
+bounded-xsd = { path = "bounded" }
+purrdf-xsd = { path = "../../../crates/xsd" }
+purrdf-testkit = { path = "../../../crates/testkit" }
+purrdf-alloc-probe = { path = "../../../crates/alloc-probe" }
+
+# Identical to the repository release/bench profiles; no measurement override.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+debug = 0
+strip = "none"

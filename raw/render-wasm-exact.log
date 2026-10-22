@@ -1,0 +1,17 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 35.00s
+     Running tests/exact_wasm_determinism.rs (/opt/.cargo/3b/38177d1af43954/wasm32-unknown-unknown/debug/build/purrdf-xsd/b02b0ba327fad33a/out/exact_wasm_determinism-b02b0ba327fad33a.wasm)
+
+running 7 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+ok
+test the_oracle_vectors_replay_on_this_target ... ok
+test large_decimal_group_parse_replays_on_this_target ... ok
+test large_binary_products_match_the_schoolbook_oracle ... determinism-digest case=exact-large-products digest=601791f97aa1152f corpus_len=325271
+ok
+test large_binary_division_replays_exact_shift_equations ... ok
+test wide_gap_gcd_replays_on_this_target ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.33s
+

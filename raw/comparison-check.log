@@ -1,0 +1,22 @@
+     Locking 26 packages to highest Rust 1.101.0-nightly compatible versions
+      Adding wasm-bindgen v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro-support v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-shared v0.2.125 (available: v0.2.129)
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/hash)
+    Checking cpufeatures v0.3.1
+    Checking cfg-if v1.0.5
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/lex)
+    Checking sha2 v0.11.1
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/crates/xsd)
+    Checking bounded-xsd v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison/bounded)
+    Checking numeric-source-comparison v0.0.0 (/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/.stage/optimize-the-exact-numeric-tower-small/comparison)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.24s

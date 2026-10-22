@@ -1,0 +1,96 @@
+[
+  {
+    "gate": "range-native-final",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--test",
+      "exact_wasm_determinism"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "gate": "range-wasm-final",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--test",
+      "exact_wasm_determinism",
+      "--",
+      "--exact",
+      "the_hand_values_are_reproduced_on_this_target",
+      "the_transcript_digest_is_reproduced_on_this_target",
+      "the_oracle_vectors_replay_on_this_target",
+      "large_decimal_group_parse_replays_on_this_target",
+      "large_binary_products_match_the_schoolbook_oracle",
+      "large_binary_division_replays_exact_shift_equations",
+      "wide_gap_gcd_replays_on_this_target"
+    ],
+    "environment": {
+      "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER": "/home/paudley/Active/purrdf/.worktrees/443-optimize-the-exact-numeric-tower-small/scripts/wasm-test-runner.sh",
+      "PURRDF_TEST_REQUIRE_EXACT": "1"
+    },
+    "exit_code": 0
+  },
+  {
+    "gate": "range-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "gate": "range-helpers",
+    "command": [
+      "make",
+      "helpers-hygiene"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "gate": "range-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "gate": "range-rustdoc",
+    "command": [
+      "cargo",
+      "doc",
+      "--locked",
+      "-p",
+      "purrdf-xsd",
+      "--no-deps"
+    ],
+    "environment": {
+      "RUSTDOCFLAGS": "-D warnings"
+    },
+    "exit_code": 0
+  }
+]

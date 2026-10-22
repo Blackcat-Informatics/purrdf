@@ -1,0 +1,9 @@
+2026-10-22T02:35:13.6975632Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +ad70fc52d12babc308d9b712f8b77341739c312f:refs/remotes/pull/676/merge
+2026-10-22T02:35:18.3000076Z  * [new ref]           ad70fc52d12babc308d9b712f8b77341739c312f -> pull/676/merge
+2026-10-22T02:35:18.3118893Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/676/merge
+2026-10-22T02:35:19.7351407Z Note: switching to 'refs/remotes/pull/676/merge'.
+2026-10-22T02:35:19.7457068Z HEAD is now at ad70fc52 Merge 007584c86e422c8dc98854180588ab9c565e932d into 6f1199b1dfb2ca3e800db7fbc45fd9aefe372c6c
+2026-10-22T02:35:19.7466534Z [command]/usr/bin/git log -1 --format=%H
+2026-10-22T02:35:19.7482536Z ad70fc52d12babc308d9b712f8b77341739c312f
+2026-10-22T02:35:28.6831304Z ##[group]Run cargo check --workspace --lib --locked
+2026-10-22T02:35:28.6831744Z cargo check --workspace --lib --locked
