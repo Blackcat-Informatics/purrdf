@@ -1,0 +1,110 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2240:21
+     |
+2240 |             .map(|(&(_, (predicate, _)), _)| self.interner.resolve(predicate))
+     |                   --^^^^^^^^^^^^^^^^^^^----
+     |                   | |
+     |                   | expected `Option<(Id<Partition>, _)>`, found `(_, _)`
+     |                   expected due to this
+     |
+     = note: expected enum `Option<(Id<Partition>, (Id<id::Term>, Id<id::Term>))>`
+               found tuple `(_, _)`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/store.rs:2254:21
+     |
+2254 |             .map(|(&(_, (_, graph)), _)| self.interner.resolve(graph))
+     |                   --^^^^^^^^^^^^^^^----
+     |                   | |
+     |                   | expected `Option<(Id<Partition>, _)>`, found `(_, _)`
+     |                   expected due to this
+     |
+     = note: expected enum `Option<(Id<Partition>, (Id<id::Term>, Id<id::Term>))>`
+               found tuple `(_, _)`
+
+error[E0599]: no method named `partitions` found for reference `&RelationStore<TermInterner, N>` in the current scope
+    --> crates/datalog/src/store.rs:2321:14
+     |
+2321 |         self.partitions(core::array::from_fn(|_| None)).flat_map(move |partition| {
+     |              ^^^^^^^^^^
+     |
+help: there is a method `partitions_for` with a similar name
+     |
+2321 |         self.partitions_for(core::array::from_fn(|_| None)).flat_map(move |partition| {
+     |                        ++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive/atom.rs:276:50
+     |
+ 276 |             let original = rel.partition_with_id(id);
+     |                                ----------------- ^^ expected `Id<Partition>`, found `&mut Id<Partition>`
+     |                                |
+     |                                arguments to this method are incorrect
+     |
+     = note:         expected struct `Id<_>`
+             found mutable reference `&mut Id<_>`
+note: method defined here
+    --> crates/datalog/src/store.rs:2178:19
+     |
+2178 |     pub(crate) fn partition_with_id(&self, id: PartitionId) -> PartitionRef<'_, D::Id, N> {
+     |                   ^^^^^^^^^^^^^^^^^        ---------------
+help: consider dereferencing the borrow
+     |
+ 276 |             let original = rel.partition_with_id(*id);
+     |                                                  +
+
+error[E0277]: the trait bound `<D as TermDictionary>::OrderKey: Clone` is not satisfied
+    --> crates/datalog/src/seminaive.rs:1473:5
+     |
+1467 | #[derive(Debug, Clone)]
+     |                 ----- in this derive macro expansion
+...
+1473 |     facts: RelationStore<D, N>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `<D as TermDictionary>::OrderKey`
+     |
+note: required for `RelationStore<D, N>` to implement `Clone`
+    --> crates/datalog/src/store.rs:1439:12
+     |
+1438 | #[derive(Debug, Clone)]
+     |                 -----
+     |                 |
+     |                 type parameter would need to implement `Clone`
+     |                 in this derive macro expansion
+1439 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     |            ^^^^^^^^^^^^^
+
+error[E0283]: type annotations needed
+    --> crates/datalog/src/store/directory.rs:74:18
+     |
+  74 |             tree.range((Bound::Excluded(key), Bound::Unbounded)).next()
+     |                  ^^^^^ cannot infer type of the type parameter `T` declared on the method `range`
+     |
+     = note: the type must implement `Ord`
+     = note: cannot satisfy `Arc<[Option<K>; 2]>: Borrow<K>`
+note: required by a bound in `BTreeMap::<K, V, A>::range`
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/alloc/src/collections/btree/map.rs:1441:12
+     |
+ 710 | impl<K, V, A: AllocatorClone> BTreeMap<K, V, A> {
+...
+1439 |     pub fn range<T: ?Sized, R>(&self, range: R) -> Range<'_, K, V>
+1440 |     where
+1441 |         T: Ord,
+     |            ^^^ required by this bound in `BTreeMap::<K, V, A>::range`
+note: required by a bound in `BTreeMap::<K, V, A>::range`
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/alloc/src/collections/btree/map.rs:1442:12
+     |
+ 710 | impl<K, V, A: AllocatorClone> BTreeMap<K, V, A> {
+...
+1439 |     pub fn range<T: ?Sized, R>(&self, range: R) -> Range<'_, K, V>
+...
+1442 |         K: Borrow<T> + Ord,
+     |            ^^^^^^^^^ required by this bound in `BTreeMap::<K, V, A>::range`
+help: consider specifying the generic arguments
+     |
+  74 |             tree.range::<T, (std::ops::Bound<&Arc<[Option<K>; 2]>>, std::ops::Bound<T>)>((Bound::Excluded(key), Bound::Unbounded)).next()
+     |                       ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0277, E0283, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 6 previous errors

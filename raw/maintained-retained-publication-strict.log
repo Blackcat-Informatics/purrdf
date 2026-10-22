@@ -1,0 +1,86 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-algebra)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/geo-kernel)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/conformance-kit)
+error: usage of wildcard import
+ --> crates/datalog/src/seminaive/maintained/prepare.rs:6:5
+  |
+6 | use super::*;
+  |     ^^^^^^^^ help: try: `super::{RowId, TermDictionary, Arity, StoreShape, Executable, Impacts, FastMap, FixpointState, Admission, TermIdentity, ChangeBatch, WorkList, FastSet, BTreeSet, BTreeMap, Task, MaintenanceError, storage_failure, DictionaryTerm, row_for, RowSet, EvalError, StorageError, push_task, Pending, reclaim}`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#wildcard_imports
+  = note: `-D clippy::wildcard-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::wildcard_imports)]`
+
+error: usage of wildcard import
+ --> crates/datalog/src/seminaive/maintained/reclaim.rs:6:5
+  |
+6 | use super::*;
+  |     ^^^^^^^^ help: try: `super::{FastSet, TermIdentity, TermDictionary, Arity, StoreShape, FixpointState, EvalError, ReclaimDictionary, StorageError, native_error}`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#wildcard_imports
+
+error: large size difference between variants
+  --> crates/datalog/src/seminaive/stratum.rs:14:1
+   |
+14 | / enum Phase<'r, I: TermIdentity, const N: usize>
+15 | | where
+16 | |     Arity<N>: StoreShape<N>,
+...  |
+19 | |     Evaluating(round::Frame<'r, I, N>),
+   | |     ---------------------------------- the second-largest variant contains at least 160 bytes
+20 | |     Publishing(commit::Frame<'r, I, N>),
+   | |     ----------------------------------- the largest variant contains at least 410 bytes
+21 | |     Evidence { had_facts: bool },
+22 | |     Complete,
+23 | | }
+   | |_^ the entire enum is at least 410 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+   = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+20 -     Publishing(commit::Frame<'r, I, N>),
+20 +     Publishing(Box<commit::Frame<'r, I, N>>),
+   |
+
+error: could not compile `purrdf-datalog` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: large size difference between variants
+  --> crates/datalog/src/seminaive/stratum.rs:14:1
+   |
+14 | / enum Phase<'r, I: TermIdentity, const N: usize>
+15 | | where
+16 | |     Arity<N>: StoreShape<N>,
+...  |
+19 | |     Evaluating(round::Frame<'r, I, N>),
+   | |     ---------------------------------- the second-largest variant contains at least 168 bytes
+20 | |     Publishing(commit::Frame<'r, I, N>),
+   | |     ----------------------------------- the largest variant contains at least 410 bytes
+21 | |     Evidence { had_facts: bool },
+22 | |     Complete,
+23 | | }
+   | |_^ the entire enum is at least 410 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+   = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+20 -     Publishing(commit::Frame<'r, I, N>),
+20 +     Publishing(Box<commit::Frame<'r, I, N>>),
+   |
+
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

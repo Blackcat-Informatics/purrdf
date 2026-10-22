@@ -1,0 +1,2 @@
+warning: the /proc/sys/kernel/yama/ptrace_scope setting of 1 might prevent attaching, see 'man 2 ptrace'
+ptrace: Operation not permitted.

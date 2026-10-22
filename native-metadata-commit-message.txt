@@ -1,0 +1,28 @@
+Admit native maintenance indexes through their original owner
+
+Construct fresh sparse row-log, partition lookup and canonical directory
+metadata under the supplied admission before replacing original Resident
+metadata. Wire actual native insertion and restoration through that memory.
+Clones construct independent Resident metadata and inherit no grant.
+
+Retain the unfinished directory and its cursor across factory refusal.
+A genuine bounded regression showed that discarding accepted construction
+progress could prevent a small model from ever finishing. Preserve exact
+retirement debt for replaced arrays and empty predicate arenas. Enter final
+transaction completion before destroying task and label storage, preventing
+release retries from clearing or charging membership work twice.
+
+Keep shared factory retirement bookkeeping in one private module. Exercise
+actual row-log, lookup and directory growth/refund refusal, original row and
+partition publication, clone independence and refused arena retirement.
+
+Validation: 455 native Datalog library and 45 public cases, including all
+12608 cumulative operation cuts; eight original-owner controls and the
+extended native metadata refusal control. Native entailment passes 818
+library and 16 public cases, with one existing ignored test. Packaged WASM
+executes all 45+16 public cases. All-target Datalog, entailment, shapes and
+validate Clippy passes with warnings denied.
+
+Internal checkpoint only: supplied construction remains private. Remaining
+array, object/column and seal/compaction factories, physical factory work
+charging and full parent qualification are unfinished.

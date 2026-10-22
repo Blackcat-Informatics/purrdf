@@ -1,0 +1,48 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: methods `admit_restore` and `restore_row` are never used
+    --> crates/datalog/src/store.rs:1811:19
+     |
+1589 | / impl<D: TermDictionary, const N: usize> RelationStore<D, N>
+1590 | | where
+1591 | |     Arity<N>: StoreShape<N>,
+     | |____________________________- methods in this implementation
+...
+1811 |       pub(crate) fn admit_restore(
+     |                     ^^^^^^^^^^^^^
+...
+1844 |       pub(crate) fn restore_row(&mut self, original: WithdrawnRow<D::Id>) {
+     |                     ^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: methods `append` and `restore` are never used
+   --> crates/datalog/src/store/rows.rs:144:19
+    |
+ 58 | impl<I: TermIdentity> RowLog<I> {
+    | ------------------------------- methods in this implementation
+...
+144 |     pub(super) fn append(&mut self, row: Row<I>) {
+    |                   ^^^^^^
+...
+190 |     pub(super) fn restore(&mut self, row: Row<I>) {
+    |                   ^^^^^^^
+
+error: could not compile `purrdf-datalog` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: methods `append` and `restore` are never used
+   --> crates/datalog/src/store/rows.rs:144:19
+    |
+ 58 | impl<I: TermIdentity> RowLog<I> {
+    | ------------------------------- methods in this implementation
+...
+144 |     pub(super) fn append(&mut self, row: Row<I>) {
+    |                   ^^^^^^
+...
+190 |     pub(super) fn restore(&mut self, row: Row<I>) {
+    |                   ^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

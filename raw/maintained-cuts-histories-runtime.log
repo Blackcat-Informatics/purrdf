@@ -1,0 +1,54 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0616]: field `join_steps` of struct `BudgetReport` is private
+    --> crates/datalog/tests/rules_runtime.rs:3780:39
+     |
+3780 |     let baseline = reference.budget().join_steps;
+     |                                       ^^^^^^^^^^ private field
+     |
+help: a method `join_steps` also exists, call it with parentheses
+     |
+3780 |     let baseline = reference.budget().join_steps();
+     |                                                 ++
+
+error[E0616]: field `join_steps` of struct `BudgetReport` is private
+    --> crates/datalog/tests/rules_runtime.rs:3783:36
+     |
+3783 |     let total = reference.budget().join_steps;
+     |                                    ^^^^^^^^^^ private field
+     |
+help: a method `join_steps` also exists, call it with parentheses
+     |
+3783 |     let total = reference.budget().join_steps();
+     |                                              ++
+
+error[E0616]: field `join_steps` of struct `BudgetReport` is private
+    --> crates/datalog/tests/rules_runtime.rs:3796:35
+     |
+3796 |                 assert_eq!(report.join_steps, cut + 1, "refusal reports cumulative successful work plus the rejected credit");
+     |                                   ^^^^^^^^^^ private field
+     |
+help: a method `join_steps` also exists, call it with parentheses
+     |
+3796 |                 assert_eq!(report.join_steps(), cut + 1, "refusal reports cumulative successful work plus the rejected credit");
+     |                                             ++
+
+error[E0616]: field `join_steps` of struct `BudgetReport` is private
+    --> crates/datalog/tests/rules_runtime.rs:3800:35
+     |
+3800 |         assert_eq!(model.budget().join_steps, total, "cut {cut} replays no original native work");
+     |                                   ^^^^^^^^^^ private field
+     |
+help: a method `join_steps` also exists, call it with parentheses
+     |
+3800 |         assert_eq!(model.budget().join_steps(), total, "cut {cut} replays no original native work");
+     |                                             ++
+
+error[E0599]: no method named `index` found for struct `SplitMix64` in the current scope
+    --> crates/datalog/tests/rules_runtime.rs:3838:29
+     |
+3838 |             let index = rng.index(rows.len());
+     |                             ^^^^^ method not found in `SplitMix64`
+
+Some errors have detailed explanations: E0599, E0616.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 5 previous errors

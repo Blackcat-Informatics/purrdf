@@ -1,0 +1,20 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+error: used `assert!` to check that a value is empty
+    --> crates/datalog/tests/rules_runtime.rs:4517:9
+     |
+4517 |         assert!(model.model_delta().unwrap().unwrap().changes().is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+4517 -         assert!(model.model_delta().unwrap().unwrap().changes().is_empty());
+4517 +         assert_eq!(model.model_delta().unwrap().unwrap().changes(), []);
+     |
+
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

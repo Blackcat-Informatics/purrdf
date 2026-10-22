@@ -1,0 +1,59 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0277]: the trait bound `&Box<SessionError<E>>: CoerceUnsized<&dyn StructuredError>` is not satisfied in `std::boxed::Box<seminaive::session::SessionError<E>>`
+   --> crates/datalog/src/seminaive/maintained.rs:231:76
+    |
+231 |         Session(cause) => "datalog-maintenance-session" { "cause" => Cause(cause) },
+    |                                                                            ^^^^^ unsatisfied trait bound
+    |
+    = help: within `std::boxed::Box<seminaive::session::SessionError<E>>`, the trait `purrdf_lex::error::StructuredError` is not implemented for `std::boxed::Box<seminaive::session::SessionError<E>>`
+    = help: the following other types implement trait `purrdf_lex::error::StructuredError`:
+              !
+              &T
+              ()
+              (First, Second)
+              admission::AdmissionRefusal
+              admission::DeclarationLayer
+              admission::DeclarationSource
+              admission::DerivationStep
+            and 206 others
+note: required because it appears within the type `std::boxed::Box<seminaive::session::SessionError<E>>`
+   --> /kache/rustup/toolchains/nightly-2026-10-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:236:12
+    |
+236 | pub struct Box<
+    |            ^^^
+    = note: required for `&std::boxed::Box<seminaive::session::SessionError<E>>` to implement `std::ops::CoerceUnsized<&dyn purrdf_lex::error::StructuredError>`
+    = note: required for the cast from `&std::boxed::Box<seminaive::session::SessionError<E>>` to `&dyn purrdf_lex::error::StructuredError`
+    = note: the full name for the type has been written to '/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/f39f383ed54ff6ec/out/purrdf_datalog-f39f383ed54ff6ec.long-type-13110502932155477250.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0277]: the trait bound `&Box<SessionError<E>>: CoerceUnsized<&dyn StructuredError>` is not satisfied in `std::boxed::Box<seminaive::session::SessionError<E>>`
+   --> crates/datalog/src/seminaive/maintained.rs:231:76
+    |
+231 |         Session(cause) => "datalog-maintenance-session" { "cause" => Cause(cause) },
+    |                                                                            ^^^^^ unsatisfied trait bound
+    |
+    = help: within `std::boxed::Box<seminaive::session::SessionError<E>>`, the trait `purrdf_lex::error::StructuredError` is not implemented for `std::boxed::Box<seminaive::session::SessionError<E>>`
+    = help: the following other types implement trait `purrdf_lex::error::StructuredError`:
+              !
+              &T
+              ()
+              (First, Second)
+              admission::AdmissionRefusal
+              admission::DeclarationLayer
+              admission::DeclarationSource
+              admission::DerivationStep
+            and 207 others
+note: required because it appears within the type `std::boxed::Box<seminaive::session::SessionError<E>>`
+   --> /kache/rustup/toolchains/nightly-2026-10-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:236:12
+    |
+236 | pub struct Box<
+    |            ^^^
+    = note: required for `&std::boxed::Box<seminaive::session::SessionError<E>>` to implement `std::ops::CoerceUnsized<&dyn purrdf_lex::error::StructuredError>`
+    = note: required for the cast from `&std::boxed::Box<seminaive::session::SessionError<E>>` to `&dyn purrdf_lex::error::StructuredError`
+    = note: the full name for the type has been written to '/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/3149172ad019fbf3/out/purrdf_datalog-3149172ad019fbf3.long-type-8514230737209870236.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

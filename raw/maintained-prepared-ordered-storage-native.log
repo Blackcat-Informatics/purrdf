@@ -1,0 +1,82 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Finished `test` profile [optimized] target(s) in 12.14s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/745ba8572cceac92/out/purrdf_lex-745ba8572cceac92)
+
+running 8 tests
+test allocation::ordered::tests::abandoned_preparation_keeps_capacity_and_publishes_nothing ... ok
+test allocation::ordered::tests::borrowed_lookup_and_clear_need_no_new_storage ... ok
+test allocation::ordered::tests::external_comparison_storage_and_payload_refusals_publish_no_association ... ok
+test allocation::ordered::tests::refused_growth_changes_no_live_association_and_release_destroys_first ... ok
+test allocation::ordered::tests::external_order_preserves_every_surviving_physical_locator ... ok
+test allocation::ordered::tests::associations_survive_rotations_deletions_and_vacant_slot_reuse ... ok
+test allocation::ordered::tests::wide_sorted_lookup_does_not_degrade_to_quadratic_work ... ok
+test allocation::ordered::tests::ordered_ranges_and_crossing_walks_match_independent_ordered_oracle ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 311 filtered out; finished in 0.01s
+
+     Running tests/frozen_vectors.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/42f8aba09c3ea659/out/frozen_vectors-42f8aba09c3ea659)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/html.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/dc25cdd8298d9fef/out/html-dc25cdd8298d9fef)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/json_test_suite.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/0e03346d4dce2484/out/json_test_suite-0e03346d4dce2484)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/json_value_equality.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/da2b50e1d8f6a88e/out/json_value_equality-da2b50e1d8f6a88e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/structured_errors.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/308ff87983bb691c/out/structured_errors-308ff87983bb691c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/unicode_aligned.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/5e35dd2a010c8816/out/unicode_aligned-5e35dd2a010c8816)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/unicode_normalization.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/534ab00462acf9a5/out/unicode_normalization-534ab00462acf9a5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/xmlconf.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/057587f50c9effed/out/xmlconf-057587f50c9effed)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/yaml_reader_edges.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/ca53db25cc842142/out/yaml_reader_edges-ca53db25cc842142)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/yaml_scalar_keys.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/f2be6f8098320b72/out/yaml_scalar_keys-f2be6f8098320b72)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/yaml_test_suite.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/ee48dc07de88e95f/out/yaml_test_suite-ee48dc07de88e95f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

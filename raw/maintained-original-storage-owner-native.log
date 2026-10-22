@@ -1,0 +1,28 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: unnecessary qualification
+   --> crates/datalog/src/seminaive/maintained/storage.rs:101:35
+    |
+101 |         assert!(live.get() >= 3 * core::mem::size_of::<Payload<'_>>());
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+101 -         assert!(live.get() >= 3 * core::mem::size_of::<Payload<'_>>());
+101 +         assert!(live.get() >= 3 * size_of::<Payload<'_>>());
+    |
+
+error: unnecessary qualification
+   --> crates/datalog/src/seminaive/maintained/storage.rs:174:55
+    |
+174 |             weights_bytes + model.levels.capacity() * core::mem::size_of::<usize>()
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+174 -             weights_bytes + model.levels.capacity() * core::mem::size_of::<usize>()
+174 +             weights_bytes + model.levels.capacity() * size_of::<usize>()
+    |
+
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors

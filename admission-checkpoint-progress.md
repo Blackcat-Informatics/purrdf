@@ -1,0 +1,9 @@
+Implemented and pushed another internal checkpoint: [5d6542565](https://github.com/Blackcat-Informatics/purrdf/commit/5d6542565).
+
+Partition traversal and lookup now use the shared native ordered arena. Surviving physical locators remain stable through deletion, canonical ordering uses original dictionary IDs, and prepared entries are published only after the original dictionary transaction succeeds. Singleton source-loss and post-validation source-refusal controls verify that no partial directory is exposed.
+
+A separate original model admission now covers initial multiplicities/levels, the shared authored dependency graph and its scratch, term-use indexes, native proof/reverse/producer/membership/withdrawal storage, and retained proof source cells. Initial evaluation and signed publication lend that same admission. The borrowed-grant controls exercise every initial growth factory, native publication growth refusal, and repeated retirement shrink refusal for retraction and derived-to-asserted witness removal. Work/cursors and the original pending watermark survive refusal; retry completes and releases the grant.
+
+Current verification: 449 Datalog library and 45 public cases, all 12,608 cumulative work cuts, 818 entailment library cases with one existing ignored case and 16 public cases, actual packaged WebAssembly callers (45 Datalog and 16 entailment), strict affected all-target checks, metadata regeneration, and normal signed commit/push hooks all pass.
+
+The supplied constructor remains private. Transaction/event/reclaim/task and deferred-publication buffers, sparse store/index admission, physical factory work charging, remaining resource/guard/group/source cuts, current allocation/scale evidence and final full qualification/review are still required. This issue remains open; no parent PR or completion claim is being made. Continuing those factories in the same original checkout.

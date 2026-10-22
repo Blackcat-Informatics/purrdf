@@ -1,0 +1,16 @@
+Admit native batch sealing before row publication
+
+Retain actual tail, merged-column and object-permutation destinations under
+the original supplemental admission. Publish through the original size-tier
+merge loop after every destination and header slot is reserved. Keep accepted
+factory progress across refusal, and retire destroyed storage after advancing
+publication cursors and before admitting the next factory.
+
+Reserve a complete publication chunk for maintained tails so unrelated source
+prefixes cannot determine the next append's copying and retained capacity.
+Exercise actual original-grant refusals across sealing and multiple merge tiers,
+and qualify affected native and portable callers and allocation fixtures.
+
+Propagate lexical reconstruction failures, enumerate original reclaimable IDs
+directly, remove a redundant depth adapter and refresh the reviewed helper
+authority and generated domain inventory.

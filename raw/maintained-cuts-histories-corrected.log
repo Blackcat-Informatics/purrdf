@@ -1,0 +1,75 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0618]: expected function, found `u64`
+   --> crates/datalog/tests/rules_runtime.rs:188:13
+    |
+188 |             evaluation.budget().join_steps()(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+    |             |
+    |             call expression requires function
+
+error[E0618]: expected function, found `u64`
+   --> crates/datalog/tests/rules_runtime.rs:291:16
+    |
+291 |     assert_eq!(evaluation.budget().join_steps()(), 300);
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+    |                |
+    |                call expression requires function
+
+error[E0618]: expected function, found `u64`
+   --> crates/datalog/tests/rules_runtime.rs:352:16
+    |
+352 |     assert_eq!(evaluation.budget().join_steps()(), 300);
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+    |                |
+    |                call expression requires function
+
+error[E0618]: expected function, found `u64`
+   --> crates/datalog/tests/rules_runtime.rs:462:20
+    |
+462 |     let expected = reference.budget().join_steps()();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+    |                    |
+    |                    call expression requires function
+
+error[E0618]: expected function, found `u64`
+   --> crates/datalog/tests/rules_runtime.rs:485:16
+    |
+485 |     assert_eq!(exact.budget().join_steps()(), expected);
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+    |                |
+    |                call expression requires function
+
+error[E0618]: expected function, found `u64`
+    --> crates/datalog/tests/rules_runtime.rs:1139:30
+     |
+1139 |         let expected_steps = reference.budget().join_steps()();
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+     |                              |
+     |                              call expression requires function
+
+error[E0618]: expected function, found `u64`
+    --> crates/datalog/tests/rules_runtime.rs:1151:20
+     |
+1151 |         assert_eq!(actual.budget().join_steps()(), expected_steps);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+     |                    |
+     |                    call expression requires function
+
+error[E0618]: expected function, found `u64`
+    --> crates/datalog/tests/rules_runtime.rs:1348:15
+     |
+1348 |         Some((model.budget().join_steps()(), 1))
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+     |               |
+     |               call expression requires function
+
+error[E0618]: expected function, found `u64`
+    --> crates/datalog/tests/rules_runtime.rs:1350:43
+     |
+1350 |     assert_eq!(model.work().join_steps(), model.budget().join_steps()());
+     |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+     |                                           |
+     |                                           call expression requires function
+
+For more information about this error, try `rustc --explain E0618`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 9 previous errors

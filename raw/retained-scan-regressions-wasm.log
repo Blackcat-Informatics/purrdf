@@ -1,0 +1,16 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 33.27s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/wasm32-unknown-unknown/debug/build/purrdf-datalog/317f7500f918cb1f/out/purrdf_datalog-317f7500f918cb1f.wasm)
+error: the wasm32 module failed outside any test case:
+RuntimeError: unreachable
+    at purrdf_datalog-317f7500f918cb1f.wasm.__rustc[611f7a7a19d737f7]::__rust_abort (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[8390]:0x7bd669)
+    at purrdf_datalog-317f7500f918cb1f.wasm.__rustc[611f7a7a19d737f7]::__rust_start_panic (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[8384]:0x7bd63e)
+    at purrdf_datalog-317f7500f918cb1f.wasm.__rustc[611f7a7a19d737f7]::rust_panic (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[8223]:0x7bce60)
+    at purrdf_datalog-317f7500f918cb1f.wasm.std[20479c4d650b61f9]::panicking::panic_with_hook (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[5476]:0x7682ba)
+    at purrdf_datalog-317f7500f918cb1f.wasm.std[20479c4d650b61f9]::panicking::panic_handler::{closure#0} (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[6808]:0x7a3ee7)
+    at purrdf_datalog-317f7500f918cb1f.wasm.std[20479c4d650b61f9]::sys::backtrace::__rust_end_short_backtrace::<std[20479c4d650b61f9]::panicking::panic_handler::{closure#0}, !> (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[8358]:0x7bd55f)
+    at purrdf_datalog-317f7500f918cb1f.wasm.__rustc[611f7a7a19d737f7]::rust_begin_unwind (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[7954]:0x7bb2d2)
+    at purrdf_datalog-317f7500f918cb1f.wasm.core[e8e77cc1e90bd3b0]::panicking::panic_fmt (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[7468]:0x7b4269)
+    at purrdf_datalog-317f7500f918cb1f.wasm.core[e8e77cc1e90bd3b0]::result::unwrap_failed (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[7167]:0x7addb3)
+    at purrdf_datalog-317f7500f918cb1f.wasm.purrdf_datalog[66ff95932e1c7dd4]::seminaive::ordered::tests::check_rule_phases::<4usize, purrdf_datalog[66ff95932e1c7dd4]::seminaive::ordered::tests::quad_whole_rules_resume_guards_signed_filters_and_conjunctive_heads::{closure#0}> (wasm://wasm/purrdf_datalog-317f7500f918cb1f.wasm-02ab4bf6:wasm-function[2]:0x1d5d4)
+error: test failed, to rerun pass `-p purrdf-datalog --lib`

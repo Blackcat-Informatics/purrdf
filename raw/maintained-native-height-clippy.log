@@ -1,0 +1,35 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: field assignment outside of initializer for an instance created with Default::default()
+    --> crates/datalog/src/store.rs:1729:9
+     |
+1729 |         new_relation.maintain_objects = self.maintenance_indexes;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: consider initializing the variable with `Relation::<<D as dictionary::TermDictionary>::Id> { maintain_objects: self.maintenance_indexes, ..Default::default() }` and removing relevant reassignments
+    --> crates/datalog/src/store.rs:1728:9
+     |
+1728 |         let mut new_relation = Relation::default();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#field_reassign_with_default
+     = note: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:5180:28
+     |
+5180 |                     depth: &vec![0; store.row_count()],
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Depths<'_, Id<Term>, 3>`, found `&Vec<{integer}>`
+     |
+     = note:   expected enum `seminaive::Depths<'_, id::Id<id::Term>, 3>`
+             found reference `&std::vec::Vec<{integer}>`
+help: try wrapping the expression in `seminaive::Depths::Dense`
+     |
+5180 |                     depth: seminaive::Depths::Dense(&vec![0; store.row_count()]),
+     |                            +++++++++++++++++++++++++                           +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

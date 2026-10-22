@@ -1,0 +1,2889 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/combined.rs:190:6
+    |
+190 | ) -> Result<bool, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/combined.rs:268:6
+    |
+268 | ) -> Result<Option<CombinedMaterialization>, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/combined.rs:288:6
+    |
+288 | ) -> Result<Option<CombinedMaterialization>, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/combined.rs:289:21
+    |
+289 |       ds.checked_read(|ds| {
+    |  _____________________^
+290 | |         let Some(clauses) = lower_horn_tbox(ds)? else {
+291 | |             return Ok(None);
+292 | |         };
+...   |
+378 | |         }))
+379 | |     })
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/combined.rs:448:6
+    |
+448 | ) -> Result<Option<Vec<DlClause>>, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:142:6
+    |
+142 | ) -> Result<Arc<RdfDataset>, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:174:6
+    |
+174 | ) -> Result<(), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:175:21
+    |
+175 |       ds.checked_read(|ds| {
+    |  _____________________^
+176 | |         for quad in ds.quads() {
+177 | |             let s = intern_into(b, &ds.term_value(quad.s)?)?;
+178 | |             let p = intern_into(b, &ds.term_value(quad.p)?)?;
+...   |
+221 | |         Ok(())
+222 | |     })
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:182:29
+    |
+182 |                 .map(|g| -> Result<_, EntailError<D::ReadError>> {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:195:29
+    |
+195 |                 .map(|g| -> Result<_, EntailError<D::ReadError>> {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:208:29
+    |
+208 |                 .map(|g| -> Result<_, EntailError<D::ReadError>> {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:321:6
+    |
+321 | ) -> Result<(Arc<RdfDataset>, RunStats), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:322:21
+    |
+322 |       ds.checked_read(|ds| {
+    |  _____________________^
+323 | |         let (program, attribution) = program_with_attribution(regime);
+...   |
+399 | |         Ok((dataset, stats))
+400 | |     })
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:524:6
+    |
+524 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:559:6
+    |
+559 | ) -> Result<GraphRun, EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:680:6
+    |
+680 | ) -> Result<(RelationStore, Terms), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/engine.rs:681:21
+    |
+681 |       ds.checked_read(|ds| {
+    |  _____________________^
+682 | |         let mut terms = Terms::default();
+683 | |         terms.record_program(program);
+684 | |         terms.record_literals();
+...   |
+784 | |         Ok((edb, terms))
+785 | |     })
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/engine.rs:827:6
+    |
+827 | ) -> Result<GraphRun, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1054:42
+     |
+1054 |     pub(crate) fn new(regime: Regime) -> Result<Self, EntailError> {
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1073:10
+     |
+1073 |     ) -> Result<Seeded<'_>, EntailError<D::ReadError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1123:10
+     |
+1123 |     ) -> Result<Option<Clash>, EntailError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1135:65
+     |
+1135 |     pub(crate) fn close(&mut self, added: &[[TermValue; 3]]) -> Result<Closed, EntailError> {
+     |                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1143:62
+     |
+1143 |     fn evaluate_with(&mut self, added: &[[TermValue; 3]]) -> Result<(), EntailError> {
+     |                                                              ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1215:30
+     |
+1215 |     fn first_clash(&self) -> Result<Option<InconsistencyWitness>, EntailError> {
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/engine.rs:1240:26
+     |
+1240 |     fn derived(&self) -> Result<Vec<[TermValue; 3]>, EntailError> {
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/comprehension.rs:795:44
+    |
+795 | pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/datarange.rs:328:44
+    |
+328 | pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/freeze.rs:754:44
+    |
+754 | pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/homomorphism.rs:364:6
+    |
+364 | ) -> Result<bool, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/homomorphism.rs:500:6
+    |
+500 | ) -> Result<Result<Binding, MissReason>, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/homomorphism.rs:550:6
+    |
+550 | ) -> Result<BTreeSet<Vec<TermValue>>, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/entails/imports.rs:143:5
+    |
+143 | /     move |import: &RifImport| {
+144 | |         map.get(&import.location)
+145 | |             .map(Arc::clone)
+146 | |             .ok_or_else(|| EntailError::UnresolvedImport(import.location.clone()))
+147 | |     }
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/imports.rs:183:6
+    |
+183 | ) -> Result<Option<Arc<RdfDataset>>, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/reflexivity.rs:291:44
+    |
+291 | pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/refutation.rs:395:44
+    |
+395 | pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/entails/refutation.rs:470:50
+    |
+470 |         let mut holds = |subset: &RdfDataset| -> Result<bool, EntailError> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/mod.rs:441:38
+    |
+441 | const fn plan_for(regime: Regime) -> Result<Materialization<'static>, EntailError> {
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/mod.rs:499:6
+    |
+499 | ) -> Result<Prepared, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/mod.rs:663:6
+    |
+663 | ) -> Result<CertainAnswers, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/mod.rs:685:6
+    |
+685 | ) -> Result<CertainAnswers, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/entails/mod.rs:889:54
+    |
+889 | fn as_graph(pats: &[PatTriple], names: &[String]) -> Result<Option<AsGraph>, EntailError> {
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/entails/mod.rs:921:35
+    |
+921 |                 .map_or(Ok(None), |cause| Err(cause.into()));
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/entails/mod.rs:1013:6
+     |
+1013 | ) -> Result<EntailmentOutcome, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/entails/mod.rs:1105:6
+     |
+1105 | ) -> Result<EntailmentCertificate, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/entails/mod.rs:1127:6
+     |
+1127 | ) -> Result<EntailmentCertificate, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/entails/mod.rs:1164:6
+     |
+1164 | ) -> Result<EntailmentOutcome, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/explain.rs:759:36
+    |
+759 |     pub fn is_sufficient(&self) -> Result<bool, EntailError> {
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/explain.rs:777:33
+    |
+777 |     pub fn is_minimal(&self) -> Result<bool, EntailError> {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/explain.rs:847:21
+    |
+847 |     let mut holds = |subset: &RdfDataset| Ok(matches!(entails(subset, axiom), Ok(Verdict::True)));
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/explain.rs:913:6
+    |
+913 | ) -> Result<Shrunk, EntailError>
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/explain.rs:949:49
+    |
+949 | fn entails(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Verdict, EntailError> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/explain.rs:1032:47
+     |
+1032 |     fn emit(&self, kept: &BTreeSet<usize>) -> Result<Arc<RdfDataset>, EntailError> {
+     |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/input_source.rs:244:10
+    |
+244 |     ) -> Result<(), crate::EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/input_source.rs:254:43
+    |
+254 |               let outcome = poll().and_then(|()| {
+    |  ___________________________________________^
+255 | |                 self.record(
+256 | |                     Input::Equality(start + offset),
+257 | |                     Source::KeyInference { key, left, right },
+258 | |                 )
+259 | |                 .map_err(crate::EntailError::from)
+260 | |             });
+    | |_____________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/key_proofs.rs:220:10
+    |
+220 |     ) -> Result<bool, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/key_proofs.rs:236:67
+    |
+236 |           let member = kb.with_negative_instance(individual, class, |assumptions| {
+    |  ___________________________________________________________________^
+237 | |             let budget = super::graph::Budget::for_kb(kb);
+238 | |             let (decision, recorder) = hyper::decide_recording(kb, assumptions, budget);
+239 | |             if hyper::decision_result(kb, budget, decision)? {
+...   |
+258 | |             }))
+259 | |         })?;
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/key_values.rs:50:10
+    |
+ 50 |     ) -> Result<Self, crate::EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/key_values.rs:51:26
+    |
+ 51 |           memory.try_scope(|memory| {
+    |  __________________________^
+ 52 | |             poll(stop)?;
+ 53 | |             let mut properties = memory.collect(properties)?;
+ 54 | |             properties.sort_unstable();
+...   |
+ 66 | |             Ok(Self { rows, order })
+ 67 | |         })
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/key_values.rs:89:10
+    |
+ 89 |     ) -> Result<Option<Common>, crate::EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/key_values.rs:163:59
+    |
+163 | fn poll(stop: Option<&dyn purrdf_datalog::StopSignal>) -> Result<(), crate::EntailError> {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/hyper.rs:697:69
+    |
+697 | pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
+    |                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/hyper.rs:706:6
+    |
+706 | ) -> Result<bool, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:496:23
+    |
+496 |     fn poll(&self) -> Result<(), EntailError> {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:503:40
+    |
+503 |     pub(crate) fn into_syntax(self) -> Result<Syntax, EntailError> {
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:516:10
+    |
+516 |     ) -> Result<T, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:582:49
+    |
+582 |     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:594:44
+    |
+594 |     fn expr_inner(&mut self, node: u32) -> Result<Concept, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:638:44
+    |
+638 |     fn build_expr(&mut self, node: u32) -> Result<Concept, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:698:43
+    |
+698 |     fn is_data_range(&self, node: u32) -> Result<bool, EntailError> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:754:61
+    |
+754 |     fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+    |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:762:68
+    |
+762 |     fn data_range_scoped(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+    |                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:788:67
+    |
+788 |     fn data_range_inner(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:829:61
+    |
+829 |     fn datatype_restriction(&self, node: u32, base: u32) -> Result<DataRange, EntailError> {
+    |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:851:10
+    |
+851 |     ) -> Result<Vec<DataRange>, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/parser.rs:855:18
+    |
+855 |             .map(|member| self.data_range(member, path))
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:864:41
+    |
+864 |     fn data_one_of(&self, head: u32) -> Result<DataRange, EntailError> {
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:899:40
+    |
+899 |     fn facet_list(&self, head: u32) -> Result<Option<Vec<Facet>>, EntailError> {
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/parser.rs:983:45
+    |
+983 |     fn restriction(&mut self, node: u32) -> Result<Concept, EntailError> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1093:50
+     |
+1093 |     fn qualified_filler(&mut self, node: u32) -> Result<Concept, EntailError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1104:34
+     |
+1104 |     fn role_of(&self, r: u32) -> Result<Role, EntailError> {
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1112:38
+     |
+1112 |     fn role_scoped(&self, r: u32) -> Result<Role, EntailError> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1143:33
+     |
+1143 |     fn card(&self, lit: u32) -> Result<u32, EntailError> {
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1175:50
+     |
+1175 |     pub(crate) fn node_list(&self, head: u32) -> Result<Vec<u32>, EntailError> {
+     |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1195:43
+     |
+1195 |     fn expr_list(&mut self, head: u32) -> Result<Vec<Concept>, EntailError> {
+     |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1197:29
+     |
+1197 |         ids.into_iter().map(|n| self.expr(n)).collect()
+     |                             ^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1222:46
+     |
+1222 | fn poll<E>(stop: Option<&dyn StopSignal>) -> Result<(), EntailError<E>> {
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<E>`, for example by boxing large elements or replacing it with `Box<EntailError<E>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1249:6
+     |
+1249 | ) -> Result<Kb, EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1250:21
+     |
+1250 |       ds.checked_read(|ds| {
+     |  _____________________^
+1251 | |         poll(stop)?;
+1252 | |         let mut interner = Interner::default();
+1253 | |         let mut v = Vocab::intern(&mut interner);
+...    |
+1533 | |         Ok(kb)
+1534 | |     })
+     | |_____^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1325:47
+     |
+1325 |                       ce.source_scope(&mut acc, |ce, acc| {
+     |  _______________________________________________^
+1326 | |                         axiom_node(ce, &mut table, acc, &v, node, axiom_class)
+1327 | |                     })
+     | |_____________________^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1341:47
+     |
+1341 |                       ce.source_scope(&mut acc, |ce, acc| {
+     |  _______________________________________________^
+1342 | |                         negative_assertion(ce, &mut table, acc, &v, node)
+1343 | |                     })
+     | |_____________________^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1350:43
+     |
+1350 |                   ce.source_scope(&mut acc, |ce, acc| {
+     |  ___________________________________________^
+1351 | |                     axiom(ce, &mut table, acc, &v, &interner, spo)
+1352 | |                 })
+     | |_________________^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1399:44
+     |
+1399 |             let non_simple = |property| -> Result<bool, EntailError> {
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1532:25
+     |
+1532 |         kb.encode_until(|| poll(stop))?;
+     |                         ^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1619:6
+     |
+1619 | ) -> Result<BTreeMap<u32, u32>, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1646:59
+     |
+1646 |     let classes = data::literal_classes_until(&described, || poll(stop))?;
+     |                                                           ^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1678:6
+     |
+1678 | ) -> Result<bool, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1753:6
+     |
+1753 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1784:22
+     |
+1784 |                 .map(|&m| ce.expr(m))
+     |                      ^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1836:6
+     |
+1836 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1875:6
+     |
+1875 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1975:6
+     |
+1975 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/owl_dl/parser.rs:1979:14
+     |
+1979 |         .map(|&m| ce.expr(m))
+     |              ^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:2021:6
+     |
+2021 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:2073:6
+     |
+2073 | ) -> Result<(), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/proof.rs:4814:6
+     |
+4814 | ) -> Result<(ProofAnswer, DlProof), EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:155:55
+    |
+155 |     fn blank(&mut self, b: &mut RdfDatasetBuilder) -> Result<TermId, EntailError> {
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:229:6
+    |
+229 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:254:6
+    |
+254 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/query.rs:263:67
+    |
+263 |       let data_index = build_data_index_until(ds, &mut kb.interner, || {
+    |  ___________________________________________________________________^
+264 | |         if stop.is_some_and(|signal| signal.stopped()) {
+265 | |             Err(EntailError::Stopped)
+266 | |         } else {
+...   |
+269 | |     })?;
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/query.rs:399:42
+    |
+399 |     build_data_index_until(ds, interner, || Ok::<(), EntailError>(()))
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:654:6
+    |
+654 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:702:6
+    |
+702 | ) -> Result<ExtractedTasks, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:815:6
+    |
+815 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:837:6
+    |
+837 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:857:6
+    |
+857 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:915:6
+    |
+915 | ) -> Result<(), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/query.rs:984:6
+    |
+984 | ) -> Result<Vec<u32>, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/query.rs:1008:6
+     |
+1008 | ) -> Result<TermId, EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/saturate.rs:178:51
+    |
+178 | pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Result<Taxonomy, crate::EntailError> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/saturate.rs:547:35
+    |
+547 |     fn run(&mut self, kb: &Kb) -> Result<bool, crate::EntailError> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:389:10
+    |
+389 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:397:10
+    |
+397 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:406:10
+    |
+406 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:442:44
+    |
+442 |     pub(crate) fn apply_keys(&mut self) -> Result<(), EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/mod.rs:508:65
+    |
+508 |               .record_key_equalities(self.same_as.len(), &forced, || {
+    |  _________________________________________________________________^
+509 | |                 if stop.is_some_and(StopSignal::stopped) {
+510 | |                     Err(EntailError::Stopped)
+511 | |                 } else {
+...   |
+514 | |             })?;
+    | |_____________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:580:42
+    |
+580 |     pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/mod.rs:581:29
+    |
+581 |         self.finalize_until(|| Ok::<(), EntailError>(()))
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:824:43
+    |
+824 |     pub(crate) fn is_consistent(&self) -> Result<bool, EntailError> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:856:10
+    |
+856 |     ) -> Result<bool, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/mod.rs:857:61
+    |
+857 |           self.with_negative_instance(individual, concept_id, |assumptions| {
+    |  _____________________________________________________________^
+858 | |             hyper::consistent(self, assumptions).map(|consistent| !consistent)
+859 | |         })
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:868:10
+    |
+868 |     ) -> Result<T, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:896:72
+    |
+896 |     pub(crate) fn entails_subclass(&self, sub_id: u32, sup_id: u32) -> Result<bool, EntailError> {
+    |                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:948:59
+    |
+948 |     pub(crate) fn instances_of(&self, concept_id: u32) -> Result<Vec<u32>, EntailError> {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/certificate.rs:729:43
+    |
+729 |     pub(crate) fn check_storage(&self) -> Result<(), crate::EntailError> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/classify.rs:99:10
+    |
+ 99 |     ) -> Result<Self, crate::EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/module.rs:256:6
+    |
+256 | ) -> Result<ModuleExtraction, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/module.rs:301:6
+    |
+301 | ) -> Result<ModuleExtraction, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/module.rs:311:6
+    |
+311 | ) -> Result<ModuleExtraction, EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:266:43
+    |
+266 |     pub fn new<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:292:51
+    |
+292 |     pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:303:10
+    |
+303 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:313:10
+    |
+313 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:331:10
+    |
+331 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:339:10
+    |
+339 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:357:10
+    |
+357 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:382:10
+    |
+382 |     ) -> Result<(), EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/reasoner/mod.rs:386:35
+    |
+386 |           self.kb.encode_until(&mut || {
+    |  ___________________________________^
+387 | |             if stop
+388 | |                 .as_deref()
+389 | |                 .is_some_and(purrdf_datalog::StopSignal::stopped)
+...   |
+395 | |         })?;
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:412:10
+    |
+412 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:421:10
+    |
+421 |     ) -> Result<Self, EntailError<D::ReadError>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/reasoner/mod.rs:424:24
+    |
+424 |           let mut poll = || {
+    |  ________________________^
+425 | |             if purrdf_core::governor::is_stopped(signal.as_deref()) {
+426 | |                 Err(EntailError::Stopped)
+427 | |             } else {
+...   |
+430 | |         };
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/reasoner/mod.rs:437:18
+    |
+437 |               .map(|&c| {
+    |  __________________^
+438 | |                 poll()?;
+439 | |                 Ok((c, kb.table.intern(class_concept(&vocab, c))))
+440 | |             })
+    | |_____________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/reasoner/mod.rs:445:18
+    |
+445 |               .map(|&individual| {
+    |  __________________^
+446 | |                 poll()?;
+447 | |                 Ok(individual)
+448 | |             })
+    | |_____________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:480:55
+    |
+480 |     pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:561:35
+    |
+561 |     pub fn proof_context(self) -> Result<crate::DlProofContext<'static>, EntailError> {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:587:45
+    |
+587 |     pub fn borrowed_proof_context(&self) -> Result<crate::DlProofContext<'_>, EntailError> {
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:770:10
+    |
+770 |     ) -> Result<Certified<Verdict>, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:828:31
+    |
+828 |     pub fn classify(&self) -> Result<Certified<ClassHierarchy>, EntailError> {
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:854:30
+    |
+854 |     pub fn realize(&self) -> Result<Certified<Realization>, EntailError> {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:875:10
+    |
+875 |     ) -> Result<Certified<Vec<TermValue>>, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:927:51
+    |
+927 |     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/reasoner/mod.rs:958:44
+    |
+958 |     fn plan(&mut self, axiom: &DlAxiom) -> Result<Refutation, EntailError> {
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/reasoner/mod.rs:1037:49
+     |
+1037 |     fn interned(&mut self, concept: Concept) -> Result<u32, EntailError> {
+     |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/reasoner/mod.rs:1044:48
+     |
+1044 |     fn negated(&mut self, concept: Concept) -> Result<u32, EntailError> {
+     |                                                ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/reasoner/mod.rs:1054:52
+     |
+1054 |     fn concept_of(&mut self, class: &TermValue) -> Result<u32, EntailError> {
+     |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/reasoner/mod.rs:1076:23
+     |
+1076 |     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/report.rs:1141:38
+     |
+1141 |     fn of<D: DatasetView>(ds: &D) -> Result<Self, crate::EntailError<D::ReadError>> {
+     |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/report.rs:1142:25
+     |
+1142 |           ds.checked_read(|ds| {
+     |  _________________________^
+1143 | |             let mut survey = Self {
+1144 | |                 ontology_import: !purrdf_core::imports::try_imported_iris(ds, &[])
+1145 | |                     .map_err(crate::EntailError::source_read)?
+...    |
+1165 | |             Ok(survey)
+1166 | |         })
+     | |_________^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/report.rs:1360:10
+     |
+1360 |     ) -> Result<Self, crate::EntailError<D::ReadError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/report.rs:1383:10
+     |
+1383 |     ) -> Result<Self, crate::EntailError<D::ReadError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/report.rs:1397:10
+     |
+1397 |     ) -> Result<Self, crate::EntailError<D::ReadError>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/report.rs:1810:6
+     |
+1810 | ) -> Result<Vec<Boundary>, crate::EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif/eval.rs:134:6
+    |
+134 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif/eval.rs:154:6
+    |
+154 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif/eval.rs:176:6
+    |
+176 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/rif/eval.rs:177:21
+    |
+177 |       ds.checked_read(|ds| {
+    |  _____________________^
+178 | |         // Refuse a run that was already stopped before interning source terms, ground facts,
+179 | |         // or compiled rules. The round-level checks below remain the mid-fixpoint boundary.
+180 | |         if stop.is_some_and(|signal| signal.stopped()) {
+...   |
+261 | |         Ok((closure, rif_report(named_graph, evaluation.budget())))
+262 | |     })
+    | |_____^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif/eval.rs:316:54
+    |
+316 | fn translate_rule(rule: &Rule, terms: &mut Terms) -> Result<Vec<DlClause>, EntailError> {
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif_xml.rs:77:57
+    |
+ 77 | pub fn parse_rif_xml(text: &str, base: Option<&str>) -> Result<ParsedRifDocument, EntailError> {
+    |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/rif_xml.rs:112:6
+    |
+112 | ) -> Result<RuleSet, EntailError>
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/lib.rs:1005:6
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+...
+1005 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/lib.rs:1057:6
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+...
+1057 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/lib.rs:1094:6
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+...
+1094 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+    --> crates/entail/src/lib.rs:1095:21
+     |
+ 436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+...
+1095 |       ds.checked_read(|ds| {
+     |  _____________________^
+1096 | |         if stop.is_some_and(|stop| stop.stopped()) {
+1097 | |             return Err(EntailError::Stopped);
+...    |
+1118 | |         Ok((closure, ReasoningReport::of_run(ds, regime, &stats)?))
+1119 | |     })
+     | |_____^
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/lib.rs:1151:6
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+...
+1151 | ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-entail` (lib) due to 183 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/entails/imports.rs:336:19
+    |
+336 |           let run = |premise: &RdfDataset, map: &ImportMap| {
+    |  ___________________^
+337 | |             crate::materialize_with_imports(
+338 | |                 premise,
+339 | |                 crate::Materialization::Rdfs,
+...   |
+344 | |         };
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/entails/imports.rs:1000:10
+     |
+1000 |     ) -> Result<(bool, Vec<crate::report::Construct>), EntailError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/input_source/tests.rs:139:54
+    |
+139 |             sources.record_key_equalities(1, &batch, || Ok(())),
+    |                                                      ^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/input_source/tests.rs:146:50
+    |
+146 |         sources.record_key_equalities(1, &batch, || Ok(())).unwrap();
+    |                                                  ^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/input_source/tests.rs:159:50
+    |
+159 |           sources.record_key_equalities(0, &batch, || {
+    |  __________________________________________________^
+160 | |             polls += 1;
+161 | |             if polls == 2 {
+162 | |                 Err(crate::EntailError::Stopped)
+...   |
+166 | |         }),
+    | |_________^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |       Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |       -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/owl_dl/input_source/tests.rs:171:59
+    |
+171 |         sources.record_key_equalities(usize::MAX, &batch, || Ok(())),
+    |                                                           ^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:1241:6
+     |
+1241 | ) -> Result<Kb, EntailError<D::ReadError>> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/entail/src/owl_dl/parser.rs:2276:44
+     |
+2276 |     fn parse_cardinality(lexical: &str) -> Result<Kb, EntailError> {
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+    ::: crates/entail/src/lib.rs:436:5
+     |
+ 436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+     |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+     |
+     = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/tableau.rs:172:69
+    |
+172 | pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
+    |                                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/tableau.rs:178:43
+    |
+178 | fn decision_result(decision: Decision) -> Result<bool, EntailError> {
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:375:59
+    |
+375 |     pub(crate) fn from_dataset<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError<<D as purrdf_core::DatasetView>::ReadError>`, for example by boxing large elements or replacing it with `Box<EntailError<<D as purrdf_core::DatasetView>::ReadError>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:841:59
+    |
+841 |     pub(crate) fn is_consistent_by_concept_tree(&self) -> Result<bool, EntailError> {
+    |                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/entail/src/owl_dl/mod.rs:928:10
+    |
+928 |     ) -> Result<bool, EntailError> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/entail/src/rif_xml.rs:776:51
+    |
+776 |         let ruleset = resolve_rif_imports(parsed, |_| Ok(Arc::clone(&imported))).unwrap();
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/entail/src/lib.rs:436:5
+    |
+436 |     Maintenance(purrdf_datalog::seminaive::MaintenanceError),
+    |     -------------------------------------------------------- the largest variant contains at least 128 bytes
+    |
+    = help: try reducing the size of `EntailError`, for example by boxing large elements or replacing it with `Box<EntailError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-entail` (lib test) due to 197 previous errors

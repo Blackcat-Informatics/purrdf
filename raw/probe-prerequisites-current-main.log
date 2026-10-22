@@ -1,0 +1,40 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/alloc-probe)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/deflate)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/testkit)
+   Compiling rayon v1.12.0
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0277]: `head_probes_retain_returned_guard_batches_at_every_credit_cut::Stopped` doesn't implement `Debug`
+    --> crates/datalog/tests/rules_runtime.rs:3411:47
+     |
+3411 |     impl purrdf_datalog::stop::StopSignal for Stopped {
+     |                                               ^^^^^^^ the trait `Debug` is not implemented for `head_probes_retain_returned_guard_batches_at_every_credit_cut::Stopped`
+     |
+note: required by a bound in `StopSignal`
+    --> crates/rdf-core/src/governor.rs:34:37
+     |
+  34 | pub trait StopSignal: Send + Sync + core::fmt::Debug {
+     |                                     ^^^^^^^^^^^^^^^^ required by this bound in `StopSignal`
+help: consider annotating `head_probes_retain_returned_guard_batches_at_every_credit_cut::Stopped` with `#[derive(Debug)]`
+     |
+3410 +     #[derive(Debug)]
+3411 |     struct Stopped;
+     |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 1 previous error

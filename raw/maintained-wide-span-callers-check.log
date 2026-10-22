@@ -1,0 +1,137 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+   Compiling getrandom v0.3.4
+    Checking twox-hash v2.1.2
+    Checking libc v0.2.186
+    Checking fastrand v2.4.1
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/geo-kernel)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-algebra)
+    Checking ctutils v0.4.2
+    Checking cipher v0.5.2
+    Checking aead v0.6.1
+    Checking structured-zstd v0.0.49
+    Checking aes v0.9.3
+    Checking universal-hash v0.6.1
+    Checking ctr v0.10.1
+    Checking polyval v0.7.3
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/ed25519)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/stack)
+    Checking ghash v0.6.0
+    Checking visual-hashing v1.0.0
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Checking aes-gcm v0.11.1
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/gts)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/shapes)
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1019:29
+     |
+1019 |             if view.rows == rows {
+     |                ---------    ^^^^ expected `usize`, found `u64`
+     |                |
+     |                expected because this is `usize`
+     |
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+1019 |             if view.rows == rows.try_into().unwrap() {
+     |                                 ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1056:13
+     |
+1054 |         Ok(LiveView::compacted(
+     |            ------------------- arguments to this function are incorrect
+1055 |             generation,
+1056 |             model.row_slots(),
+     |             ^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+     |
+note: associated function defined here
+    --> crates/shapes/src/srl/eval.rs:859:8
+     |
+ 859 |     fn compacted<const N: usize>(
+     |        ^^^^^^^^^
+ 860 |         generation: u64,
+ 861 |         rows: usize,
+     |         -----------
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+1056 |             model.row_slots().try_into().unwrap(),
+     |                              ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1098:21
+     |
+1098 |         view.rows = rows;
+     |         ---------   ^^^^ expected `usize`, found `u64`
+     |         |
+     |         expected due to the type of this binding
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1110:58
+     |
+1110 |             *view = LiveView::compacted(view.generation, rows, core, sparql, self);
+     |                     -------------------                  ^^^^ expected `usize`, found `u64`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+note: associated function defined here
+    --> crates/shapes/src/srl/eval.rs:859:8
+     |
+ 859 |     fn compacted<const N: usize>(
+     |        ^^^^^^^^^
+ 860 |         generation: u64,
+ 861 |         rows: usize,
+     |         -----------
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+1110 |             *view = LiveView::compacted(view.generation, rows.try_into().unwrap(), core, sparql, self);
+     |                                                              ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1322:35
+     |
+1322 |         match record.last.replace(now) {
+     |                           ------- ^^^ expected `(u64, usize)`, found `(u64, u64)`
+     |                           |
+     |                           arguments to this method are incorrect
+     |
+     = note: expected tuple `(_, usize)`
+                found tuple `(_, u64)`
+help: the return type of this call is `(u64, u64)` due to the type of the argument passed
+    --> crates/shapes/src/srl/eval.rs:1322:15
+     |
+1322 |         match record.last.replace(now) {
+     |               ^^^^^^^^^^^^^^^^^^^^---^
+     |                                   |
+     |                                   this argument influences the return type of `replace`
+note: method defined here
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/option.rs:1962:18
+     |
+1962 |     pub const fn replace(&mut self, value: T) -> Option<T> {
+     |                  ^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/shapes/src/srl/eval.rs:1342:24
+     |
+1342 |             .rows_from(since)
+     |              --------- ^^^^^ expected `u64`, found `usize`
+     |              |
+     |              arguments to this method are incorrect
+     |
+note: method defined here
+    --> crates/datalog/src/store.rs:1950:12
+     |
+1950 |     pub fn rows_from(&self, since: u64) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
+     |            ^^^^^^^^^
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+1342 |             .rows_from(since.try_into().unwrap())
+     |                             ++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-shapes` (lib) due to 6 previous errors

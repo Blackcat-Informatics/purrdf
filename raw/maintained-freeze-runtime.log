@@ -1,0 +1,25 @@
+    Finished `test` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-entail/693b46d37b5b3d8a/out/purrdf_entail-693b46d37b5b3d8a)
+
+running 18 tests
+test entails::freeze::tests::a_blank_named_position_is_declined_rather_than_dropped ... ok
+test entails::freeze::tests::a_list_valued_predicate_is_refused ... ok
+test entails::freeze::tests::a_conclusion_past_the_budget_is_undecided ... ok
+test entails::freeze::tests::a_read_axiom_carries_the_shape_that_recognized_it ... ok
+test entails::freeze::tests::a_declined_shape_survives_an_axiom_established_in_the_same_reading ... ok
+test entails::freeze::tests::a_freeze_warrant_does_not_replay ... ok
+test entails::freeze::tests::an_ordinary_conclusion_is_not_applicable ... ok
+test entails::freeze::tests::a_property_chain_entails_transitivity_and_the_warrant_verifies ... ok
+test entails::freeze::tests::a_subclass_inclusion_is_established_by_freezing_an_instance ... ok
+test entails::freeze::tests::an_untyped_term_fails_the_membership_half ... ok
+test entails::freeze::tests::an_unconstrained_property_is_undecided_rather_than_refuted ... ok
+test entails::freeze::tests::the_freeze_lane_adds_no_rule ... ok
+test entails::freeze::tests::materialization_still_does_not_produce_these_conclusions ... ok
+test entails::freeze::tests::an_empty_property_is_symmetric_vacuously ... ok
+test entails::freeze::tests::the_shape_table_is_well_formed ... ok
+test entails::freeze::tests::only_the_owl_rl_lane_freezes ... ok
+test entails::freeze::tests::the_frozen_constants_occur_in_neither_document ... ok
+test entails::freeze::tests::the_freeze_lane_is_deterministic ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 800 filtered out; finished in 0.06s
+

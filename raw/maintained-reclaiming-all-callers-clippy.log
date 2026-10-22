@@ -1,0 +1,20 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: this function has too many arguments (8/7)
+    --> crates/datalog/src/seminaive/maintained.rs:1284:1
+     |
+1284 | / fn advance<'r, M, S: Admission, D: TermDictionary, const N: usize>(
+1285 | |     exe: &'r Executable<N>,
+1286 | |     guards: &dyn GuardEvaluator<D, N>,
+1287 | |     levels: &[usize],
+...    |
+1294 | | where
+1295 | |     Arity<N>: StoreShape<N>,
+     | |____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

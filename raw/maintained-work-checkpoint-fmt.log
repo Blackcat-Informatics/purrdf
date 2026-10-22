@@ -1,0 +1,185 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog/src/seminaive.rs:100:
+ mod session;
+ mod stratum;
+ pub use evidence::NegationScope;
+-pub use maintained::{DeltaResult, Maintained, MaintenanceError, ModelDelta, PreparationPause, PreparationProgress, RelationProgress};
++pub use maintained::{
++    DeltaResult, Maintained, MaintenanceError, ModelDelta, PreparationPause, PreparationProgress,
++    RelationProgress,
++};
+ pub use probe::{HeadProbe, HeadWitness, ProbeError};
+ pub use session::{
+     ContinuationBinding, EvaluationSession, PartialModel, ResumeProgress, SessionContext,
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:128:
+     values: &mut [T],
+     compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
+ ) -> Result<(), E> {
+-    HeapSortFrame::new(values.len()).resume(values, compare, || true).map(|complete| {
+-        debug_assert!(complete, "an unlimited comparison grant completes the original sort");
+-    })
++    HeapSortFrame::new(values.len())
++        .resume(values, compare, || true)
++        .map(|complete| {
++            debug_assert!(
++                complete,
++                "an unlimited comparison grant completes the original sort"
++            );
++        })
+ }
+ 
+ /// Retained progress of the native in-place heap reduction.
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:149:
+ impl HeapSortFrame {
+     /// Start sorting an original slice of the stated length.
+     pub const fn new(len: usize) -> Self {
+-        Self { len, build: len / 2, end: len, active: None }
++        Self {
++            len,
++            build: len / 2,
++            end: len,
++            active: None,
++        }
+     }
+ 
+     /// Resume through the shared native sift, charging before each comparison.
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:161:
+     /// # Panics
+     /// Panics if a caller replaces the retained slice with a different length.
+     pub fn resume<T, E>(
+-        &mut self, values: &mut [T],
++        &mut self,
++        values: &mut [T],
+         mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>,
+         mut allow: impl FnMut() -> bool,
+     ) -> Result<bool, E> {
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:168:
+-        assert_eq!(values.len(), self.len, "sort progress retains its original slice");
++        assert_eq!(
++            values.len(),
++            self.len,
++            "sort progress retains its original slice"
++        );
+         loop {
+             if let Some(active) = &mut self.active {
+                 if !active.resume(&mut values[..self.end], &mut compare, &mut allow)? {
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:194:
+ }
+ 
+ impl SiftFrame {
+-    const fn new(root: usize) -> Self { Self { root, child: None } }
++    const fn new(root: usize) -> Self {
++        Self { root, child: None }
++    }
+ 
+     fn resume<T, E>(
+-        &mut self, values: &mut [T],
++        &mut self,
++        values: &mut [T],
+         compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
+         allow: &mut impl FnMut() -> bool,
+     ) -> Result<bool, E> {
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:206:
+             if self.child.is_none() {
+                 let mut child = 2 * self.root + 1;
+                 if child + 1 < values.len() {
+-                    if !allow() { return Ok(false); }
+-                    if compare(&values[child], &values[child + 1])? == Ordering::Less { child += 1; }
++                    if !allow() {
++                        return Ok(false);
++                    }
++                    if compare(&values[child], &values[child + 1])? == Ordering::Less {
++                        child += 1;
++                    }
+                 }
+                 self.child = Some(child);
+             }
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:214:
+-            let child = self.child.expect("the original child selection remains owned");
+-            if !allow() { return Ok(false); }
++            let child = self
++                .child
++                .expect("the original child selection remains owned");
++            if !allow() {
++                return Ok(false);
++            }
+             if compare(&values[self.root], &values[child])? != Ordering::Less {
+                 return Ok(true);
+             }
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:341:
+     root: usize,
+     compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
+ ) -> Result<(), E> {
+-    SiftFrame::new(root).resume(values, compare, &mut || true).map(|complete| {
+-        debug_assert!(complete, "an unlimited comparison grant completes the original sift");
+-    })
++    SiftFrame::new(root)
++        .resume(values, compare, &mut || true)
++        .map(|complete| {
++            debug_assert!(
++                complete,
++                "an unlimited comparison grant completes the original sift"
++            );
++        })
+ }
+ 
+ #[cfg(test)]
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:360:
+             let mut expected = original.clone();
+             let mut total = 0;
+             let mut reference = super::HeapSortFrame::new(len);
+-            assert!(reference.resume(&mut expected, |a, b| { total += 1; Ok::<_, ()>(a.cmp(b)) }, || true).unwrap());
++            assert!(
++                reference
++                    .resume(
++                        &mut expected,
++                        |a, b| {
++                            total += 1;
++                            Ok::<_, ()>(a.cmp(b))
++                        },
++                        || true
++                    )
++                    .unwrap()
++            );
+             for cut in 0..=total {
+                 let mut values = original.clone();
+                 let mut frame = super::HeapSortFrame::new(len);
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk/sort.rs:367:
+                 let calls = core::cell::Cell::new(0);
+                 let mut left = cut;
+-                let compare = |a: &usize, b: &usize| { calls.set(calls.get() + 1); Ok::<_, ()>(a.cmp(b)) };
+-                let completed = frame.resume(&mut values, compare, || {
+-                    if left == 0 { false } else { left -= 1; true }
+-                }).unwrap();
++                let compare = |a: &usize, b: &usize| {
++                    calls.set(calls.get() + 1);
++                    Ok::<_, ()>(a.cmp(b))
++                };
++                let completed = frame
++                    .resume(&mut values, compare, || {
++                        if left == 0 {
++                            false
++                        } else {
++                            left -= 1;
++                            true
++                        }
++                    })
++                    .unwrap();
+                 assert_eq!(completed, cut == total);
+-                if !completed { assert!(frame.resume(&mut values, compare, || true).unwrap()); }
++                if !completed {
++                    assert!(frame.resume(&mut values, compare, || true).unwrap());
++                }
+                 assert_eq!(values, expected);
+                 assert_eq!(calls.get(), total, "length {len}, cut {cut}");
+             }
+Diff in /home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex/src/walk.rs:65:
+ 
+ pub use scalar::{DebugScalar, write_debug_scalars};
+ pub use sort::{
+-    HeapSortFrame, try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_partition_unique_by,
+-    try_sort_unstable_by,
++    HeapSortFrame, try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by,
++    try_partition_unique_by, try_sort_unstable_by,
+ };
+ 
+ /// A buffer owner that reserves storage before publishing vector elements.

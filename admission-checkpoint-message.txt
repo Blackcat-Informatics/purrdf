@@ -1,0 +1,19 @@
+Admit retained native maintenance proof storage
+
+Use stable native ordered arenas for partition lookup and traversal, and admit
+placements before the original dictionary transaction commits. Preserve live
+locators through deletion and reject missing singleton keys before publication.
+
+Pass a separate original model admission through constructor metadata, the
+shared dependency walk, native proof indexes and retained source-cell storage.
+Keep retired layouts pending across refused shrink without replay or early
+watermark acknowledgement. Payloads outlive neither their owner nor its grant.
+
+The supplied constructor remains private: transaction and store/index factories,
+physical factory work charging and full resource-contract acceptance are still
+unfinished. This is an internal implementation checkpoint, not parent completion.
+
+Validate 449 Datalog library and 45 public cases, 818 entailment library and
+16 public cases (one existing library case ignored), actual WebAssembly public
+cases (45 Datalog and 16 entailment), strict affected all-target checks and
+regenerated metadata.

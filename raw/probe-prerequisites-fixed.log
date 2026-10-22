@@ -1,0 +1,12 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 18.57s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 4 tests
+test head_probes_retain_returned_guard_batches_at_every_credit_cut ... ok
+test head_probes_preserve_factor_cycles_negation_and_independent_proofs ... ok
+test head_probes_bind_variable_predicate_and_graph_partitions ... ok
+test head_probes_preserve_native_targets_and_original_guard_batches ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.14s
+

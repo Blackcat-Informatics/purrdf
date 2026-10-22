@@ -1,0 +1,15 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0599]: no method named `facts_sorted` found for reference `&RelationStore<ReclaimingInterner, 3>` in the current scope
+    --> crates/datalog/tests/rules_runtime.rs:4321:47
+     |
+4321 |     let expected = reference.facts().unwrap().facts_sorted();
+     |                                               ^^^^^^^^^^^^ method not found in `&RelationStore<ReclaimingInterner, 3>`
+
+error[E0599]: no method named `facts_sorted` found for reference `&RelationStore<ReclaimingInterner, 3>` in the current scope
+    --> crates/datalog/tests/rules_runtime.rs:4333:26
+     |
+4333 |         assert_eq!(facts.facts_sorted(), expected);
+     |                          ^^^^^^^^^^^^ method not found in `&RelationStore<ReclaimingInterner, 3>`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 2 previous errors

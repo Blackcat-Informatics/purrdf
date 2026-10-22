@@ -1,0 +1,18 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 39.69s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 8 tests
+test maintained_restoration_respects_a_reduced_fact_grant_before_publication ... ok
+preparation_work=26944 credit_cuts=26945
+test maintained_change_source_preserves_pending_positions_and_original_failures ... ok
+test maintained_reclaiming_settlement_resumes_every_stop_cut ... ok
+test maintained_transactions_resume_every_credit_cut_without_early_acknowledgement ... ok
+test maintained_transactions_retract_cycles_repair_alternatives_and_negation ... ok
+test maintained_reclaiming_terms_preserve_live_proofs_and_pin_the_latest_delta ... ok
+test maintained_transactions_match_seeded_random_signed_histories ... ok
+transaction_work=86245 credit_cuts=86246
+test maintained_preparation_resumes_every_metadata_credit_without_publishing ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 36.56s
+

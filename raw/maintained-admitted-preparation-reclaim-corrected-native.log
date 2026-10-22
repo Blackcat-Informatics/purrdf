@@ -1,0 +1,28 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 36.35s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 7 tests
+test seminaive::maintained::storage::tests::original_borrowed_grant_outlives_its_last_payload ... ok
+test seminaive::maintained::storage::tests::initial_model_factories_use_the_supplied_grant_before_construction ... ok
+test seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals ... FAILED
+test seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal ... ok
+test seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending ... ok
+test seminaive::maintained::storage::tests::replaced_winner_array_and_completed_publication_retry_their_original_releases ... ok
+test seminaive::maintained::storage::tests::preparation_task_spills_use_the_original_grant_before_mutation ... ok
+
+failures:
+
+---- seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals stdout ----
+
+thread 'seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals' (1978443) panicked at crates/datalog/src/seminaive/maintained/storage.rs:542:58:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 446 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --lib`

@@ -1,0 +1,20 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0603]: enum import `Bound` is private
+   --> crates/datalog/src/seminaive/maintained/storage.rs:977:21
+    |
+977 |             cursor::Bound,
+    |                     ^^^^^ private enum import
+    |
+note: the enum import `Bound` is defined here...
+   --> crates/datalog/src/cursor.rs:43:27
+    |
+ 43 | use crate::store::{Batch, Bound, Relation, Tail};
+    |                           ^^^^^
+note: ...and refers to the enum `Bound` which is defined here
+   --> crates/datalog/src/store.rs:340:1
+    |
+340 | pub enum Bound<I: TermIdentity = TermId> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ you could import this directly
+
+For more information about this error, try `rustc --explain E0603`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

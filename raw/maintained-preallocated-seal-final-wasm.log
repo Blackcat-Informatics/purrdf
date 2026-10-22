@@ -1,0 +1,76 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+    Finished `test` profile [optimized] target(s) in 35.75s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/wasm32-unknown-unknown/debug/build/purrdf-datalog/e4d237e4fb205768/out/rules_runtime-e4d237e4fb205768.wasm)
+
+running 45 tests
+test maintained_restoration_respects_a_reduced_fact_grant_before_publication ... ok
+test maintained_reclaiming_settlement_resumes_every_stop_cut ... ok
+test maintained_preparation_resumes_every_metadata_credit_without_publishing ... ok
+test maintained_reclaiming_terms_preserve_live_proofs_and_pin_the_latest_delta ... ok
+test maintained_change_source_preserves_pending_positions_and_original_failures ... ok
+test maintained_transactions_match_seeded_random_signed_histories ... ok
+test maintained_transactions_resume_every_credit_cut_without_early_acknowledgement ... ok
+test maintained_transactions_retract_cycles_repair_alternatives_and_negation ... ok
+test head_probes_bind_variable_predicate_and_graph_partitions ... ok
+test head_probes_retain_returned_guard_batches_at_every_credit_cut ... ok
+test head_probes_preserve_factor_cycles_negation_and_independent_proofs ... ok
+test head_probes_preserve_native_targets_and_original_guard_batches ... ok
+test native_signed_transactions_preserve_watermarks_and_exact_cancellation ... ok
+test removed_append_slots_preserve_recursive_models_and_proofs ... ok
+test resumable_models_preserve_partial_proofs_work_and_bindings ... ok
+test continuations_preserve_original_source_death_and_hard_guard_failures ... ok
+test native_integer_dictionary_runs_recursive_models_without_lexical_projection ... ok
+test native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier ... ok
+test native_integer_columns_and_indexes_preserve_wide_original_handles ... ok
+test narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work ... ok
+test late_delta_seed_completes_under_a_prefix_independent_work_limit ... ok
+test ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms ... ok
+test ordered_guard_outputs_probe_later_atoms_without_intermediate_relations ... ok
+test native_inequality_needs_no_callback_and_is_independently_checked ... ok
+test native_inequality_in_a_negative_group_uses_the_same_filter ... ok
+test conjunctive_recursion_and_factor_projection_match_split_programs ... ok
+test conjunctive_heads_share_joins_and_check_the_authored_head ... ok
+test conjunctive_heads_settle_at_each_predicates_actual_stratum ... ok
+test predicate_rows_keep_native_identities_and_lexical_graph_order ... ok
+test interrupted_guarded_commit_counts_only_completed_generating_rounds ... ok
+test model_only_and_recorded_models_have_explicit_evidence_and_equal_counts ... ok
+test term_arena_limits_are_caller_selected_and_reach_contracts ... ok
+test stored_fact_admission_refuses_the_first_extra_fact_in_both_engines ... ok
+test public_sequential_execution_preserves_models_proofs_and_counters ... ok
+test triple_base_authority_survives_data_growth_and_layer_retraction ... ok
+test triple_negated_base_preserves_seminaive_work_and_limits ... ok
+test triple_no_output_runs_the_body_without_fabricating_a_fact ... ok
+test triple_store_has_predicate_only_keys_and_transactional_original_ids ... ok
+test triple_compiler_preserves_static_arity_and_original_admission ... ok
+test public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error ... ok
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+test recursive_factor_preserves_authored_proofs_and_typed_limits ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.45s
+
+     Running tests/current_clash_support.rs (/opt/.cargo/67/26e15a2cc3057b/wasm32-unknown-unknown/debug/build/purrdf-entail/33b3683205400ade/out/current_clash_support-33b3683205400ade.wasm)
+
+running 16 tests
+test signed_refutation_scenarios_preserve_public_warrants_and_source_binding ... ok
+test signed_frozen_scenarios_preserve_public_generalization_warrants ... ok
+test public_dataset_views_preserve_source_identity_and_causal_verification ... ok
+test current_clash_preserves_named_and_scoped_blank_source_identity ... ok
+test current_clash_preserves_public_service_certificate_and_verification ... ok
+test current_clash_replays_generated_existential_witnesses ... ok
+test current_clash_checks_fresh_refutation_assumptions_without_a_source_name ... ok
+test current_clash_replays_equality_before_observing_role_premises ... ok
+test current_clash_borrows_the_independent_prepared_consumer ... ok
+test public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs ... ok
+test public_causal_service_binds_the_requested_question_and_query_assumptions ... ok
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... ok
+test public_causal_service_checks_reserved_birth_and_generative_trigger ... ok
+test public_causal_service_checks_nested_reserved_origin ... ok
+test public_causal_service_preserves_literal_metadata_in_key_support ... ok
+test public_causal_service_checks_inverse_transitive_path_licenses ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+

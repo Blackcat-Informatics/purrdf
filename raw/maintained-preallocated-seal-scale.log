@@ -1,0 +1,28 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 3.34s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 2 tests
+edges=1000 update=0 join_steps=3 allocations=55 requested_bytes=14200 retained_bytes=1664 peak_working_bytes=4630
+edges=1000 update=1 join_steps=1 allocations=33 requested_bytes=4768 retained_bytes=-56 peak_working_bytes=1758
+churn_block=0 allocations=40960 requested_bytes=7014400 retained_bytes=0 peak_working_bytes=3238
+churn_block=1 allocations=40960 requested_bytes=7014400 retained_bytes=0 peak_working_bytes=3238
+churn_block=2 allocations=40960 requested_bytes=7014400 retained_bytes=0 peak_working_bytes=3238
+churn_block=3 allocations=40960 requested_bytes=7014400 retained_bytes=0 peak_working_bytes=3238
+test repeated_retractions_release_row_metadata_without_reusing_coordinates ... ok
+edges=1000000 update=0 join_steps=3 allocations=55 requested_bytes=12376 retained_bytes=800 peak_working_bytes=3766
+edges=1000000 update=1 join_steps=1 allocations=33 requested_bytes=4768 retained_bytes=-56 peak_working_bytes=1758
+thread 'one_fact_updates_visit_only_the_affected_star_paths' panicked at crates/datalog/tests/maintained_scale.rs:120:5:
+assertion `left == right` failed: native work and all four allocation quantities are independent of the unrelated source prefix
+  left: [(3, Measurement { allocations: 55, requested_bytes: 14200, retained_bytes: 1664, peak_working_bytes: 4630 }), (1, Measurement { allocations: 33, requested_bytes: 4768, retained_bytes: -56, peak_working_bytes: 1758 })]
+ right: [(3, Measurement { allocations: 55, requested_bytes: 12376, retained_bytes: 800, peak_working_bytes: 3766 }), (1, Measurement { allocations: 33, requested_bytes: 4768, retained_bytes: -56, peak_working_bytes: 1758 })]
+test one_fact_updates_visit_only_the_affected_star_paths ... FAILED
+
+failures:
+
+failures:
+    one_fact_updates_visit_only_the_affected_star_paths
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.88s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test maintained_scale`

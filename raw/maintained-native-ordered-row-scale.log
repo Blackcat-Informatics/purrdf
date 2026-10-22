@@ -1,0 +1,23 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 16.14s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 2 tests
+edges=1000 update=0 join_steps=3 allocations=45 requested_bytes=15246 retained_bytes=704 peak_working_bytes=7598
+edges=1000 update=1 join_steps=1 allocations=28 requested_bytes=7494 retained_bytes=-56 peak_working_bytes=5990
+churn_block=0 allocations=43008 requested_bytes=15408128 retained_bytes=0 peak_working_bytes=7426
+churn_block=1 allocations=43008 requested_bytes=15408128 retained_bytes=0 peak_working_bytes=7426
+churn_block=2 allocations=43008 requested_bytes=15408128 retained_bytes=0 peak_working_bytes=7426
+churn_block=3 allocations=43008 requested_bytes=15408128 retained_bytes=0 peak_working_bytes=7426
+test repeated_retractions_release_row_metadata_without_reusing_coordinates ... ok
+edges=1000000 update=0 join_steps=3 allocations=45 requested_bytes=15246 retained_bytes=704 peak_working_bytes=7598
+edges=1000000 update=1 join_steps=1 allocations=28 requested_bytes=7494 retained_bytes=-56 peak_working_bytes=5990
+test one_fact_updates_visit_only_the_affected_star_paths ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.36s
+

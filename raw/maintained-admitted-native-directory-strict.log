@@ -1,0 +1,19 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: all fields have the same postfix: `bytes`
+  --> crates/datalog/src/store/directory.rs:20:1
+   |
+20 | / pub(super) struct Supplemental {
+21 | |     predicate_bytes: usize,
+22 | |     location_bytes: usize,
+23 | |     retired_bytes: usize,
+24 | | }
+   | |_^
+   |
+   = help: remove the postfixes
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#struct_field_names
+   = note: `-D clippy::struct-field-names` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::struct_field_names)]`
+
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

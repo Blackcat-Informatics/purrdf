@@ -1,0 +1,23 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: method `copy_in` is never used
+   --> crates/datalog/src/store.rs:944:8
+    |
+919 | impl<I: TermIdentity> Tail<I> {
+    | ----------------------------- method in this implementation
+...
+944 |     fn copy_in<A: Admission + ?Sized>(
+    |        ^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `copy_in` is never used
+   --> crates/datalog/src/store/columns.rs:146:19
+    |
+ 31 | impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
+    | ------------------------------------------------------------------ method in this implementation
+...
+146 |     pub(crate) fn copy_in<A: Admission + ?Sized>(
+    |                   ^^^^^^^
+
+error: could not compile `purrdf-datalog` (lib) due to 2 previous errors

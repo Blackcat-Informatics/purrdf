@@ -1,0 +1,25 @@
+   Compiling libc v0.2.186
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/stack)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+    Finished `test` profile [optimized] target(s) in 43.33s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-entail/693b46d37b5b3d8a/out/purrdf_entail-693b46d37b5b3d8a)
+
+running 14 tests
+test entails::refutation::tests::a_negation_stays_inside_the_rl_syntax ... ok
+test entails::refutation::tests::a_conclusion_past_the_budget_is_undecided ... ok
+test entails::refutation::tests::an_added_assertion_never_disturbs_a_pre_pass ... ok
+test entails::refutation::tests::a_complement_membership_is_reached_by_refutation_and_the_warrant_verifies ... ok
+test entails::refutation::tests::a_different_from_is_reached_through_a_derived_body_instance ... ok
+test entails::refutation::tests::a_refutation_warrant_does_not_replay ... ok
+test entails::refutation::tests::an_inconsistent_premise_never_reaches_the_refutation_lane ... ok
+test entails::refutation::tests::an_unforced_difference_is_not_entailed ... ok
+test entails::refutation::tests::only_the_owl_rl_lane_refutes ... ok
+test entails::refutation::tests::the_refutation_lane_adds_no_rule ... ok
+test entails::refutation::tests::materialization_still_does_not_produce_these_conclusions ... ok
+test entails::refutation::tests::an_all_different_with_one_unforced_pair_is_not_entailed ... ok
+test entails::refutation::tests::an_all_different_collection_needs_every_pair_to_refute ... ok
+test entails::refutation::tests::the_refutation_lane_is_deterministic ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 804 filtered out; finished in 0.22s
+

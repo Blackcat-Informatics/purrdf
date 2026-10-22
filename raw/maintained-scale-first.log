@@ -1,0 +1,19 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 21.29s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 1 test
+edges=1000 update=0 join_steps=5 allocations=47 requested_bytes=40140 retained_bytes=16384 peak_working_bytes=31012
+edges=1000 update=1 join_steps=1998 allocations=2036 requested_bytes=945956 retained_bytes=-152 peak_working_bytes=336208
+thread 'one_fact_updates_visit_only_the_affected_star_paths' panicked at crates/datalog/tests/maintained_scale.rs:56:13:
+one affected branch must not enumerate the unrelated star: edges=1000, steps=1998
+test one_fact_updates_visit_only_the_affected_star_paths ... FAILED
+
+failures:
+
+failures:
+    one_fact_updates_visit_only_the_affected_star_paths
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test maintained_scale`

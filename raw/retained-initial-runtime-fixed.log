@@ -1,0 +1,20 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0599]: no variant, associated function, or constant named `empty_sparse` found for enum `RowLog<I>` in the current scope
+  --> crates/datalog/src/store/metadata.rs:45:27
+   |
+45 |             rows: RowLog::empty_sparse(0),
+   |                           ^^^^^^^^^^^^ variant, associated function, or constant not found in `RowLog<_>`
+   |
+  ::: crates/datalog/src/store/rows.rs:16:1
+   |
+16 | pub(super) enum RowLog<I: TermIdentity> {
+   | --------------------------------------- variant, associated function, or constant `empty_sparse` not found for this enum
+   |
+help: there is a method `is_sparse` with a similar name, but with different arguments
+  --> crates/datalog/src/store/rows.rs:81:5
+   |
+81 |     pub(super) const fn is_sparse(&self) -> bool {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error

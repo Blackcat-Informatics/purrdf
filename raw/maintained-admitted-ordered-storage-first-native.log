@@ -1,0 +1,13 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Finished `test` profile [optimized] target(s) in 9.44s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/745ba8572cceac92/out/purrdf_lex-745ba8572cceac92)
+
+running 5 tests
+test allocation::ordered::tests::borrowed_lookup_and_clear_need_no_new_storage ... ok
+test allocation::ordered::tests::refused_growth_changes_no_live_association_and_release_destroys_first ... ok
+test allocation::ordered::tests::associations_survive_rotations_deletions_and_vacant_slot_reuse ... ok
+test allocation::ordered::tests::wide_sorted_lookup_does_not_degrade_to_quadratic_work ... ok
+test allocation::ordered::tests::ordered_ranges_and_crossing_walks_match_independent_ordered_oracle ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 311 filtered out; finished in 0.01s
+

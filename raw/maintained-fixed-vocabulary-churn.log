@@ -1,0 +1,13 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 20.27s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 1 test
+churn_block=0 allocations=29952 requested_bytes=14652928 retained_bytes=0 peak_working_bytes=7070
+churn_block=1 allocations=29952 requested_bytes=14652928 retained_bytes=0 peak_working_bytes=7070
+churn_block=2 allocations=29952 requested_bytes=14652928 retained_bytes=0 peak_working_bytes=7070
+churn_block=3 allocations=29952 requested_bytes=14652928 retained_bytes=0 peak_working_bytes=7070
+test repeated_retractions_release_row_metadata_without_reusing_coordinates ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s
+

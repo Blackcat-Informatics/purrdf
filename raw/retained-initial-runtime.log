@@ -1,0 +1,55 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: method `prepare_object_in` is never used
+   --> crates/datalog/src/store.rs:743:8
+    |
+564 | impl<W: Weight, I: TermIdentity> Batch<W, I> {
+    | -------------------------------------------- method in this implementation
+...
+743 |     fn prepare_object_in<A: Admission + ?Sized>(
+    |        ^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: methods `admit_native_metadata_in`, `prepare_maintenance_indexes_in`, and `prepare_maintenance_indexes_with` are never used
+    --> crates/datalog/src/store.rs:1964:19
+     |
+1880 | / impl<D: TermDictionary, const N: usize> RelationStore<D, N>
+1881 | | where
+1882 | |     Arity<N>: StoreShape<N>,
+     | |____________________________- methods in this implementation
+...
+1964 |       pub(crate) fn admit_native_metadata_in<A: Admission + ?Sized>(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1985 |       pub(crate) fn prepare_maintenance_indexes_in<A: Admission + ?Sized>(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2003 |       fn prepare_maintenance_indexes_with<A: Admission + ?Sized>(
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: methods `copy_sparse_in` and `prepare_sparse` are never used
+   --> crates/datalog/src/store/rows.rs:144:19
+    |
+ 66 | impl<I: TermIdentity> RowLog<I> {
+    | ------------------------------- methods in this implementation
+...
+144 |     pub(super) fn copy_sparse_in<A: Admission + ?Sized>(
+    |                   ^^^^^^^^^^^^^^
+...
+179 |     pub(super) fn prepare_sparse(&self) -> Result<Option<Self>, StorageError> {
+    |                   ^^^^^^^^^^^^^^
+
+error: associated functions `from_live` and `from_live_with` are never used
+   --> crates/datalog/src/store/directory.rs:468:19
+    |
+159 | impl<I: TermIdentity, K: Copy> Directory<I, K> {
+    | ---------------------------------------------- associated functions in this implementation
+...
+468 |     pub(super) fn from_live<D: TermDictionary<Id = I>, const N: usize>(
+    |                   ^^^^^^^^^
+...
+478 |     fn from_live_with<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
+    |        ^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-datalog` (lib) due to 4 previous errors

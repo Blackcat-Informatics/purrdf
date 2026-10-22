@@ -1,0 +1,27 @@
+Admit maintained partition arrays and mutable tail columns
+
+Construct fresh relation/key/free-slot arrays and tail columns under the
+original supplemental admission. Preserve existing sealed arrangement
+owners, original cells and handles. Wire ordinary column reservation through
+the same native amortized factory and keep independent clones Resident.
+
+Retain empty next-partition storage in the original store across refusal.
+Accepted column growth is not discarded when a later companion refuses.
+Reserve every possible free partition slot before publication; retirement
+allocates no storage and queues exact destroyed column charges. Flush those
+charges and original row-log debt before later factory progress.
+
+Expand the actual original-watermark refusal control with an unrelated new
+partition alongside a productive derived fact. Repeated refusal preserves
+original native joins, retained storage and the pending position, then
+finishes with exact facts, proofs and delta.
+
+Validation: 455 native Datalog library and 45 public cases, all 12608
+cumulative operation cuts; all eight extended original-owner cases pass.
+Native entailment passes 818 library and 16 public cases, with one existing
+ignored test. Packaged WASM executes all 45+16 public cases. All-target
+Datalog, entailment, shapes and validate Clippy passes with warnings denied.
+
+Internal checkpoint only. Supplied constructors remain private. Sealed
+batch/log/object and compaction factories, physical factory work charging
+and full parent qualification remain unfinished.

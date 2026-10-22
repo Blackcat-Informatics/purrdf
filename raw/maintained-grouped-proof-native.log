@@ -1,0 +1,18 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0277]: can't compare `DictionaryTerm<'_, u64>` with `{integer}`
+    --> crates/datalog/tests/rules_runtime.rs:5099:13
+     |
+5099 |             assert_eq!(call.inputs, [1, 3]);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `DictionaryTerm<'_, u64> == {integer}`
+     |
+help: the trait `PartialEq<{integer}>` is not implemented for `DictionaryTerm<'_, u64>`
+      but trait `PartialEq<DictionaryTerm<'_, u64>>` is implemented for it
+    --> crates/datalog/src/dictionary.rs:23:30
+     |
+  23 | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+     |                              ^^^^^^^^^
+     = help: for that trait implementation, expected `DictionaryTerm<'_, u64>`, found `{integer}`
+     = note: required for `&[DictionaryTerm<'_, u64>]` to implement `PartialEq<[{integer}; 2]>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 1 previous error

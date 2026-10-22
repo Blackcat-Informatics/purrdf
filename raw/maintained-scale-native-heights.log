@@ -1,0 +1,13 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 16.03s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 1 test
+edges=1000 update=0 join_steps=3 allocations=44 requested_bytes=15244 retained_bytes=704 peak_working_bytes=7544
+edges=1000 update=1 join_steps=1 allocations=26 requested_bytes=7364 retained_bytes=-152 peak_working_bytes=5936
+edges=1000000 update=0 join_steps=3 allocations=44 requested_bytes=15244 retained_bytes=704 peak_working_bytes=7544
+edges=1000000 update=1 join_steps=1 allocations=26 requested_bytes=7364 retained_bytes=-152 peak_working_bytes=5936
+test one_fact_updates_visit_only_the_affected_star_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.14s
+

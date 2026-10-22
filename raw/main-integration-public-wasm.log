@@ -1,0 +1,41 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+   Compiling twox-hash v2.1.2
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/columnar)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+    Finished `test` profile [optimized] target(s) in 59.43s
+     Running tests/structured_errors.rs (/opt/.cargo/67/26e15a2cc3057b/wasm32-unknown-unknown/debug/build/purrdf-columnar/8cd050d4ec603783/out/structured_errors-8cd050d4ec603783.wasm)
+
+running 6 tests
+test original_parquet_bounds_survive_file_disposal_without_narrowing ... ok
+test public_projection_and_write_preserve_source_owners_and_fields ... ok
+test human_presentation_preserves_codec_and_source_messages ... ok
+test public_blob_read_preserves_original_integrity_cause ... ok
+test public_reconstruction_preserves_original_diagnostic ... ok
+test native_cause_transport_preserves_storage_and_full_width_rows ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/current_clash_support.rs (/opt/.cargo/67/26e15a2cc3057b/wasm32-unknown-unknown/debug/build/purrdf-entail/33b3683205400ade/out/current_clash_support-33b3683205400ade.wasm)
+
+running 16 tests
+test signed_refutation_scenarios_preserve_public_warrants_and_source_binding ... ok
+test frozen_warrants_reject_empty_and_weakened_premises ... ok
+test public_dataset_views_preserve_source_identity_and_causal_verification ... ok
+test current_clash_preserves_named_and_scoped_blank_source_identity ... ok
+test current_clash_preserves_public_service_certificate_and_verification ... ok
+test current_clash_replays_generated_existential_witnesses ... ok
+test current_clash_checks_fresh_refutation_assumptions_without_a_source_name ... ok
+test current_clash_replays_equality_before_observing_role_premises ... ok
+test current_clash_borrows_the_independent_prepared_consumer ... ok
+test public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs ... ok
+test public_causal_service_binds_the_requested_question_and_query_assumptions ... ok
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... ok
+test public_causal_service_checks_reserved_birth_and_generative_trigger ... ok
+test public_causal_service_checks_nested_reserved_origin ... ok
+test public_causal_service_preserves_literal_metadata_in_key_support ... ok
+test public_causal_service_checks_inverse_transitive_path_licenses ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+

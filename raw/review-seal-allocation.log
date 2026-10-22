@@ -1,0 +1,25 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 8.11s
+     Running tests/factor_allocation.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/41beee2af6bd3ae4/out/factor_allocation-41beee2af6bd3ae4)
+
+running 1 test
+test independent_existential_factor_work_and_allocation_grow_additively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/negative_guard_admission.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/6d835fa8a5faa512/out/negative_guard_admission-6d835fa8a5faa512)
+
+running 1 test
+test nested_refusal_stops_owned_local_expansion_and_preserves_exact_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/object_permutation_allocation.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/ace46388c3d294c4/out/object_permutation_allocation-ace46388c3d294c4)
+
+running 3 tests
+test object_probe_allocates_one_address_per_row_once ... ok
+test indexed_removal_and_warm_object_probes_allocate_nothing ... ok
+test consolidated_object_order_serves_the_actual_cycle_join ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

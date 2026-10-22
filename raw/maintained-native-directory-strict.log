@@ -1,0 +1,49 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-algebra)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/geo-kernel)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/entail)
+error: redundant closure
+    --> crates/datalog/src/store.rs:2590:26
+     |
+2590 |                     .map(|p| p.id())
+     |                          ^^^^^^^^^^ help: replace the closure with the method itself: `super::PartitionRef::id`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+     = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+    --> crates/datalog/src/store.rs:2601:22
+     |
+2601 |                 .map(|p| p.id())
+     |                      ^^^^^^^^^^ help: replace the closure with the method itself: `super::PartitionRef::id`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+    --> crates/datalog/src/store.rs:2616:22
+     |
+2616 |                 .map(|p| p.id())
+     |                      ^^^^^^^^^^ help: replace the closure with the method itself: `super::PartitionRef::id`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+    --> crates/datalog/src/store.rs:2623:18
+     |
+2623 |             .map(|p| p.id())
+     |                  ^^^^^^^^^^ help: replace the closure with the method itself: `super::PartitionRef::id`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: could not compile `purrdf-datalog` (lib test) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

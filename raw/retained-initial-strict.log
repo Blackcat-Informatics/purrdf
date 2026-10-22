@@ -1,0 +1,64 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: usage of wildcard import
+ --> crates/datalog/src/seminaive/maintained/initial.rs:6:5
+  |
+6 | use super::*;
+  |     ^^^^^^^^ help: try: `super::{TermDictionary, StorageError, Arity, StoreShape, ReclaimDictionary, Maintained, Admission, EvalOptions, StopSignal, ResumeProgress, MaintenanceError, Limits, Cell, work, check_budget, flush_retired_bytes, EvalError, native_error, reserve_index_in, push_task, Task, advance, Run}`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#wildcard_imports
+  = note: `-D clippy::wildcard-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::wildcard_imports)]`
+
+error: the following explicit lifetimes could be elided: 'r
+  --> crates/datalog/src/seminaive/maintained/initial.rs:73:6
+   |
+73 | impl<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission>
+   |      ^^
+74 |     Maintained<'r, M, S, D, N, A>
+   |                ^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+   = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+   |
+73 ~ impl<M, S: Admission, D: TermDictionary, const N: usize, A: Admission>
+74 ~     Maintained<'_, M, S, D, N, A>
+   |
+
+error: usage of wildcard import
+ --> crates/datalog/src/store/maintenance_indexes.rs:6:5
+  |
+6 | use super::*;
+  |     ^^^^^^^^ help: try: `super::{TermDictionary, Admission, Arity, StoreShape, RelationStore, Memory, DictionaryError, directory, LendingIterator, Infallible, index, ObjectIndex}`
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#wildcard_imports
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/datalog/src/store.rs:2176:10
+     |
+2176 |     ) -> Result<core::ops::ControlFlow<(), InsertedRow<D::Id>>, DictionaryError<D::Error>> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `purrdf-datalog` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: field assignment outside of initializer for an instance created with Default::default()
+   --> crates/datalog/src/store/seal.rs:381:13
+    |
+381 |             relation.maintain_objects = true;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `Relation::<u64> { maintain_objects: true, ..Default::default() }` and removing relevant reassignments
+   --> crates/datalog/src/store/seal.rs:380:13
+    |
+380 |             let mut relation = Relation::<u64>::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#field_reassign_with_default
+    = note: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+error: could not compile `purrdf-datalog` (lib test) due to 3 previous errors

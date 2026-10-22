@@ -1,0 +1,19 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 31.76s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 1 test
+preparation_work=3814 credit_cuts=3815
+transaction_work=67287 credit_cuts=67288
+thread 'maintained_preparation_resumes_every_metadata_credit_without_publishing' panicked at crates/datalog/tests/rules_runtime.rs:4219:17:
+work cut 15362
+test maintained_preparation_resumes_every_metadata_credit_without_publishing ... FAILED
+
+failures:
+
+failures:
+    maintained_preparation_resumes_every_metadata_credit_without_publishing
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 44 filtered out; finished in 6.18s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test rules_runtime`

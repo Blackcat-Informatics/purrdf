@@ -1,0 +1,55 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive/factors.rs:1167:54
+     |
+1167 |         let mut rel = RelationStore::with_dictionary(HostDictionary {
+     |                                                      ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:5480:56
+     |
+5480 |         let mut store = RelationStore::with_dictionary(HostDictionary {
+     |                                                        ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:5737:60
+     |
+5737 |             let mut store = RelationStore::with_dictionary(HostDictionary {
+     |                                                            ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:5920:52
+     |
+5920 |         let store = RelationStore::with_dictionary(HostDictionary {
+     |                                                    ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:5973:26
+     |
+5973 |         let dictionary = HostDictionary {
+     |                          ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:6091:26
+     |
+6091 |         let dictionary = HostDictionary {
+     |                          ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/seminaive.rs:6245:26
+     |
+6245 |         let dictionary = HostDictionary {
+     |                          ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+error[E0063]: missing field `refuse_after_interned` in initializer of `HostDictionary`
+    --> crates/datalog/src/store.rs:2849:26
+     |
+2849 |         let dictionary = HostDictionary {
+     |                          ^^^^^^^^^^^^^^ missing `refuse_after_interned`
+
+For more information about this error, try `rustc --explain E0063`.
+error: could not compile `purrdf-datalog` (lib test) due to 8 previous errors

@@ -1,0 +1,41 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: unnecessary qualification
+   --> crates/datalog/tests/rules_runtime.rs:575:36
+    |
+575 |             refuse_after_interned: std::sync::atomic::AtomicBool::new(false),
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+575 -             refuse_after_interned: std::sync::atomic::AtomicBool::new(false),
+575 +             refuse_after_interned: AtomicBool::new(false),
+    |
+
+error: unnecessary qualification
+    --> crates/datalog/tests/rules_runtime.rs:1291:32
+     |
+1291 |         refuse_after_interned: std::sync::atomic::AtomicBool::new(false),
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1291 -         refuse_after_interned: std::sync::atomic::AtomicBool::new(false),
+1291 +         refuse_after_interned: AtomicBool::new(false),
+     |
+
+error[E0308]: mismatched types
+    --> crates/datalog/tests/rules_runtime.rs:5210:5
+     |
+5210 |     assert_ne!(inserted, removed);
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |     |
+     |     expected `(u64, u64, Id<Row>)`, found `Id<Row>`
+     |     expected because this is `(u64, u64, purrdf_datalog::id::Id<Row>)`
+     |
+     = note: expected tuple `(u64, u64, purrdf_datalog::id::Id<Row>)`
+               found struct `purrdf_datalog::id::Id<Row>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 3 previous errors

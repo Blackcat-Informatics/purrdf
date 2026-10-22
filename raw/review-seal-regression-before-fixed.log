@@ -1,0 +1,22 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 18.99s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 1 test
+test removal_invalidates_seal_rows_prepared_before_source_refusal ... FAILED
+
+failures:
+
+---- removal_invalidates_seal_rows_prepared_before_source_refusal stdout ----
+thread 'removal_invalidates_seal_rows_prepared_before_source_refusal' panicked at crates/datalog/src/store/seal.rs:133:9:
+assertion `left == right` failed: preparation pins the original relation
+  left: Shape { rows: 64, merged: 64, intermediate: 0, merges: 0, additional: 1 }
+ right: Shape { rows: 63, merged: 63, intermediate: 0, merges: 0, additional: 1 }
+
+
+failures:
+    removal_invalidates_seal_rows_prepared_before_source_refusal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test rules_runtime`

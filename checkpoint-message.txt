@@ -1,0 +1,13 @@
+Retain native model maintenance across signed transactions
+
+Maintain current native proofs, exact model deltas and original committed
+positions through insertions, retractions and governed suspension. Retain
+preparation, event fan-out, publication and settlement frames, reclaim unused
+row/partition/term metadata, and reuse the maintained model in refutation.
+
+The cumulative operation allowance shares original native join accounting.
+Restoration checks the current fact grant before publishing an old row again.
+Native library/public tests, actual WebAssembly public callers, strict affected
+all-target lint, generated metadata and formatting are verified for this
+checkpoint. Supplemental-model admission and physical factory work charging
+remain unfinished; this is not a completed resource-contract delivery.

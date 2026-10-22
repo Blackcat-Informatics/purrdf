@@ -1,0 +1,12 @@
+Run: https://github.com/Blackcat-Informatics/purrdf/actions/runs/39836714354
+Head: 9a695a072c3b79cd5317e17f41f53d4181b889c1
+Material failure excerpts from completed job logs; not a new local gate.
+Configuration: aarch64
+2026-10-22T19:22:34.5844164Z FAIL: 1 problem(s):
+2026-10-22T19:22:34.5844902Z   - row `datalog.chase` `aarch64` reads 'v0·f0·r0', measured 'v1·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+2026-10-22T19:22:34.6508112Z ##[error]Process completed with exit code 2.
+
+Configuration: x86_64-v4
+2026-10-22T19:24:40.8950554Z FAIL: 1 problem(s):
+2026-10-22T19:24:40.8951785Z   - row `datalog.chase` `x86_64-v4` reads 'v2·f0·r0', measured 'v4·f0·r0' (run `python3 scripts/check-simd-asm.py --write-doc`)
+2026-10-22T19:24:40.9654992Z ##[error]Process completed with exit code 2.

@@ -1,0 +1,15 @@
+Govern maintenance allocation work before native growth
+
+Lend the original admission through one stack adapter for preparation and
+mutation. Check replacement layout work before invoking that admission,
+consume credit only when it accepts, and allow refunds without more credit.
+Keep original resource refusals distinct from cumulative work refusals.
+
+Retain logical operation credit and native factory progress across suspension.
+Represent input reservation, event and publication progress with explicit
+phases, and advance completed winner/output ownership before retiring it.
+
+Exercise the original exhaustive credit-cut controls without weakening their
+exact final-work, model, delta, join or watermark assertions. Add actual Memory
+controls for work refusal before the original callback and original resource
+refusal without factory-credit consumption.

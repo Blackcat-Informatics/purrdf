@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 36.60s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 3 tests
+test maintained_transactions_resume_every_credit_cut_without_early_acknowledgement ... FAILED
+test maintained_transactions_retract_cycles_repair_alternatives_and_negation ... ok
+test maintained_transactions_match_seeded_random_signed_histories ... ok
+
+failures:
+
+---- maintained_transactions_resume_every_credit_cut_without_early_acknowledgement stdout ----
+thread 'maintained_transactions_resume_every_credit_cut_without_early_acknowledgement' panicked at crates/datalog/src/store.rs:230:17:
+TermId Id(6) was not minted by this interner (len 6): term ids are per-store handles and must never cross store boundaries
+
+
+failures:
+    maintained_transactions_resume_every_credit_cut_without_early_acknowledgement
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test rules_runtime`

@@ -1,0 +1,24 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 35.71s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 1 test
+test seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending ... FAILED
+
+failures:
+
+---- seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending stdout ----
+
+thread 'seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending' (1758636) panicked at crates/datalog/src/seminaive/maintained/storage.rs:634:9:
+assertion `left == right` failed: a refused old-table release is retried before another table grows
+  left: 25
+ right: 24
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 450 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --lib`

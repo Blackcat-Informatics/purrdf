@@ -1,0 +1,123 @@
+{
+  "issue": 493,
+  "branch": "paudley/493-datalog-incremental-maintenance-of-a",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "55e3b052762f18d5850734ee7ff2970dd86bb5c9",
+      "subject": "fix(datalog): invalidate prepared seals when removing rows",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "578bb65dac002cbf20de99851bee3a928905b0e1",
+      "subject": "feat(datalog): govern native maintenance initialization and sealing",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "4e942a3fee599b298eb601ece657b7e0a9f81564",
+      "subject": "Govern maintenance allocation work before native growth",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "4349803d9f9fe73da77026af71cd1cea2c1a7100",
+      "subject": "Admit native batch sealing before row publication",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "bf6fab38b659ab1d55de4dc4ecd124a7d317d3e2",
+      "subject": "Admit maintained partition arrays and mutable tail columns",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "36063bee05ed80493c2ada3a5a08e890d3fd3a0a",
+      "subject": "Admit native maintenance indexes through their original owner",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "d2e19593a29172b440d479072cfb0d567a845478",
+      "subject": "Admit maintenance transaction frames before native mutation",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "5d65425659446c3b63d8413a992a196ef410c2c9",
+      "subject": "Admit retained native maintenance proof storage",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "b5075ebd711f459e89ec676edf431904c6dea93f",
+      "subject": "Retain native model maintenance across signed transactions",
+      "date": "2026-10-22"
+    },
+    {
+      "oid": "de6098321dbb5f235a451b65529a2c9f7c97ca8a",
+      "subject": "Admit native signed Datalog change batches with host watermarks",
+      "date": "2026-10-21"
+    }
+  ],
+  "files": [
+    "crates/datalog/Cargo.toml",
+    "crates/datalog/README.md",
+    "crates/datalog/src/allocation.rs",
+    "crates/datalog/src/clause.rs",
+    "crates/datalog/src/dictionary.rs",
+    "crates/datalog/src/dictionary/integer.rs",
+    "crates/datalog/src/id.rs",
+    "crates/datalog/src/lib.rs",
+    "crates/datalog/src/maintenance.rs",
+    "crates/datalog/src/plan.rs",
+    "crates/datalog/src/proof.rs",
+    "crates/datalog/src/schedule.rs",
+    "crates/datalog/src/seminaive.rs",
+    "crates/datalog/src/seminaive/atom.rs",
+    "crates/datalog/src/seminaive/commit.rs",
+    "crates/datalog/src/seminaive/cycle.rs",
+    "crates/datalog/src/seminaive/evidence.rs",
+    "crates/datalog/src/seminaive/factors.rs",
+    "crates/datalog/src/seminaive/factors/execution.rs",
+    "crates/datalog/src/seminaive/factors/filters.rs",
+    "crates/datalog/src/seminaive/factors/matches.rs",
+    "crates/datalog/src/seminaive/guards.rs",
+    "crates/datalog/src/seminaive/join.rs",
+    "crates/datalog/src/seminaive/maintained.rs",
+    "crates/datalog/src/seminaive/maintained/event.rs",
+    "crates/datalog/src/seminaive/maintained/initial.rs",
+    "crates/datalog/src/seminaive/maintained/prepare.rs",
+    "crates/datalog/src/seminaive/maintained/reclaim.rs",
+    "crates/datalog/src/seminaive/maintained/storage.rs",
+    "crates/datalog/src/seminaive/maintained/work.rs",
+    "crates/datalog/src/seminaive/negative.rs",
+    "crates/datalog/src/seminaive/ordered.rs",
+    "crates/datalog/src/seminaive/probe.rs",
+    "crates/datalog/src/seminaive/rule.rs",
+    "crates/datalog/src/seminaive/session.rs",
+    "crates/datalog/src/seminaive/stratum.rs",
+    "crates/datalog/src/store.rs",
+    "crates/datalog/src/store/columns.rs",
+    "crates/datalog/src/store/directory.rs",
+    "crates/datalog/src/store/index.rs",
+    "crates/datalog/src/store/maintenance_indexes.rs",
+    "crates/datalog/src/store/metadata.rs",
+    "crates/datalog/src/store/rows.rs",
+    "crates/datalog/src/store/seal.rs",
+    "crates/datalog/src/store/terms.rs",
+    "crates/datalog/src/test_support/host_dictionary.rs",
+    "crates/datalog/tests/maintained_scale.rs",
+    "crates/datalog/tests/rules_runtime.rs",
+    "crates/entail/src/engine.rs",
+    "crates/entail/src/entails/freeze.rs",
+    "crates/entail/src/entails/mod.rs",
+    "crates/entail/src/entails/refutation.rs",
+    "crates/entail/src/lib.rs",
+    "crates/entail/tests/current_clash_support.rs",
+    "crates/hash/README.md",
+    "crates/lex/src/allocation.rs",
+    "crates/lex/src/allocation/ordered.rs",
+    "crates/lex/src/walk.rs",
+    "crates/lex/src/walk/sort.rs",
+    "crates/shapes/src/srl/eval.rs",
+    "docs/MIGRATION-4.0.md",
+    "docs/design/purrdf-simd.md",
+    "helpers-ledger.toml"
+  ],
+  "adrs_touched": []
+}

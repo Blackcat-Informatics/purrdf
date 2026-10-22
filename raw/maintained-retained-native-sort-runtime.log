@@ -1,0 +1,18 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Finished `test` profile [optimized] target(s) in 17.19s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-lex/745ba8572cceac92/out/purrdf_lex-745ba8572cceac92)
+
+running 9 tests
+test walk::sort::tests::fallible_dedup_matches_adjacent_runs_and_preserves_elements_on_refusal ... ok
+test walk::sort::tests::fallible_heap_uses_original_inventory_and_matches_independent_heap ... ok
+test walk::sort::tests::equal_ranges_match_linear_partition_and_refuse_at_each_comparison ... ok
+test walk::sort::tests::heap_comparator_refusal_preserves_every_element_and_stops_immediately ... ok
+test walk::sort::tests::maximal_zero_sized_inventory_refuses_without_index_overflow ... ok
+test walk::sort::tests::every_comparison_refusal_stops_immediately_without_losing_elements ... ok
+test walk::sort::tests::large_adversarial_orders_match_independent_sort_and_equal_runs_use_linear_comparisons ... ok
+test walk::sort::tests::every_small_repeated_key_sequence_matches_independent_ordering ... ok
+test walk::sort::tests::retained_heap_sort_resumes_every_comparison_cut_without_replay ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 307 filtered out; finished in 0.00s
+

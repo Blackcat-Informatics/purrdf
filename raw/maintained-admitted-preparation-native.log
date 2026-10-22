@@ -1,0 +1,47 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 36.48s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 7 tests
+test seminaive::maintained::storage::tests::original_borrowed_grant_outlives_its_last_payload ... ok
+test seminaive::maintained::storage::tests::initial_model_factories_use_the_supplied_grant_before_construction ... ok
+test seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals ... FAILED
+test seminaive::maintained::storage::tests::replaced_native_table_keeps_its_refused_old_charge_pending ... ok
+test seminaive::maintained::storage::tests::preparation_task_spills_use_the_original_grant_before_mutation ... ok
+test seminaive::maintained::storage::tests::replaced_winner_array_and_completed_publication_retry_their_original_releases ... ok
+
+thread 'seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal' (1964824) panicked at crates/datalog/src/seminaive/maintained/storage.rs:396:18:
+called `Result::unwrap()` on an `Err` value: Failed(Storage(AdmissionFailed))
+
+thread 'seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal' (1964824) panicked at crates/datalog/src/seminaive/maintained/storage.rs:35:18:
+the original model admission must release its destroyed payloads: AdmissionFailed
+stack backtrace:
+   0:     0x5582b9058591 - <<std[f57a5bc8e5fe77fc]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[31b2b309d3e4f25a]::fmt::Display>::fmt
+   1:     0x5582b906df1a - core[31b2b309d3e4f25a]::fmt::write
+   2:     0x5582b905ca6c - <alloc[51d2d2b9e141973e]::vec::Vec<u8> as core[31b2b309d3e4f25a]::io::write::Write>::write_fmt
+   3:     0x5582b9034716 - std[f57a5bc8e5fe77fc]::panicking::default_hook::{closure#0}
+   4:     0x5582b9050a69 - std[f57a5bc8e5fe77fc]::panicking::default_hook
+   5:     0x5582b8f624a0 - test[2804c9f1e7b58ae3]::test_main_inner::{closure#0}
+   6:     0x5582b9050d92 - std[f57a5bc8e5fe77fc]::panicking::panic_with_hook
+   7:     0x5582b90347c2 - std[f57a5bc8e5fe77fc]::panicking::panic_handler::{closure#0}
+   8:     0x5582b902e6d9 - std[f57a5bc8e5fe77fc]::sys::backtrace::__rust_end_short_backtrace::<std[f57a5bc8e5fe77fc]::panicking::panic_handler::{closure#0}, !>
+   9:     0x5582b90353cd - __rustc[611f7a7a19d737f7]::rust_begin_unwind
+  10:     0x5582b906e6dc - core[31b2b309d3e4f25a]::panicking::panic_fmt
+  11:     0x5582b906e452 - core[31b2b309d3e4f25a]::result::unwrap_failed
+  12:     0x5582b8f50cac - <purrdf_datalog[d446be3ae9788499]::seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal::{closure#0} as core[31b2b309d3e4f25a]::ops::function::FnOnce<()>>::call_once
+  13:     0x5582b8f558eb - test[2804c9f1e7b58ae3]::__rust_begin_short_backtrace::<core[31b2b309d3e4f25a]::result::Result<(), alloc[51d2d2b9e141973e]::string::String>, fn() -> core[31b2b309d3e4f25a]::result::Result<(), alloc[51d2d2b9e141973e]::string::String>>
+  14:     0x5582b8f62ac5 - test[2804c9f1e7b58ae3]::run_test::{closure#0}
+  15:     0x5582b8f5d4b4 - std[f57a5bc8e5fe77fc]::sys::backtrace::__rust_begin_short_backtrace::<test[2804c9f1e7b58ae3]::run_test::{closure#1}, ()>
+  16:     0x5582b8f65b52 - <std[f57a5bc8e5fe77fc]::thread::lifecycle::spawn_unchecked<test[2804c9f1e7b58ae3]::run_test::{closure#1}, ()>::{closure#1} as core[31b2b309d3e4f25a]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  17:     0x5582b9057ddf - <std[f57a5bc8e5fe77fc]::sys::thread::unix::Thread>::new::thread_start
+  18:     0x7f4656cacef1 - <unknown>
+  19:     0x7f4656d4c05c - <unknown>
+  20:                0x0 - <unknown>
+
+thread 'seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal' (1964824) panicked at /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.
+error: test failed, to rerun pass `-p purrdf-datalog --lib`
+
+Caused by:
+  process didn't exit successfully: `/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d 'seminaive::maintained::storage::tests'` (signal: 6, SIGABRT: process abort signal)

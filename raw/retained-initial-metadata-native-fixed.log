@@ -1,0 +1,12 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 51.19s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 4 tests
+test dictionary::integer::tests::validation_and_symbol_refusals_do_not_publish_identity_metadata ... ok
+test store::rows::tests::supplemental_native_metadata_factories_preserve_original_publication_and_clones ... ok
+test seminaive::tests::default_evidenced_execution_needs_no_metadata_admission ... ok
+test store::metadata::tests::metadata_work_cuts_keep_original_coordinates_and_factory_progress ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 457 filtered out; finished in 0.04s
+

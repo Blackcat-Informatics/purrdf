@@ -1,0 +1,23 @@
+Diagnostic control: temporarily restore the old existing.is_none() && restored.is_none() fact-admission exemption.
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 26.24s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 1 test
+test maintained_restoration_respects_a_reduced_fact_grant_before_publication ... FAILED
+
+failures:
+
+---- maintained_restoration_respects_a_reduced_fact_grant_before_publication stdout ----
+thread 'maintained_restoration_respects_a_reduced_fact_grant_before_publication' panicked at crates/datalog/tests/rules_runtime.rs:4528:5:
+assertion `left == right` failed: restoration refuses before the extra live fact
+  left: 2
+ right: 1
+
+
+failures:
+    maintained_restoration_respects_a_reduced_fact_grant_before_publication
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-datalog --test rules_runtime`

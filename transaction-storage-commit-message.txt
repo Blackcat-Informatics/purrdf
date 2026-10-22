@@ -1,0 +1,23 @@
+Admit maintenance transaction frames before native mutation
+
+Allocate deferred publication, task arenas and spills, event fan-out,
+preparation indexes, result deltas and term-reclamation buffers through the
+original supplemental admission. Preserve exact outstanding charges when
+destroyed replacement layouts cannot yet be released. Advance original
+publication cursors before retryable retirement, and retain complete
+settlement while final metadata release is pending.
+
+Reuse the last admitted delta buffer for the next transaction and retire
+rejected preparation without losing its original charge. Exercise actual
+growth, spill and release refusals, repeated retries, watermark retention,
+complete relation reads and latest-delta term pins.
+
+Native Datalog: 454 library and 45 public cases, including all 12608
+cumulative operation cuts. Native entailment: 818 library and 16 public
+cases, with one existing ignored test. Packaged WASM executes all 45+16
+public cases. All-target Datalog, entailment, shapes and validate Clippy
+passes with warnings denied.
+
+This is an internal checkpoint. Supplied construction remains private;
+sparse store/index factories and physical factory work charging remain
+unfinished. No complete maintenance resource contract is claimed.

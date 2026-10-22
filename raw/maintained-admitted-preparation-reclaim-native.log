@@ -1,0 +1,9 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0616]: field `tasks` of struct `prepare::Frame` is private
+   --> crates/datalog/src/seminaive/maintained/storage.rs:905:69
+    |
+905 |             let tasks = model.preparing.as_ref().map(|frame| &frame.tasks)
+    |                                                                     ^^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `purrdf-datalog` (lib test) due to 1 previous error

@@ -1,0 +1,24 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 6.46s
+     Running tests/factor_allocation.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/41beee2af6bd3ae4/out/factor_allocation-41beee2af6bd3ae4)
+
+running 1 test
+model_only_factors n=100 join_steps=300 requested_bytes=563732 retained_bytes=14188 peak_working_bytes=175208
+independent_factors n=100 join_steps=300 requested_bytes=674608 retained_bytes=93848 peak_working_bytes=175208
+model_only_factors n=1000 join_steps=3000 requested_bytes=5362996 retained_bytes=129228 peak_working_bytes=1689976
+independent_factors n=1000 join_steps=3000 requested_bytes=6378508 retained_bytes=876756 peak_working_bytes=1689976
+model_only_factors n=10000 join_steps=30000 requested_bytes=63215124 retained_bytes=1282796 peak_working_bytes=17451776
+independent_factors n=10000 join_steps=30000 requested_bytes=73842244 retained_bytes=8991628 peak_working_bytes=17451776
+test independent_existential_factor_work_and_allocation_grow_additively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/object_permutation_allocation.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/ace46388c3d294c4/out/object_permutation_allocation-ace46388c3d294c4)
+
+running 3 tests
+test object_probe_allocates_one_address_per_row_once ... ok
+test indexed_removal_and_warm_object_probes_allocate_nothing ... ok
+test consolidated_object_order_serves_the_actual_cycle_join ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

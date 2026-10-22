@@ -1,0 +1,11 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 22.19s
+     Running tests/rules_runtime.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/30b901224541b26b/out/rules_runtime-30b901224541b26b)
+
+running 3 tests
+test maintained_transactions_resume_every_credit_cut_without_early_acknowledgement ... ok
+test maintained_transactions_retract_cycles_repair_alternatives_and_negation ... ok
+test maintained_transactions_match_seeded_random_signed_histories ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.03s
+

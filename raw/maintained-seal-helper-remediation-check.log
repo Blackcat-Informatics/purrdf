@@ -1,0 +1,244 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0277]: the trait bound `Depths<'_, <D as TermDictionary>::Id, N>: From<&Vec<u32>>` is not satisfied
+    --> crates/datalog/src/seminaive.rs:4524:43
+     |
+4524 |             .map_or_else(|| (&self.depth).into(), Depths::Native)
+     |                                           ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<u32>` value to `&[u32]`
+help: the trait `From<&Vec<u32>>` is not implemented for `Depths<'_, <D as TermDictionary>::Id, N>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<u32>` to implement `Into<Depths<'_, <D as TermDictionary>::Id, N>>`
+help: consider dereferencing here
+     |
+4524 |             .map_or_else(|| (&(*self.depth)).into(), Depths::Native)
+     |                               ++          +
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1690:37
+     |
+1690 |                     depth: (&depth).into(),
+     |                                     ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1690 |                     depth: (&(*depth)).into(),
+     |                              ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1760:33
+     |
+1760 |                 depth: (&depth).into(),
+     |                                 ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1760 |                 depth: (&(*depth)).into(),
+     |                          ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1792:76
+     |
+1792 | ...                   source_heights(&original.sources, (&depth).into()),
+     |                                                                  ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1792 |                                 source_heights(&original.sources, (&(*depth)).into()),
+     |                                                                     ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1835:33
+     |
+1835 |                 depth: (&depth).into(),
+     |                                 ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1835 |                 depth: (&(*depth)).into(),
+     |                          ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<u32>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1908:33
+     |
+1908 |                 depth: (&depth).into(),
+     |                                 ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<u32>` value to `&[u32]`
+help: the trait `From<&Vec<u32>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<u32>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1908 |                 depth: (&(*depth)).into(),
+     |                          ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:1987:29
+     |
+1987 |             depth: (&depth).into(),
+     |                             ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+1987 |             depth: (&(*depth)).into(),
+     |                      ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:2207:37
+     |
+2207 |                     depth: (&depth).into(),
+     |                                     ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+2207 |                     depth: (&(*depth)).into(),
+     |                              ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:2323:29
+     |
+2323 |             depth: (&depth).into(),
+     |                             ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+2323 |             depth: (&(*depth)).into(),
+     |                      ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 4>: From<&Vec<u32>>` is not satisfied
+    --> crates/datalog/src/seminaive/factors.rs:2646:37
+     |
+2646 |                     depth: (&depth).into(),
+     |                                     ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<u32>` value to `&[u32]`
+help: the trait `From<&Vec<u32>>` is not implemented for `Depths<'_, id::Id<id::Term>, 4>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<u32>` to implement `Into<Depths<'_, id::Id<id::Term>, 4>>`
+help: consider dereferencing here
+     |
+2646 |                     depth: (&(*depth)).into(),
+     |                              ++     +
+
+error[E0277]: the trait bound `Depths<'_, <D as dictionary::TermDictionary>::Id, N>: From<&Vec<u32>>` is not satisfied
+    --> crates/datalog/src/seminaive.rs:4524:43
+     |
+4524 |             .map_or_else(|| (&self.depth).into(), Depths::Native)
+     |                                           ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<u32>` value to `&[u32]`
+help: the trait `From<&Vec<u32>>` is not implemented for `Depths<'_, <D as dictionary::TermDictionary>::Id, N>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<u32>` to implement `Into<Depths<'_, <D as dictionary::TermDictionary>::Id, N>>`
+help: consider dereferencing here
+     |
+4524 |             .map_or_else(|| (&(*self.depth)).into(), Depths::Native)
+     |                               ++          +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 3>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive.rs:5196:33
+     |
+5196 |                 depth: (&depth).into(),
+     |                                 ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 3>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 3>>`
+help: consider dereferencing here
+     |
+5196 |                 depth: (&(*depth)).into(),
+     |                          ++     +
+
+error[E0277]: the trait bound `Depths<'_, id::Id<id::Term>, 3>: From<&Vec<{integer}>>` is not satisfied
+    --> crates/datalog/src/seminaive.rs:5293:58
+     |
+5293 |                     depth: (&vec![0; store.row_count()]).into(),
+     |                                                          ^^^^ unsatisfied trait bound
+     |
+     = help: consider casting the `&Vec<{integer}>` value to `&[{integer}]`
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 3>`
+    --> crates/datalog/src/seminaive.rs:3738:1
+     |
+3738 | pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the trait `From<&Vec<{integer}>>` is not implemented for `Depths<'_, id::Id<id::Term>, 3>`
+      but trait `From<&[u32]>` is implemented for it
+    --> crates/datalog/src/seminaive.rs:3758:1
+     |
+3758 | / impl<'a, I: TermIdentity, const N: usize> From<&'a [u32]> for Depths<'a, I, N>
+3759 | | where
+3760 | |     Arity<N>: StoreShape<N>,
+     | |____________________________^
+     = help: for that trait implementation, expected `[u32]`, found `Vec<{integer}>`
+     = note: required for `&Vec<{integer}>` to implement `Into<Depths<'_, id::Id<id::Term>, 3>>`
+
+error: could not compile `purrdf-datalog` (lib test) due to 12 previous errors

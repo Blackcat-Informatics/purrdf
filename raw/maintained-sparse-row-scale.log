@@ -1,0 +1,12 @@
+    Finished `test` profile [optimized] target(s) in 0.21s
+     Running tests/maintained_scale.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/c85e826de8fada2b/out/maintained_scale-c85e826de8fada2b)
+
+running 1 test
+edges=1000 update=0 join_steps=3 allocations=45 requested_bytes=15246 retained_bytes=704 peak_working_bytes=7598
+edges=1000 update=1 join_steps=1 allocations=27 requested_bytes=7462 retained_bytes=-56 peak_working_bytes=5990
+edges=1000000 update=0 join_steps=3 allocations=45 requested_bytes=15246 retained_bytes=704 peak_working_bytes=7598
+edges=1000000 update=1 join_steps=1 allocations=27 requested_bytes=7462 retained_bytes=-56 peak_working_bytes=5990
+test one_fact_updates_visit_only_the_affected_star_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 7.24s
+

@@ -1,0 +1,7 @@
+Auto-merging crates/entail/src/entails/freeze.rs
+Auto-merging crates/entail/tests/current_clash_support.rs
+CONFLICT (content): Merge conflict in crates/entail/tests/current_clash_support.rs
+Auto-merging docs/MIGRATION-4.0.md
+Auto-merging helpers-ledger.toml
+Recorded preimage for 'crates/entail/tests/current_clash_support.rs'
+Automatic merge failed; fix conflicts and then commit the result.

@@ -1,0 +1,144 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/hash)
+    Checking typenum v1.20.1
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-core)
+    Checking crossbeam-utils v0.8.21
+    Checking cpufeatures v0.3.0
+    Checking hashbrown v0.17.1
+    Checking either v1.16.0
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking rayon-core v1.13.0
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/lex)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/rdf-events)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/deflate)
+    Checking rayon v1.12.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/iri)
+    Checking regex-automata v0.4.14
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking regex v1.12.4
+    Checking sha2 v0.11.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: unused import: `TermId`
+ --> crates/datalog/src/seminaive/maintained.rs:9:72
+  |
+9 | use crate::{dictionary::{DictionaryError, DictionaryTerm}, id::{RowId, TermId},
+  |                                                                        ^^^^^^
+  |
+  = note: `-D unused-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0107]: struct takes 2 generic arguments but 1 generic argument was supplied
+   --> crates/datalog/src/seminaive/maintained.rs:154:28
+    |
+154 |     tasks: BTreeMap<usize, WorkList<Task<D::Id, N>>>,
+    |                            ^^^^^^^^ -------------- supplied 1 generic argument
+    |                            |
+    |                            expected 2 generic arguments
+    |
+note: struct defined here, with 2 generic parameters: `T`, `N`
+   --> crates/lex/src/walk.rs:120:12
+    |
+120 | pub struct WorkList<T, const N: usize> {
+    |            ^^^^^^^^ -  --------------
+help: add missing generic argument
+    |
+154 |     tasks: BTreeMap<usize, WorkList<Task<D::Id, N>, N>>,
+    |                                                   +++
+
+error[E0107]: struct takes 2 generic arguments but 1 generic argument was supplied
+   --> crates/datalog/src/seminaive/maintained.rs:375:64
+    |
+375 | fn push_task<I, E, const N: usize>(tasks: &mut BTreeMap<usize, WorkList<Task<I, N>>>, level: usize,
+    |                                                                ^^^^^^^^ ---------- supplied 1 generic argument
+    |                                                                |
+    |                                                                expected 2 generic arguments
+    |
+note: struct defined here, with 2 generic parameters: `T`, `N`
+   --> crates/lex/src/walk.rs:120:12
+    |
+120 | pub struct WorkList<T, const N: usize> {
+    |            ^^^^^^^^ -  --------------
+help: add missing generic argument
+    |
+375 | fn push_task<I, E, const N: usize>(tasks: &mut BTreeMap<usize, WorkList<Task<I, N>, N>>, level: usize,
+    |                                                                                   +++
+
+error[E0107]: struct takes 2 generic arguments but 1 generic argument was supplied
+   --> crates/datalog/src/seminaive/maintained.rs:381:51
+    |
+381 |     levels: &[usize], tasks: &mut BTreeMap<usize, WorkList<Task<I, N>>>,
+    |                                                   ^^^^^^^^ ---------- supplied 1 generic argument
+    |                                                   |
+    |                                                   expected 2 generic arguments
+    |
+note: struct defined here, with 2 generic parameters: `T`, `N`
+   --> crates/lex/src/walk.rs:120:12
+    |
+120 | pub struct WorkList<T, const N: usize> {
+    |            ^^^^^^^^ -  --------------
+help: add missing generic argument
+    |
+381 |     levels: &[usize], tasks: &mut BTreeMap<usize, WorkList<Task<I, N>, N>>,
+    |                                                                      +++
+
+error[E0277]: the trait bound `<D as TermDictionary>::Id: std::default::Default` is not satisfied
+   --> crates/datalog/src/seminaive/maintained.rs:204:82
+    |
+204 |         session.state.as_mut().expect("new session owns its seed").native = Some(Supports::default());
+    |                                                                                  ^^^^^^^^ the trait `std::default::Default` is not implemented for `<D as TermDictionary>::Id`
+    |
+note: required for `Supports<<D as TermDictionary>::Id, N>` to implement `std::default::Default`
+   --> crates/datalog/src/seminaive/maintained.rs:26:19
+    |
+ 25 | #[derive(Debug, Default)]
+    |                 ------- in this derive macro expansion
+ 26 | pub(super) struct Supports<I: TermIdentity, const N: usize>
+    |                   ^^^^^^^^ - type parameter would need to implement `std::default::Default`
+    = help: consider manually implementing `std::default::Default` to avoid undesired bounds caused by "imperfect derives"
+    = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+help: consider further restricting the associated type
+    |
+192 |     ) -> Result<Self, EvalError<D::Error>> where <D as TermDictionary>::Id: std::default::Default {
+    |                                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0107]: struct takes 2 generic arguments but 1 generic argument was supplied
+   --> crates/datalog/src/seminaive/maintained.rs:263:25
+    |
+263 |         let mut roots = WorkList::<(RowId, [D::Id; N])>::new();
+    |                         ^^^^^^^^   ------------------- supplied 1 generic argument
+    |                         |
+    |                         expected 2 generic arguments
+    |
+note: struct defined here, with 2 generic parameters: `T`, `N`
+   --> crates/lex/src/walk.rs:120:12
+    |
+120 | pub struct WorkList<T, const N: usize> {
+    |            ^^^^^^^^ -  --------------
+help: add missing generic argument
+    |
+263 |         let mut roots = WorkList::<(RowId, [D::Id; N]), N>::new();
+    |                                                       +++
+
+error: unused variable: `rule`
+   --> crates/datalog/src/seminaive/probe.rs:212:14
+    |
+212 |         let (rule, plan) = exe.rule_entry(index);
+    |              ^^^^ help: if this is intentional, prefix it with an underscore: `_rule`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+Some errors have detailed explanations: E0107, E0277.
+For more information about an error, try `rustc --explain E0107`.
+error: could not compile `purrdf-datalog` (lib) due to 7 previous errors

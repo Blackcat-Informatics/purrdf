@@ -1,0 +1,65 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 28.50s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 57 tests
+test store::columns::tests::size_refusal_keeps_the_original_complete_rows ... ok
+test store::columns::tests::arbitrary_integer_widths_keep_original_cells_and_handles ... ok
+test store::index::tests::invalid_index_declarations_and_prefixes_are_typed_refusals ... ok
+test store::index::tests::six_column_keys_select_original_rows_and_duplicate_handles ... ok
+test store::rows::tests::original_key_failure_does_not_publish_a_partial_directory ... ok
+test store::rows::tests::maintained_partition_order_uses_original_integer_keys_without_text ... ok
+test store::terms::tests::expired_input_and_refused_publication_leave_no_new_lexical_payload ... ok
+test store::tests::arrangements_preserve_tagged_host_ids_across_batches_and_tail ... ok
+test store::tests::batch_merge_is_a_z_set_over_signed_weights ... ok
+test store::terms::tests::fresh_lexical_churn_reuses_storage_without_reusing_identities ... ok
+test store::rows::tests::sparse_row_log_keeps_wide_coordinates_and_consumes_original_tokens ... ok
+test store::rows::tests::retired_partition_slots_are_reused_without_reusing_original_ids ... ok
+test store::tests::consolidated_object_positions_preserve_wide_row_ids ... ok
+test store::tests::dependent_term_capacity_rolls_back_lexical_identity_and_original_rows ... ok
+test store::tests::compaction_discards_vacant_keys_and_preserves_original_survivors ... ok
+test store::tests::gallop_lower_bound_matches_the_linear_lower_bound ... ok
+test store::tests::host_store_preserves_ids_and_original_source_refusal ... ok
+test store::tests::mixed_row_admission_preserves_ids_and_rolls_back_fresh_terms ... ok
+test store::tests::native_row_capacity_refuses_before_terms_and_preserves_duplicate_hits ... ok
+test store::tests::cardinality_advice_never_builds_a_cold_historical_object_index ... ok
+test store::tests::owned_partition_positions_resume_full_and_delta_quad_selections ... ok
+test store::tests::owned_partition_positions_resume_full_and_delta_triple_selections ... ok
+test store::tests::partition_capacity_keeps_existing_partition_growth_and_refuses_new_keys ... ok
+test store::tests::indexed_removal_preserves_survivors_and_appends_reinserted_handles ... ok
+test store::tests::relation_tail_dispatch_reuses_live_counts_after_native_removal ... ok
+test store::tests::rows_from_reads_the_rows_added_since_in_row_order ... ok
+test store::tests::retired_partitions_leave_live_enumerations_and_keep_cold_indexes ... ok
+test store::tests::signed_weight_combine_is_commutative_across_merge_order ... ok
+test store::tests::signed_weight_overflow_never_saturates ... ok
+test store::tests::store_contains_on_lexical_surfaces ... ok
+test store::tests::store_dedup_reports_none_and_stores_one_row ... ok
+test store::tests::sparse_directory_waits_for_the_original_dictionary_transaction ... ok
+test store::tests::store_default_graph_is_the_empty_surface ... ok
+test store::tests::store_facts_sorted_is_lexical_and_complete ... ok
+test store::tests::store_insert_assigns_dense_cross_partition_row_ids ... ok
+test store::tests::predicate_directory_skips_other_predicates_and_preserves_graph_order ... ok
+test store::tests::store_interner_is_shared_across_partitions ... ok
+test store::tests::store_partition_sweep_is_lexical_and_selective ... ok
+test store::tests::store_predicates_are_sorted_and_repeatable ... ok
+test store::tests::store_predicates_are_terms_in_the_one_dictionary ... ok
+test store::tests::store_predicates_never_leak_mint_or_hash_order ... ok
+test store::tests::store_resolving_a_foreign_term_id_panics - should panic ... ok
+test store::tests::store_sealed_batches_preserve_row_set_and_dense_ids ... ok
+test store::tests::store_select_any_yields_every_row ... ok
+test store::tests::store_select_both_bound ... ok
+test store::tests::store_select_object_bound ... ok
+test store::tests::store_select_subject_bound ... ok
+test store::tests::store_separates_the_same_triple_in_two_graphs ... ok
+test store::tests::store_term_bytes_counts_each_distinct_surface_once ... ok
+test store::tests::store_term_id_lookup_never_inserts ... ok
+test store::tests::tail_columns_round_trip_rows_in_insertion_order ... ok
+test store::tests::store_every_bound_shape_is_insertion_order_independent ... ok
+test store::tests::tail_contains_finds_a_lone_hit_at_every_position ... ok
+test store::tests::store_insertion_order_does_not_affect_lexical_output ... ok
+test store::tests::vacant_batch_cells_preserve_exact_row_and_trie_selections ... ok
+test store::tests::tail_contains_matches_the_tuple_scan ... ok
+test store::tests::native_membership_updates_match_the_reference_set ... ok
+
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 389 filtered out; finished in 0.05s
+

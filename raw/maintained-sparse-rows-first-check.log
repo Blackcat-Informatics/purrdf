@@ -1,0 +1,161 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:470:26
+    |
+470 |                 assumed: &mut assumed,
+    |                          ^^^^^^^^^^^^ expected `&mut Vec<bool>`, found `&mut HashSet<Id<Row>, FixedState>`
+    |
+    = note: expected mutable reference `&mut Vec<bool>`
+               found mutable reference `&mut std::collections::HashSet<Id<id::Row>, FixedState>`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:491:30
+    |
+491 |                     assumed: &mut assumed,
+    |                              ^^^^^^^^^^^^ expected `&mut Vec<bool>`, found `&mut HashSet<Id<Row>, FixedState>`
+    |
+    = note: expected mutable reference `&mut Vec<bool>`
+               found mutable reference `&mut std::collections::HashSet<Id<id::Row>, FixedState>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/schedule.rs:569:48
+     |
+ 569 |                 let last = seen[index].replace(hi);
+     |                                        ------- ^^ expected `usize`, found `u64`
+     |                                        |
+     |                                        arguments to this method are incorrect
+     |
+help: the return type of this call is `u64` due to the type of the argument passed
+    --> crates/datalog/src/schedule.rs:569:28
+     |
+ 569 |                 let last = seen[index].replace(hi);
+     |                            ^^^^^^^^^^^^^^^^^^^^--^
+     |                                                |
+     |                                                this argument influences the return type of `replace`
+note: method defined here
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/option.rs:1962:18
+     |
+1962 |     pub const fn replace(&mut self, value: T) -> Option<T> {
+     |                  ^^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+ 569 |                 let last = seen[index].replace(hi.try_into().unwrap());
+     |                                                  ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:584:43
+    |
+584 |                     Some(last) if last == hi || plan.positive().is_empty() => continue,
+    |                                   ----    ^^ expected `usize`, found `u64`
+    |                                   |
+    |                                   expected because this is `usize`
+    |
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+    |
+584 |                     Some(last) if last == hi.try_into().unwrap() || plan.positive().is_empty() => continue,
+    |                                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:585:47
+    |
+585 |                     Some(last) => Delta { lo: last, hi },
+    |                                               ^^^^ expected `u64`, found `usize`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/schedule.rs:606:22
+    |
+606 |             assumed: run.assumed,
+    |                      ^^^^^^^^^^^ expected `&HashSet<Id<Row>, FixedState>`, found `&mut Vec<bool>`
+    |
+    = note:      expected reference `&std::collections::HashSet<Id<id::Row>, FixedState>`
+            found mutable reference `&mut Vec<bool>`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/schedule.rs:624:24
+     |
+ 624 |     run.assumed.resize(state.rel.row_slots(), false);
+     |                 ------ ^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+     |                 |
+     |                 arguments to this method are incorrect
+     |
+note: method defined here
+    --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/alloc/src/vec/mod.rs:3600:12
+     |
+3600 |     pub fn resize(&mut self, new_len: usize, value: T) {
+     |            ^^^^^^
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+ 624 |     run.assumed.resize(state.rel.row_slots().try_into().unwrap(), false);
+     |                                             ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive/evidence.rs:251:41
+     |
+ 251 |         for (row, _) in store.rows_from(original_rows) {
+     |                               --------- ^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                               |
+     |                               arguments to this method are incorrect
+     |
+note: method defined here
+    --> crates/datalog/src/store.rs:1950:12
+     |
+1950 |     pub fn rows_from(&self, since: u64) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
+     |            ^^^^^^^^^        ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+ 251 |         for (row, _) in store.rows_from(original_rows.try_into().unwrap()) {
+     |                                                      ++++++++++++++++++++
+
+error[E0308]: mismatched types
+  --> crates/datalog/src/seminaive/stratum.rs:56:23
+   |
+56 |             round_lo: state.rel.row_slots(),
+   |                       ^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/seminaive/stratum.rs:110:37
+    |
+110 |                     self.round_lo = state.rel.row_slots();
+    |                     -------------   ^^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+    |                     |
+    |                     expected due to the type of this binding
+
+error[E0308]: mismatched types
+   --> crates/datalog/src/seminaive/stratum.rs:167:33
+    |
+167 | ...                   lo: self.round_lo,
+    |                           ^^^^^^^^^^^^^ expected `u64`, found `usize`
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:4652:28
+     |
+4652 |     if rows.row_count() != edb.row_slots() {
+     |        ----------------    ^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+     |        |
+     |        expected because this is `usize`
+     |
+help: you can convert a `u64` to a `usize` and panic if the converted value doesn't fit
+     |
+4652 |     if rows.row_count() != edb.row_slots().try_into().unwrap() {
+     |                                           ++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/datalog/src/seminaive.rs:4670:52
+     |
+4670 |         for (row, _) in evaluation.facts.rows_from(rows.row_count()) {
+     |                                          --------- ^^^^^^^^^^^^^^^^ expected `u64`, found `usize`
+     |                                          |
+     |                                          arguments to this method are incorrect
+     |
+note: method defined here
+    --> crates/datalog/src/store.rs:1950:12
+     |
+1950 |     pub fn rows_from(&self, since: u64) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
+     |            ^^^^^^^^^        ----------
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+     |
+4670 |         for (row, _) in evaluation.facts.rows_from(rows.row_count().try_into().unwrap()) {
+     |                                                                    ++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-datalog` (lib) due to 13 previous errors

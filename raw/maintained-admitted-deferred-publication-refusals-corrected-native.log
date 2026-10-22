@@ -1,0 +1,12 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 27.04s
+     Running unittests src/lib.rs (/opt/.cargo/67/26e15a2cc3057b/debug/build/purrdf-datalog/0115295068b4cf0d/out/purrdf_datalog-0115295068b4cf0d)
+
+running 4 tests
+test seminaive::maintained::storage::tests::original_borrowed_grant_outlives_its_last_payload ... ok
+test seminaive::maintained::storage::tests::initial_model_factories_use_the_supplied_grant_before_construction ... ok
+test seminaive::maintained::storage::tests::deferred_publication_keeps_completed_native_output_across_growth_refusals ... ok
+test seminaive::maintained::storage::tests::native_publication_and_retirement_preserve_the_original_grant_at_refusal ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 446 filtered out; finished in 0.00s
+

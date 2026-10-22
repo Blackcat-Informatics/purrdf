@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 9444a7a39eff (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/493-datalog-incremental-maintenance-of-a 5d6542565] Admit retained native maintenance proof storage
+ 19 files changed, 1838 insertions(+), 418 deletions(-)
+ create mode 100644 crates/datalog/src/seminaive/maintained/storage.rs

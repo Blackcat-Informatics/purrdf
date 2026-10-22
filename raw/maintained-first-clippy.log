@@ -1,0 +1,33 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/datalog/src/seminaive/maintained.rs:141:79
+    |
+141 | fn unlink<K: std::hash::Hash + Eq>(map: &mut FastMap<K, FastSet<RowId>>, key: K, row: RowId) {
+    |                                                                               ^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+141 | fn unlink<K: std::hash::Hash + Eq>(map: &mut FastMap<K, FastSet<RowId>>, key: &K, row: RowId) {
+    |                                                                               +
+
+error: the following explicit lifetimes could be elided: 'r
+   --> crates/datalog/src/seminaive/probe.rs:362:6
+    |
+362 | impl<'r, D: TermDictionary, const N: usize> Frame<'r, D, N>
+    |      ^^                                           ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+362 - impl<'r, D: TermDictionary, const N: usize> Frame<'r, D, N>
+362 + impl<D: TermDictionary, const N: usize> Frame<'_, D, N>
+    |
+
+error: could not compile `purrdf-datalog` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors

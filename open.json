@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 493,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a",
+  "branch": "paudley/493-datalog-incremental-maintenance-of-a",
+  "slug": "datalog-incremental-maintenance-of-a",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/.stage/datalog-incremental-maintenance-of-a",
+  "stage_tracked": true,
+  "base": "paudley/667-deliver-bound-datalog-continuations-and",
+  "base_oid": "f774a862402192c74e0acaef45135cf70b005078",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a",
+    "branch:paudley/493-datalog-incremental-maintenance-of-a",
+    "stage:/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/.stage/datalog-incremental-maintenance-of-a",
+    "issue:/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/.stage/datalog-incremental-maintenance-of-a/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-20T21:51:52-0600"
+}

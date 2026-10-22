@@ -1,0 +1,26 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against fdb144c93d0d (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Merge made by the 'ort' strategy.
+ Cargo.lock                                 |   1 +
+ Makefile                                   |   6 +
+ crates/columnar/Cargo.toml                 |   5 +
+ crates/columnar/src/error.rs               |  51 +++-
+ crates/columnar/src/lib.rs                 |   2 +-
+ crates/columnar/src/writer.rs              |  86 +++---
+ crates/columnar/tests/golden_bytes.rs      |   4 +-
+ crates/columnar/tests/structured_errors.rs | 445 ++++++++++++++++++++++++++++-
+ crates/datalog/src/cursor.rs               |   5 +-
+ crates/datalog/src/store.rs                | 157 ++++++++--
+ crates/sparql-eval/src/modifier.rs         |   3 +-
+ crates/sparql-eval/src/parallel.rs         | 271 ++++++++++++++++--
+ crates/sparql-eval/src/row_checkpoint.rs   |  11 +-
+ crates/xsd/benches/exact.rs                |  92 +++---
+ crates/xsd/src/decimal_float.rs            |  23 +-
+ crates/xsd/src/exact/decimal.rs            |  14 +-
+ crates/xsd/src/exact/integer.rs            |   2 +-
+ crates/xsd/tests/exact_governance.rs       |  30 ++
+ docs/BENCHMARKS.md                         |  48 +++-
+ docs/COLUMNAR.md                           |   9 +
+ docs/COLUMNAR.zh-Hans.md                   |   4 +
+ docs/MIGRATION-4.0.md                      |  10 +
+ docs/design/purrdf-simd.md                 |  20 +-
+ 23 files changed, 1125 insertions(+), 174 deletions(-)

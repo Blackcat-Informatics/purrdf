@@ -1,0 +1,55 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error[E0599]: no associated function or constant named `new` found for struct `store::RelationStore<store::TermInterner, 3>` in the current scope
+    --> crates/datalog/src/store/maintenance_indexes.rs:210:59
+     |
+ 210 |         let mut store = RelationStore::<TermInterner, 3>::new();
+     |                                                           ^^^ associated function or constant not found in `store::RelationStore<store::TermInterner, 3>`
+     |
+    ::: crates/datalog/src/store.rs:1726:1
+     |
+1726 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     | ------------------------------------------------------------------------------ associated function or constant `new` not found for this struct
+     |
+note: if you're trying to build a new `store::RelationStore<store::TermInterner, 3>`, consider using `store::RelationStore::<D, N>::with_dictionary` which returns `store::RelationStore<_, _>`
+    --> crates/datalog/src/store.rs:1898:5
+     |
+1898 |     pub fn with_dictionary(interner: D) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the associated function or constant was found for `store::RelationStore`
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `new`, perhaps you need to implement one of them:
+             candidate #1: `crypto_common::KeyInit`
+             candidate #2: `crypto_common::KeyIvInit`
+             candidate #3: `crypto_common::TryKeyInit`
+             candidate #4: `digest::block_api::VariableOutputCore`
+             candidate #5: `digest::digest::Digest`
+             candidate #6: `typenum::marker_traits::Bit`
+
+error[E0599]: no associated function or constant named `new` found for struct `store::RelationStore<store::TermInterner, 3>` in the current scope
+    --> crates/datalog/src/store/rows.rs:350:59
+     |
+ 350 |         let mut input = RelationStore::<TermInterner, 3>::new();
+     |                                                           ^^^ associated function or constant not found in `store::RelationStore<store::TermInterner, 3>`
+     |
+    ::: crates/datalog/src/store.rs:1726:1
+     |
+1726 | pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
+     | ------------------------------------------------------------------------------ associated function or constant `new` not found for this struct
+     |
+note: if you're trying to build a new `store::RelationStore<store::TermInterner, 3>`, consider using `store::RelationStore::<D, N>::with_dictionary` which returns `store::RelationStore<_, _>`
+    --> crates/datalog/src/store.rs:1898:5
+     |
+1898 |     pub fn with_dictionary(interner: D) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: the associated function or constant was found for `store::RelationStore`
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `new`, perhaps you need to implement one of them:
+             candidate #1: `crypto_common::KeyInit`
+             candidate #2: `crypto_common::KeyIvInit`
+             candidate #3: `crypto_common::TryKeyInit`
+             candidate #4: `digest::block_api::VariableOutputCore`
+             candidate #5: `digest::digest::Digest`
+             candidate #6: `typenum::marker_traits::Bit`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors

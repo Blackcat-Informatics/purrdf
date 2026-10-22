@@ -1,0 +1,30 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/493-datalog-incremental-maintenance-of-a/crates/datalog)
+error: this function has too many arguments (8/7)
+    --> crates/datalog/src/seminaive/maintained.rs:1507:1
+     |
+1507 | / fn advance<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission + ?Sized>(
+1508 | |     exe: &'r Executable<N>,
+1509 | |     guards: &dyn GuardEvaluator<D, N>,
+1510 | |     levels: &[usize],
+...    |
+1517 | | where
+1518 | |     Arity<N>: StoreShape<N>,
+     | |____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: could not compile `purrdf-datalog` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: wildcard matches only a single variant and will also match any future added variants
+   --> crates/datalog/src/seminaive/maintained/storage.rs:354:21
+    |
+354 |                     other => panic!("unexpected publication refusal: {other:?}"),
+    |                     ^^^^^ help: try: `other @ ResumeProgress::Paused(_)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#match_wildcard_for_single_variants
+    = note: `-D clippy::match-wildcard-for-single-variants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::match_wildcard_for_single_variants)]`
+
+error: could not compile `purrdf-datalog` (lib test) due to 2 previous errors
