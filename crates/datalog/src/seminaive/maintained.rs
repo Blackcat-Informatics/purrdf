@@ -6,6 +6,7 @@
 mod event;
 mod prepare;
 mod reclaim;
+mod storage;
 mod work;
 
 use super::{
@@ -41,6 +42,7 @@ where
 #[derive(Debug)]
 struct TermUses<I: TermIdentity> {
     counts: FastMap<I, usize>,
+    counts_bytes: usize,
     zero: RowSet<I>,
 }
 
@@ -62,8 +64,12 @@ impl<I> Default for RowSet<I> {
 }
 
 impl<I: Copy + std::hash::Hash + Eq> RowSet<I> {
-    fn reserve(&mut self, additional: usize) -> Result<(), StorageError> {
-        reserve_index(&mut self.rows, &mut self.retained, additional)
+    fn reserve_in<A: Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        reserve_index_in(&mut self.rows, &mut self.retained, additional, memory)
     }
 
     fn insert(&mut self, row: I) {
@@ -83,18 +89,17 @@ impl<I: Copy + std::hash::Hash + Eq> RowSet<I> {
     }
 }
 
-fn reserve_index<K: Eq + std::hash::Hash, V>(
+fn reserve_index_in<K: Eq + std::hash::Hash, V, A: Admission + ?Sized>(
     map: &mut FastMap<K, V>,
     retained: &mut usize,
     additional: usize,
+    memory: &mut Memory<'_, A>,
 ) -> Result<(), StorageError> {
     let required = map
         .len()
         .checked_add(additional)
         .ok_or(StorageError::SizeOverflow)?;
-    let mut resident = Resident;
-    let mut memory = Memory::resume(&mut resident, *retained);
-    purrdf_core::hash::reserve_map_with_retained_memory(map, retained, required, &mut memory)
+    purrdf_core::hash::reserve_map_with_retained_memory(map, retained, required, memory)
 }
 
 impl<'a, I> IntoIterator for &'a RowSet<I> {
@@ -106,11 +111,13 @@ impl<'a, I> IntoIterator for &'a RowSet<I> {
 }
 
 impl<I: TermIdentity> TermUses<I> {
-    fn reserve(&mut self, count: usize) -> Result<(), StorageError> {
-        self.counts
-            .try_reserve(count)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        self.zero.reserve(count)
+    fn reserve_in<A: Admission + ?Sized>(
+        &mut self,
+        count: usize,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        reserve_index_in(&mut self.counts, &mut self.counts_bytes, count, memory)?;
+        self.zero.reserve_in(count, memory)
     }
     fn change<const N: usize>(&mut self, terms: [I; N], delta: i64) {
         for id in terms {
@@ -148,11 +155,15 @@ where
     pub(super) nodes: FastMap<RowId, Node<I, N>>,
     reverse: FastMap<RowId, RowSet>,
     producers: FastMap<usize, RowSet>,
+    nodes_bytes: usize,
+    reverse_bytes: usize,
+    producers_bytes: usize,
     pub(super) withdrawn: FastMap<[I; N], crate::store::WithdrawnRow<I>>,
     changed: Vec<(RowId, [I; N])>,
     membership: FastMap<[I; N], i64>,
     membership_bytes: usize,
     withdrawn_bytes: usize,
+    retired_bytes: usize,
     tracking: bool,
     native_heights: bool,
     term_uses: Option<TermUses<I>>,
@@ -167,11 +178,15 @@ where
             nodes: FastMap::default(),
             reverse: FastMap::default(),
             producers: FastMap::default(),
+            nodes_bytes: 0,
+            reverse_bytes: 0,
+            producers_bytes: 0,
             withdrawn: FastMap::default(),
             changed: Vec::new(),
             membership: FastMap::default(),
             membership_bytes: 0,
             withdrawn_bytes: 0,
+            retired_bytes: 0,
             tracking: false,
             native_heights: false,
             term_uses: None,
@@ -200,39 +215,70 @@ where
         }
     }
     /// Reserve every companion before a native row or replacement is published.
-    pub(super) fn reserve(&mut self, candidate: &Candidate<I, N>) -> Result<(), StorageError> {
-        self.reserve_terms()?;
-        self.nodes
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        self.reverse
-            .try_reserve(candidate.sources.len())
-            .map_err(|_| StorageError::AllocationFailed)?;
-        self.producers
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
+    pub(super) fn reserve<A: Admission + ?Sized>(
+        &mut self,
+        candidate: &Candidate<I, N>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        self.reserve_terms(memory)?;
+        reserve_index_in(&mut self.nodes, &mut self.nodes_bytes, 1, memory)?;
+        reserve_index_in(
+            &mut self.reverse,
+            &mut self.reverse_bytes,
+            candidate.sources.len(),
+            memory,
+        )?;
+        reserve_index_in(&mut self.producers, &mut self.producers_bytes, 1, memory)?;
         for source in &candidate.sources {
             debug_assert_eq!(source.source, crate::clause::ReadSource::Evaluation);
-            self.reverse.entry(source.row).or_default().reserve(1)?;
+            self.reverse
+                .entry(source.row)
+                .or_default()
+                .reserve_in(1, memory)?;
         }
         self.producers
             .entry(candidate.rule)
             .or_default()
-            .reserve(1)?;
+            .reserve_in(1, memory)?;
         if self.tracking {
-            reserve_index(&mut self.membership, &mut self.membership_bytes, 1)?;
-            self.changed
-                .try_reserve(1)
-                .map_err(|_| StorageError::AllocationFailed)?;
+            reserve_index_in(&mut self.membership, &mut self.membership_bytes, 1, memory)?;
+            memory.reserve_for_push(&mut self.changed)?;
         }
         Ok(())
     }
 
-    fn reserve_terms(&mut self) -> Result<(), StorageError> {
+    fn reserve_terms<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        self.flush_retired(memory)?;
         if let Some(uses) = &mut self.term_uses {
-            uses.reserve(N)?;
+            uses.reserve_in(N, memory)?;
         }
         Ok(())
+    }
+
+    /// Keep a refused shrink outstanding until the next native boundary.
+    pub(super) fn flush_retired<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        memory.release_bytes(self.retired_bytes)?;
+        self.retired_bytes = 0;
+        Ok(())
+    }
+
+    pub(super) fn retire_proof(&mut self, proof: Candidate<I, N>) {
+        let bytes = proof
+            .sources
+            .capacity()
+            .checked_mul(size_of::<super::SourceRow<I, N>>())
+            .expect("the original proof array has a valid physical layout");
+        drop(proof);
+        self.retired_bytes = self
+            .retired_bytes
+            .checked_add(bytes)
+            .expect("destroyed proof layouts fit their original admitted total");
     }
 
     pub(super) fn record(
@@ -254,14 +300,24 @@ where
             .insert(row);
         if let Some(old) = self.nodes.insert(row, Node { terms, proof }) {
             let current = &self.nodes[&row].proof;
-            for source in old.proof.sources {
+            let mut released = 0_usize;
+            for source in &old.proof.sources {
                 if !current.sources.iter().any(|s| s.row == source.row) {
-                    unlink(&mut self.reverse, source.row, row);
+                    released = released
+                        .checked_add(unlink(&mut self.reverse, source.row, row))
+                        .expect("retired premise buckets fit their original grant");
                 }
             }
             if old.proof.rule != current.rule {
-                unlink(&mut self.producers, old.proof.rule, row);
+                released = released
+                    .checked_add(unlink(&mut self.producers, old.proof.rule, row))
+                    .expect("retired producer buckets fit their original grant");
             }
+            self.retire_proof(old.proof);
+            self.retired_bytes = self
+                .retired_bytes
+                .checked_add(released)
+                .expect("retired buckets fit their original grant");
         }
         if self.tracking {
             self.changed.push((row, terms));
@@ -287,21 +343,39 @@ where
 
     fn remove(&mut self, row: RowId) {
         if let Some(old) = self.nodes.remove(&row) {
-            for source in old.proof.sources {
-                unlink(&mut self.reverse, source.row, row);
+            let mut released = 0_usize;
+            for source in &old.proof.sources {
+                released = released
+                    .checked_add(unlink(&mut self.reverse, source.row, row))
+                    .expect("retired premise buckets fit their original grant");
             }
-            unlink(&mut self.producers, old.proof.rule, row);
+            released = released
+                .checked_add(unlink(&mut self.producers, old.proof.rule, row))
+                .expect("retired producer buckets fit their original grant");
+            self.retire_proof(old.proof);
+            self.retired_bytes = self
+                .retired_bytes
+                .checked_add(released)
+                .expect("retired buckets fit their original grant");
         }
     }
 }
 
-fn unlink<K: Copy + std::hash::Hash + Eq>(map: &mut FastMap<K, RowSet>, key: K, row: RowId) {
+fn unlink<K: Copy + std::hash::Hash + Eq>(
+    map: &mut FastMap<K, RowSet>,
+    key: K,
+    row: RowId,
+) -> usize {
     if let Some(rows) = map.get_mut(&key) {
         rows.remove(&row);
         if rows.is_empty() {
-            map.remove(&key);
+            let retired = map.remove(&key).expect("an empty original bucket");
+            let bytes = retired.retained;
+            drop(retired);
+            return bytes;
         }
     }
+    0
 }
 
 /// A transaction cannot be accepted or its native execution failed.
@@ -401,47 +475,7 @@ enum Task<I, const N: usize> {
     },
 }
 
-#[derive(Debug)]
-struct Impact {
-    rule: Option<usize>,
-    head: usize,
-    body: usize,
-    negative: bool,
-}
-
-/// Immutable authored dependency metadata; transactions never rebuild the program graph.
-#[derive(Debug)]
-struct Impacts {
-    predicates: Vec<String>,
-    edges: Vec<Impact>,
-}
-
-impl Impacts {
-    fn new<const N: usize>(exe: &Executable<N>) -> Self
-    where
-        Arity<N>: StoreShape<N>,
-    {
-        let (predicates, edges) =
-            crate::plan::dependency_edges_with(exe.rules(), |rule, head, body, negative| {
-                (rule, head, body, negative)
-            });
-        let predicates = predicates.into_iter().collect::<Vec<_>>();
-        let edges = edges
-            .into_iter()
-            .map(|(rule, head, body, negative)| Impact {
-                rule,
-                head: predicates
-                    .binary_search(&head)
-                    .expect("declared head predicate"),
-                body: predicates
-                    .binary_search(&body)
-                    .expect("declared body predicate"),
-                negative,
-            })
-            .collect();
-        Self { predicates, edges }
-    }
-}
+type Impacts = crate::plan::DependencyGraph;
 
 struct InputState {
     existing: Option<RowId>,
@@ -592,8 +626,14 @@ pub enum PreparationProgress {
 /// dictionary and rule/guard kernels. Reads of a new complete snapshot are withheld
 /// until its entire transaction settles; the opaque applied watermark advances once.
 /// Native witnesses are retained without constructing a parallel lexical proof table.
-pub struct Maintained<'r, M, S: Admission, D: TermDictionary, const N: usize = 4>
-where
+pub struct Maintained<
+    'r,
+    M,
+    S: Admission,
+    D: TermDictionary,
+    const N: usize = 4,
+    A: Admission = Resident,
+> where
     Arity<N>: StoreShape<N>,
 {
     session: EvaluationSession<'r, D, N>,
@@ -609,6 +649,9 @@ where
     failure: Option<EvalError<D::Error>>,
     prepared: bool,
     initial_reclaim: reclaim::Frame<D::Id>,
+    // Rust destroys fields in declaration order. The original grant must outlive
+    // the session, every pending frame, the result and their dependent payloads.
+    storage: storage::Storage<A>,
 }
 
 pub(super) type ReleaseTerm<D> = fn(
@@ -616,7 +659,8 @@ pub(super) type ReleaseTerm<D> = fn(
     <D as TermDictionary>::Id,
 ) -> Result<(), DictionaryError<<D as TermDictionary>::Error>>;
 
-impl<M, S: Admission, D: TermDictionary, const N: usize> fmt::Debug for Maintained<'_, M, S, D, N>
+impl<M, S: Admission, D: TermDictionary, const N: usize, A: Admission> fmt::Debug
+    for Maintained<'_, M, S, D, N, A>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -625,6 +669,7 @@ where
             .field("session", &self.session)
             .field("pending", &self.pending.is_some())
             .field("preparing", &self.preparing.is_some())
+            .field("admitted_metadata_bytes", &self.storage.live())
             .finish_non_exhaustive()
     }
 }
@@ -645,21 +690,63 @@ where
         context: SessionContext,
         options: EvalOptions,
     ) -> Result<Self, EvalError<D::Error>> {
+        Self::new_in(exe, edb, guards, context, options, Resident)
+    }
+
+    /// Own a model with explicit retirement of unused dictionary terms.
+    /// Current rows, proofs and the most recent delta retain their terms;
+    /// retired IDs are never reassigned.
+    ///
+    /// # Errors
+    /// Preserves the original initialization or reference-storage failure.
+    pub fn new_reclaiming(
+        exe: &'r Executable<N>,
+        edb: RelationStore<D, N>,
+        guards: &'r dyn GuardEvaluator<D, N>,
+        context: SessionContext,
+        options: EvalOptions,
+    ) -> Result<Self, EvalError<D::Error>>
+    where
+        D: ReclaimDictionary,
+    {
+        Self::new_reclaiming_in(exe, edb, guards, context, options, Resident)
+    }
+}
+
+impl<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission>
+    Maintained<'r, M, S, D, N, A>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn new_in(
+        exe: &'r Executable<N>,
+        edb: RelationStore<D, N>,
+        guards: &'r dyn GuardEvaluator<D, N>,
+        context: SessionContext,
+        options: EvalOptions,
+        admission: A,
+    ) -> Result<Self, EvalError<D::Error>> {
+        let mut storage = storage::Storage::new(admission);
         let mut weights = FastMap::default();
-        weights
-            .try_reserve(edb.row_count())
-            .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+        storage
+            .with_memory(|memory| {
+                purrdf_core::hash::reserve_map_with_memory(&mut weights, edb.row_count(), memory)
+            })
+            .map_err(EvalError::Storage)?;
         weights.extend(edb.rows_from(0).map(|(_, ids)| (ids, 1)));
         let mut levels = Vec::new();
-        levels
-            .try_reserve_exact(exe.rule_count())
-            .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+        storage
+            .with_memory(|memory| memory.reserve(&mut levels, exe.rule_count()))
+            .map_err(EvalError::Storage)?;
         levels.resize(exe.rule_count(), 0);
         for level in 0..exe.stratum_count() {
             for &rule in exe.stratum_rule_indices(level) {
                 levels[rule] = level;
             }
         }
+        let impacts = storage
+            .with_memory(|memory| Impacts::new_in(exe.rules(), memory))
+            .map_err(EvalError::Storage)?;
         let mut session = EvaluationSession::new(
             exe,
             edb,
@@ -677,7 +764,7 @@ where
             session,
             weights,
             levels,
-            impacts: Impacts::new(exe),
+            impacts,
             pending: None,
             preparing: None,
             preparation_work: 0,
@@ -687,6 +774,7 @@ where
             failure: None,
             prepared: false,
             initial_reclaim: reclaim::Frame::default(),
+            storage,
         })
     }
 
@@ -698,17 +786,18 @@ where
     ///
     /// # Errors
     /// Preserves the original initialization or reference-storage failure.
-    pub fn new_reclaiming(
+    fn new_reclaiming_in(
         exe: &'r Executable<N>,
         edb: RelationStore<D, N>,
         guards: &'r dyn GuardEvaluator<D, N>,
         context: SessionContext,
         options: EvalOptions,
+        admission: A,
     ) -> Result<Self, EvalError<D::Error>>
     where
         D: ReclaimDictionary,
     {
-        let mut owner = Self::new(exe, edb, guards, context, options)?;
+        let mut owner = Self::new_in(exe, edb, guards, context, options, admission)?;
         let state = owner
             .session
             .state
@@ -716,18 +805,30 @@ where
             .expect("new model owns its seed");
         let mut uses = TermUses {
             counts: FastMap::default(),
+            counts_bytes: 0,
             zero: RowSet::default(),
         };
         for (_, terms) in state.rel.rows_from(0) {
-            uses.reserve(N).map_err(EvalError::Storage)?;
+            owner
+                .storage
+                .with_memory(|memory| uses.reserve_in(N, memory))
+                .map_err(EvalError::Storage)?;
             uses.change(terms, 1);
         }
         for id in state.rel.interner().owned_terms() {
             if !uses.counts.contains_key(&id) {
-                uses.zero.reserve(1).map_err(EvalError::Storage)?;
+                owner
+                    .storage
+                    .with_memory(|memory| uses.zero.reserve_in(1, memory))
+                    .map_err(EvalError::Storage)?;
                 uses.zero.insert(id);
             }
         }
+        state.native_bytes = state
+            .native_bytes
+            .checked_add(uses.counts_bytes)
+            .and_then(|bytes| bytes.checked_add(uses.zero.retained))
+            .expect("admitted native term metadata fits its original grant");
         state
             .native
             .as_mut()
@@ -871,12 +972,16 @@ where
             .state
             .as_mut()
             .expect("maintenance retains its model");
-        state
-            .native
-            .as_mut()
-            .expect("native proof owner")
-            .reserve_terms()
-            .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
+        let before = self.storage.live();
+        let reserved = self.storage.with_memory(|memory| {
+            state
+                .native
+                .as_mut()
+                .expect("native proof owner")
+                .reserve_terms(memory)
+        });
+        state.account_native_memory(before, self.storage.live());
+        reserved.map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
         let ids = state
             .rel
             .intern_terms(terms)
@@ -1252,8 +1357,11 @@ where
         let options = options.with_derivation_mode(super::DerivationMode::ModelOnly);
         if self.pending.is_none() {
             let progress = self
-                .session
-                .resume(self.session.binding(), options, stop)
+                .storage
+                .with_memory(|memory| {
+                    self.session
+                        .resume_in_memory(self.session.binding(), options, stop, memory)
+                })
                 .map_err(MaintenanceError::Session)?;
             if progress == ResumeProgress::Complete {
                 let state = self
@@ -1325,15 +1433,22 @@ where
         state.execution = options.round_execution();
         let mut meter =
             work::Meter::new(&mut self.mutation_work, self.preparation_work, limit, stop);
-        let result = advance(
-            self.session.exe,
-            self.session.guards,
-            &self.levels,
-            &mut self.weights,
-            self.pending.as_mut().expect("checked pending transaction"),
-            state,
-            &mut meter,
-        );
+        let before = self.storage.live();
+        let result = self.storage.with_memory(|memory| {
+            advance(
+                &Run {
+                    exe: self.session.exe,
+                    guards: self.session.guards,
+                    levels: &self.levels,
+                },
+                &mut self.weights,
+                self.pending.as_mut().expect("checked pending transaction"),
+                state,
+                &mut meter,
+                memory,
+            )
+        });
+        state.account_native_memory(before, self.storage.live());
         match result {
             Ok(false) => Err(meter.refusal()),
             Ok(true) => {
@@ -1391,18 +1506,31 @@ fn push_task<I, E, const N: usize>(
         .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))
 }
 
-fn advance<'r, M, S: Admission, D: TermDictionary, const N: usize>(
+struct Run<'a, 'r, D: TermDictionary, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
     exe: &'r Executable<N>,
-    guards: &dyn GuardEvaluator<D, N>,
-    levels: &[usize],
+    guards: &'a dyn GuardEvaluator<D, N>,
+    levels: &'a [usize],
+}
+
+fn advance<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission + ?Sized>(
+    run: &Run<'_, 'r, D, N>,
     weights: &mut FastMap<[D::Id; N], i64>,
     pending: &mut Pending<'r, M, S, D, N>,
     state: &mut FixpointState<D, N>,
     meter: &mut work::Meter<'_, '_>,
+    memory: &mut Memory<'_, A>,
 ) -> Result<bool, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
+    let &Run {
+        exe,
+        guards,
+        levels,
+    } = run;
     let stop = meter.stop();
     check_budget(state)?;
     if is_stopped(stop) {
@@ -1410,6 +1538,12 @@ where
             report: state.report(),
         });
     }
+    state
+        .native
+        .as_mut()
+        .expect("native proof owner")
+        .flush_retired(memory)
+        .map_err(EvalError::Storage)?;
     while let Some(&(terms, weight)) = pending.changes.get(pending.installed_weights) {
         if !meter.allow(1) {
             return meter.paused(state.report());
@@ -1436,11 +1570,21 @@ where
             return meter.paused(state.report());
         }
         let native = state.native.as_mut().expect("native proof owner");
-        native.reserve_terms().map_err(EvalError::Storage)?;
-        reserve_index(&mut native.withdrawn, &mut native.withdrawn_bytes, 1)
-            .map_err(EvalError::Storage)?;
-        reserve_index(&mut native.membership, &mut native.membership_bytes, 1)
-            .map_err(EvalError::Storage)?;
+        native.reserve_terms(memory).map_err(EvalError::Storage)?;
+        reserve_index_in(
+            &mut native.withdrawn,
+            &mut native.withdrawn_bytes,
+            1,
+            memory,
+        )
+        .map_err(EvalError::Storage)?;
+        reserve_index_in(
+            &mut native.membership,
+            &mut native.membership_bytes,
+            1,
+            memory,
+        )
+        .map_err(EvalError::Storage)?;
         let removed = state
             .rel
             .withdraw_ids(terms)
@@ -1455,6 +1599,7 @@ where
         native.membership(terms, -1);
         native.remove(row);
         pending.deletion += 1;
+        native.flush_retired(memory).map_err(EvalError::Storage)?;
     }
     while let Some(&(terms, weight)) = pending.changes.get(pending.input) {
         if weight <= 0 {
@@ -1493,9 +1638,14 @@ where
                     return meter.paused(state.report());
                 }
                 let native = state.native.as_mut().expect("native proof owner");
-                native.reserve_terms().map_err(EvalError::Storage)?;
-                reserve_index(&mut native.membership, &mut native.membership_bytes, 1)
-                    .map_err(EvalError::Storage)?;
+                native.reserve_terms(memory).map_err(EvalError::Storage)?;
+                reserve_index_in(
+                    &mut native.membership,
+                    &mut native.membership_bytes,
+                    1,
+                    memory,
+                )
+                .map_err(EvalError::Storage)?;
                 input.reserved = true;
             }
             if !input.event_done {
@@ -1561,6 +1711,12 @@ where
         }
         pending.input += 1;
         pending.input_state = None;
+        state
+            .native
+            .as_mut()
+            .expect("native proof owner")
+            .flush_retired(memory)
+            .map_err(EvalError::Storage)?;
     }
 
     while !pending.settling {
@@ -1572,7 +1728,7 @@ where
         }
         if let Some(publication) = pending.publication.as_mut() {
             if !publication.prepare(state, |cost| meter.allow(cost))?
-                || !publication.advance_until(state, |cost| meter.allow(cost))?
+                || !publication.advance_until(state, memory, |cost| meter.allow(cost))?
             {
                 return meter.paused(state.report());
             }
@@ -1753,6 +1909,7 @@ where
         return meter.paused(state.report());
     }
     let native = state.native.as_mut().expect("native proof owner");
+    native.flush_retired(memory).map_err(EvalError::Storage)?;
     let cost = native
         .membership_bytes
         .checked_add(1)

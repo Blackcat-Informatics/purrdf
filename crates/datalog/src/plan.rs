@@ -55,6 +55,7 @@
 //! program and, when supplied explicitly, immutable snapshot statistics. The same
 //! rules and statistical inputs compile to the same plan on every target.
 
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -172,75 +173,175 @@ pub(crate) fn dependency_edges_with<T, const N: usize>(
     rules: &[DlClause<N>],
     mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
 ) -> (BTreeSet<String>, Vec<T>) {
-    // Every predicate symbol, heads and body atoms alike.
-    let mut preds: BTreeSet<String> = BTreeSet::new();
-    let mut wildcard_head = false;
-    let mut wildcard_body = false;
-    for rule in rules {
-        for head in rule.head_atoms() {
-            let symbol = predicate_symbol(head);
-            wildcard_head |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-        for atom in rule.body() {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // A negated conjunction's atoms are read NEGATIVELY: the group is decided only
-    // once every relation it matches is complete, exactly as a negated atom is.
-    for rule in rules {
-        for atom in rule.negations().iter().flat_map(Negation::atoms) {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // Edges: (head predicate, body predicate, negative?).
-    let mut edges = Vec::new();
-    for (rule_index, rule) in rules.iter().enumerate() {
-        for head in rule.head_atoms() {
-            let head_symbol = predicate_symbol(head);
-            for atom in rule.body() {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    atom.is_negated(),
-                ));
-            }
-            for atom in rule.negations().iter().flat_map(Negation::atoms) {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    true,
-                ));
-            }
-        }
-    }
-
-    // Couple the wildcard to the concrete symbols, in whichever direction the program
-    // actually uses it. Both directions together intentionally fuse the whole program
-    // into one stratum — see the doc comment.
-    let concrete: Vec<String> = preds
-        .iter()
-        .filter(|symbol| symbol.as_str() != ANY_PREDICATE)
-        .cloned()
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    let edges = graph
+        .edges
+        .into_iter()
+        .map(|dependency| {
+            edge(
+                dependency.rule,
+                graph.predicates[dependency.head].clone(),
+                graph.predicates[dependency.body].clone(),
+                dependency.negative,
+            )
+        })
         .collect();
-    for symbol in &concrete {
-        if wildcard_body {
-            edges.push(edge(None, ANY_PREDICATE.to_owned(), symbol.clone(), false));
-        }
-        if wildcard_head {
-            edges.push(edge(None, symbol.clone(), ANY_PREDICATE.to_owned(), false));
-        }
-    }
+    (graph.predicates.into_iter().collect(), edges)
+}
 
-    (preds, edges)
+/// Original authored dependency coordinates, including explicit wildcard coupling.
+#[derive(Debug)]
+pub(crate) struct DependencyEdge {
+    pub(crate) rule: Option<usize>,
+    pub(crate) head: usize,
+    pub(crate) body: usize,
+    pub(crate) negative: bool,
+}
+
+/// One dependency walk shared by stratification, diagnostics and maintenance.
+#[derive(Debug)]
+pub(crate) struct DependencyGraph {
+    pub(crate) predicates: Vec<String>,
+    pub(crate) edges: Vec<DependencyEdge>,
+}
+
+fn predicate_surface_in<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    memory: &mut Memory<'_, A>,
+) -> Result<String, StorageError> {
+    if let Some(surface) = atom.predicate().surface_in(memory)? {
+        return Ok(surface);
+    }
+    memory.scope(|memory| {
+        let mut surface = String::new();
+        memory.push_str(&mut surface, ANY_PREDICATE)?;
+        Ok(surface)
+    })
+}
+
+fn retain_predicate<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    predicates: &mut OrderedTable<String, ()>,
+    memory: &mut Memory<'_, A>,
+) -> Result<bool, StorageError> {
+    let symbol = predicate_surface_in(atom, memory)?;
+    let wildcard = symbol == ANY_PREDICATE;
+    if predicates.get(&symbol).is_some() {
+        memory.release_string(symbol)?;
+    } else {
+        predicates.insert(symbol, (), memory)?;
+    }
+    Ok(wildcard)
+}
+
+fn predicate_index<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    predicates: &[String],
+    memory: &mut Memory<'_, A>,
+) -> Result<usize, StorageError> {
+    let symbol = predicate_surface_in(atom, memory)?;
+    let index = predicates
+        .binary_search(&symbol)
+        .expect("an authored predicate was gathered");
+    memory.release_string(symbol)?;
+    Ok(index)
+}
+
+impl DependencyGraph {
+    pub(crate) fn new_in<A: Admission + ?Sized, const N: usize>(
+        rules: &[DlClause<N>],
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(|memory| {
+            let mut names = OrderedTable::default();
+            let mut wildcard_head = false;
+            let mut wildcard_body = false;
+            for rule in rules {
+                for atom in rule.head_atoms() {
+                    wildcard_head |= retain_predicate(atom, &mut names, memory)?;
+                }
+                for atom in rule
+                    .body()
+                    .iter()
+                    .chain(rule.negations().iter().flat_map(Negation::atoms))
+                {
+                    wildcard_body |= retain_predicate(atom, &mut names, memory)?;
+                }
+            }
+            let mut predicates = Vec::new();
+            memory.reserve(&mut predicates, names.len())?;
+            while let Some((symbol, ())) = names.pop_first() {
+                predicates.push(symbol);
+            }
+            names.release(memory)?;
+            let mut edges = Vec::new();
+            for (rule_index, rule) in rules.iter().enumerate() {
+                for atom in rule.head_atoms() {
+                    let head = predicate_index(atom, &predicates, memory)?;
+                    for body in rule.body() {
+                        let body_index = predicate_index(body, &predicates, memory)?;
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: Some(rule_index),
+                                head,
+                                body: body_index,
+                                negative: body.is_negated(),
+                            },
+                        )?;
+                    }
+                    // A negated conjunction reads every member negatively.
+                    for body in rule.negations().iter().flat_map(Negation::atoms) {
+                        let body = predicate_index(body, &predicates, memory)?;
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: Some(rule_index),
+                                head,
+                                body,
+                                negative: true,
+                            },
+                        )?;
+                    }
+                }
+            }
+            if wildcard_body || wildcard_head {
+                let wildcard = predicates
+                    .iter()
+                    .position(|symbol| symbol == ANY_PREDICATE)
+                    .expect("an authored wildcard was gathered");
+                for symbol in 0..predicates.len() {
+                    if symbol == wildcard {
+                        continue;
+                    }
+                    if wildcard_body {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: wildcard,
+                                body: symbol,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                    if wildcard_head {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: symbol,
+                                body: wildcard,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                }
+            }
+            Ok(Self { predicates, edges })
+        })
+    }
 }
 
 // ── Index selection ─────────────────────────────────────────────────────────────

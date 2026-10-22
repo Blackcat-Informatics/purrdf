@@ -572,6 +572,7 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         });
         store.insert_ids([TRIPLE, 7, u64::MAX, 1]).unwrap().unwrap();
@@ -1287,6 +1288,7 @@ fn triple_store_has_predicate_only_keys_and_transactional_original_ids() {
         lost: AtomicBool::default(),
         lose_after_lookup: AtomicBool::default(),
         pins: AtomicUsize::default(),
+        refuse_after_interned: false,
     };
     let mut host = RelationStore::<_, 3>::with_dictionary(dictionary);
     host.insert_ids([S, P, 0]).unwrap().unwrap();

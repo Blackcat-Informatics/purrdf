@@ -308,10 +308,6 @@ impl TermDictionary for ReclaimingInterner {
     type Id = TermId;
     type Error = TermExpired;
     type Lexical<'a> = &'a str;
-    type OrderKey = String;
-    fn order_key(&self, id: TermId) -> Result<String, TermExpired> {
-        Ok(self.resolve_term(id)?.to_owned())
-    }
     fn lookup_term(&self, surface: &str) -> Result<Option<TermId>, TermExpired> {
         Ok(self.inner.lookup(surface))
     }

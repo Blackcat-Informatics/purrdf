@@ -3435,6 +3435,20 @@ impl<I: TermIdentity, const N: usize> Candidate<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Retain native proof cells through their original supplemental admission.
+    fn copy_in<A: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            rule: self.rule,
+            head: self.head,
+            sources: memory.collect(self.sources.iter().copied())?,
+            proof_height: self.proof_height,
+            sum_source_height: self.sum_source_height,
+        })
+    }
+
     /// The candidate's source facts, in authored body order.
     ///
     /// Each source names the quad it actually matched, predicate included: a body atom
@@ -4439,6 +4453,8 @@ where
     pub(crate) derivations: Vec<Derivation<N>>,
     /// Native chosen proofs retained only by a maintained execution.
     native: Option<maintained::Supports<D::Id, N>>,
+    /// Exact admitted native metadata across this execution's retained frames.
+    native_bytes: usize,
     /// Explicit original dictionary retirement authority, owned with this model.
     release_term: Option<maintained::ReleaseTerm<D>>,
     /// Exported evidence requested by the caller.
@@ -4484,6 +4500,7 @@ where
             depth,
             derivations: Vec::new(),
             native: sparse.then(maintained::Supports::native_heights),
+            native_bytes: 0,
             release_term: None,
             derivation_mode: options.derivation_mode(),
             execution: options.round_execution(),
@@ -4497,6 +4514,15 @@ where
             input_terms,
             generating_rules: BTreeSet::new(),
         }
+    }
+
+    pub(super) fn account_native_memory(&mut self, before: usize, after: usize) {
+        self.native_bytes = if after >= before {
+            self.native_bytes.checked_add(after - before)
+        } else {
+            self.native_bytes.checked_sub(before - after)
+        }
+        .expect("native metadata retains its original admitted layout counter");
     }
 
     /// The budget consumption observed so far.
@@ -5495,6 +5521,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         });
         for subject in [0, FIRST] {
@@ -5749,6 +5776,7 @@ mod tests {
                 lost: AtomicBool::new(false),
                 lose_after_lookup: AtomicBool::new(false),
                 pins: AtomicUsize::new(0),
+                refuse_after_interned: false,
                 extra_terms: 0,
             });
             for row in [
@@ -5924,6 +5952,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         });
         let guard = Guard::new(
@@ -5979,6 +6008,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -6102,6 +6132,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -6255,6 +6286,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);

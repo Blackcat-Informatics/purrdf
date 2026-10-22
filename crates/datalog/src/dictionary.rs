@@ -228,17 +228,6 @@ pub trait TermDictionary: Send + Sync {
     where
         Self: 'a;
 
-    /// Retained canonical ordering value for a partition-key component.
-    /// Its order must agree with `compare_terms` for original IDs. This may be
-    /// an original integer or a source-owned pin; it is never a new term identity.
-    type OrderKey: Ord + fmt::Debug + Send + Sync;
-
-    /// Retain a key without retaining a borrow of the mutable model itself.
-    ///
-    /// # Errors
-    /// Preserves the original source failure at this explicit indexing boundary.
-    fn order_key(&self, id: Self::Id) -> Result<Self::OrderKey, Self::Error>;
-
     /// Look up an authored constant without minting or remapping an ID.
     fn lookup_term(&self, surface: &str) -> Result<Option<Self::Id>, Self::Error>;
     /// Pin the canonical RDF surface at a semantic or publication boundary.

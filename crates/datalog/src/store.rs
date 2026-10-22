@@ -76,7 +76,7 @@
 //!   table is **never iterated**: it is keyed by the fixed-key `FixedHasher` and is only ever
 //!   asked "which id, if any, carries this surface". Insertion order lives in the
 //!   parallel `Vec` side arena, which is what every sweep reads.
-//! - The partition table is a `BTreeMap` keyed by `(predicate id, graph id)`. It is
+//! - The partition table is a native ordered arena keyed by `(predicate id, graph id)`. It is
 //!   probed, never iterated: id order is mint order, so every partition SWEEP reads the
 //!   separately maintained lexical order instead.
 //!
@@ -92,7 +92,7 @@ use core::cmp::Ordering;
 use core::convert::Infallible;
 use core::fmt;
 use core::hash::Hasher;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 mod columns;
@@ -114,7 +114,7 @@ use crate::dictionary::{
     DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row,
 };
 use crate::id::{PartitionId, RowId, TermId};
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
 
 // ── Interners ───────────────────────────────────────────────────────────────────
 
@@ -291,10 +291,6 @@ impl TermDictionary for TermInterner {
     type Id = TermId;
     type Error = Infallible;
     type Lexical<'a> = &'a str;
-    type OrderKey = String;
-    fn order_key(&self, id: TermId) -> Result<String, Infallible> {
-        Ok(self.resolve(id).to_owned())
-    }
     fn lookup_term(&self, surface: &str) -> Result<Option<TermId>, Infallible> {
         Ok(self.lookup(surface))
     }
@@ -1479,10 +1475,10 @@ where
     keys: Vec<PartitionKey<D::Id, N>>,
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
-    by_key: BTreeMap<StoreKey<D::Id, N>, usize>,
+    by_key: OrderedTable<StoreKey<D::Id, N>, usize>,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
-    order: Directory<D::Id, D::OrderKey>,
+    order: Directory<D::Id, StoreKey<D::Id, N>>,
     /// Retired physical slots can be reused without reusing a logical identity.
     free_partitions: Vec<usize>,
     next_partition: u64,
@@ -1515,7 +1511,10 @@ where
             base: self.base.clone(),
             relations: self.relations.clone(),
             keys: self.keys.clone(),
-            by_key: self.by_key.clone(),
+            by_key: self
+                .by_key
+                .try_clone(&mut Memory::new(&mut Resident))
+                .expect("cloning original partition lookup storage"),
             order: self.order.clone(),
             free_partitions: self.free_partitions.clone(),
             next_partition: self.next_partition,
@@ -1628,7 +1627,7 @@ where
             base: None,
             relations: Vec::new(),
             keys: Vec::new(),
-            by_key: BTreeMap::new(),
+            by_key: OrderedTable::default(),
             order: Directory::default(),
             free_partitions: Vec::new(),
             next_partition: 0,
@@ -1864,7 +1863,14 @@ where
         let ordered = Arity::<N>::MINT_ORDER
             .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
-        let order = &self.order;
+        let order = &mut self.order;
+        let partition_id = admission.partition_id;
+        let partition_slot = existing.unwrap_or_else(|| {
+            self.free_partitions
+                .last()
+                .copied()
+                .unwrap_or(self.relations.len())
+        });
         let (ids, position) = self.interner.with_interned(ordered, |dictionary, minted| {
             let mut ids = minted;
             for (index, position) in Arity::<N>::MINT_ORDER.into_iter().enumerate() {
@@ -1874,12 +1880,9 @@ where
             let position = if existing.is_some() {
                 None
             } else if order.is_sparse() {
-                Some(Position::Sparse(
-                    directory::retained_key::<D, N>(dictionary, Arity::<N>::key(&ids))
-                        .map_err(DictionaryError::Source)?,
-                ))
+                Some(order.prepare_sparse::<D, N>(dictionary, Arity::<N>::key(&ids))?)
             } else {
-                Some(Position::Dense(
+                Some(directory::Prepared::Dense(
                     partition_position::<D, N>(
                         dictionary,
                         keys,
@@ -1892,6 +1895,7 @@ where
             dictionary.check_read().map_err(DictionaryError::Source)?;
             Ok((ids, position))
         })?;
+        let position = position.map(|prepared| prepared.publish(partition_id, partition_slot));
         Ok(Some(self.publish_row(ids, existing, position, admission)))
     }
 
@@ -1925,6 +1929,10 @@ where
         if let Some(slot) = existing {
             self.relations[slot].tail.reserve_row()?;
         } else {
+            self.by_key.reserve_insert(&mut Memory::resume(
+                &mut Resident,
+                self.by_key.storage_bytes()?,
+            ))?;
             if self.free_partitions.is_empty() {
                 self.relations
                     .try_reserve(1)
@@ -1956,7 +1964,7 @@ where
         &mut self,
         ids: [D::Id; N],
         existing: Option<usize>,
-        position: Option<Position<D::OrderKey>>,
+        position: Option<Position>,
         admission: RowAdmission<D::Id>,
     ) -> (D::Id, D::Id, RowId) {
         let (subject_id, object_id) = (ids[0], ids[2]);
@@ -1985,7 +1993,16 @@ where
                 self.keys.push(Some((partition_id, key)));
                 slot
             };
-            self.by_key.insert(key, slot);
+            let lookup_bytes = self
+                .by_key
+                .storage_bytes()
+                .expect("original admitted lookup layout");
+            assert!(
+                self.by_key
+                    .insert(key, slot, &mut Memory::resume(&mut Resident, lookup_bytes))
+                    .expect("lookup capacity was reserved before the dictionary transaction")
+                    .is_none()
+            );
             let keys = &self.keys;
             self.order.publish(
                 slot,
@@ -2557,6 +2574,84 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{HostDictionary, SourceLost};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn sparse_directory_waits_for_the_original_dictionary_transaction() {
+        let mut dictionary = HostDictionary::default();
+        dictionary.surfaces.extend([
+            (41, "s".into()),
+            (7, "z".into()),
+            (99, "a".into()),
+            (3, "o".into()),
+            (81, "g".into()),
+            (15, "h".into()),
+        ]);
+        let mut store = RelationStore::<_, 4>::with_dictionary(dictionary);
+        store.insert_ids([41, 7, 3, 81]).unwrap();
+        store.prepare_maintenance_indexes().unwrap();
+        let original = store.partitions_for([None; 4]).next().unwrap().id();
+        store.interner.refuse_after_interned = true;
+        // Both ordered placements have been prepared when the source refuses.
+        // Neither a new predicate nor another graph may become visible.
+        for row in [[41, 99, 3, 81], [41, 7, 3, 15]] {
+            assert_eq!(
+                store.insert_terms(row.map(DictionaryTerm::Id)),
+                Err(DictionaryError::Source(SourceLost(71)))
+            );
+            assert_eq!(store.row_count(), 1);
+            assert_eq!(store.partition_count(), 1);
+            assert_eq!(
+                store
+                    .partitions_for([None; 4])
+                    .map(PartitionRef::id)
+                    .collect::<Vec<_>>(),
+                [original]
+            );
+        }
+        store.interner.refuse_after_interned = false;
+        store.insert_ids([41, 99, 3, 81]).unwrap();
+        store.insert_ids([41, 7, 3, 15]).unwrap();
+        let ordered = || {
+            store
+                .partitions_for([None; 4])
+                .map(PartitionRef::id)
+                .collect::<Vec<_>>()
+        };
+        let before = ordered();
+        assert_eq!(before.len(), 3);
+        assert_ne!(
+            before[0], original,
+            "canonical order differs from original integer order"
+        );
+        assert_eq!(before[1], original);
+        store.remove_ids([41, 99, 3, 81]).unwrap();
+        store.retire_empty_partition([41, 99, 3, 81]).unwrap();
+        assert_eq!(
+            store
+                .partitions_for([None; 4])
+                .map(PartitionRef::id)
+                .collect::<Vec<_>>(),
+            before[1..]
+        );
+        store.insert_ids([41, 99, 3, 81]).unwrap();
+        let after = store
+            .partitions_for([None; 4])
+            .map(PartitionRef::id)
+            .collect::<Vec<_>>();
+        assert_eq!(after[1..], before[1..]);
+        assert_ne!(
+            after[0], before[0],
+            "a reused physical arena cannot reuse logical identity"
+        );
+        assert_eq!(
+            store
+                .interner
+                .pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
 
     #[test]
     fn cardinality_advice_never_builds_a_cold_historical_object_index() {
@@ -2781,6 +2876,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: false,
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);

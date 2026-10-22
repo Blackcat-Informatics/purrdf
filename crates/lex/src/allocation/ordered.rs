@@ -26,6 +26,101 @@ enum Slot<K, V> {
     Free(Option<usize>),
 }
 
+/// A physical locator in an ordered arena, valid while its association is live.
+/// It is not a persistent identity: removal permits its slot to be reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OrderedSlot(usize);
+
+#[derive(Debug, Clone, Copy)]
+enum Placement {
+    Occupied(usize),
+    Vacant {
+        index: usize,
+        parent: Option<usize>,
+        left: bool,
+        len: usize,
+    },
+}
+
+/// An exclusively borrowed, admitted placement awaiting its original payload.
+/// It prevents another edit from invalidating its path and clones no grant.
+#[derive(Debug)]
+pub struct OrderedEntry<'a, K, V> {
+    table: &'a mut OrderedTable<K, V>,
+    key: K,
+    placement: Placement,
+}
+
+impl<K, V> OrderedEntry<'_, K, V> {
+    /// Physical locator which becomes valid when this entry is published.
+    pub fn slot(&self) -> OrderedSlot {
+        OrderedSlot(match self.placement {
+            Placement::Occupied(index) | Placement::Vacant { index, .. } => index,
+        })
+    }
+
+    /// Whether publication replaces an already live value.
+    pub fn is_occupied(&self) -> bool {
+        matches!(self.placement, Placement::Occupied(_))
+    }
+
+    /// Publish without comparison or allocation through the admitted placement.
+    pub fn publish(self, value: V) -> (OrderedSlot, Option<V>) {
+        let Self {
+            table,
+            key,
+            placement,
+        } = self;
+        match placement {
+            Placement::Occupied(index) => (
+                OrderedSlot(index),
+                Some(mem::replace(&mut table.entry_mut(index).value, value)),
+            ),
+            Placement::Vacant {
+                index,
+                parent,
+                left,
+                len,
+            } => {
+                let entry = Entry {
+                    key,
+                    value,
+                    parent,
+                    left: None,
+                    right: None,
+                    height: 1,
+                };
+                if let Some(free) = table.free {
+                    assert_eq!(
+                        free, index,
+                        "the exclusive insertion retains its original free slot"
+                    );
+                    let Slot::Free(next) = &table.slots[index] else {
+                        unreachable!("scope free list points at a live slot");
+                    };
+                    table.free = *next;
+                    table.slots[index] = Slot::Live(entry);
+                } else {
+                    assert_eq!(index, table.slots.len());
+                    table.slots.push(Slot::Live(entry));
+                }
+                if let Some(parent) = parent {
+                    if left {
+                        table.entry_mut(parent).left = Some(index);
+                    } else {
+                        table.entry_mut(parent).right = Some(index);
+                    }
+                } else {
+                    table.root = Some(index);
+                }
+                table.len = len;
+                table.rebalance(parent);
+                (OrderedSlot(index), None)
+            }
+        }
+    }
+}
+
 /// One balanced lookup tree in a caller-admitted reusable slot arena.
 ///
 /// Both empty construction and every lookup are allocation-free. The memory
@@ -320,35 +415,9 @@ impl<K, V> OrderedTable<K, V> {
             at = self.entry(root).parent;
         }
     }
-
-    fn swap_payloads(&mut self, first: usize, second: usize) {
-        let (first, second) = if first < second {
-            let (before, after) = self.slots.split_at_mut(second);
-            (&mut before[first], &mut after[0])
-        } else {
-            let (before, after) = self.slots.split_at_mut(first);
-            (&mut after[0], &mut before[second])
-        };
-        let (Slot::Live(first), Slot::Live(second)) = (first, second) else {
-            unreachable!("scope tree payload swap names a vacant slot");
-        };
-        mem::swap(&mut first.key, &mut second.key);
-        mem::swap(&mut first.value, &mut second.value);
-    }
 }
 
-impl<K: Ord, V> OrderedTable<K, V> {
-    /// Borrow the payload associated with an exactly ordered key.
-    pub fn get(&self, key: &K) -> Option<&V> {
-        self.get_by(|candidate| key.cmp(candidate))
-    }
-
-    /// Mutate an existing payload without allocating or changing its key.
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        let index = self.find(|candidate| key.cmp(candidate))?;
-        Some(&mut self.entry_mut(index).value)
-    }
-
+impl<K, V> OrderedTable<K, V> {
     /// Reserve the actual next array layout without modifying any key/value.
     /// Consumers may reserve their parallel output destination before insertion.
     pub fn reserve_insert<S: Admission + ?Sized>(
@@ -374,21 +443,26 @@ impl<K: Ord, V> OrderedTable<K, V> {
         Ok(())
     }
 
-    /// Replace the value in place, or admit storage before adding a new key.
-    /// Refusal leaves every existing association unchanged.
-    pub fn insert<S: Admission + ?Sized>(
+    /// Compare and admit an association before constructing its payload.
+    /// All comparisons must agree with the tree's original total key order.
+    /// Dropping the prepared entry leaves existing associations unchanged;
+    /// successfully reserved arena capacity remains under the original memory.
+    ///
+    /// # Errors
+    /// Preserves the original comparison or physical-storage refusal.
+    pub fn prepare_insert<S: Admission + ?Sized, E: From<StorageError>>(
         &mut self,
         key: K,
-        value: V,
         memory: &mut Memory<'_, S>,
-    ) -> Result<Option<V>, StorageError> {
+        mut compare: impl FnMut(&K, &K) -> Result<Ordering, E>,
+    ) -> Result<OrderedEntry<'_, K, V>, E> {
         let mut at = self.root;
         let mut parent = None;
         let mut left = false;
         while let Some(index) = at {
             let entry = self.entry(index);
             parent = Some(index);
-            at = match key.cmp(&entry.key) {
+            at = match compare(&key, &entry.key)? {
                 Ordering::Less => {
                     left = true;
                     entry.left
@@ -398,77 +472,109 @@ impl<K: Ord, V> OrderedTable<K, V> {
                     entry.right
                 }
                 Ordering::Equal => {
-                    return Ok(Some(mem::replace(&mut self.entry_mut(index).value, value)));
+                    return Ok(OrderedEntry {
+                        table: self,
+                        key,
+                        placement: Placement::Occupied(index),
+                    });
                 }
             };
         }
-        let len = self.len.checked_add(1).ok_or(StorageError::SizeOverflow)?;
-        self.reserve_insert(memory)?;
-        let entry = Entry {
+        let len = self
+            .len
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)
+            .map_err(E::from)?;
+        self.reserve_insert(memory).map_err(E::from)?;
+        let index = self.free.unwrap_or(self.slots.len());
+        Ok(OrderedEntry {
+            table: self,
             key,
-            value,
-            parent,
-            left: None,
-            right: None,
-            height: 1,
-        };
-        let index = if let Some(index) = self.free {
-            let Slot::Free(next) = &self.slots[index] else {
-                unreachable!("scope free list points at a live slot");
-            };
-            self.free = *next;
-            self.slots[index] = Slot::Live(entry);
-            index
-        } else {
-            let index = self.slots.len();
-            self.slots.push(Slot::Live(entry));
-            index
-        };
-        if let Some(parent) = parent {
-            if left {
-                self.entry_mut(parent).left = Some(index);
-            } else {
-                self.entry_mut(parent).right = Some(index);
-            }
-        } else {
-            self.root = Some(index);
+            placement: Placement::Vacant {
+                index,
+                parent,
+                left,
+                len,
+            },
+        })
+    }
+
+    /// Admit a placement, construct its payload, then publish without allocation.
+    /// The callback receives its future locator and whether it replaces a value.
+    /// Failed construction preserves existing associations and admitted capacity.
+    ///
+    /// # Errors
+    /// Preserves the original comparison, payload or physical-storage refusal.
+    pub fn try_insert_with<S: Admission + ?Sized, E: From<StorageError>>(
+        &mut self,
+        key: K,
+        memory: &mut Memory<'_, S>,
+        compare: impl FnMut(&K, &K) -> Result<Ordering, E>,
+        make: impl FnOnce(&mut Memory<'_, S>, OrderedSlot, bool) -> Result<V, E>,
+    ) -> Result<(OrderedSlot, Option<V>), E> {
+        let entry = self.prepare_insert(key, memory, compare)?;
+        let value = make(memory, entry.slot(), entry.is_occupied())?;
+        Ok(entry.publish(value))
+    }
+
+    /// First live physical locator, without comparing or projecting keys.
+    pub fn first_slot(&self) -> Option<OrderedSlot> {
+        self.root.map(|root| OrderedSlot(self.extreme(root, true)))
+    }
+
+    /// Borrow a live association at its original physical locator.
+    pub fn at_slot(&self, slot: OrderedSlot) -> Option<(&K, &V)> {
+        match self.slots.get(slot.0)? {
+            Slot::Live(entry) => Some((&entry.key, &entry.value)),
+            Slot::Free(_) => None,
         }
-        self.len = len;
-        self.rebalance(parent);
-        Ok(None)
     }
 
-    /// Remove an association without allocation; reuse its original slot later.
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.remove_entry_by(|candidate| key.cmp(candidate))
-            .map(|(_, value)| value)
+    /// Next association in the established key order, with no key comparison.
+    /// The supplied locator must still name its original live association.
+    pub fn next_slot(&self, slot: OrderedSlot) -> Option<OrderedSlot> {
+        self.at_slot(slot)?;
+        self.neighbor(slot.0, true).map(OrderedSlot)
     }
 
-    /// Remove the original key and payload through a borrowed comparison.
-    pub fn remove_entry_by(&mut self, compare: impl FnMut(&K) -> Ordering) -> Option<(K, V)> {
-        let index = self.find(compare)?;
-        Some(self.remove_index(index))
+    /// Remove a live association while preserving every surviving locator.
+    /// The removed locator is invalidated and may be reused by a later insertion.
+    pub fn remove_slot(&mut self, slot: OrderedSlot) -> Option<(K, V)> {
+        self.at_slot(slot)?;
+        Some(self.remove_index(slot.0))
     }
 
-    fn remove_index(&mut self, mut index: usize) -> (K, V) {
-        let entry = self.entry(index);
-        if let (Some(_), Some(mut successor)) = (entry.left, entry.right) {
-            while let Some(left) = self.entry(successor).left {
-                successor = left;
-            }
-            self.swap_payloads(index, successor);
-            index = successor;
-        }
+    fn remove_index(&mut self, index: usize) -> (K, V) {
         let entry = self.entry(index);
         let parent = entry.parent;
-        let child = entry.left.or(entry.right);
-        self.link(parent, index, child);
+        let rebalance = if let (Some(left), Some(right)) = (entry.left, entry.right) {
+            let successor = self.extreme(right, true);
+            let predecessor = self.entry(successor).parent;
+            if predecessor != Some(index) {
+                let child = self.entry(successor).right;
+                self.link(predecessor, successor, child);
+                self.entry_mut(successor).right = Some(right);
+                self.entry_mut(right).parent = Some(successor);
+            }
+            self.link(parent, index, Some(successor));
+            self.entry_mut(successor).left = Some(left);
+            self.entry_mut(left).parent = Some(successor);
+            if predecessor == Some(index) {
+                Some(successor)
+            } else {
+                predecessor
+            }
+        } else {
+            let child = entry.left.or(entry.right);
+            self.link(parent, index, child);
+            parent
+        };
         let Slot::Live(entry) = mem::replace(&mut self.slots[index], Slot::Free(self.free)) else {
             unreachable!("scope removal names a vacant slot");
         };
         self.free = Some(index);
         self.len -= 1;
-        self.rebalance(parent);
+        self.rebalance(rebalance);
         (entry.key, entry.value)
     }
 
@@ -484,6 +590,48 @@ impl<K: Ord, V> OrderedTable<K, V> {
         self.root
             .map(|root| self.extreme(root, false))
             .map(|index| self.remove_index(index))
+    }
+}
+
+impl<K: Ord, V> OrderedTable<K, V> {
+    /// Borrow the payload associated with an exactly ordered key.
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.get_by(|candidate| key.cmp(candidate))
+    }
+
+    /// Mutate an existing payload without allocating or changing its key.
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        let index = self.find(|candidate| key.cmp(candidate))?;
+        Some(&mut self.entry_mut(index).value)
+    }
+
+    /// Replace the value in place, or admit storage before adding a new key.
+    /// Refusal leaves every existing association unchanged.
+    pub fn insert<S: Admission + ?Sized>(
+        &mut self,
+        key: K,
+        value: V,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<V>, StorageError> {
+        self.try_insert_with(
+            key,
+            memory,
+            |a, b| Ok::<_, StorageError>(a.cmp(b)),
+            |_, _, _| Ok(value),
+        )
+        .map(|(_, previous)| previous)
+    }
+
+    /// Remove an association without allocation; reuse its original slot later.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.remove_entry_by(|candidate| key.cmp(candidate))
+            .map(|(_, value)| value)
+    }
+
+    /// Remove the original key and payload through a borrowed comparison.
+    pub fn remove_entry_by(&mut self, compare: impl FnMut(&K) -> Ordering) -> Option<(K, V)> {
+        let index = self.find(compare)?;
+        Some(self.remove_index(index))
     }
 
     fn seek<Q: ?Sized + Ord>(&self, bound: &Q, forward: bool, inclusive: bool) -> Option<usize>
@@ -716,10 +864,106 @@ mod tests {
         assert_eq!(memory.admitted_bytes(), 0);
     }
 
+    #[test]
+    fn external_order_preserves_every_surviving_physical_locator() {
+        struct Key(i32);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut table = OrderedTable::default();
+        let mut slots = vec![None; 97];
+        let mut oracle = BTreeMap::new();
+        for step in 0..97 {
+            let key = (step * 37) % 97;
+            let (slot, old) = table
+                .try_insert_with(
+                    Key(key),
+                    &mut memory,
+                    |a, b| Ok::<_, StorageError>(b.0.cmp(&a.0)),
+                    |_, _, replacing| {
+                        assert!(!replacing);
+                        Ok(key * 11)
+                    },
+                )
+                .unwrap();
+            assert_eq!(old, None);
+            slots[usize::try_from(key).unwrap()] = Some(slot);
+            oracle.insert(core::cmp::Reverse(key), key * 11);
+        }
+        for step in 0..97 {
+            let key = (step * 53) % 97;
+            let slot = slots[usize::try_from(key).unwrap()].take().unwrap();
+            let (removed, value) = table.remove_slot(slot).unwrap();
+            assert_eq!((removed.0, value), (key, key * 11));
+            assert!(table.at_slot(slot).is_none());
+            oracle.remove(&core::cmp::Reverse(key));
+            for (key, &slot) in slots.iter().enumerate() {
+                if let Some(slot) = slot {
+                    let (stored, value) = table.at_slot(slot).unwrap();
+                    assert_eq!(usize::try_from(stored.0).unwrap(), key);
+                    assert_eq!(*value, stored.0 * 11);
+                }
+            }
+            let mut walked = Vec::new();
+            let mut at = table.first_slot();
+            while let Some(slot) = at {
+                let (key, value) = table.at_slot(slot).unwrap();
+                walked.push((core::cmp::Reverse(key.0), *value));
+                at = table.next_slot(slot);
+            }
+            assert_eq!(
+                walked,
+                oracle.iter().map(|(k, v)| (*k, *v)).collect::<Vec<_>>()
+            );
+        }
+        assert!(table.is_empty());
+        assert_eq!(table.storage_bytes().unwrap(), memory.admitted_bytes());
+        table.release(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
     struct Limit {
         live: usize,
         maximum: usize,
         refusals: usize,
+    }
+
+    #[test]
+    fn abandoned_preparation_keeps_capacity_and_publishes_nothing() {
+        let mut limit = Limit {
+            live: 0,
+            maximum: usize::MAX,
+            refusals: 0,
+        };
+        let mut memory = Memory::new(&mut limit);
+        let mut table = OrderedTable::default();
+        let original = table
+            .prepare_insert(1, &mut memory, |a, b| Ok::<_, StorageError>(a.cmp(b)))
+            .unwrap()
+            .publish(10)
+            .0;
+        {
+            let prepared = table
+                .prepare_insert(2, &mut memory, |a, b| Ok::<_, StorageError>(a.cmp(b)))
+                .unwrap();
+            assert!(!prepared.is_occupied());
+        }
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.at_slot(original), Some((&1, &10)));
+        assert_eq!(table.storage_bytes().unwrap(), memory.admitted_bytes());
+        let admitted = memory.admitted_bytes();
+        let prepared = table
+            .prepare_insert(2, &mut memory, |a, b| Ok::<_, StorageError>(a.cmp(b)))
+            .unwrap();
+        let future = prepared.slot();
+        // The external transaction commits only after all fallible preparation.
+        memory.admission_mut().maximum = 0;
+        let (published, previous) = prepared.publish(20);
+        assert_eq!(published, future);
+        assert_eq!(previous, None);
+        assert_eq!(table.at_slot(published), Some((&2, &20)));
+        assert_eq!(memory.admitted_bytes(), admitted);
+        table.release(&mut memory).unwrap();
+        assert_eq!(memory.admission_mut().live, 0);
     }
 
     impl Admission for Limit {
@@ -731,6 +975,107 @@ mod tests {
             self.live = live;
             Ok(())
         }
+    }
+
+    #[test]
+    fn external_comparison_storage_and_payload_refusals_publish_no_association() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Refusal {
+            Storage(StorageError),
+            Read(u16),
+            Payload,
+        }
+        crate::variant_from!(Refusal { Storage(StorageError) });
+        let mut limit = Limit {
+            live: 0,
+            maximum: usize::MAX,
+            refusals: 0,
+        };
+        let mut memory = Memory::new(&mut limit);
+        let mut table = OrderedTable::default();
+        let (original, _) = table
+            .try_insert_with(
+                1,
+                &mut memory,
+                |a, b| Ok::<_, Refusal>(a.cmp(b)),
+                |_, _, _| Ok(10),
+            )
+            .unwrap();
+        let calls = Cell::new(0);
+        let original_bytes = memory.admitted_bytes();
+        assert_eq!(
+            table.try_insert_with(
+                2,
+                &mut memory,
+                |_, _| Err(Refusal::Read(7)),
+                |_, _, _| {
+                    calls.set(calls.get() + 1);
+                    Ok(20)
+                }
+            ),
+            Err(Refusal::Read(7))
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(memory.admitted_bytes(), original_bytes);
+        memory.admission_mut().maximum = original_bytes;
+        assert_eq!(
+            table.try_insert_with(
+                2,
+                &mut memory,
+                |a, b| Ok::<_, Refusal>(a.cmp(b)),
+                |_, _, _| {
+                    calls.set(calls.get() + 1);
+                    Ok(20)
+                }
+            ),
+            Err(Refusal::Storage(StorageError::AdmissionFailed))
+        );
+        assert_eq!(
+            calls.get(),
+            0,
+            "physical admission precedes payload construction"
+        );
+        memory.admission_mut().maximum = usize::MAX;
+        assert_eq!(
+            table.try_insert_with(
+                2,
+                &mut memory,
+                |a, b| Ok::<_, Refusal>(a.cmp(b)),
+                |_, _, _| {
+                    calls.set(calls.get() + 1);
+                    Err(Refusal::Payload)
+                }
+            ),
+            Err(Refusal::Payload)
+        );
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.at_slot(original), Some((&1, &10)));
+        assert_eq!(table.storage_bytes().unwrap(), memory.admitted_bytes());
+        let (second, _) = table
+            .try_insert_with(
+                2,
+                &mut memory,
+                |a, b| Ok::<_, Refusal>(a.cmp(b)),
+                |_, _, _| Ok(20),
+            )
+            .unwrap();
+        assert_ne!(original, second);
+        assert_eq!(
+            table.try_insert_with(
+                1,
+                &mut memory,
+                |a, b| Ok::<_, Refusal>(a.cmp(b)),
+                |_, slot, replacing| {
+                    assert_eq!(slot, original);
+                    assert!(replacing);
+                    Err(Refusal::Payload)
+                }
+            ),
+            Err(Refusal::Payload)
+        );
+        assert_eq!(table.at_slot(original), Some((&1, &10)));
+        table.release(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]

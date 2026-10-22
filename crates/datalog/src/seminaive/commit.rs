@@ -9,6 +9,7 @@ use super::{
     StorageError, TermDictionary, TermId, TermIdentity,
 };
 use crate::store::{Arity, StoreShape};
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 
 type Winner<'r, I, const N: usize> = (HeadKey<'r, I, N>, Candidate<I, N>, Option<ShapeFact<N>>);
 
@@ -36,6 +37,7 @@ where
     winners: std::vec::IntoIter<Winner<'r, I, N>>,
     pending: Option<Winner<'r, I, N>>,
     sources: Option<Vec<ShapeFact<N>>>,
+    native_proof: Option<Candidate<I, N>>,
     generates_terms: bool,
     generating_rules: BTreeSet<usize>,
     complete: bool,
@@ -71,6 +73,7 @@ where
             winners: winners.into_iter(),
             pending: None,
             sources: None,
+            native_proof: None,
             generates_terms: round.generates_terms,
             generating_rules: round.generating_rules,
             complete: false,
@@ -111,6 +114,7 @@ where
             winners: Vec::new().into_iter(),
             pending: None,
             sources: None,
+            native_proof: None,
             generates_terms: round.generates_terms,
             generating_rules: round.generating_rules,
             complete: false,
@@ -182,22 +186,28 @@ where
         &mut self,
         state: &mut FixpointState<D, N>,
     ) -> Result<(), EvalError<D::Error>> {
-        assert!(
-            self.advance_until(state, |_| true)?,
-            "unlimited publication completes"
-        );
+        let before = state.native_bytes;
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, before);
+        let result = self.advance_until(state, &mut memory, |_| true);
+        state.account_native_memory(before, memory.admitted_bytes());
+        assert!(result?, "unlimited publication completes");
         Ok(())
     }
 
-    pub(super) fn advance_until<D: TermDictionary<Id = I>>(
+    pub(super) fn advance_until<D: TermDictionary<Id = I>, A: Admission + ?Sized>(
         &mut self,
         state: &mut FixpointState<D, N>,
+        memory: &mut Memory<'_, A>,
         mut allow: impl FnMut(usize) -> bool,
     ) -> Result<bool, EvalError<D::Error>> {
         assert!(
             self.preparation.is_empty(),
             "publication follows complete preparation"
         );
+        if let Some(native) = state.native.as_mut() {
+            native.flush_retired(memory).map_err(EvalError::Storage)?;
+        }
         state
             .rel
             .interner()
@@ -237,6 +247,14 @@ where
                 if !improves {
                     self.pending = None;
                     self.sources = None;
+                    if let Some(proof) = self.native_proof.take() {
+                        let native = state
+                            .native
+                            .as_mut()
+                            .expect("an admitted native proof owner");
+                        native.retire_proof(proof);
+                        native.flush_retired(memory).map_err(EvalError::Storage)?;
+                    }
                     continue;
                 }
             }
@@ -288,7 +306,13 @@ where
                     .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
             }
             if let Some(native) = state.native.as_mut() {
-                native.reserve(candidate).map_err(EvalError::Storage)?;
+                native
+                    .reserve(candidate, memory)
+                    .map_err(EvalError::Storage)?;
+                if self.native_proof.is_none() {
+                    self.native_proof =
+                        Some(candidate.copy_in(memory).map_err(EvalError::Storage)?);
+                }
             }
             let terms = key.terms().map(|term| match term {
                 HeadTerm::Interned(id) => DictionaryTerm::Id(*id),
@@ -359,7 +383,12 @@ where
                     .rows_from(row.index())
                     .next()
                     .expect("the native row was just published");
-                native.record(row, terms, candidate, existing.is_none());
+                let proof = self
+                    .native_proof
+                    .take()
+                    .expect("the native proof was admitted before publication");
+                native.record(row, terms, proof, existing.is_none());
+                native.flush_retired(memory).map_err(EvalError::Storage)?;
             }
         }
         state

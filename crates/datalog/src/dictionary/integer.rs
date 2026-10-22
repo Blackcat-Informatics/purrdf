@@ -120,15 +120,10 @@ impl<'a, I: TermIdentity + Into<u64>> IntegerDictionary<'a, I> {
 impl<I: TermIdentity + Into<u64>> TermDictionary for IntegerDictionary<'_, I> {
     type Id = I;
     type Error = IntegerDictionaryError;
-    type OrderKey = I;
     type Lexical<'a>
         = &'a str
     where
         Self: 'a;
-
-    fn order_key(&self, id: I) -> Result<I, Self::Error> {
-        Ok(id)
-    }
 
     fn lookup_term(&self, surface: &str) -> Result<Option<I>, Self::Error> {
         Ok(self.symbols.get(surface).copied())

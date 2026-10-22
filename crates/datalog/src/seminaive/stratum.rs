@@ -9,6 +9,7 @@ use super::{
     evidence::RuleEvidence, is_stopped, round,
 };
 use crate::store::{Arity, StoreShape};
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 
 #[derive(Debug)]
 enum Phase<'r, I: TermIdentity, const N: usize>
@@ -68,6 +69,21 @@ where
         state: &mut FixpointState<D, N>,
         run: StratumRun<'_, D, N>,
         evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
+    ) -> Result<(), EvalError<D::Error>> {
+        let before = state.native_bytes;
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, before);
+        let result = self.advance_in_memory(state, run, evidence, &mut memory);
+        state.account_native_memory(before, memory.admitted_bytes());
+        result
+    }
+
+    pub(super) fn advance_in_memory<D: TermDictionary<Id = I>, A: Admission + ?Sized>(
+        &mut self,
+        state: &mut FixpointState<D, N>,
+        run: StratumRun<'_, D, N>,
+        evidence: &mut Option<&mut dyn RuleEvidence<D, N>>,
+        memory: &mut Memory<'_, A>,
     ) -> Result<(), EvalError<D::Error>> {
         check_budget(state)?;
         loop {
@@ -152,7 +168,10 @@ where
                     };
                 }
                 Phase::Publishing(frame) => {
-                    frame.advance(state)?;
+                    assert!(
+                        frame.advance_until(state, memory, |_| true)?,
+                        "unlimited publication completes its original winners"
+                    );
                     check_budget(state)?;
                     self.phase = Phase::Evidence { had_facts: true };
                 }

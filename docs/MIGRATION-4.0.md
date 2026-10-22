@@ -93,11 +93,10 @@ canonical lexical order and original dictionary pins. A native dictionary may
 compare original IDs directly. `compare_rows` applies that contract in position
 order and preserves source errors.
 
-Implementations also provide `OrderKey` and `order_key(id)`. The owned ordering
-value must agree with `compare_terms` and remain valid while its partition is
-retained. A lexical dictionary can retain the canonical spelling; a native
-integer dictionary returns the original integer. This value orders partition
-metadata and does not replace the dictionary's term identity.
+Maintained partition directories retain original term IDs. They establish their
+canonical order through `compare_terms` before the dictionary transaction commits;
+publication and subsequent traversal need no lexical copies or source comparison.
+Removing a partition preserves every surviving partition's original identity.
 
 `dictionary::IntegerDictionary<u32>` and `IntegerDictionary<u64>` provide the
 native alternative. Construct one with an explicit `with_symbols` table for the

@@ -11,6 +11,7 @@ use super::{
 use crate::cache::{canonical_rule_hash, contract_hash_with};
 use crate::store::{Arity, StoreShape};
 use purrdf_hash::{Domain, hex::Digest32};
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 use std::fmt;
 
 const PARTIAL_MODEL_DOMAIN: Domain = Domain::new(b"purrdf-datalog-partial-model-v1");
@@ -230,6 +231,37 @@ where
         options: EvalOptions,
         stop: Option<&dyn StopSignal>,
     ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
+        let before = self.state.as_ref().map_or(0, |state| state.native_bytes);
+        self.resume_in_memory(
+            binding,
+            options,
+            stop,
+            &mut Memory::resume(&mut Resident, before),
+        )
+    }
+
+    pub(super) fn resume_in_memory<A: Admission + ?Sized>(
+        &mut self,
+        binding: ContinuationBinding,
+        options: EvalOptions,
+        stop: Option<&dyn StopSignal>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
+        let before = memory.admitted_bytes();
+        let result = self.resume_native(binding, options, stop, memory);
+        if let Some(state) = self.state.as_mut() {
+            state.account_native_memory(before, memory.admitted_bytes());
+        }
+        result
+    }
+
+    fn resume_native<A: Admission + ?Sized>(
+        &mut self,
+        binding: ContinuationBinding,
+        options: EvalOptions,
+        stop: Option<&dyn StopSignal>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
         for (component, expected, actual) in [
             ("program", self.binding.program, binding.program),
             (
@@ -286,7 +318,7 @@ where
                 let frame = self.frame.get_or_insert_with(|| {
                     stratum::Frame::new(self.exe, self.exe.runtimes(), self.stratum, state)
                 });
-                frame.advance(
+                frame.advance_in_memory(
                     state,
                     StratumRun {
                         stop,
@@ -295,6 +327,7 @@ where
                         strategy: JoinStrategy::Planned,
                     },
                     &mut None,
+                    memory,
                 )?;
                 debug_assert!(frame.is_complete());
                 self.frame = None;
