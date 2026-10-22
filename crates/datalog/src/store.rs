@@ -97,9 +97,13 @@ use std::sync::OnceLock;
 
 mod columns;
 mod index;
+mod maintenance_indexes;
+mod metadata;
 mod seal;
 pub use columns::RowColumns;
 pub use index::{RowIndex, RowIndexError};
+pub(crate) use maintenance_indexes::Preparation as MaintenanceIndexPreparation;
+pub(crate) use metadata::Preparation as MetadataPreparation;
 mod rows;
 use rows::RowLog;
 mod terms;
@@ -628,16 +632,6 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
         self.live += 1;
     }
 
-    fn fill_sorted(&mut self, rows: &[(I, I, RowId)]) {
-        assert!(self.object_index.get().is_none());
-        self.data.clear();
-        self.weight.clear();
-        self.live = 0;
-        for &(subject, object, row) in rows {
-            self.push_reserved(subject, object, row, W::UNIT);
-        }
-    }
-
     /// The number of rows in the batch.
     #[inline]
     pub(crate) fn len(&self) -> usize {
@@ -745,25 +739,6 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
             Ok(ObjectIndex { perm, admitted })
         })
     }
-
-    fn prepare_object_in<A: Admission + ?Sized>(
-        &mut self,
-        memory: &mut Memory<'_, A>,
-        retired: &mut usize,
-    ) -> Result<(), StorageError> {
-        if self.object_index.get().is_some_and(|index| index.admitted) {
-            return Ok(());
-        }
-        let index = crate::allocation::construct_in(memory, retired, |memory| {
-            self.object_index_in(true, memory)
-        })?;
-        let previous = self.object_index.take();
-        self.object_index
-            .set(index)
-            .expect("replacing the original resident object permutation");
-        drop(previous);
-        Ok(())
-    }
 }
 
 /// Merge two sorted batches into one sorted batch.
@@ -792,66 +767,101 @@ fn merge_batches<W: Weight, I: TermIdentity>(
     Ok(merged)
 }
 
+#[cfg(test)]
 fn merge_batches_into<W: Weight, I: TermIdentity>(
     left: &Batch<W, I>,
     right: &Batch<W, I>,
     merged: &mut Batch<W, I>,
 ) -> Result<(), W::Error> {
-    merged.data.clear();
-    merged.weight.clear();
-    merged.live = 0;
-    assert!(
-        merged.object_index.get().is_none(),
-        "merge output has no published permutation"
-    );
-    let (mut i, mut j) = (0usize, 0usize);
-    let push = |merged: &mut Batch<W, I>, b: &Batch<W, I>, p: usize| {
-        if let Some((subject, object, row)) = b.row_at(p) {
-            merged.push_reserved(subject, object, row, b.weight[p]);
-        }
-    };
-    while i < left.len() && j < right.len() {
-        let lk = left.key_at(i);
-        let rk = right.key_at(j);
-        match lk.cmp(&rk) {
-            Ordering::Less => {
-                push(merged, left, i);
-                i += 1;
-            }
-            Ordering::Greater => {
-                push(merged, right, j);
-                j += 1;
-            }
-            Ordering::Equal => {
-                // Combine live weights; a retired copy cannot compete with a
-                // fresh reinsertion or retain its old handle.
-                match (left.data.handles()[i], right.data.handles()[j]) {
-                    (Some(left_row), Some(right_row)) => {
-                        let w = left.weight[i].combine(right.weight[j])?;
-                        if !w.is_annihilated() {
-                            merged.push_reserved(lk.0, lk.1, left_row.min(right_row), w);
-                        }
-                    }
-                    (Some(_), None) => push(merged, left, i),
-                    (None, Some(_)) => {
-                        push(merged, right, j);
-                    }
-                    (None, None) => {}
-                }
-                i += 1;
-                j += 1;
-            }
-        }
-    }
-    while i < left.len() {
-        push(merged, left, i);
-        i += 1;
-    }
-    while j < right.len() {
-        push(merged, right, j);
-        j += 1;
-    }
+    let complete = MergeFrame::default().resume(left, right, merged, |_| true)?;
+    assert!(complete, "unrestricted native merge completes");
     Ok(())
+}
+
+/// Positions in the one native merge; inputs remain immutable until publication.
+#[derive(Debug, Default)]
+struct MergeFrame {
+    left: usize,
+    right: usize,
+    started: bool,
+}
+
+impl MergeFrame {
+    fn resume<W: Weight, I: TermIdentity>(
+        &mut self,
+        left: &Batch<W, I>,
+        right: &Batch<W, I>,
+        merged: &mut Batch<W, I>,
+        mut allow: impl FnMut(usize) -> bool,
+    ) -> Result<bool, W::Error> {
+        if !self.started {
+            merged.data.clear();
+            merged.weight.clear();
+            merged.live = 0;
+            self.started = true;
+        }
+        assert!(
+            merged.object_index.get().is_none(),
+            "merge output has no published permutation"
+        );
+        let (i, j) = (&mut self.left, &mut self.right);
+        let push = |merged: &mut Batch<W, I>, b: &Batch<W, I>, p: usize| {
+            if let Some((subject, object, row)) = b.row_at(p) {
+                merged.push_reserved(subject, object, row, b.weight[p]);
+            }
+        };
+        while *i < left.len() && *j < right.len() {
+            if !allow(1) {
+                return Ok(false);
+            }
+            let lk = left.key_at(*i);
+            let rk = right.key_at(*j);
+            match lk.cmp(&rk) {
+                Ordering::Less => {
+                    push(merged, left, *i);
+                    *i += 1;
+                }
+                Ordering::Greater => {
+                    push(merged, right, *j);
+                    *j += 1;
+                }
+                Ordering::Equal => {
+                    // Combine live weights; a retired copy cannot compete with a
+                    // fresh reinsertion or retain its old handle.
+                    match (left.data.handles()[*i], right.data.handles()[*j]) {
+                        (Some(left_row), Some(right_row)) => {
+                            let w = left.weight[*i].combine(right.weight[*j])?;
+                            if !w.is_annihilated() {
+                                merged.push_reserved(lk.0, lk.1, left_row.min(right_row), w);
+                            }
+                        }
+                        (Some(_), None) => push(merged, left, *i),
+                        (None, Some(_)) => {
+                            push(merged, right, *j);
+                        }
+                        (None, None) => {}
+                    }
+                    *i += 1;
+                    *j += 1;
+                }
+            }
+        }
+        while *i < left.len() {
+            if !allow(1) {
+                return Ok(false);
+            }
+            push(merged, left, *i);
+            *i += 1;
+        }
+        while *j < right.len() {
+            if !allow(1) {
+                return Ok(false);
+            }
+            push(merged, right, *j);
+            *j += 1;
+        }
+        Ok(true)
+    }
 }
 
 // ── Relations ───────────────────────────────────────────────────────────────────
@@ -912,16 +922,6 @@ impl<I: TermIdentity> Tail<I> {
         } else {
             self.reserve_row()
         }
-    }
-
-    fn copy_in<A: Admission + ?Sized>(
-        &self,
-        memory: &mut Memory<'_, A>,
-    ) -> Result<Self, StorageError> {
-        Ok(Self {
-            data: self.data.copy_in(TAIL_SEAL_THRESHOLD, memory)?,
-            supplemental: true,
-        })
     }
 
     /// Publish row `(subject, object, row)` after [`Self::reserve_row`] succeeds.
@@ -1185,18 +1185,24 @@ impl<I: TermIdentity> Relation<I> {
     fn insert(&mut self, s_id: I, o_id: I, row_id: RowId) {
         self.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)
             .expect("original resident row preparation");
+        assert!(self.prepare_row_work(|_| true).expect("resident seal work"));
         self.insert_reserved(s_id, o_id, row_id);
     }
 
-    fn insert_reserved(&mut self, s_id: I, o_id: I, row_id: RowId) {
-        self.tail.push(s_id, o_id, row_id);
-        self.len += 1;
-        if self.tail.len() >= TAIL_SEAL_THRESHOLD {
-            self.seal_preparation
-                .take()
-                .expect("sealing storage is admitted before publication")
-                .publish(self);
+    fn prepare_row_work(&mut self, allow: impl FnMut(usize) -> bool) -> Result<bool, StorageError> {
+        match self.seal_preparation.as_mut() {
+            Some(frame) => frame.resume(&self.tail, &self.batches, allow),
+            None => Ok(true),
         }
+    }
+
+    fn insert_reserved(&mut self, s_id: I, o_id: I, row_id: RowId) {
+        if let Some(frame) = self.seal_preparation.take() {
+            frame.publish(self, Some((s_id, o_id, row_id)));
+        } else {
+            self.tail.push(s_id, o_id, row_id);
+        }
+        self.len += 1;
     }
 
     /// Whether a tuple with these interned terms is present — a galloping probe of each
@@ -1257,10 +1263,11 @@ impl<I: TermIdentity> Relation<I> {
         }
         self.prepare_seal_in(0, &mut Memory::new(&mut Resident), &mut 0)
             .expect("original resident seal preparation");
+        assert!(self.prepare_row_work(|_| true).expect("resident seal work"));
         self.seal_preparation
             .take()
             .expect("prepared original seal")
-            .publish(self);
+            .publish(self, None);
     }
 
     /// The number of rows in this relation (batches + tail).
@@ -1832,6 +1839,8 @@ impl<I: TermIdentity> DeltaRun<I> {
 /// Original subject/object identities and the newly published row, if not a duplicate.
 pub type InsertedRow<I> = Option<(I, I, RowId)>;
 
+type InsertProgress<I, E> = Result<core::ops::ControlFlow<(), InsertedRow<I>>, DictionaryError<E>>;
+
 /// Original withdrawn coordinates, moved between one store and its maintenance owner.
 /// Only the store constructs this token; restoration consumes it once.
 #[derive(Debug)]
@@ -1935,6 +1944,7 @@ where
     }
 
     /// Construct new native metadata before transferring it to supplemental ownership.
+    #[cfg(test)]
     pub(crate) fn admit_native_metadata_in<A: Admission + ?Sized>(
         &mut self,
         memory: &mut Memory<'_, A>,
@@ -1943,62 +1953,54 @@ where
             !self.row_log.is_supplemental() && !self.metadata_supplemental,
             "the original native metadata transfers once"
         );
-        self.interner
-            .check_read()
-            .map_err(DictionaryError::Source)?;
-        let (rows, lookup, keys, free, mut relations) = memory.try_scope(|memory| {
-            let rows = self.row_log.copy_sparse_in(memory)?;
-            let lookup = self.by_key.try_clone(memory)?;
-            let mut keys = Vec::new();
-            memory.reserve(&mut keys, self.keys.len())?;
-            keys.extend_from_slice(&self.keys);
-            let mut free = Vec::new();
-            memory.reserve(&mut free, self.free_partitions.len())?;
-            free.extend_from_slice(&self.free_partitions);
-            let mut relations = Vec::new();
-            memory.reserve(&mut relations, self.relations.len())?;
-            for original in &self.relations {
-                let mut replacement = Relation {
-                    tail: original.tail.copy_in(memory)?,
-                    len: original.len,
-                    maintain_objects: original.maintain_objects,
-                    ..Relation::supplemental()
-                };
-                memory.reserve(&mut replacement.batches, original.batches.len())?;
-                relations.push(replacement);
+        memory.try_scope(|memory| {
+            let mut preparation = MetadataPreparation::default();
+            assert!(preparation.resume(self, memory, |_| true)?);
+            Ok(())
+        })
+    }
+
+    /// Drive the same native preparation without a work ceiling for store tests.
+    #[cfg(test)]
+    pub(crate) fn prepare_maintenance_indexes(&mut self) -> Result<(), DictionaryError<D::Error>> {
+        // These resident store tests continue through public insertion, which
+        // deliberately refuses metadata owned by a supplemental admission.
+        let entries = self.keys.iter().enumerate().filter_map(|(slot, key)| {
+            key.filter(|_| self.relations[slot].row_count() != 0)
+                .map(|(id, key)| (slot, id, key))
+        });
+        let directory = Directory::resident_from_live::<D, N>(&self.interner, entries)?;
+        let rows = self.row_log.resident_sparse_copy()?;
+        self.reserve_partition_slots_in(self.relations.len(), &mut Memory::new(&mut Resident))?;
+        for slot in 0..self.keys.len() {
+            if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
+                let (_, key) = self.keys[slot].take().expect("occupied empty key");
+                self.by_key.remove(&key);
+                self.retire_relation_slot(slot);
+                self.free_partitions.push(slot);
             }
-            self.interner
-                .check_read()
-                .map_err(DictionaryError::Source)?;
-            Ok::<_, DictionaryError<D::Error>>((rows, lookup, keys, free, relations))
-        })?;
-        // Existing sealed arrangements retain their original inner owners;
-        // mutable tail columns were constructed under the new admission.
-        for (replacement, original) in relations.iter_mut().zip(&mut self.relations) {
-            replacement.batches.append(&mut original.batches);
+            self.relations[slot].maintain_objects = true;
+            for batch in &self.relations[slot].batches {
+                batch.object_order();
+            }
         }
-        self.relations = relations;
-        self.keys = keys;
-        self.free_partitions = free;
+        self.order = directory;
         self.row_log = rows;
-        self.by_key = lookup;
-        self.metadata_supplemental = true;
-        self.spare_relation = Relation::supplemental();
-        self.maintenance_indexes = false;
+        self.maintenance_indexes = true;
         Ok(())
     }
 
-    /// Prepare original secondary arrangements before exposing a maintained model.
     #[cfg(test)]
-    pub(crate) fn prepare_maintenance_indexes(&mut self) -> Result<(), DictionaryError<D::Error>> {
-        self.prepare_maintenance_indexes_with(&mut Memory::new(&mut Resident), false)
-    }
-
     pub(crate) fn prepare_maintenance_indexes_in<A: Admission + ?Sized>(
         &mut self,
         memory: &mut Memory<'_, A>,
     ) -> Result<(), DictionaryError<D::Error>> {
-        self.prepare_maintenance_indexes_with(memory, true)
+        if !self.metadata_supplemental {
+            self.admit_native_metadata_in(memory)?;
+        }
+        let mut preparation = MaintenanceIndexPreparation::default();
+        assert!(preparation.resume(self, memory, |_| true)?);
+        Ok(())
     }
 
     pub(crate) fn flush_metadata_retirement_in<A: Admission + ?Sized>(
@@ -2010,105 +2012,6 @@ where
         }
         self.row_log.flush_retired_in(memory)?;
         self.order.flush_retired_in(memory)
-    }
-
-    fn prepare_maintenance_indexes_with<A: Admission + ?Sized>(
-        &mut self,
-        memory: &mut Memory<'_, A>,
-        supplemental: bool,
-    ) -> Result<(), DictionaryError<D::Error>> {
-        self.flush_metadata_retirement_in(memory)?;
-        if self.maintenance_indexes
-            && (supplemental && self.order.is_supplemental()
-                || !supplemental && self.order.is_sparse())
-        {
-            return Ok(());
-        }
-        self.interner
-            .check_read()
-            .map_err(DictionaryError::Source)?;
-        self.reserve_partition_slots_in(self.relations.len(), memory)?;
-        let (directory, sparse_rows) = if supplemental && self.order.is_supplemental() {
-            (None, self.row_log.prepare_sparse()?)
-        } else if supplemental {
-            assert!(
-                self.row_log.is_supplemental() && self.metadata_supplemental,
-                "maintained metadata keeps its original supplied owner"
-            );
-            let frame = self
-                .directory_preparation
-                .get_or_insert_with(directory::Preparation::default);
-            while frame.next < self.keys.len() {
-                let slot = frame.next;
-                if self.relations[slot].row_count() != 0 {
-                    let (id, key) = self.keys[slot].expect("live original key");
-                    frame.directory.insert_live_in::<D, N, A>(
-                        &self.interner,
-                        (slot, id, key),
-                        memory,
-                    )?;
-                }
-                frame.next += 1;
-            }
-            self.interner
-                .check_read()
-                .map_err(DictionaryError::Source)?;
-            let rows = self.row_log.prepare_sparse()?;
-            let frame = self
-                .directory_preparation
-                .take()
-                .expect("completed original directory preparation");
-            (Some(frame.directory), rows)
-        } else {
-            let entries = self
-                .keys
-                .iter()
-                .enumerate()
-                .filter(|(slot, key)| key.is_some() && self.relations[*slot].row_count() != 0)
-                .map(|(slot, key)| {
-                    let (id, key) = key.expect("live key");
-                    (slot, id, key)
-                });
-            let directory = Directory::from_live::<D, N>(&self.interner, entries)?;
-            let rows = self.row_log.prepare_sparse()?;
-            self.interner
-                .check_read()
-                .map_err(DictionaryError::Source)?;
-            (Some(directory), rows)
-        };
-        for slot in 0..self.keys.len() {
-            if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
-                let (id, key) = self.keys[slot].take().expect("occupied empty key");
-                if directory.is_none() {
-                    assert_eq!(self.order.remove(id, Arity::<N>::key_term(key, 0)), slot);
-                }
-                self.by_key.remove(&key);
-                self.retire_relation_slot(slot);
-                self.free_partitions.push(slot);
-            }
-        }
-        if let Some(directory) = directory {
-            self.order = directory;
-        }
-        if let Some(rows) = sparse_rows {
-            self.row_log = rows;
-        }
-        self.flush_metadata_retirement_in(memory)?;
-        for relation in &mut self.relations {
-            relation.maintain_objects = true;
-            for batch in &mut relation.batches {
-                if supplemental {
-                    batch.prepare_object_in(memory, &mut self.metadata_retired_bytes)?;
-                } else {
-                    batch.object_order();
-                }
-            }
-        }
-        self.interner
-            .check_read()
-            .map_err(DictionaryError::Source)?;
-        self.maintenance_indexes = true;
-        Ok(())
     }
 
     /// Retire one emptied key after every native frame has finished using it.
@@ -2197,7 +2100,8 @@ where
         &mut self,
         original: &WithdrawnRow<D::Id>,
         memory: &mut Memory<'_, A>,
-    ) -> Result<(), DictionaryError<D::Error>> {
+        allow: impl FnMut(usize) -> bool,
+    ) -> Result<bool, DictionaryError<D::Error>> {
         self.flush_metadata_retirement_in(memory)?;
         self.interner
             .check_read()
@@ -2212,10 +2116,13 @@ where
         self.row_log.reserve_in(memory)?;
         assert!(!self.relations[slot].contains(original.subject, original.object));
         self.relations[slot].reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
+        if !self.relations[slot].prepare_row_work(allow)? {
+            return Ok(false);
+        }
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
-        Ok(())
+        Ok(true)
     }
 
     /// Publish the admitted original token, with no intervening source callback.
@@ -2257,6 +2164,18 @@ where
         terms: [DictionaryTerm<'_, D::Id>; N],
         memory: &mut Memory<'_, A>,
     ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        match self.insert_terms_until_in(terms, memory, |_| true)? {
+            core::ops::ControlFlow::Continue(inserted) => Ok(inserted),
+            core::ops::ControlFlow::Break(()) => unreachable!("unrestricted seal work completes"),
+        }
+    }
+
+    pub(crate) fn insert_terms_until_in<A: Admission + ?Sized>(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+        memory: &mut Memory<'_, A>,
+        allow: impl FnMut(usize) -> bool,
+    ) -> InsertProgress<D::Id, D::Error> {
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -2278,9 +2197,13 @@ where
         if let (Some(slot), Some(subject), Some(object)) = (existing, subject, object)
             && self.relations[slot].contains(subject, object)
         {
-            return Ok(None);
+            return Ok(core::ops::ControlFlow::Continue(None));
         }
         let admission = self.admit_row(existing, known[1], memory)?;
+        let relation = existing.map_or(&mut self.spare_relation, |slot| &mut self.relations[slot]);
+        if !relation.prepare_row_work(allow)? {
+            return Ok(core::ops::ControlFlow::Break(()));
+        }
         let ordered = Arity::<N>::MINT_ORDER
             .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
@@ -2321,9 +2244,9 @@ where
             Ok((ids, position))
         })?;
         let position = position.map(|prepared| prepared.publish(partition_id, partition_slot));
-        Ok(Some(
+        Ok(core::ops::ControlFlow::Continue(Some(
             self.publish_row(ids, existing, position, admission, memory),
-        ))
+        )))
     }
 
     fn retire_relation_slot(&mut self, slot: usize) {
@@ -2809,6 +2732,7 @@ where
                 .get_mut(&partition)
                 .expect("the delta arrangement was admitted");
             relation.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)?;
+            assert!(relation.prepare_row_work(|_| true)?);
             relation.insert_reserved(subject, object, row);
         }
         // This private physical run uses original partition ordinals. It never

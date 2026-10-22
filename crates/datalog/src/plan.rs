@@ -132,23 +132,37 @@ pub fn predicate_symbol<const N: usize>(atom: &ClauseAtom<N>) -> String {
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
 pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String, usize>> {
-    let (preds, edges) = dependency_edges(rules);
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    stratify_dependencies(&graph)
+}
 
-    let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
+fn stratify_dependencies(graph: &DependencyGraph) -> Option<BTreeMap<String, usize>> {
+    let mut stratum: BTreeMap<String, usize> = graph
+        .predicates
+        .iter()
+        .map(|p| (p.clone(), 0usize))
+        .collect();
 
     // Still relaxing after n + 1 passes ⇒ a negative edge sits in a cycle.
     let settled = relax_strata(
         &mut stratum,
         || {
-            edges
-                .iter()
-                .map(|(head, body, negative)| (head.clone(), body.clone(), *negative))
+            graph.edges.iter().map(|edge| {
+                (
+                    graph.predicates[edge.head].as_str(),
+                    graph.predicates[edge.body].as_str(),
+                    edge.negative,
+                )
+            })
         },
-        |levels, predicate| levels[predicate],
+        |levels, predicate| levels[*predicate],
         |levels, predicate, level| {
-            levels.insert(predicate.clone(), level);
+            *levels
+                .get_mut(*predicate)
+                .expect("an original dependency predicate") = level;
         },
-        Some(preds.len()),
+        Some(graph.predicates.len()),
     );
     settled.then_some(stratum)
 }
@@ -1559,7 +1573,11 @@ impl<const N: usize> Parsed<N> {
     /// A rule runs at its lowest head-predicate stratum; within a stratum the
     /// authored program order is preserved, so rules fire in a stable order.
     pub fn stratify(self) -> Option<Stratified<N>> {
-        let stratum_of = stratify(&self.rules)?;
+        let dependencies = Arc::new(
+            DependencyGraph::new_in(&self.rules, &mut Memory::new(&mut Resident))
+                .expect("resident dependency construction requires physical storage"),
+        );
+        let stratum_of = stratify_dependencies(&dependencies)?;
 
         let max_stratum = self
             .rules
@@ -1592,6 +1610,7 @@ impl<const N: usize> Parsed<N> {
             settled_predicates[stratum_of[&predicate]].push(predicate);
         }
         Some(Stratified {
+            dependencies,
             settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1603,6 +1622,7 @@ impl<const N: usize> Parsed<N> {
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified<const N: usize = 4> {
+    dependencies: Arc<DependencyGraph>,
     /// Predicates complete after each stratum, independent of early head emission.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
@@ -1642,6 +1662,7 @@ impl<const N: usize> Stratified<N> {
             .map(|rule| RulePlan::for_rule_with_estimates(rule, estimate))
             .collect();
         Planned {
+            dependencies: self.dependencies,
             settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1654,6 +1675,7 @@ impl<const N: usize> Stratified<N> {
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
 pub struct Planned<const N: usize = 4> {
+    dependencies: Arc<DependencyGraph>,
     /// Predicates complete after each stratum.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
@@ -1684,7 +1706,19 @@ impl<const N: usize> Planned<N> {
             .zip(&self.plans)
             .map(|(rule, plan)| RuleRuntime::new(rule, plan))
             .collect::<Arc<[_]>>();
+        let mut rule_levels = vec![0; self.rules.len()];
+        for (level, rules) in self.strata.iter().enumerate() {
+            for &rule in rules {
+                rule_levels[rule] = level;
+            }
+        }
+        let program_hash = crate::cache::canonical_rule_hash(&self.rules);
+        let base_read_rule = self.rules.iter().position(DlClause::reads_base);
         Executable {
+            dependencies: self.dependencies,
+            rule_levels: Arc::from(rule_levels),
+            program_hash,
+            base_read_rule,
             settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1706,6 +1740,12 @@ pub struct Executable<const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Immutable analysis and identity belong to the compiled program, never a
+    /// per-model copy or a supplemental grant adopting existing allocation.
+    pub(crate) dependencies: Arc<DependencyGraph>,
+    pub(crate) rule_levels: Arc<[usize]>,
+    pub(crate) program_hash: [u8; 32],
+    pub(crate) base_read_rule: Option<usize>,
     /// Predicates complete after each stratum.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,

@@ -205,6 +205,14 @@ pub trait ReclaimDictionary: TermDictionary {
     /// Used once when the maintenance owner adopts the initial dictionary.
     fn owned_terms(&self) -> impl Iterator<Item = Self::Id> + '_;
 
+    /// Metadata-work bound for one complete owned-identity scan, including
+    /// vacant hash buckets or ordered-index storage the iterator must visit.
+    /// The owner admits this atomic scan before invoking `owned_terms`.
+    ///
+    /// # Errors
+    /// Returns a typed overflow when the original layout cannot be represented.
+    fn owned_term_scan_work(&self) -> Result<usize, StorageError>;
+
     /// Release one original identity after its last semantic use.
     ///
     /// # Errors

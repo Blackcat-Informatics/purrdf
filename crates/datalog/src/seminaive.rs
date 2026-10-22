@@ -4478,7 +4478,15 @@ where
 {
     /// A state over the seeded store `edb`, governed by `options`.
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
-        let sparse = edb.has_sparse_rows();
+        Self::seeded_with_native(edb, options, false)
+    }
+
+    pub(super) fn seeded_with_native(
+        edb: RelationStore<D, N>,
+        options: EvalOptions,
+        native: bool,
+    ) -> Self {
+        let sparse = native || edb.has_sparse_rows();
         let depth = if sparse {
             Vec::new()
         } else {

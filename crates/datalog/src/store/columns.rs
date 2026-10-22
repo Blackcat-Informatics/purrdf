@@ -143,22 +143,6 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
         })
     }
 
-    pub(crate) fn copy_in<A: Admission + ?Sized>(
-        &self,
-        minimum_capacity: usize,
-        memory: &mut Memory<'_, A>,
-    ) -> Result<Self, StorageError> {
-        memory.scope(|memory| {
-            let mut copied = Self::default();
-            copied.reserve_capacity_in(minimum_capacity.max(self.len()), memory, &mut 0)?;
-            for (to, from) in copied.columns.iter_mut().zip(&self.columns) {
-                to.extend_from_slice(from);
-            }
-            copied.rows.extend_from_slice(&self.rows);
-            Ok(copied)
-        })
-    }
-
     /// Append one complete row after reserving all of its cells and its handle.
     ///
     /// # Errors
@@ -171,6 +155,20 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
     }
 
     /// Publish a row whose complete allocation was already admitted by its owner.
+    pub(crate) fn insert_reserved(&mut self, position: usize, cells: [I; N], handle: R) {
+        assert!(position <= self.len());
+        assert!(self.rows.capacity() > self.len());
+        assert!(
+            self.columns
+                .iter()
+                .all(|column| column.capacity() > self.len())
+        );
+        for (column, cell) in self.columns.iter_mut().zip(cells) {
+            column.insert(position, cell);
+        }
+        self.rows.insert(position, handle);
+    }
+
     pub(crate) fn push_reserved(&mut self, cells: [I; N], handle: R) {
         let position = self.len();
         assert!(

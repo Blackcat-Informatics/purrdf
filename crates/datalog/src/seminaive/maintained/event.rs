@@ -177,8 +177,13 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                         .len()
                         .checked_add(self.count)
                         .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
+                    let capacity = purrdf_lex::allocation::growth_capacity::<Task<I, N>>(
+                        work.heap_capacity(),
+                        required.saturating_sub(8),
+                    )
+                    .map_err(EvalError::Storage)?;
                     reserve_work_in(work, memory, retired, |work, memory| {
-                        work.try_reserve_heap_admitted(required.saturating_sub(8), memory)
+                        work.try_reserve_heap_admitted(capacity, memory)
                     })
                     .map_err(EvalError::Storage)?;
                     if !allow(1) {
@@ -213,5 +218,67 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                 Phase::Complete => return Ok(true),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        clause::{ClauseAtom, ClauseTerm, DlClause},
+        seminaive::compile,
+        store::TermInterner,
+    };
+    use purrdf_lex::allocation::Resident;
+
+    #[test]
+    fn accumulated_native_events_grow_the_original_task_spill_geometrically() {
+        let atom = |predicate| {
+            ClauseAtom::triple(
+                ClauseTerm::var("x"),
+                ClauseTerm::literal(predicate),
+                ClauseTerm::var("y"),
+            )
+        };
+        let program = compile(vec![DlClause::datalog(atom("out"), vec![atom("edge")])]).unwrap();
+        let mut rel = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        rel.insert_row(["a", "edge", "b"]).unwrap();
+        let terms = ["a", "edge", "b"].map(|surface| rel.term_id(surface).unwrap());
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut tasks = Tasks::default();
+        let mut retired = 0;
+        let mut capacity = 0;
+        let mut replacements = 0;
+        for count in 1..=4096 {
+            let mut event = Frame::new(terms);
+            assert!(
+                event
+                    .resume(
+                        &mut Inputs {
+                            exe: &program,
+                            levels: &[0],
+                            tasks: &mut tasks,
+                            rel: &rel
+                        },
+                        &mut memory,
+                        &mut retired,
+                        |_| true
+                    )
+                    .unwrap()
+            );
+            let work = tasks.get(&0).unwrap();
+            assert_eq!(work.len(), count);
+            if work.heap_capacity() != capacity {
+                replacements += 1;
+                capacity = work.heap_capacity();
+            }
+            memory.release_bytes(event.retire()).unwrap();
+        }
+        assert!(
+            replacements < 16,
+            "retained queue growth copies a geometric series, not every prefix"
+        );
+        assert!((4096 - 8..2 * 4096).contains(&capacity));
     }
 }

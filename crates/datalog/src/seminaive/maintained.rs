@@ -4,6 +4,7 @@
 //! Signed maintenance over the original native model and chosen finite proofs.
 
 mod event;
+mod initial;
 mod prepare;
 mod reclaim;
 mod storage;
@@ -518,8 +519,9 @@ struct InputState {
     phase: InputPhase,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum MutationPhase {
+    #[default]
     Tasks,
     Settlement,
     Complete,
@@ -530,7 +532,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     // Retain the complete original batch and grant until atomic acknowledgement.
-    batch: ChangeBatch<M, S, D::Id, N>,
+    batch: Option<ChangeBatch<M, S, D::Id, N>>,
     changes: Vec<([D::Id; N], i64)>,
     delete: Vec<(RowId, [D::Id; N])>,
     deletion: usize,
@@ -553,6 +555,41 @@ where
     delta: Vec<([D::Id; N], i64)>,
     altered: RowSet<D::Id>,
     reached: Vec<bool>,
+}
+
+// A retained initial run has no host batch; deriving Default would needlessly
+// require default watermarks, dictionaries and original admission providers.
+impl<M, S: Admission, D: TermDictionary, const N: usize> Default for Pending<'_, M, S, D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn default() -> Self {
+        Self {
+            batch: None,
+            changes: Vec::new(),
+            delete: Vec::new(),
+            deletion: 0,
+            input: 0,
+            input_state: None,
+            event: None,
+            installed_weights: 0,
+            phase: MutationPhase::Tasks,
+            withdrawals_cleared: false,
+            tasks: Tasks::default(),
+            active: None,
+            task: None,
+            publication: None,
+            output_work_admitted: false,
+            retired_bytes: 0,
+            retirement: 0,
+            delta_gathered: false,
+            delta_sort: None,
+            reclaim: reclaim::Frame::default(),
+            delta: Vec::new(),
+            altered: RowSet::default(),
+            reached: Vec::new(),
+        }
+    }
 }
 
 /// Certified progress of one predicate across all its original graph partitions.
@@ -665,7 +702,7 @@ pub enum PreparationProgress {
 
 /// A long-lived native model, its finite chosen proofs and original transaction owner.
 ///
-/// Initialization uses the normal evaluator. Updates retain the same store,
+/// Initialization and updates retain the same store,
 /// dictionary and rule/guard kernels. Reads of a new complete snapshot are withheld
 /// until its entire transaction settles; the opaque applied watermark advances once.
 /// Native witnesses are retained without constructing a parallel lexical proof table.
@@ -682,8 +719,8 @@ pub struct Maintained<
     session: EvaluationSession<'r, D, N>,
     weights: FastMap<[D::Id; N], i64>,
     weights_bytes: usize,
-    levels: Vec<usize>,
-    impacts: Impacts,
+    levels: &'r [usize],
+    impacts: &'r Impacts,
     pending: Option<Pending<'r, M, S, D, N>>,
     preparing: Option<prepare::Frame<M, S, D::Id, N>>,
     preparation_work: u128,
@@ -693,7 +730,8 @@ pub struct Maintained<
     delta: Vec<([D::Id; N], i64)>,
     failure: Option<EvalError<D::Error>>,
     prepared: bool,
-    initial_reclaim: reclaim::Frame<D::Id>,
+    initial: initial::Frame<D, N>,
+    initial_work: u128,
     // Rust destroys fields in declaration order. The original grant must outlive
     // the session, every pending frame, the result and their dependent payloads.
     storage: storage::Storage<A>,
@@ -763,7 +801,13 @@ impl<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission>
 where
     Arity<N>: StoreShape<N>,
 {
-    fn new_in(
+    /// Capture an original seed and its supplemental storage admission.
+    /// Construction borrows immutable compiler metadata; `resume_until` admits
+    /// and retains every initial native metadata and execution frame.
+    ///
+    /// # Errors
+    /// Preserves the original source failure and rejects unsupported base reads.
+    pub fn new_in(
         exe: &'r Executable<N>,
         edb: RelationStore<D, N>,
         guards: &'r dyn GuardEvaluator<D, N>,
@@ -771,55 +815,32 @@ where
         options: EvalOptions,
         admission: A,
     ) -> Result<Self, EvalError<D::Error>> {
-        let mut storage = storage::Storage::new(admission);
-        let mut weights = FastMap::default();
-        let mut weights_bytes = 0;
-        storage
-            .with_memory(|memory| {
-                purrdf_core::hash::reserve_map_with_retained_memory(
-                    &mut weights,
-                    &mut weights_bytes,
-                    edb.row_count(),
-                    memory,
-                )
-            })
-            .map_err(EvalError::Storage)?;
-        weights.extend(edb.rows_from(0).map(|(_, ids)| (ids, 1)));
-        let mut levels = Vec::new();
-        storage
-            .with_memory(|memory| memory.reserve(&mut levels, exe.rule_count()))
-            .map_err(EvalError::Storage)?;
-        levels.resize(exe.rule_count(), 0);
-        for level in 0..exe.stratum_count() {
-            for &rule in exe.stratum_rule_indices(level) {
-                levels[rule] = level;
-            }
-        }
-        let impacts = storage
-            .with_memory(|memory| Impacts::new_in(exe.rules(), memory))
-            .map_err(EvalError::Storage)?;
-        let mut edb = edb;
-        let before_store = storage.live();
-        storage
-            .with_memory(|memory| edb.admit_native_metadata_in(memory))
-            .map_err(native_error)?;
-        let mut session = EvaluationSession::new(
+        let storage = storage::Storage::new(admission);
+        let levels = exe.rule_levels.as_ref();
+        let impacts = exe.dependencies.as_ref();
+        let mut session = EvaluationSession::new_with_native(
             exe,
             edb,
             guards,
             context,
             options.with_derivation_mode(super::DerivationMode::ModelOnly),
+            true,
         )?;
-        let state = session.state.as_mut().expect("new session owns its seed");
-        state.account_native_memory(before_store, storage.live());
-        state.native.get_or_insert_with(Supports::default);
+        session
+            .state
+            .as_mut()
+            .expect("new session owns its seed")
+            .native
+            .as_mut()
+            .expect("native capture is active")
+            .tracking = true;
         Ok(Self {
             session,
-            weights,
-            weights_bytes,
+            weights: FastMap::default(),
+            weights_bytes: 0,
             levels,
             impacts,
-            pending: None,
+            pending: Some(Pending::default()),
             preparing: None,
             preparation_work: 0,
             mutation_work: 0,
@@ -828,7 +849,8 @@ where
             delta: Vec::new(),
             failure: None,
             prepared: false,
-            initial_reclaim: reclaim::Frame::default(),
+            initial: initial::Frame::default(),
+            initial_work: 0,
             storage,
         })
     }
@@ -841,7 +863,7 @@ where
     ///
     /// # Errors
     /// Preserves the original initialization or reference-storage failure.
-    fn new_reclaiming_in(
+    pub fn new_reclaiming_in(
         exe: &'r Executable<N>,
         edb: RelationStore<D, N>,
         guards: &'r dyn GuardEvaluator<D, N>,
@@ -858,42 +880,16 @@ where
             .state
             .as_mut()
             .expect("new model owns its seed");
-        let mut uses = TermUses {
-            counts: FastMap::default(),
-            counts_bytes: 0,
-            zero: RowSet::default(),
-        };
-        let mut retired = 0;
-        for (_, terms) in state.rel.rows_from(0) {
-            owner
-                .storage
-                .with_memory(|memory| uses.reserve_in(N, memory, &mut retired))
-                .map_err(EvalError::Storage)?;
-            uses.change(terms, 1);
-        }
-        for id in state.rel.interner().owned_terms() {
-            if !uses.counts.contains_key(&id) {
-                owner
-                    .storage
-                    .with_memory(|memory| uses.zero.reserve_in(1, memory, &mut retired))
-                    .map_err(EvalError::Storage)?;
-                uses.zero.insert(id);
-            }
-        }
-        state.native_bytes = state
-            .native_bytes
-            .checked_add(uses.counts_bytes)
-            .and_then(|bytes| bytes.checked_add(uses.zero.retained))
-            .expect("admitted native term metadata fits its original grant");
-        assert_eq!(
-            retired, 0,
-            "successful construction settled its native factories"
-        );
         state
             .native
             .as_mut()
             .expect("maintenance captures native proofs")
-            .term_uses = Some(uses);
+            .term_uses = Some(TermUses {
+            counts: FastMap::default(),
+            counts_bytes: 0,
+            zero: RowSet::default(),
+        });
+        owner.initial.reclaiming();
         state.release_term = Some(D::release_term);
         Ok(owner)
     }
@@ -907,7 +903,7 @@ where
     pub fn pending_watermark(&self) -> Option<&M> {
         self.pending
             .as_ref()
-            .map(|p| p.batch.watermark())
+            .and_then(|p| p.batch.as_ref().map(ChangeBatch::watermark))
             .or_else(|| self.preparing.as_ref().map(prepare::Frame::watermark))
     }
 
@@ -950,7 +946,10 @@ where
             target = Some(preparing.watermark());
             status = super::StratumStatus::Withheld;
         } else if let Some(pending) = &self.pending {
-            target = Some(pending.batch.watermark());
+            if !self.prepared {
+                return Err(MaintenanceError::InitialIncomplete);
+            }
+            target = pending.batch.as_ref().map(ChangeBatch::watermark);
             if pending.phase == MutationPhase::Complete {
                 return Ok(RelationProgress {
                     status: super::StratumStatus::Complete,
@@ -1146,11 +1145,11 @@ where
         if let Some(error) = &self.failure {
             return Err(MaintenanceError::Failed(error.clone()));
         }
-        if self.pending.is_some() || self.preparing.is_some() {
-            return Err(MaintenanceError::Busy);
-        }
         if !self.session.complete || !self.prepared {
             return Err(MaintenanceError::InitialIncomplete);
+        }
+        if self.pending.is_some() || self.preparing.is_some() {
+            return Err(MaintenanceError::Busy);
         }
         Ok(())
     }
@@ -1197,6 +1196,11 @@ where
         self.preparation_work
     }
 
+    /// Cumulative admitted initialization work, independent of later batches.
+    pub const fn initialization_work(&self) -> u128 {
+        self.initial_work
+    }
+
     /// Admitted preparation, metadata, native joins and replacement layout bytes.
     pub fn transaction_work(&self) -> u128 {
         self.preparation_work
@@ -1233,8 +1237,8 @@ where
         let meter = work::Meter::new(&used, 0, limit, stop);
         let mut inputs = prepare::Inputs {
             exe: self.session.exe,
-            impacts: &self.impacts,
-            levels: &self.levels,
+            impacts: self.impacts,
+            levels: self.levels,
             weights: &mut self.weights,
             weights_bytes: &mut self.weights_bytes,
             state: self
@@ -1364,8 +1368,8 @@ where
     /// Native replacement layout bytes are admitted before the original storage
     /// callback. Refusal by that callback consumes no factory work credit;
     /// refunds require none. An accepted allocation attempt retains its charge.
-    /// Use `begin` to include preparation in the grant. Initialize through
-    /// `resume` under the original evaluator governors before this method.
+    /// Use `begin` to include transaction preparation in the grant. Initialization
+    /// retains its own cumulative work counter under the same allowance.
     ///
     /// # Errors
     /// Retryable WorkLimit retains the original transaction and native frames.
@@ -1376,9 +1380,6 @@ where
         limit: u128,
         stop: Option<&dyn StopSignal>,
     ) -> Result<ResumeProgress<D::Error>, MaintenanceError<D::Error>> {
-        if !self.prepared {
-            return Err(MaintenanceError::InitialIncomplete);
-        }
         self.resume_inner(options, limit, stop)
     }
 
@@ -1435,69 +1436,8 @@ where
             return Ok(ResumeProgress::Complete);
         }
         let options = options.with_derivation_mode(super::DerivationMode::ModelOnly);
-        if self.pending.is_none() {
-            let progress = self
-                .storage
-                .with_memory(|memory| {
-                    self.session
-                        .resume_in_memory(self.session.binding(), options, stop, memory)
-                })
-                .map_err(MaintenanceError::Session)?;
-            if progress == ResumeProgress::Complete {
-                let state = self
-                    .session
-                    .state
-                    .as_mut()
-                    .expect("initial state remains owned");
-                let before = self.storage.live();
-                let preparation = self.storage.with_memory(|memory| {
-                    state
-                        .rel
-                        .prepare_maintenance_indexes_in(memory)
-                        .map_err(native_error)
-                        .and_then(|()| {
-                            self.initial_reclaim
-                                .resume(state, &[], memory, |_| !is_stopped(stop))
-                        })
-                });
-                state.account_native_memory(before, self.storage.live());
-                if matches!(preparation, Ok(false)) {
-                    return Ok(ResumeProgress::Paused(EvalError::Stopped {
-                        report: state.report(),
-                    }));
-                }
-                if let Err(error) = preparation {
-                    if matches!(error, EvalError::Storage(_)) {
-                        return Ok(ResumeProgress::Paused(error));
-                    }
-                    self.failure = Some(error.clone());
-                    return Err(MaintenanceError::Failed(error));
-                }
-                self.session
-                    .state
-                    .as_mut()
-                    .expect("initial state remains owned")
-                    .native
-                    .as_mut()
-                    .expect("native capture is active")
-                    .tracking = true;
-                self.session
-                    .state
-                    .as_mut()
-                    .expect("initial state remains owned")
-                    .native
-                    .as_mut()
-                    .expect("native capture is active")
-                    .native_heights = true;
-                self.session
-                    .state
-                    .as_mut()
-                    .expect("initial state remains owned")
-                    .depth = Vec::new();
-                self.prepared = true;
-                self.initial_reclaim = reclaim::Frame::default();
-            }
-            return Ok(progress);
+        if !self.prepared {
+            return self.resume_initial(options, limit, stop);
         }
         let consumed = self.transaction_work();
         if consumed > limit {
@@ -1524,7 +1464,7 @@ where
                     &Run {
                         exe: self.session.exe,
                         guards: self.session.guards,
-                        levels: &self.levels,
+                        levels: self.levels,
                     },
                     &mut self.weights,
                     self.pending.as_mut().expect("checked pending transaction"),
@@ -1550,7 +1490,7 @@ where
                     .take()
                     .expect("the completed transaction is owned");
                 self.delta = completed.delta;
-                self.applied = Some(completed.batch);
+                self.applied = completed.batch;
 
                 Ok(ResumeProgress::Complete)
             }
@@ -1869,12 +1809,16 @@ where
                         .contains_key(&terms),
                     "preparation preserves every row whose resulting asserted weight is positive"
                 );
-                state
+                let inserted = state
                     .rel
-                    .insert_terms_in(terms.map(DictionaryTerm::Id), memory)
-                    .map_err(native_error)?
-                    .expect("absent input inserts")
-                    .2
+                    .insert_terms_until_in(terms.map(DictionaryTerm::Id), memory, |cost| {
+                        meter.allow(cost)
+                    })
+                    .map_err(native_error)?;
+                let core::ops::ControlFlow::Continue(inserted) = inserted else {
+                    return meter.paused(state.report());
+                };
+                inserted.expect("absent input inserts").2
             };
             let native = state.native.as_mut().expect("native proof owner");
             native.remove(row);

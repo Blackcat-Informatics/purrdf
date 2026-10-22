@@ -8,7 +8,7 @@ use super::{
     FixpointState, GuardEvaluator, JoinStrategy, Limits, RelationStore, StopSignal, StratumRun,
     TermDictionary, WorkReport, check_budget, is_stopped, stratum,
 };
-use crate::cache::{canonical_rule_hash, contract_hash_with};
+use crate::cache::contract_hash_with;
 use crate::store::{Arity, StoreShape};
 use purrdf_hash::{Domain, hex::Digest32};
 use purrdf_lex::allocation::{Admission, Memory, Resident};
@@ -189,11 +189,18 @@ where
         context: SessionContext,
         options: EvalOptions,
     ) -> Result<Self, EvalError<D::Error>> {
-        if let Some(rule) = exe
-            .rules()
-            .iter()
-            .position(crate::clause::DlClause::reads_base)
-        {
+        Self::new_with_native(exe, edb, guards, context, options, false)
+    }
+
+    pub(super) fn new_with_native(
+        exe: &'r Executable<N>,
+        edb: RelationStore<D, N>,
+        guards: &'r dyn GuardEvaluator<D, N>,
+        context: SessionContext,
+        options: EvalOptions,
+        native: bool,
+    ) -> Result<Self, EvalError<D::Error>> {
+        if let Some(rule) = exe.base_read_rule {
             return Err(EvalError::BaseReadRequiresSchedule { rule });
         }
         edb.interner().check_read().map_err(EvalError::Source)?;
@@ -201,16 +208,25 @@ where
             exe,
             guards,
             binding: ContinuationBinding {
-                program: Digest32::new(canonical_rule_hash(exe.rules())),
+                program: Digest32::new(exe.program_hash),
                 context,
             },
             options,
-            state: Some(FixpointState::seeded(edb, options)),
+            state: Some(FixpointState::seeded_with_native(edb, options, native)),
             stratum: 0,
             frame: None,
             complete: false,
             failure: None,
         })
+    }
+
+    pub(super) fn maintained_complete(&mut self) {
+        assert!(
+            self.frame.is_none(),
+            "maintenance owns its original execution frames"
+        );
+        self.stratum = self.exe.stratum_count();
+        self.complete = true;
     }
 
     /// The exact original binding a subsequent resume must present unchanged.

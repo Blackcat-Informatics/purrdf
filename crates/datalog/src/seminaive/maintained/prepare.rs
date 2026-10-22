@@ -549,7 +549,7 @@ where
             .and_then(|bytes| bytes.checked_add(absence_bytes))
             .expect("retired preparation layouts fit their original grant");
         Pending {
-            batch: self.batch,
+            batch: Some(self.batch),
             changes: self.changes,
             delete: self.delete,
             deletion: 0,

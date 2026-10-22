@@ -141,36 +141,74 @@ impl<I: TermIdentity> RowLog<I> {
     }
 
     /// Build new metadata under the supplied owner; existing buffers keep theirs.
-    pub(super) fn copy_sparse_in<A: Admission + ?Sized>(
-        &self,
-        memory: &mut Memory<'_, A>,
-    ) -> Result<Self, StorageError> {
-        memory.scope(|memory| {
-            let mut live = OrderedTable::default();
-            for row in self.from(0) {
-                assert!(live.insert(row.0.index(), row, memory)?.is_none());
-            }
-            Ok(Self::Sparse {
-                live,
-                next: self.next(),
-                supplemental: true,
-                retired_bytes: 0,
-            })
-        })
+    pub(super) fn empty_sparse(next: u64) -> Self {
+        Self::Sparse {
+            live: OrderedTable::default(),
+            next,
+            supplemental: true,
+            retired_bytes: 0,
+        }
     }
 
-    /// One-time construction changes metadata layout, never arrangements or identities.
-    pub(super) fn prepare_sparse(&self) -> Result<Option<Self>, StorageError> {
-        if self.is_sparse() {
-            return Ok(None);
-        }
+    #[cfg(test)]
+    pub(super) fn resident_sparse_copy(&self) -> Result<Self, StorageError> {
+        let mut rows = Self::empty_sparse(self.next());
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        let mut rows = self.copy_sparse_in(&mut memory)?;
+        assert!(self.copy_sparse_until_in(&mut rows, &mut 0, &mut memory, |_| true)?);
         if let Self::Sparse { supplemental, .. } = &mut rows {
             *supplemental = false;
         }
-        Ok(Some(rows))
+        Ok(rows)
+    }
+
+    pub(super) fn copy_sparse_until_in<A: Admission + ?Sized>(
+        &self,
+        copy: &mut Self,
+        cursor: &mut u64,
+        memory: &mut Memory<'_, A>,
+        mut allow: impl FnMut(usize) -> bool,
+    ) -> Result<bool, StorageError> {
+        let Self::Sparse {
+            live,
+            next,
+            retired_bytes,
+            ..
+        } = copy
+        else {
+            unreachable!("native metadata copy is sparse")
+        };
+        *next = self.next();
+        flush_retired_bytes(retired_bytes, memory)?;
+        loop {
+            let (row, following) = match self {
+                Self::Dense(rows) => {
+                    let index = usize::try_from((*cursor).min(rows.len() as u64))
+                        .expect("bounded resident cursor");
+                    let Some(&(id, partition, subject, object)) = rows.get(index) else {
+                        break;
+                    };
+                    (id.map(|id| (id, partition, subject, object)), *cursor + 1)
+                }
+                Self::Sparse { .. } => {
+                    let Some(row) = self.from(*cursor).next() else {
+                        break;
+                    };
+                    (Some(row), row.0.index() + 1)
+                }
+            };
+            if row.is_some() {
+                reserve_ordered_in(live, memory, retired_bytes)?;
+            }
+            if !allow(1) {
+                return Ok(false);
+            }
+            if let Some(row) = row {
+                assert!(live.insert(row.0.index(), row, memory)?.is_none());
+            }
+            *cursor = following;
+        }
+        Ok(true)
     }
 
     pub(super) fn append_in<A: Admission + ?Sized>(
@@ -306,6 +344,70 @@ mod tests {
     };
     use purrdf_hash::hex::Digest32;
     use purrdf_lex::allocation::Resident;
+
+    #[test]
+    fn sparse_copy_charges_vacant_dense_prefix_and_suffix_before_advancing() {
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for index in 0..257 {
+            input.insert_row([&index.to_string(), "in", "o"]).unwrap();
+        }
+        for index in (0..257).filter(|&index| index != 128) {
+            input.remove_row([&index.to_string(), "in", "o"]).unwrap();
+        }
+        let source = &input.row_log;
+        let original = source.from(0).collect::<Vec<_>>();
+        assert_eq!(original.len(), 1);
+        assert_eq!(original[0].0.index(), 128);
+
+        let mut uninterrupted = RowLog::empty_sparse(source.next());
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut work = 0;
+        assert!(
+            source
+                .copy_sparse_until_in(&mut uninterrupted, &mut 0, &mut memory, |units| {
+                    work += units;
+                    true
+                },)
+                .unwrap()
+        );
+        assert_eq!(work, 257, "vacant physical cells also consume work");
+        let expected_bytes = memory.admitted_bytes();
+
+        let mut resumed = RowLog::empty_sparse(source.next());
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut cursor = 0;
+        for expected in 0..257 {
+            assert!(
+                !source
+                    .copy_sparse_until_in(&mut resumed, &mut cursor, &mut memory, |_| false,)
+                    .unwrap()
+            );
+            assert_eq!(cursor, expected, "refusal retains the original slot");
+            if expected < 128 {
+                assert_eq!(memory.admitted_bytes(), 0);
+                assert_eq!(resumed.retained(), 0);
+            }
+            let mut remaining = 1;
+            let done = source
+                .copy_sparse_until_in(&mut resumed, &mut cursor, &mut memory, |units| {
+                    if units > remaining {
+                        return false;
+                    }
+                    remaining -= units;
+                    true
+                })
+                .unwrap();
+            assert_eq!(cursor, expected + 1);
+            assert_eq!(done, expected == 256);
+        }
+        assert_eq!(resumed, uninterrupted);
+        assert_eq!(memory.admitted_bytes(), expected_bytes);
+        assert_eq!(resumed.next(), 257);
+        assert_eq!(source.from(0).collect::<Vec<_>>(), original);
+        assert_eq!(resumed.from(0).collect::<Vec<_>>(), original);
+    }
 
     #[test]
     fn supplemental_native_metadata_factories_preserve_original_publication_and_clones() {
@@ -669,7 +771,11 @@ mod tests {
         assert_eq!(input.retained_rows(), 2);
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        input.admit_restore_in(&token, &mut memory).unwrap();
+        assert!(
+            input
+                .admit_restore_in(&token, &mut memory, |_| true)
+                .unwrap()
+        );
         input.restore_row_in(token, &mut memory);
         assert_eq!(input.rows_from(wide).next().unwrap(), (original, ids));
         assert_eq!(input.row_slots(), wide + 1);

@@ -3685,14 +3685,16 @@ fn head_probes_preserve_factor_cycles_negation_and_independent_proofs() {
     }
 }
 
-fn assert_native_grounding(
-    rules: &[DlClause<3>],
-    input: &RelationStore<purrdf_datalog::store::TermInterner, 3>,
-    model: &RelationStore<purrdf_datalog::store::TermInterner, 3>,
-    mut proofs: Vec<seminaive::Derivation<3>>,
-) {
+fn assert_native_grounding<const N: usize>(
+    rules: &[DlClause<N>],
+    input: &RelationStore<purrdf_datalog::store::TermInterner, N>,
+    model: &RelationStore<purrdf_datalog::store::TermInterner, N>,
+    mut proofs: Vec<seminaive::Derivation<N>>,
+) where
+    purrdf_datalog::store::Arity<N>: purrdf_datalog::store::StoreShape<N>,
+{
     proofs.sort_by_key(seminaive::Derivation::proof_height);
-    let mut arena = purrdf_datalog::proof::ProofArena::<3>::default();
+    let mut arena = purrdf_datalog::proof::ProofArena::<N>::default();
     let mut established = std::collections::BTreeMap::new();
     for fact in input.facts_sorted() {
         established.insert(fact.clone(), arena.axiom(fact).unwrap());
@@ -4955,7 +4957,317 @@ fn maintained_transactions_match_seeded_random_signed_histories() {
     }
 }
 
+fn maintained_grouped_negation_and_guards_resume_original_triples_and_quads() {
+    use purrdf_datalog::{
+        guard::Negation,
+        maintenance::ChangeBatch,
+        seminaive::{Maintained, MaintenanceError, ResumeProgress, SessionContext},
+        store::{Arity, StoreShape, TermInterner},
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    fn check<const N: usize>(atom: impl Fn(&str, &str, &str) -> ClauseAtom<N>)
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        let program = compile(vec![
+            DlClause::datalog(atom("x", "out", "y"), vec![atom("x", "edge", "y")])
+                .with_guards(vec![Guard::not_equal("x", "y")])
+                .with_negations(vec![Negation::new(
+                    vec![atom("x", "blocked", "z"), atom("z", "marker", "y")],
+                    vec![Guard::not_equal("z", "y")],
+                )]),
+            DlClause::datalog(atom("x", "aux", "y"), vec![atom("x", "out", "y")]),
+            DlClause::datalog(atom("x", "out", "y"), vec![atom("x", "aux", "y")]),
+        ])
+        .unwrap();
+        let mut input = RelationStore::<TermInterner, N>::with_dictionary(TermInterner::default());
+        for graph in if N == 4 { &["g1", "g2"][..] } else { &[""][..] } {
+            for [s, p, o] in [
+                ["a", "edge", "b"],
+                ["b", "edge", "c"],
+                ["a", "edge", "a"],
+                ["c", "marker", "b"],
+            ] {
+                let row = [s, p, o, graph];
+                input
+                    .insert_row(core::array::from_fn(|index| row[index]))
+                    .unwrap();
+            }
+        }
+        let text = ["a", "blocked", "c", "g1"];
+        input
+            .insert_row(core::array::from_fn(|index| text[index]))
+            .unwrap();
+        let row = core::array::from_fn(|index| input.term_id(text[index]).unwrap());
+        input.remove_ids(row).unwrap();
+        let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+        let mut model = Maintained::<u64, Resident, _, N>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            SessionContext {
+                snapshot: Digest32::new([0xe1; 32]),
+                guards: Digest32::new([0xe2; 32]),
+                evidence: Digest32::new([0xe3; 32]),
+            },
+            options,
+        )
+        .unwrap();
+        let mut limit = 0;
+        loop {
+            match model.resume_until(options, limit, None) {
+                Ok(ResumeProgress::Complete) => break,
+                Err(MaintenanceError::WorkLimit { needed, .. }) => {
+                    assert!(model.facts().is_err());
+                    assert!(model.pending_watermark().is_none());
+                    assert!(model.applied_watermark().is_none());
+                    limit = needed;
+                }
+                other => panic!("initial grouped native work: {other:?}"),
+            }
+        }
+        for (position, weight) in [1, -1, 1, -1].into_iter().enumerate() {
+            if weight > 0 {
+                input.insert_ids(row).unwrap();
+            } else {
+                input.remove_ids(row).unwrap();
+            }
+            model
+                .begin(ChangeBatch::new(position as u64, [(row, weight)], Resident).unwrap())
+                .unwrap();
+            let mut limit = 0;
+            loop {
+                match model.resume_until(options, limit, None) {
+                    Ok(ResumeProgress::Complete) => break,
+                    Err(MaintenanceError::WorkLimit { needed, .. }) => {
+                        assert!(needed > limit);
+                        assert_eq!(model.pending_watermark(), Some(&(position as u64)));
+                        assert_ne!(model.applied_watermark(), Some(&(position as u64)));
+                        limit = needed;
+                    }
+                    other => panic!("grouped native transaction: {other:?}"),
+                }
+            }
+            let cold =
+                evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+            assert_eq!(
+                model.facts().unwrap().facts_sorted(),
+                cold.facts().facts_sorted()
+            );
+            let mut proofs = Vec::new();
+            for (_, terms) in model.facts().unwrap().rows_from(0) {
+                if let Some(witness) = model.witness(terms).unwrap() {
+                    let actual = witness.derivation().unwrap();
+                    assert_eq!(
+                        &actual,
+                        cold.derivations()
+                            .unwrap()
+                            .iter()
+                            .find(|proof| proof.fact() == actual.fact())
+                            .unwrap()
+                    );
+                    proofs.push(actual);
+                }
+            }
+            assert_native_grounding(program.rules(), &input, model.facts().unwrap(), proofs);
+        }
+    }
+    check(triple_pattern);
+    check(|s, p, o| {
+        ClauseAtom::quad(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+            ClauseTerm::var("g"),
+        )
+    });
+}
+
+fn maintained_quad_callbacks_preserve_original_failures_and_poison_the_owner() {
+    use host_dictionary::{HostDictionary, SourceLost};
+    use purrdf_datalog::{
+        guard::{CallbackDiagnostic, CallbackError},
+        maintenance::ChangeBatch,
+        seminaive::{EvalError, Maintained, MaintenanceError, ResumeProgress, SessionContext},
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    struct Refuse {
+        source: bool,
+    }
+    impl GuardEvaluator<HostDictionary> for Refuse {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, HostDictionary>,
+        ) -> Result<GuardRows<u64>, CallbackError<SourceLost>> {
+            assert_eq!(
+                call.inputs,
+                [
+                    dictionary::DictionaryTerm::Id(1),
+                    dictionary::DictionaryTerm::Id(3)
+                ]
+            );
+            if self.source {
+                Err(CallbackError::Source(SourceLost(137)))
+            } else {
+                Err(CallbackError::Evaluation(
+                    "original guard refusal".to_owned(),
+                ))
+            }
+        }
+    }
+    let atom = |predicate| {
+        ClauseAtom::quad(
+            ClauseTerm::var("x"),
+            ClauseTerm::literal(predicate),
+            ClauseTerm::var("y"),
+            ClauseTerm::var("g"),
+        )
+    };
+    let program = compile(vec![
+        DlClause::datalog(atom("out"), vec![atom("edge")])
+            .with_guards(vec![Guard::filter("host", vec!["x".into(), "y".into()])]),
+    ])
+    .unwrap();
+    for source in [false, true] {
+        for initialization in [false, true] {
+            let mut dictionary = HostDictionary::default();
+            dictionary.surfaces.extend([
+                (1, "a".into()),
+                (2, "edge".into()),
+                (3, "b".into()),
+                (4, "g".into()),
+                (5, "out".into()),
+            ]);
+            let mut input = RelationStore::<_, 4>::with_dictionary(dictionary);
+            let row = [1, 2, 3, 4];
+            input.insert_ids(row).unwrap();
+            if !initialization {
+                input.remove_ids(row).unwrap();
+            }
+            let guard = Refuse { source };
+            let options = EvalOptions::default();
+            let mut model = Maintained::<u64, Resident, _>::new(
+                &program,
+                input,
+                &guard,
+                SessionContext {
+                    snapshot: Digest32::new([0xf1; 32]),
+                    guards: Digest32::new([0xf2; 32]),
+                    evidence: Digest32::new([0xf3; 32]),
+                },
+                options,
+            )
+            .unwrap();
+            if !initialization {
+                assert!(matches!(
+                    model.resume(options, None),
+                    Ok(ResumeProgress::Complete)
+                ));
+                model
+                    .begin(ChangeBatch::new(17, [(row, 1)], Resident).unwrap())
+                    .unwrap();
+            }
+            for _ in 0..2 {
+                let failure = model.resume(options, None);
+                if source {
+                    assert!(matches!(
+                        failure,
+                        Err(MaintenanceError::Failed(EvalError::Source(SourceLost(137))))
+                    ));
+                } else {
+                    assert!(
+                        matches!(failure, Err(MaintenanceError::Failed(EvalError::Guard { message: CallbackDiagnostic::Message(ref message), .. })) if message == "original guard refusal")
+                    );
+                }
+                assert!(model.facts().is_err());
+                assert!(model.applied_watermark().is_none());
+            }
+        }
+    }
+}
+
+fn maintained_bootstrap_resumes_vacant_rows_and_retired_partitions() {
+    use purrdf_datalog::{
+        seminaive::{Maintained, MaintenanceError, ResumeProgress, SessionContext},
+        store::TermInterner,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+
+    let program = compile(Vec::<DlClause<3>>::new()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for index in 0..257 {
+        input.insert_row(["s", &index.to_string(), "o"]).unwrap();
+    }
+    for index in (0..257).filter(|&index| index != 128) {
+        input.remove_row(["s", &index.to_string(), "o"]).unwrap();
+    }
+    let original = input.rows_from(0).collect::<Vec<_>>();
+    assert_eq!(original[0].0.index(), 128);
+    let options = EvalOptions::default();
+    let start = || {
+        Maintained::<u64, Resident, _, 3>::new_in(
+            &program,
+            input.clone(),
+            &NoGuards,
+            SessionContext {
+                snapshot: Digest32::new([0xa1; 32]),
+                guards: Digest32::new([0xa2; 32]),
+                evidence: Digest32::new([0xa3; 32]),
+            },
+            options,
+            Resident,
+        )
+        .unwrap()
+    };
+    let mut reference = start();
+    assert!(matches!(
+        reference.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let work = reference.initialization_work();
+    assert!(work > 257);
+    let mut resumed = start();
+    let mut limit = 0;
+    let mut pauses = 0;
+    loop {
+        assert!(resumed.applied_watermark().is_none());
+        assert!(resumed.pending_watermark().is_none());
+        match resumed.resume_until(options, limit, None) {
+            Ok(ResumeProgress::Complete) => break,
+            Err(MaintenanceError::WorkLimit {
+                consumed, needed, ..
+            }) => {
+                assert!(consumed <= limit && needed > limit);
+                if limit == 0 {
+                    assert_eq!(needed, 1, "the first vacant slot needs one unit");
+                }
+                assert!(resumed.facts().is_err());
+                assert_eq!(resumed.initialization_work(), consumed);
+                limit = needed;
+                pauses += 1;
+            }
+            other => panic!("original sparse bootstrap: {other:?}"),
+        }
+    }
+    assert!(pauses > 257);
+    assert_eq!(resumed.initialization_work(), work);
+    assert_eq!(
+        resumed.facts().unwrap().rows_from(0).collect::<Vec<_>>(),
+        original
+    );
+    assert_eq!(resumed.facts().unwrap().row_slots(), 257);
+    assert_eq!(resumed.facts().unwrap().partition_count(), 1);
+    assert_eq!(resumed.budget().join_steps(), 0);
+    assert!(resumed.model_delta().unwrap().is_none());
+}
+
 purrdf_testkit::harness_main!(
+    maintained_bootstrap_resumes_vacant_rows_and_retired_partitions,
+    maintained_quad_callbacks_preserve_original_failures_and_poison_the_owner,
+    maintained_grouped_negation_and_guards_resume_original_triples_and_quads,
     maintained_restoration_respects_a_reduced_fact_grant_before_publication,
     maintained_reclaiming_settlement_resumes_every_stop_cut,
     maintained_preparation_resumes_every_metadata_credit_without_publishing,

@@ -368,7 +368,7 @@ where
             let row = if let Some(row) = existing {
                 row
             } else if let Some((row, ids)) = restored {
-                state
+                let admitted = state
                     .rel
                     .admit_restore_in(
                         state
@@ -379,11 +379,15 @@ where
                             .get(&ids)
                             .expect("the original withdrawal token remains owned"),
                         memory,
+                        &mut allow,
                     )
                     .map_err(|error| match error {
                         DictionaryError::Source(error) => EvalError::Source(error),
                         DictionaryError::Storage(error) => EvalError::Storage(error),
                     })?;
+                if !admitted {
+                    return Ok(false);
+                }
                 let original = state
                     .native
                     .as_mut()
@@ -394,15 +398,17 @@ where
                 state.rel.restore_row_in(original, memory);
                 row
             } else {
-                state
+                let inserted = state
                     .rel
-                    .insert_terms_in(terms, memory)
+                    .insert_terms_until_in(terms, memory, &mut allow)
                     .map_err(|error| match error {
                         DictionaryError::Source(error) => EvalError::Source(error),
                         DictionaryError::Storage(error) => EvalError::Storage(error),
-                    })?
-                    .expect("an absent winner inserts a new row")
-                    .2
+                    })?;
+                let core::ops::ControlFlow::Continue(inserted) = inserted else {
+                    return Ok(false);
+                };
+                inserted.expect("an absent winner inserts a new row").2
             };
             let (_, candidate, fact) = self
                 .pending

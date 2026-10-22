@@ -183,103 +183,106 @@ mod tests {
             refuse_shrink: false,
             destroyed: None,
         };
-        let result = Maintained::<u64, Resident, _, 3, _>::new_in(
+        let options = EvalOptions::default();
+        let mut model = Maintained::<u64, Resident, _, 3, _>::new_in(
             &program,
             input(),
             &NoGuards,
             context,
-            EvalOptions::default(),
-            &mut grant,
-        );
-        assert!(matches!(
-            result,
-            Err(EvalError::Storage(StorageError::AdmissionFailed))
-        ));
-        drop(result);
-        assert_eq!(live.get(), 0);
-        grant.maximum = usize::MAX;
-        let model = Maintained::<u64, Resident, _, 3, _>::new_in(
-            &program,
-            input(),
-            &NoGuards,
-            context,
-            EvalOptions::default(),
+            options,
             &mut grant,
         )
         .unwrap();
+        assert_eq!(live.get(), 0, "capture creates no source-sized metadata");
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(crate::seminaive::ResumeProgress::Paused(
+                EvalError::Storage(StorageError::AdmissionFailed)
+            ))
+        ));
+        model.storage.admission.maximum = usize::MAX;
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(crate::seminaive::ResumeProgress::Complete)
+        ));
         assert_eq!(model.storage.live(), live.get());
-        let weights_bytes = purrdf_core::hash::hash_table_allocation_bound::<(
-            [crate::id::TermId; 3],
-            i64,
-        )>(model.weights.capacity())
-        .unwrap();
         assert_eq!(
-            live.get(),
-            weights_bytes
-                + model.session.state.as_ref().unwrap().native_bytes
-                + model.levels.capacity() * size_of::<usize>()
-                + model.impacts.predicates.capacity() * size_of::<String>()
-                + model.impacts.edges.capacity() * size_of::<crate::plan::DependencyEdge>()
-                + model
-                    .impacts
-                    .predicates
-                    .iter()
-                    .map(String::capacity)
-                    .sum::<usize>()
+            model.session.state.as_ref().unwrap().native_bytes,
+            live.get()
         );
+        assert!(core::ptr::eq(model.levels, program.rule_levels.as_ref()));
+        assert!(core::ptr::eq(model.impacts, program.dependencies.as_ref()));
         let initial_bytes = live.get();
+        let initial_work = model.initialization_work();
         let initial_grows = model.storage.admission.grows;
         drop(model);
         assert_eq!(live.get(), 0);
-        // Let the first map succeed, then refuse the next actual vector layout.
-        grant.maximum = weights_bytes;
-        let result = Maintained::<u64, Resident, _, 3, _>::new_in(
-            &program,
-            input(),
-            &NoGuards,
-            context,
-            EvalOptions::default(),
-            &mut grant,
-        );
-        assert!(matches!(
-            result,
-            Err(EvalError::Storage(StorageError::AdmissionFailed))
-        ));
-        drop(result);
-        assert_eq!(live.get(), 0);
-        // Refuse each actual initial factory, including dependency scratch and
-        // temporary surfaces. Every failed local graph dies before its refund.
+        // Refuse each actual factory, then continue the same owner. No compiler
+        // metadata or original buffers are adopted by the supplemental grant.
         for allowed in 0..initial_grows {
-            grant.maximum = usize::MAX;
             grant.grows = 0;
             grant.maximum_grows = allowed;
-            let result = Maintained::<u64, Resident, _, 3, _>::new_in(
+            let mut model = Maintained::<u64, Resident, _, 3, _>::new_in(
                 &program,
                 input(),
                 &NoGuards,
                 context,
-                EvalOptions::default(),
+                options,
                 &mut grant,
-            );
+            )
+            .unwrap();
             assert!(matches!(
-                result,
-                Err(EvalError::Storage(StorageError::AdmissionFailed))
+                model.resume(options, None),
+                Ok(crate::seminaive::ResumeProgress::Paused(
+                    EvalError::Storage(StorageError::AdmissionFailed)
+                ))
             ));
-            drop(result);
+            model.storage.admission.maximum_grows = usize::MAX;
+            assert!(matches!(
+                model.resume(options, None),
+                Ok(crate::seminaive::ResumeProgress::Complete)
+            ));
+            assert_eq!(live.get(), initial_bytes, "factory {allowed}");
+            assert_eq!(
+                model.initialization_work(),
+                initial_work,
+                "factory {allowed} repeats no admitted work"
+            );
+            assert_eq!(model.facts().unwrap().row_count(), 2);
+            drop(model);
             assert_eq!(live.get(), 0);
         }
-        grant.maximum = usize::MAX;
         grant.grows = 0;
         grant.maximum_grows = usize::MAX;
-        let model = Maintained::<u64, Resident, _, 3, _>::new_reclaiming_in(
+        let mut model = Maintained::<u64, Resident, _, 3, _>::new_reclaiming_in(
             &program,
             input().into_reclaiming().unwrap(),
             &NoGuards,
             context,
-            EvalOptions::default(),
+            options,
             &mut grant,
         )
         .unwrap();
+        let mut limit = 0;
+        let mut cuts = 0;
+        loop {
+            match model.resume_until(options, limit, None) {
+                Ok(crate::seminaive::ResumeProgress::Complete) => break,
+                Err(crate::seminaive::MaintenanceError::WorkLimit {
+                    consumed, needed, ..
+                }) => {
+                    assert_eq!(model.initialization_work(), consumed);
+                    assert!(needed > limit);
+                    assert!(model.applied_watermark().is_none());
+                    assert!(model.pending_watermark().is_none());
+                    limit = needed;
+                    cuts += 1;
+                }
+                other => panic!("initial native work cut: {other:?}"),
+            }
+        }
+        assert!(cuts > 20, "all original phases are governed");
+        assert_eq!(model.facts().unwrap().row_count(), 2);
         let uses = model
             .session
             .state
@@ -291,30 +294,10 @@ mod tests {
             .term_uses
             .as_ref()
             .unwrap();
-        assert_eq!(uses.counts.len(), 3);
-        assert_eq!(
-            live.get(),
-            initial_bytes + uses.counts_bytes + uses.zero.retained
-        );
+        assert_eq!(uses.counts.len(), 4);
         assert_eq!(model.storage.live(), live.get());
+        assert!(model.model_delta().unwrap().is_none());
         drop(model);
-        assert_eq!(live.get(), 0);
-        grant.maximum = usize::MAX;
-        grant.grows = 0;
-        grant.maximum_grows = initial_grows;
-        let result = Maintained::<u64, Resident, _, 3, _>::new_reclaiming_in(
-            &program,
-            input().into_reclaiming().unwrap(),
-            &NoGuards,
-            context,
-            EvalOptions::default(),
-            &mut grant,
-        );
-        assert!(matches!(
-            result,
-            Err(EvalError::Storage(StorageError::AdmissionFailed))
-        ));
-        drop(result);
         assert_eq!(live.get(), 0);
     }
 

@@ -196,9 +196,117 @@ fn repeated_retractions_release_row_metadata_without_reusing_coordinates() {
     assert_eq!(model.facts().unwrap().row_slots(), 10_241);
 }
 
+fn hot_partition_compaction_retains_large_original_buffers_across_work_refusal() {
+    use purrdf_datalog::seminaive::MaintenanceError;
+    let program = compile(Vec::<DlClause<3>>::new()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    // The original merge law admits a batch up to twice the incoming span;
+    // its full-consolidation boundaries are Fibonacci chunk counts. The next
+    // tail at 17,711 chunks merges all 1,133,440 preceding original rows.
+    let prefix = 17_711_usize * 64 - 64;
+    for index in 0..prefix {
+        input
+            .insert_row([&format!("s{index:08}"), "hot", "o"])
+            .unwrap();
+    }
+    let original = input.rows_from(0).next().unwrap();
+    let options = EvalOptions::default()
+        .with_max_stored_facts(u64::MAX)
+        .with_max_join_steps(u64::MAX);
+    let context = SessionContext {
+        snapshot: Digest32::new([0xc1; 32]),
+        guards: Digest32::new([0xc2; 32]),
+        evidence: Digest32::new([0xc3; 32]),
+    };
+    let mut observations = Vec::new();
+    for paused in [false, true] {
+        let mut model = Maintained::<u64, Resident, _, 3>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            context,
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let mut final_row = None;
+        for offset in 0..64 {
+            let row = model
+                .admit_terms([
+                    DictionaryTerm::Surface(&format!("s{:08}", prefix + offset)),
+                    DictionaryTerm::Surface("hot"),
+                    DictionaryTerm::Surface("o"),
+                ])
+                .unwrap();
+            model
+                .apply(ChangeBatch::new(offset as u64, [(row, 1)], Resident).unwrap())
+                .unwrap();
+            if offset == 63 {
+                final_row = Some(row);
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let mut limit = if paused { 0 } else { u128::MAX };
+                let mut cuts = 0;
+                loop {
+                    match model.resume_until(options, limit, None) {
+                        Ok(ResumeProgress::Complete) => break,
+                        Err(MaintenanceError::WorkLimit { needed, .. }) => {
+                            assert!(paused);
+                            assert_eq!(model.pending_watermark(), Some(&63));
+                            assert_eq!(model.applied_watermark(), Some(&62));
+                            assert!(model.facts().is_err());
+                            limit = needed + 1_000_000;
+                            cuts += 1;
+                        }
+                        other => panic!("large original compaction: {other:?}"),
+                    }
+                }
+                let memory = window.close();
+                println!(
+                    "hot_rows={} paused={paused} cuts={cuts} work={} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={}",
+                    prefix + 64,
+                    model.transaction_work(),
+                    memory.allocations,
+                    memory.requested_bytes,
+                    memory.retained_bytes,
+                    memory.peak_working_bytes
+                );
+                assert!(!paused || cuts > 4, "refusals span actual large merge work");
+                observations.push((model.transaction_work(), memory));
+            } else {
+                assert!(matches!(
+                    model.resume(options, None),
+                    Ok(ResumeProgress::Complete)
+                ));
+            }
+        }
+        assert_eq!(model.facts().unwrap().row_count(), prefix + 64);
+        assert_eq!(model.facts().unwrap().rows_from(0).next(), Some(original));
+        assert_eq!(
+            model.model_delta().unwrap().unwrap().changes(),
+            &[(final_row.unwrap(), 1)]
+        );
+        assert_eq!(model.budget().join_steps(), 0);
+    }
+    assert_eq!(
+        observations[0], observations[1],
+        "pausing repeats no compaction work or physical factory"
+    );
+}
+
 fn main() -> std::process::ExitCode {
     use purrdf_testkit::harness::{self, Trial};
     harness::main([
+        Trial::test(
+            "hot_partition_compaction_retains_large_original_buffers_across_work_refusal",
+            || {
+                hot_partition_compaction_retains_large_original_buffers_across_work_refusal();
+                Ok(())
+            },
+        )
+        .with_ignored_flag(true),
         Trial::test(
             "one_fact_updates_visit_only_the_affected_star_paths",
             || {

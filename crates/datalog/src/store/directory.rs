@@ -465,35 +465,6 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
         slot
     }
 
-    pub(super) fn from_live<D: TermDictionary<Id = I>, const N: usize>(
-        dictionary: &D,
-        entries: impl IntoIterator<Item = (usize, PartitionId, StoreKey<I, N>)>,
-    ) -> Result<Self, DictionaryError<D::Error>>
-    where
-        Arity<N>: StoreShape<N, Key<I> = K>,
-    {
-        Self::from_live_with::<D, N, _>(dictionary, entries, &mut Memory::new(&mut Resident), false)
-    }
-
-    fn from_live_with<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
-        dictionary: &D,
-        entries: impl IntoIterator<Item = (usize, PartitionId, StoreKey<I, N>)>,
-        memory: &mut Memory<'_, A>,
-        supplemental: bool,
-    ) -> Result<Self, DictionaryError<D::Error>>
-    where
-        Arity<N>: StoreShape<N, Key<I> = K>,
-    {
-        memory.try_scope(|memory| {
-            let mut directory = Self::sparse(supplemental);
-            for entry in entries {
-                directory.insert_live_in::<D, N, A>(dictionary, entry, memory)?;
-            }
-            dictionary.check_read().map_err(DictionaryError::Source)?;
-            Ok(directory)
-        })
-    }
-
     fn sparse(supplemental: bool) -> Self {
         Self::Sparse {
             order: OrderedTable::default(),
@@ -503,6 +474,25 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
             bytes: 0,
             admitted: supplemental.then(SupplementalBytes::default),
         }
+    }
+
+    /// Resident test stores exercise the public insertion boundary after setup.
+    #[cfg(test)]
+    pub(super) fn resident_from_live<D: TermDictionary<Id = I>, const N: usize>(
+        dictionary: &D,
+        entries: impl IntoIterator<Item = (usize, PartitionId, StoreKey<I, N>)>,
+    ) -> Result<Self, DictionaryError<D::Error>>
+    where
+        Arity<N>: StoreShape<N, Key<I> = K>,
+    {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut directory = Self::sparse(false);
+        for entry in entries {
+            directory.insert_live_in::<D, N, _>(dictionary, entry, &mut memory)?;
+        }
+        dictionary.check_read().map_err(DictionaryError::Source)?;
+        Ok(directory)
     }
 
     pub(super) fn insert_live_in<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(

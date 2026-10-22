@@ -353,6 +353,16 @@ impl crate::dictionary::ReclaimDictionary for ReclaimingInterner {
         values.ordered().map(|(&id, _)| id)
     }
 
+    fn owned_term_scan_work(&self) -> Result<usize, StorageError> {
+        let TermArena::Sparse { values, .. } = &self.inner.surfaces else {
+            unreachable!("reclaiming ownership always uses removable lexical metadata");
+        };
+        values
+            .storage_bytes()?
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)
+    }
+
     fn release_term(&mut self, id: TermId) -> Result<(), DictionaryError<TermExpired>> {
         self.retire(id).map_err(DictionaryError::Source)
     }
