@@ -11,6 +11,10 @@ SPDX-License-Identifier: CC-BY-4.0
 
 所有表都是扁平的。Parquet 物理类型只有 `INT64` 和 `BYTE_ARRAY`；表示文本的字节数组带有标准 UTF8 注解。必需列每行恰有一个值。可选列的定义层级为 0 时表示 null，为 1 时表示有值。
 
+## 投影失败
+
+`project` 和 `write` 返回 `ColumnarWriteError<D::ReadError>`。`SourceRead` 变体按值保留原始 `DatasetView` 错误，`Codec` 变体保留原有的 `ColumnarError`。传递源错误时不会格式化或克隆它，标准错误链直接借用原始原因。源错误实现结构化错误协议时，检查会报告其原始嵌套字段。`read` 和已准备投影的 `to_parquet` 仍返回 `ColumnarError`。
+
 ## 表
 
 ### `terms.parquet`

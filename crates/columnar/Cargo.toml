@@ -32,6 +32,7 @@ purrdf-lex.workspace = true
 structured-zstd = { workspace = true }
 
 [dev-dependencies]
+purrdf-alloc-probe.workspace = true
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread
 # natively, the running stack under a fresh floor on wasm32.
 purrdf-stack = { workspace = true }
@@ -39,6 +40,10 @@ purrdf-testkit = { workspace = true }
 
 [[test]]
 name = "structured_errors"
+harness = false
+
+[[test]]
+name = "golden_bytes"
 harness = false
 
 [[bench]]

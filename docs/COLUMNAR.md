@@ -16,6 +16,15 @@ Every table is flat. The only Parquet physical types are `INT64` and
 columns contain one value per row. Optional columns use definition level 0 for
 null and 1 for present.
 
+## Projection failures
+
+`project` and `write` return `ColumnarWriteError<D::ReadError>`. Its `SourceRead`
+variant owns the original `DatasetView` failure; its `Codec` variant owns the
+existing `ColumnarError`. Source transport neither formats nor clones the error.
+The standard error chain borrows that original cause. When the source implements
+the structured-error protocol, inspection reports its original nested fields.
+`read` and a prepared projection's `to_parquet` still return `ColumnarError`.
+
 ## Tables
 
 ### `terms.parquet`

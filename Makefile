@@ -955,6 +955,11 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-columnar --test structured_errors -- --exact \
 				original_parquet_bounds_survive_file_disposal_without_narrowing \
+				public_projection_and_write_preserve_source_owners_and_fields \
+				human_presentation_preserves_codec_and_source_messages \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-columnar --test golden_bytes -- --exact \
+				seeded_files_are_the_pinned_bytes \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hash-conformance --test blake3 -- --exact \
 				required_backends_are_available official_modes_and_extended_output \
