@@ -2040,6 +2040,7 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> GrowthAdmission for G
         let workspace = QueryWorkspace {
             account: Some(self.account.clone()),
             capability: WorkspaceCapability::default(),
+            direct_failure: None,
         };
         let charge = workspace.charge(bytes)?;
         // The concrete box layout was admitted along with the payload above.
@@ -2067,6 +2068,7 @@ struct Account<E> {
 pub(crate) struct QueryWorkspace<E> {
     account: Option<Shared<Mutex<Account<E>>>>,
     capability: WorkspaceCapability,
+    direct_failure: Option<SharedWorkspace<Mutex<Option<E>>>>,
 }
 
 impl<E> Clone for QueryWorkspace<E> {
@@ -2074,6 +2076,7 @@ impl<E> Clone for QueryWorkspace<E> {
         Self {
             account: self.account.clone(),
             capability: self.capability.clone(),
+            direct_failure: self.direct_failure.clone(),
         }
     }
 }
@@ -2100,6 +2103,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: WorkspaceCapability { owner: None },
+            direct_failure: None,
         }
     }
 
@@ -2108,6 +2112,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: capability.clone(),
+            direct_failure: None,
         }
     }
 
@@ -2145,6 +2150,7 @@ impl<E> QueryWorkspace<E> {
         Ok(Self {
             account: Some(account),
             capability: WorkspaceCapability { owner: Some(owner) },
+            direct_failure: None,
         })
     }
 
@@ -2168,6 +2174,18 @@ pub(crate) fn shared_layout<T>() -> Result<u64, EvalError> {
 }
 
 impl<E: Clone> QueryWorkspace<E> {
+    /// Retain direct errors even for a fallible source with no live-memory budget.
+    /// Bounded sources already retain the same first cause in their original account.
+    pub(crate) fn capture_direct_errors(mut self) -> Result<Self, EvalError> {
+        if self.account.is_none() && self.direct_failure.is_none() {
+            self.direct_failure = Some(SharedWorkspace::new_admitted(
+                Mutex::new(None),
+                &self.capability,
+            )?);
+        }
+        Ok(self)
+    }
+
     pub(crate) fn source_error(&self, error: E) -> EvalError
     where
         E: std::fmt::Display,
@@ -2179,6 +2197,12 @@ impl<E: Clone> QueryWorkspace<E> {
                 account.failed = true;
             }
             EvalError::WorkspaceStopped
+        } else if let Some(failure) = &self.direct_failure {
+            let mut failure = lock(failure);
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            EvalError::WorkspaceStopped
         } else {
             EvalError::source_read(error)
         }
@@ -2188,6 +2212,11 @@ impl<E: Clone> QueryWorkspace<E> {
         self.account
             .as_ref()
             .and_then(|account| lock(account).failure.take())
+            .or_else(|| {
+                self.direct_failure
+                    .as_ref()
+                    .and_then(|failure| lock(failure).take())
+            })
     }
 
     #[cfg(test)]
@@ -2502,6 +2531,33 @@ pub(crate) mod owned_row_regressions {
         }
     }
     impl std::error::Error for Refusal {}
+
+    #[test]
+    fn resident_composed_read_retains_first_direct_cause_across_clones() {
+        #[derive(Debug, Clone)]
+        struct NoRender(u64);
+        impl core::fmt::Display for NoRender {
+            fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                panic!("retaining a direct read refusal must not render it")
+            }
+        }
+        impl std::error::Error for NoRender {}
+        let workspace = QueryWorkspace::<NoRender>::resident()
+            .capture_direct_errors()
+            .unwrap();
+        let retained = workspace.clone().capture_direct_errors().unwrap();
+        assert!(matches!(
+            workspace.source_error(NoRender(71)),
+            EvalError::WorkspaceStopped
+        ));
+        assert!(matches!(
+            retained.source_error(NoRender(72)),
+            EvalError::WorkspaceStopped
+        ));
+        drop(workspace);
+        assert_eq!(retained.take_failure().unwrap().0, 71);
+        assert!(retained.take_failure().is_none());
+    }
 
     #[derive(Debug)]
     struct Reservation {
@@ -3665,6 +3721,124 @@ pub(crate) mod owned_row_regressions {
         fn term_count(&self) -> u64 {
             purrdf_core::DatasetView::term_count(self.inner)
         }
+    }
+
+    impl purrdf_core::FallibleDatasetView for GroundFaultView<'_> {
+        type Error = Refusal;
+        type Evidence = ();
+
+        fn operation_status(&self) -> purrdf_core::ViewOperationStatus<Refusal, ()> {
+            // This fixture reports point-read failures directly, without latching.
+            purrdf_core::ViewOperationStatus::Ready { evidence: () }
+        }
+    }
+
+    #[test]
+    fn unbounded_fallible_evidence_keeps_non_latching_source_errors() {
+        struct Closed;
+        impl crate::EvidenceSource<TermId> for Closed {
+            fn claim(
+                &self,
+                _: &purrdf_core::QuadIds,
+            ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
+                Ok(None)
+            }
+            fn scope(&self, _: purrdf_core::GraphMatch) -> Result<crate::EvidenceScope, EvalError> {
+                Ok(crate::EvidenceScope {
+                    completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+                    closure_declared: true,
+                    missing_reason: None,
+                })
+            }
+            fn reason(
+                &self,
+                _: purrdf_core::evidence::ReasonId,
+            ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError>
+            {
+                Ok(None)
+            }
+        }
+        fn refused<R>(result: crate::FallibleScopedResult<R, Refusal, ()>) {
+            match result {
+                Err(crate::FallibleSparqlError::Operational {
+                    error,
+                    evidence: (),
+                }) => assert_eq!(error.identity, 41),
+                Err(error) => panic!("the original read error became a query refusal: {error:?}"),
+                Ok(_) => panic!("a non-latching read error cannot publish success"),
+            }
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("original value"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let clones = Arc::new(AtomicUsize::new(0));
+        let view = GroundFaultView {
+            inner: &dataset,
+            failed_id: object,
+            clones: clones.clone(),
+        };
+        assert!(purrdf_core::DatasetView::storage_live_budget(&view).is_none());
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT (STR(?o) AS ?value) WHERE { ?s <http://example.org/p> ?o }";
+        let request = crate::InternedRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let answer = purrdf_core::evidence::AnswerRequest {
+            tier: purrdf_core::evidence::AnswerTier::Summary,
+            question: None,
+            standpoint: purrdf_core::evidence::StandpointKey::Unscoped,
+            input_completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+            closure_declared: true,
+        };
+        refused(engine.query_interned_evidence_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        refused(engine.query_evidence_status_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _| 7,
+        ));
+        refused(engine.query_evidence_answer_fallible_view(
+            &view,
+            request,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _, _| 7,
+        ));
+        let mut execution = engine
+            .prepare_execution(query, None, &[], crate::QueryOptions::EMPTY)
+            .unwrap();
+        refused(engine.execute_witnessed_evidence_fallible(
+            &mut execution,
+            &view,
+            crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        assert_eq!(
+            clones.load(Ordering::Relaxed),
+            0,
+            "the original point-read cause moves without cloning"
+        );
+        assert!(matches!(
+            purrdf_core::FallibleDatasetView::operation_status(&view),
+            purrdf_core::ViewOperationStatus::Ready { .. }
+        ));
     }
 
     #[test]

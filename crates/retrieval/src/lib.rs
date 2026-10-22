@@ -466,7 +466,8 @@ pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
 pub use execute::{
     CandidateExecutionResult, ExecutionError, ExecutionResult, RankedStreamImpl, ReadStratum,
-    StratumStream, StreamEnding, execute, execute_scoped_within, execute_within,
+    StratumStream, StreamEnding, execute, execute_scoped_in_read, execute_scoped_within,
+    execute_within,
 };
 pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
@@ -496,7 +497,10 @@ pub use reciprocal_rank::{
 };
 pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
-pub use search::{RankedStreamAdapter, SearchError, SearchResult, search, search_scoped};
+pub use search::{
+    FallibleSearchError, RankedStreamAdapter, SearchError, SearchResult, search, search_scoped,
+    search_scoped_fallible,
+};
 pub use statistics::Statistics;
 pub use union::{CandidateUnion, UnionCandidate, UnionError, UnionFailure, UnionProducer, union};
 

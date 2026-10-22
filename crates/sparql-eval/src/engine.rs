@@ -1489,7 +1489,7 @@ impl NativeSparqlEngine {
                 bounded_workspace::AdmissionError::Evaluation(error) => {
                     EvaluationFailure::Evaluation(error)
                 }
-                bounded_workspace::AdmissionError::Operational(error) => match error {},
+                bounded_workspace::AdmissionError::Operational(never) => match never {},
                 bounded_workspace::AdmissionError::AllocationFailed(construct) => {
                     EvaluationFailure::Evaluation(crate::EvalError::AllocationFailed { construct })
                 }
@@ -4248,6 +4248,43 @@ impl NativeSparqlEngine {
     where
         D: FallibleDatasetView + Sync,
     {
+        self.execute_fallible_input(execution, dataset, options, false, None, visit)
+            .map(|((value, _), evidence)| (value, evidence))
+    }
+
+    /// Execute the original prepared plan with claim declarations over an
+    /// operationally fallible source. Visitor output and the relation witness
+    /// become publishable only with the final successful read receipt.
+    ///
+    /// # Errors
+    /// Preserves original operational, source, declaration and admission causes.
+    /// A read refusal discards visitor output and resets retained execution state.
+    pub fn execute_witnessed_evidence_fallible<'d, D, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d, 'd>,
+        source: &'d dyn crate::EvidenceSource<D::Id>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> FallibleScopedResult<(R, crate::witness::RelationWitness), D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.execute_fallible_input(execution, dataset, options, true, Some(source), visit)
+    }
+
+    fn execute_fallible_input<'d, D, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d, 'd>,
+        witnessing: bool,
+        source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> FallibleScopedResult<(R, crate::witness::RelationWitness), D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
         let result = (|| {
             preflight_fallible_view(dataset)?;
             let reporting = reserve_fallible_reporting(dataset)?;
@@ -4261,18 +4298,16 @@ impl NativeSparqlEngine {
                         bounded_workspace::AdmissionError::Query(diagnostic),
                     )
                 })?;
-            let evaluated = self
-                .execute_ungoverned_admitted(
-                    execution,
-                    dataset,
-                    options,
-                    false,
-                    Sequencing::for_view::<D>(),
-                    None,
-                    &workspace,
-                    visit,
-                )
-                .map(|(value, _)| value);
+            let evaluated = self.execute_ungoverned_admitted(
+                execution,
+                dataset,
+                options,
+                witnessing,
+                Sequencing::for_view::<D>(),
+                source,
+                &workspace,
+                visit,
+            );
             if let Some(error) = workspace.take_failure() {
                 return Err(fallible_admission_failure(
                     dataset,
@@ -4380,21 +4415,48 @@ impl NativeSparqlEngine {
         capability: &crate::WorkspaceCapability,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<(R, crate::witness::RelationWitness), EvaluationFailure> {
-        let publication = crate::user_fn::RefusalPublication::default();
-        let options = publication.options(dataset, options)?;
-        let workspace = crate::workspace::QueryWorkspace::with_capability(capability);
-        let result = self.execute_ungoverned_admitted(
+        self.execute_read_witnessed_admitted(
             execution,
             dataset,
             options,
-            true,
-            Sequencing::Free,
             source,
-            &workspace,
+            &ReadOperation::from_capability(capability),
             visit,
-        );
+        )
+    }
+
+    /// Execute witnessed evidence with the caller's existing allocation authority.
+    /// The enclosing operation checks final operational status after consuming all
+    /// returned values. Direct read and admission causes remain typed.
+    ///
+    /// # Errors
+    /// Preserves the original evaluation or storage refusal.
+    pub fn execute_read_witnessed_admitted<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d, 'd>,
+        source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
+        operation: &ReadOperation<D::ReadError>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<(R, crate::witness::RelationWitness), EvaluationFailure> {
+        let publication = crate::user_fn::RefusalPublication::default();
+        let workspace = &operation.workspace;
+        let result = (|| {
+            let options = publication.options(dataset, options)?;
+            self.execute_ungoverned_admitted(
+                execution,
+                dataset,
+                options,
+                true,
+                Sequencing::for_view::<D>(),
+                source,
+                workspace,
+                visit,
+            )
+        })();
         if result.is_err() {
-            execution.reset_after_failure(capability);
+            execution.reset_after_failure(&workspace.capability());
         }
         result
     }
@@ -4587,15 +4649,43 @@ impl NativeSparqlEngine {
         capability: &crate::WorkspaceCapability,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<AdmittedInternedGoverned<R>, EvaluationFailure> {
+        self.execute_read_governed_admitted(
+            execution,
+            dataset,
+            options,
+            governors,
+            &ReadOperation::from_capability(capability),
+            visit,
+        )
+    }
+
+    /// Run governed evaluation under an existing authority over either read kind.
+    /// The enclosing operation owns final read-status checking after consumption.
+    ///
+    /// # Errors
+    /// Preserves the original evaluation and direct operational causes.
+    pub fn execute_read_governed_admitted<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        execution: &mut PreparedExecution,
+        dataset: &'d D,
+        options: QueryOptions<'d, 'd>,
+        governors: &QueryGovernors,
+        operation: &ReadOperation<D::ReadError>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<AdmittedInternedGoverned<R>, EvaluationFailure> {
         let publication = crate::user_fn::RefusalPublication::default();
-        let options = publication.options(dataset, options)?;
-        let workspace = crate::workspace::QueryWorkspace::with_capability(capability);
-        let state = crate::SharedWorkspace::new_admitted(
-            GovernorState::with_workspace(governors, capability.clone()),
-            capability,
-        )?;
-        let result = self
-            .execute_governed_in_workspace(execution, dataset, options, &state, &workspace, visit);
+        let workspace = &operation.workspace;
+        let capability = &workspace.capability();
+        let result = (|| {
+            let options = publication.options(dataset, options)?;
+            let state = crate::SharedWorkspace::new_admitted(
+                GovernorState::with_workspace(governors, capability.clone()),
+                capability,
+            )?;
+            self.execute_governed_in_workspace(
+                execution, dataset, options, &state, workspace, visit,
+            )
+        })();
         if result.is_err()
             || matches!(&result, Ok(outcome) if matches!(outcome.outcome(), InternedGoverned::BudgetExhausted(_)))
         {
@@ -4604,11 +4694,7 @@ impl NativeSparqlEngine {
         result
     }
 
-    fn execute_governed_in_workspace<
-        'd,
-        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
-        R,
-    >(
+    fn execute_governed_in_workspace<'d, D: DatasetView + Sync, R>(
         &'d self,
         execution: &mut PreparedExecution,
         dataset: &'d D,
@@ -4655,6 +4741,7 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
         // The retained workspace, exactly as on the ungoverned twin — and taken
         // here rather than inside `governed_ctx` so both lanes spell it at the same
         // level, beside the `substituted` call whose borrow it has to sit outside.
@@ -4772,16 +4859,56 @@ impl NativeSparqlEngine {
         source: &'d dyn crate::evidence_exec::EvidenceSource<D::Id>,
         visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
     ) -> Result<R, RdfDiagnostic> {
-        self.query_interned_input(dataset, request, options, Some(source), None, |outcome, ctx| {
-            if !matches!(outcome, Outcome::Solutions(_)) {
-                return Err(crate::NativeDiagnostic::error(
-                    crate::NativeDiagnosticKind::Config,
-                    "ASK and graph evidence require query_evidence_status_view so semantic unknown remains visible",
-                    &ctx.growth,
-                ));
-            }
-            Ok(visit(borrow_outcome(outcome, ctx)))
-        })
+        self.query_interned_input(
+            dataset,
+            request,
+            options,
+            Some(source),
+            None,
+            |outcome, ctx| Self::visit_select_evidence(outcome, ctx, visit),
+        )
+    }
+
+    /// Borrow SELECT rows and their original claim evidence over a fallible
+    /// source. The final operational receipt certifies the caller-owned result.
+    ///
+    /// # Errors
+    /// Preserves original read, declaration, parse and admission failures.
+    /// ASK and graph forms require the answer or status entry point.
+    pub fn query_interned_evidence_fallible_view<'d, D, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d, 'd>,
+        source: &'d dyn crate::EvidenceSource<D::Id>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_interned_fallible_input(
+            dataset,
+            request,
+            options,
+            source,
+            None,
+            |outcome, ctx| Self::visit_select_evidence(outcome, ctx, visit),
+        )
+    }
+
+    fn visit_select_evidence<D: DatasetView + Sync, R>(
+        outcome: &Outcome<D::Id>,
+        ctx: &EvalCtx<'_, D>,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> R,
+    ) -> Result<R, crate::EvalError> {
+        if !matches!(outcome, Outcome::Solutions(_)) {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Config,
+                "ASK and graph evidence require query_evidence_status_view so semantic unknown remains visible",
+                &ctx.growth,
+            ));
+        }
+        Ok(visit(borrow_outcome(outcome, ctx)))
     }
 
     /// Publish the actual query outcome with native evidence status and reason
@@ -4807,6 +4934,34 @@ impl NativeSparqlEngine {
         visit: impl FnOnce(InternedOutcome<'_, '_, D>, purrdf_core::evidence::AnswerStatus<'_>) -> R,
     ) -> Result<R, RdfDiagnostic> {
         self.query_evidence_answer_view(
+            dataset,
+            request,
+            options,
+            source,
+            answer,
+            |outcome, _, status| visit(outcome, status),
+        )
+    }
+
+    /// Publish the original query outcome and semantic evidence status only
+    /// after its fallible source reports complete operational reads.
+    ///
+    /// # Errors
+    /// A native read failure remains operational and never becomes an unknown
+    /// evidence row. Original declaration and evaluation failures are preserved.
+    pub fn query_evidence_status_fallible_view<'d, D, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d, 'd>,
+        source: &'d dyn crate::EvidenceSource<D::Id>,
+        answer: purrdf_core::evidence::AnswerRequest,
+        visit: impl FnOnce(InternedOutcome<'_, '_, D>, purrdf_core::evidence::AnswerStatus<'_>) -> R,
+    ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_evidence_answer_fallible_view(
             dataset,
             request,
             options,
@@ -4853,36 +5008,80 @@ impl NativeSparqlEngine {
             options,
             Some(source),
             Some(answer),
-            |outcome, ctx| {
-                let rows = match outcome {
-                    Outcome::Solutions(rows) => rows,
-                    _ => ctx.evidence_answer.as_ref().ok_or_else(|| {
-                        crate::NativeDiagnostic::error(
-                            crate::NativeDiagnosticKind::Internal,
-                            "a completed evidence query lost its original WHERE rows",
-                            &ctx.growth,
-                        )
-                    })?,
-                };
-                let input = ctx.evidence_input.as_ref().ok_or_else(|| {
-                    crate::NativeDiagnostic::error(
-                        crate::NativeDiagnosticKind::Internal,
-                        "an evidence query lost its original declarations",
-                        &ctx.growth,
-                    )
-                })?;
-                input.with_answer_status(
-                    rows,
-                    answer,
+            |outcome, ctx| Self::visit_evidence_answer(outcome, ctx, answer, visit),
+        )
+    }
+
+    /// Borrow the actual outcome, original evidence-bearing WHERE rows and
+    /// requested answer status from one fallible execution. No dataset or row
+    /// ledger is materialized to enter this path.
+    ///
+    /// # Errors
+    /// Preserves original source, read, evaluation and count-admission failures.
+    /// Caller output is publishable only after the complete method returns Ok.
+    pub fn query_evidence_answer_fallible_view<'d, D, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d, 'd>,
+        source: &'d dyn crate::EvidenceSource<D::Id>,
+        answer: purrdf_core::evidence::AnswerRequest,
+        visit: impl FnOnce(
+            InternedOutcome<'_, '_, D>,
+            InternedSolutions<'_, '_, D>,
+            purrdf_core::evidence::AnswerStatus<'_>,
+        ) -> R,
+    ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        self.query_interned_fallible_input(
+            dataset,
+            request,
+            options,
+            source,
+            Some(answer),
+            |outcome, ctx| Self::visit_evidence_answer(outcome, ctx, answer, visit),
+        )
+    }
+
+    fn visit_evidence_answer<D: DatasetView + Sync, R>(
+        outcome: &Outcome<D::Id>,
+        ctx: &EvalCtx<'_, D>,
+        answer: purrdf_core::evidence::AnswerRequest,
+        visit: impl FnOnce(
+            InternedOutcome<'_, '_, D>,
+            InternedSolutions<'_, '_, D>,
+            purrdf_core::evidence::AnswerStatus<'_>,
+        ) -> R,
+    ) -> Result<R, crate::EvalError> {
+        let rows = match outcome {
+            Outcome::Solutions(rows) => rows,
+            _ => ctx.evidence_answer.as_ref().ok_or_else(|| {
+                crate::NativeDiagnostic::error(
+                    crate::NativeDiagnosticKind::Internal,
+                    "a completed evidence query lost its original WHERE rows",
                     &ctx.growth,
-                    ctx.evidence_stop.is_none(),
-                    |status| {
-                        visit(
-                            borrow_outcome(outcome, ctx),
-                            InternedSolutions::new(rows, ctx),
-                            status,
-                        )
-                    },
+                )
+            })?,
+        };
+        let input = ctx.evidence_input.as_ref().ok_or_else(|| {
+            crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Internal,
+                "an evidence query lost its original declarations",
+                &ctx.growth,
+            )
+        })?;
+        input.with_answer_status(
+            rows,
+            answer,
+            &ctx.growth,
+            ctx.evidence_stop.is_none(),
+            |status| {
+                visit(
+                    borrow_outcome(outcome, ctx),
+                    InternedSolutions::new(rows, ctx),
+                    status,
                 )
             },
         )
@@ -4904,34 +5103,98 @@ impl NativeSparqlEngine {
             let reporting = bounded_workspace::reserve_reporting(dataset)
                 .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
             let workspace = reporting.execution();
-            let admitted = RequestParameters::of_admitted(
-                Prebindings::Borrowed(request.substitutions),
-                options.declared_prebound,
-                &workspace.capability(),
-            )?;
-            let prepared = self.prepare_request_admitted(
-                request.query,
-                request.base_iri,
-                options.env,
-                &admitted,
-                options.geo,
-                &workspace.capability(),
-            )?;
-            let mut ctx = self.query_ctx(dataset, options, &workspace)?;
-            if let Some(source) = source {
-                ctx = ctx.with_evidence_source(source)?;
-            }
-            ctx.evidence_verdict = answer.filter(|request| {
-                request.tier == purrdf_core::evidence::AnswerTier::Verdict
-                    && request.question.is_some()
-            });
-            let outcome = evaluate_with_substitutions(
-                &prepared,
-                Prebindings::Borrowed(request.substitutions),
-                &mut ctx,
-            )?;
-            visit(&outcome, &ctx).map_err(EvaluationFailure::Evaluation)
+            self.query_interned_input_admitted(
+                dataset, request, options, source, answer, &workspace, visit,
+            )
         })
+    }
+
+    fn query_interned_fallible_input<'d, D, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d, 'd>,
+        source: &'d dyn crate::EvidenceSource<D::Id>,
+        answer: Option<purrdf_core::evidence::AnswerRequest>,
+        visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
+    ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+    where
+        D: FallibleDatasetView + Sync,
+    {
+        preflight_fallible_view(dataset)?;
+        let reporting = reserve_fallible_reporting(dataset)?;
+        let workspace = reserve_fallible_execution(dataset, reporting.execution())?;
+        let publication = crate::user_fn::RefusalPublication::default();
+        let options = publication
+            .options(dataset, options)
+            .map_err(|diagnostic| {
+                fallible_admission_failure(
+                    dataset,
+                    bounded_workspace::AdmissionError::Query(diagnostic),
+                )
+            })?;
+        let evaluated = self.query_interned_input_admitted(
+            dataset,
+            request,
+            options,
+            Some(source),
+            answer,
+            &workspace,
+            visit,
+        );
+        if let Some(error) = workspace.take_failure() {
+            return Err(fallible_admission_failure(
+                dataset,
+                bounded_workspace::AdmissionError::Operational(error),
+            ));
+        }
+        publication.finish(
+            finish_fallible_read(dataset, evaluated, Some(&workspace)),
+            |error| matches!(error, FallibleSparqlError::Query { .. }),
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the shared query body carries its original admitted owner beside the source and answer policy"
+    )]
+    fn query_interned_input_admitted<'d, D: DatasetView + Sync, R>(
+        &'d self,
+        dataset: &'d D,
+        request: InternedRequest<'_>,
+        options: QueryOptions<'d, 'd>,
+        source: Option<&'d dyn crate::EvidenceSource<D::Id>>,
+        answer: Option<purrdf_core::evidence::AnswerRequest>,
+        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
+    ) -> Result<R, EvaluationFailure> {
+        let admitted = RequestParameters::of_admitted(
+            Prebindings::Borrowed(request.substitutions),
+            options.declared_prebound,
+            &workspace.capability(),
+        )?;
+        let prepared = self.prepare_request_admitted(
+            request.query,
+            request.base_iri,
+            options.env,
+            &admitted,
+            options.geo,
+            &workspace.capability(),
+        )?;
+        let mut ctx = self.query_ctx(dataset, options, workspace)?;
+        ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
+        if let Some(source) = source {
+            ctx = ctx.with_evidence_source(source)?;
+        }
+        ctx.evidence_verdict = answer.filter(|request| {
+            request.tier == purrdf_core::evidence::AnswerTier::Verdict && request.question.is_some()
+        });
+        let outcome = evaluate_with_substitutions(
+            &prepared,
+            Prebindings::Borrowed(request.substitutions),
+            &mut ctx,
+        )?;
+        visit(&outcome, &ctx).map_err(EvaluationFailure::Evaluation)
     }
 
     /// [`Self::query_governed_in_operation`] on the **interned** egress.
@@ -5154,6 +5417,75 @@ impl From<crate::substitute::GroundFailure> for EvaluationFailure {
             crate::substitute::GroundFailure::Operational(error) => Self::Evaluation(error),
         }
     }
+}
+
+/// The original allocation authority and typed failure owner of a composed read.
+/// Clones share the first source refusal, including lookups driven during fusion.
+#[derive(Debug)]
+pub struct ReadOperation<E> {
+    workspace: crate::workspace::QueryWorkspace<E>,
+}
+
+impl<E> Clone for ReadOperation<E> {
+    fn clone(&self) -> Self {
+        Self {
+            workspace: self.workspace.clone(),
+        }
+    }
+}
+
+impl<E: Clone + std::error::Error + Send + Sync + 'static> ReadOperation<E> {
+    /// The original native allocation authority; no second account is constructed.
+    #[must_use]
+    pub fn capability(&self) -> crate::WorkspaceCapability {
+        self.workspace.capability()
+    }
+}
+
+impl<E: Clone + core::fmt::Display> ReadOperation<E> {
+    /// Retain a direct point-read refusal and stop the current native operation.
+    /// Its original cause is returned at the enclosing fallible read boundary.
+    #[must_use]
+    pub fn source_error(&self, error: E) -> crate::EvalError {
+        self.workspace.source_error(error)
+    }
+}
+
+impl ReadOperation<std::convert::Infallible> {
+    /// Borrow an existing authority for a source whose reads cannot fail.
+    #[must_use]
+    pub fn from_capability(capability: &crate::WorkspaceCapability) -> Self {
+        Self {
+            workspace: crate::workspace::QueryWorkspace::with_capability(capability),
+        }
+    }
+}
+
+/// Run a composed asynchronous read under one original source account.
+/// The result is publishable only after this boundary returns success. This
+/// includes source errors retained by deferred lookups and the final view status.
+///
+/// # Errors
+/// Returns the original source refusal and receipt, or native admission failure.
+#[allow(clippy::future_not_send)]
+pub async fn with_fallible_read<D, F, Fut, R>(
+    dataset: &D,
+    operation: F,
+) -> FallibleScopedResult<R, D::Error, D::Evidence>
+where
+    D: FallibleDatasetView + Sync,
+    F: FnOnce(ReadOperation<D::Error>) -> Fut,
+    Fut: Future<Output = R>,
+{
+    preflight_fallible_view(dataset)?;
+    let reporting = reserve_fallible_reporting(dataset)?;
+    let execution = reserve_fallible_execution(dataset, reporting.execution())?;
+    let workspace = execution.clone();
+    let result = operation(ReadOperation {
+        workspace: workspace.clone(),
+    })
+    .await;
+    finish_fallible_read(dataset, Ok(result), Some(&workspace))
 }
 
 impl EvaluationFailure {
@@ -5420,6 +5752,11 @@ fn reserve_fallible_execution<D>(
 where
     D: FallibleDatasetView + Sync,
 {
+    // Every fallible execution retains direct point-read causes, including when
+    // a source has no live-memory budget and has not latched its returned error.
+    let workspace = workspace.capture_direct_errors().map_err(|error| {
+        fallible_admission_failure(dataset, bounded_workspace::AdmissionError::from(error))
+    })?;
     bounded_workspace::reserve_execution(dataset, workspace)
         .map_err(|failure| fallible_admission_failure(dataset, failure))
 }
