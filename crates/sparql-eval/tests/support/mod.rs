@@ -9,6 +9,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod boundary_joins;
+pub mod fallible;
 #[cfg(target_os = "linux")]
 pub mod governor_counts;
 pub mod governor_workloads;

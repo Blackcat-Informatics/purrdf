@@ -706,19 +706,44 @@ impl PreparedExecution {
         id: D::Id,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<(), crate::EvalError> {
-        if slot >= self.values.len() {
-            return Err(crate::NativeDiagnostic::error(
-                crate::NativeDiagnosticKind::Data,
-                format_args!(
-                    "no parameter in slot {slot}: this execution declares {}",
-                    ParameterList(&self.parameters)
-                ),
-                workspace,
-            ));
-        }
-        let value =
-            ParameterValue::from_id_admitted(dataset, id, workspace, |never| match never {})
-                .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+        self.bind_read_id_admitted(
+            slot,
+            dataset,
+            id,
+            &crate::ReadOperation::from_capability(workspace),
+        )
+    }
+
+    /// Bind a source id under the enclosing operation's original allocation authority.
+    /// The enclosing operation checks the source's final operational status.
+    ///
+    /// # Errors
+    /// Preserves the original direct read refusal or native evaluation cause.
+    pub fn bind_read_id_admitted<D: DatasetView>(
+        &mut self,
+        slot: usize,
+        dataset: &D,
+        id: D::Id,
+        operation: &crate::ReadOperation<D::ReadError>,
+    ) -> Result<(), crate::EvalError> {
+        let capability = &operation.capability();
+        let result = (|| {
+            if slot >= self.values.len() {
+                return Err(crate::NativeDiagnostic::error(
+                    crate::NativeDiagnosticKind::Data,
+                    format_args!(
+                        "no parameter in slot {slot}: this execution declares {}",
+                        ParameterList(&self.parameters)
+                    ),
+                    capability,
+                ));
+            }
+            ParameterValue::from_id_admitted(dataset, id, capability, |error| {
+                crate::substitute::GroundFailure::Operational(operation.source_error(error))
+            })
+            .map_err(crate::substitute::GroundFailure::into_eval_error)
+        })();
+        let value = result?;
         self.values[slot] = Some(value);
         Ok(())
     }

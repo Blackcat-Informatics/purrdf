@@ -301,7 +301,7 @@ pub use property_fn_plan::content_fingerprint as property_function_content_finge
 // The on-demand read of one property-function call, returned by
 // `NativeSparqlEngine::open_call_cursor`: a composition layer that stops reading a
 // ranked relation as soon as it has what it needs holds one of these.
-pub use engine::{AdmittedInternedGoverned, EvaluationFailure};
+pub use engine::{AdmittedInternedGoverned, EvaluationFailure, ReadOperation, with_fallible_read};
 pub use property_fn_eval::{AdmittedPropertyRow, CallCursor, EvidencedPropertyRow};
 pub use workspace::SharedWorkspace;
 // The one shape description behind every question asked of a query's calls: which
