@@ -1084,7 +1084,134 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     assert_eq!(licenses, [true; 3]);
 }
 
+fn signed_refutation_scenarios_preserve_public_warrants_and_source_binding() {
+    use purrdf_entail::Regime;
+    use purrdf_entail::entails::{
+        EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify,
+    };
+    let mut premise = Fixture::default();
+    let a = premise.name("A");
+    let b = premise.name("B");
+    let class = premise.builder.intern_iri(owl::CLASS).unwrap();
+    premise.edge(a, rdf::TYPE, class);
+    premise.edge(b, rdf::TYPE, class);
+    premise.edge(a, owl::DISJOINT_WITH, b);
+    for name in ["first", "second", "third"] {
+        let subject = premise.name(name);
+        premise.edge(subject, rdf::TYPE, a);
+    }
+    let premise = premise.freeze();
+    let mut conclusion = Fixture::default();
+    let b = conclusion.name("B");
+    let class = conclusion.builder.intern_iri(owl::CLASS).unwrap();
+    let complement = conclusion
+        .builder
+        .intern_blank("complement", BlankScope::DEFAULT)
+        .unwrap();
+    conclusion.edge(b, rdf::TYPE, class);
+    conclusion.edge(complement, rdf::TYPE, class);
+    conclusion.edge(complement, owl::COMPLEMENT_OF, b);
+    for name in ["first", "second", "third"] {
+        let subject = conclusion.name(name);
+        conclusion.edge(subject, rdf::TYPE, complement);
+    }
+    let conclusion = conclusion.freeze();
+    let (outcome, _) = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
+        .unwrap()
+        .into_parts();
+    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Refutation(_)) = outcome else {
+        panic!("the negative memberships require three native signed scenarios");
+    };
+    let EntailmentWarrant::Refutation(refutations) = &warrant else {
+        unreachable!()
+    };
+    assert_eq!(refutations.refutations().len(), 3);
+    assert!(verify(&warrant, &premise, &conclusion));
+    assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
+}
+
+fn signed_frozen_scenarios_preserve_public_generalization_warrants() {
+    use purrdf_core::TermFactory;
+    use purrdf_entail::Regime;
+    use purrdf_entail::entails::{
+        EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify,
+    };
+    let mut premise = Fixture::default();
+    let ontology = premise.name("ontology");
+    let ontology_type = premise.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    premise.edge(ontology, rdf::TYPE, ontology_type);
+    let p = premise.name("p");
+    let property = premise.builder.intern_iri(owl::OBJECT_PROPERTY).unwrap();
+    premise.edge(p, rdf::TYPE, property);
+    let first = premise
+        .builder
+        .intern_blank("first", BlankScope::DEFAULT)
+        .unwrap();
+    let second = premise
+        .builder
+        .intern_blank("second", BlankScope::DEFAULT)
+        .unwrap();
+    let nil = premise.builder.intern_iri(rdf::NIL).unwrap();
+    premise.edge(p, owl::PROPERTY_CHAIN_AXIOM, first);
+    premise.edge(first, rdf::FIRST, p);
+    premise.edge(first, rdf::REST, second);
+    premise.edge(second, rdf::FIRST, p);
+    premise.edge(second, rdf::REST, nil);
+    let premise = premise.freeze();
+    let mut conclusion = Fixture::default();
+    let ontology = conclusion.name("ontology");
+    let ontology_type = conclusion.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    conclusion.edge(ontology, rdf::TYPE, ontology_type);
+    let p = conclusion.name("p");
+    let transitive = conclusion
+        .builder
+        .intern_iri(owl::TRANSITIVE_PROPERTY)
+        .unwrap();
+    conclusion.edge(p, rdf::TYPE, transitive);
+    let conclusion = conclusion.freeze();
+    let (outcome, _) = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
+        .unwrap()
+        .into_parts();
+    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Freeze(_)) = outcome else {
+        panic!("the chain entails transitivity through the native frozen scenario");
+    };
+    assert!(verify(&warrant, &premise, &conclusion));
+    // The same asserted content must survive different dataset-local IDs and order.
+    let mut reordered = Fixture::default();
+    let rows: Vec<_> = premise.quads().collect();
+    for quad in rows.into_iter().rev() {
+        let subject = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.s))
+            .unwrap();
+        let predicate = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.p))
+            .unwrap();
+        let object = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.o))
+            .unwrap();
+        reordered
+            .builder
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
+    }
+    assert!(verify(&warrant, &reordered.freeze(), &conclusion));
+    assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
+    let mut weakened = Fixture::default();
+    let ontology = weakened.name("ontology");
+    let ontology_type = weakened.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    weakened.edge(ontology, rdf::TYPE, ontology_type);
+    let p = weakened.name("p");
+    let property = weakened.builder.intern_iri(owl::OBJECT_PROPERTY).unwrap();
+    weakened.edge(p, rdf::TYPE, property);
+    assert!(!verify(&warrant, &weakened.freeze(), &conclusion));
+}
+
 purrdf_testkit::harness_main!(
+    signed_refutation_scenarios_preserve_public_warrants_and_source_binding,
+    signed_frozen_scenarios_preserve_public_generalization_warrants,
     public_dataset_views_preserve_source_identity_and_causal_verification,
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,

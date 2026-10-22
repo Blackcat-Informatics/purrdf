@@ -33,7 +33,7 @@ where
     stratum: usize,
     delta: Delta,
     first_round: bool,
-    round_lo: usize,
+    round_lo: u64,
     phase: Phase<'r, I, N>,
 }
 
@@ -100,9 +100,10 @@ where
                     let frame = round::Frame::new(
                         &entries,
                         RoundSnapshot {
+                            probe: None,
                             rel: &state.rel,
-                            depth: &state.depth,
-                            assumed: &[],
+                            depth: state.depths(),
+                            assumed: &purrdf_core::FastSet::default(),
                             delta_indexes: None,
                         },
                     )?;
@@ -114,9 +115,10 @@ where
                     let before = frame.successful_steps();
                     frame.advance(
                         RoundSnapshot {
+                            probe: None,
                             rel: &state.rel,
-                            depth: &state.depth,
-                            assumed: &[],
+                            depth: state.depths(),
+                            assumed: &purrdf_core::FastSet::default(),
                             delta_indexes: None,
                         },
                         run.execution,

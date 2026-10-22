@@ -240,11 +240,15 @@ where
                     .take()
                     .expect("the invocation completed")
                     .into_rows();
-                for row in rows {
+                'returned: for row in rows {
                     let mut next = solution.clone();
                     for (&slot, value) in guard.outputs.iter().zip(&row) {
-                        next.bind_value(slot, value, rel)
-                            .map_err(EvalError::Source)?;
+                        if !next
+                            .unify_guard_value(slot, value, rel)
+                            .map_err(EvalError::Source)?
+                        {
+                            continue 'returned;
+                        }
                     }
                     self.output.push(next);
                 }
@@ -442,6 +446,31 @@ mod tests {
         assert_eq!(check_cuts(entry, &store, 0..2, &inputs).len(), 4);
         assert_eq!(check_cuts(entry, &store, 0..1, &inputs).len(), 6);
         assert_eq!(check_cuts(entry, &store, 0..0, &inputs), inputs);
+        for positions in [0..1, 0..2] {
+            let unbound = check_cuts(entry, &store, positions.clone(), &inputs);
+            for value in [
+                DictionaryValue::Id(0),
+                DictionaryValue::Id(u64::MAX),
+                DictionaryValue::Surface("<https://example.org/fresh>".into()),
+                DictionaryValue::Surface("<https://example.org/absent>".into()),
+            ] {
+                let mut seeded = inputs.clone();
+                for input in &mut seeded {
+                    input.bind_value(slot("value"), &value, &store).unwrap();
+                }
+                let expected = unbound
+                    .iter()
+                    .filter(|solution| {
+                        solution.value(slot("value")).as_term() == Some(value.as_term())
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    check_cuts(entry, &store, positions.clone(), &seeded),
+                    expected
+                );
+            }
+        }
         assert_eq!(store.interner().resolves.load(Ordering::Relaxed), resolves);
     }
 

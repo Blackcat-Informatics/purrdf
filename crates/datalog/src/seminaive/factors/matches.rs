@@ -70,16 +70,13 @@ where
                 scan,
                 seed,
                 cyclic: entry.plan.has_cyclic_subplan(),
-                rebound: seed.is_some(),
+                rebound: seed.is_some() || snapshot.seed.is_some(),
             },
             |operator| factor.positions.contains(&operator.positive_position()),
         );
         Ok(Self {
             phase: Phase::Join {
-                sequence: join::Sequence::new(
-                    steps,
-                    vec![SlotSolution::empty(entry.plan.variables().len())],
-                ),
+                sequence: join::Sequence::new(steps, vec![snapshot.initial(entry.plan)]),
                 seed_in_cycle,
             },
             output: Vec::new(),
@@ -349,9 +346,10 @@ mod tests {
             factor,
             entry,
             RoundSnapshot {
+                probe: None,
                 rel: snapshot.rel,
-                depth: &[0; 14],
-                assumed: &[],
+                depth: (&[0; 14][..]).into(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: Some(snapshot.indexes),
             },
             &mut full,
@@ -491,6 +489,7 @@ mod tests {
                 delta,
             };
             let snapshot = JoinSnapshot {
+                seed: None,
                 rel: &rel,
                 delta,
                 indexes: &indexes,
@@ -526,9 +525,10 @@ mod tests {
         Arity<N>: StoreShape<N>,
     {
         let round = RoundSnapshot {
+            probe: None,
             rel: snapshot.rel,
-            depth: &[0; 14],
-            assumed: &[],
+            depth: (&[0; 14][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: Some(snapshot.indexes),
         };
         let all = entry.delta == Delta::all(snapshot.rel.row_slots());
@@ -676,6 +676,7 @@ mod tests {
                     delta,
                 };
                 let snapshot = JoinSnapshot {
+                    seed: None,
                     rel: &rel,
                     delta,
                     indexes: &indexes,
@@ -902,9 +903,11 @@ mod tests {
                     delta,
                 };
                 let snapshot = RoundSnapshot {
+                    probe: None,
                     rel: &rel,
-                    depth: &[0, 2, u32::MAX - 1, 1, 3, u32::MAX, 4, 1, 0, 0, 2, 5, 0, 4],
-                    assumed: &[],
+                    depth: (&[0, 2, u32::MAX - 1, 1, 3, u32::MAX, 4, 1, 0, 0, 2, 5, 0, 4][..])
+                        .into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: Some(&indexes),
                 };
                 for evidenced in [false, true] {
@@ -925,9 +928,10 @@ mod tests {
             delta,
         };
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &[0; 14],
-            assumed: &[],
+            depth: (&[0; 14][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: Some(&indexes),
         };
         let mut frame = WholeFactor::new();
@@ -1094,9 +1098,10 @@ mod tests {
         let runtime = RuleRuntime::new(&rule, &plan);
         assert_eq!(runtime.factors.len(), 3);
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &[0, 2, u32::MAX - 1, 1, 3, u32::MAX, 4, 1, 0, 0, 2, 5, 0, 4],
-            assumed: &[],
+            depth: (&[0, 2, u32::MAX - 1, 1, 3, u32::MAX, 4, 1, 0, 0, 2, 5, 0, 4][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         for delta in [
@@ -1283,6 +1288,7 @@ mod tests {
             delta,
         };
         let snapshot = JoinSnapshot {
+            seed: None,
             rel: &rel,
             delta,
             indexes: &indexes,

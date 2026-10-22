@@ -148,14 +148,14 @@ pub struct EvaluationSession<'r, D: TermDictionary, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
-    exe: &'r Executable<N>,
-    guards: &'r dyn GuardEvaluator<D, N>,
+    pub(super) exe: &'r Executable<N>,
+    pub(super) guards: &'r dyn GuardEvaluator<D, N>,
     binding: ContinuationBinding,
-    options: EvalOptions,
-    state: Option<FixpointState<D, N>>,
+    pub(super) options: EvalOptions,
+    pub(super) state: Option<FixpointState<D, N>>,
     stratum: usize,
     frame: Option<stratum::Frame<'r, D::Id, N>>,
-    complete: bool,
+    pub(super) complete: bool,
     failure: Option<EvalError<D::Error>>,
 }
 
@@ -357,6 +357,29 @@ where
             .take()
             .expect("the checked complete state is retained")
             .finish())
+    }
+
+    /// Probe one authored head against this original completed model.
+    ///
+    /// The borrow prevents model transfer or mutation while the query retains
+    /// native frames. Original pure guards and source identities are reused.
+    ///
+    /// # Errors
+    /// Refuses an incomplete/taken model, invalid coordinates or original failures.
+    pub fn probe_head(
+        &self,
+        rule: usize,
+        head: usize,
+        terms: [D::Id; N],
+    ) -> Result<super::HeadProbe<'_, D, N>, super::ProbeError<D::Error>> {
+        if let Some(error) = &self.failure {
+            return Err(super::ProbeError::Failed(error.clone()));
+        }
+        let state = self.state.as_ref().ok_or(super::ProbeError::ModelTaken)?;
+        if !self.complete {
+            return Err(super::ProbeError::ModelIncomplete);
+        }
+        super::HeadProbe::new(self.exe, state, self.guards, rule, head, terms)
     }
 }
 

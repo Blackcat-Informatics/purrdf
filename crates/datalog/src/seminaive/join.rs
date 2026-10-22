@@ -6,7 +6,8 @@
 use super::{
     AtomOperator, Delta, JoinGroup, JoinScan, JoinSnapshot, JoinStrategy, LeapfrogRun, RulePlan,
     Scan, SlotSolution, StepGovernor, TermDictionary, TermId, TermIdentity, atom,
-    constant_pattern_counts, cycle, decomposition_seed, delta_can_match, scan_for,
+    constant_pattern_count, constant_pattern_counts, cycle, decomposition_seed, delta_can_match,
+    scan_for,
 };
 use crate::store::{Arity, StoreShape};
 
@@ -291,9 +292,16 @@ where
         snapshot.rel.interner().check_read()?;
         // Advice was frozen before any task could warm an access path. Own that
         // same small table across suspension rather than recomputing its answers.
-        let full_counts = match full_counts {
-            Some(counts) => counts.to_vec(),
-            None => constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?,
+        let full_counts = if let Some(seed) = snapshot.seed {
+            plan.operators()
+                .iter()
+                .map(|operator| constant_pattern_count(operator, snapshot.rel, None, Some(seed)))
+                .collect::<Result<_, _>>()?
+        } else {
+            match full_counts {
+                Some(counts) => counts.to_vec(),
+                None => constant_pattern_counts(plan, snapshot.rel, snapshot.delta)?,
+            }
         };
         let base = plan
             .operators()
@@ -342,8 +350,7 @@ where
         snapshot.rel.interner().check_read()?;
         if self.unit_pending {
             if governor.charge() {
-                self.output
-                    .push(SlotSolution::empty(plan.variables().len()));
+                self.output.push(snapshot.initial(plan));
                 self.unit_pending = false;
             }
             return snapshot.rel.interner().check_read();
@@ -411,12 +418,23 @@ where
         let mut steps = Vec::new();
         let (reordered, seed_in_cycle) = match self.mode {
             Mode::Binary { base } => {
-                let reordered = !base && snapshot.delta != Delta::all(snapshot.rel.row_slots());
-                let seed = if reordered {
+                let partial = !base && snapshot.delta != Delta::all(snapshot.rel.row_slots());
+                let bound = (!base && !partial && snapshot.seed.is_some())
+                    .then(|| {
+                        self.full_counts
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(position, count)| count.map(|count| (count, position)))
+                            .min()
+                            .map(|(_, position)| position)
+                    })
+                    .flatten();
+                let seed = if partial {
                     decomposition_seed(plan, snapshot, anchor, &self.full_counts)?
                 } else {
-                    anchor
+                    bound.unwrap_or(anchor)
                 };
+                let reordered = partial || bound.is_some_and(|position| position != 0);
                 let order = [seed, anchor]
                     .into_iter()
                     .enumerate()
@@ -433,7 +451,7 @@ where
                     };
                     steps.push(Step::Atom {
                         operator,
-                        access: if reordered {
+                        access: if reordered || snapshot.seed.is_some() {
                             atom::Access::Rebound(scan)
                         } else {
                             atom::Access::Planned(scan)
@@ -448,7 +466,7 @@ where
                     scan: JoinScan::DeltaPosition(anchor),
                     seed: reordered.then_some(anchor),
                     cyclic: true,
-                    rebound: reordered,
+                    rebound: reordered || snapshot.seed.is_some(),
                 };
                 let (selected, seed_in_cycle) = selected_steps(plan, selection, |_| true);
                 steps = selected;
@@ -457,7 +475,7 @@ where
             Mode::Unit => unreachable!("the empty conjunction needs no sequence"),
         };
         Ok(Anchor {
-            sequence: Sequence::new(steps, vec![SlotSolution::empty(plan.variables().len())]),
+            sequence: Sequence::new(steps, vec![snapshot.initial(plan)]),
             reordered,
             seed_in_cycle,
         })
@@ -593,6 +611,64 @@ mod tests {
     }
 
     #[test]
+    fn native_binding_seeds_constrain_original_joins_at_every_cut() {
+        let store = fixture();
+        let resolves = store.interner().resolves.load(Ordering::Relaxed);
+        let binary = vec![
+            atom("a", "https://example.org/p", "b"),
+            atom("b", "https://example.org/q", "c"),
+        ];
+        let mut cyclic = binary.clone();
+        cyclic.push(atom("c", "https://example.org/r", "a"));
+        let mut hybrid = vec![atom("root", "https://example.org/seed", "a")];
+        hybrid.extend(cyclic.clone());
+        for body in [binary, cyclic, hybrid] {
+            let rule = DlClause::datalog(atom("a", "https://example.org/result", "c"), body);
+            let plan = RulePlan::for_rule(&rule);
+            for delta in [Delta::all(store.row_slots()), Delta { lo: 40, hi: 60 }] {
+                let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
+                let snapshot = JoinSnapshot {
+                    seed: None,
+                    rel: &store,
+                    delta,
+                    indexes: &indexes,
+                };
+                for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+                    let all = check_cuts(&plan, snapshot, strategy);
+                    for slot in 0..plan.variables().len() {
+                        for value in [0, (1 << 54) + 1, u64::MAX, u64::MAX - 1] {
+                            let mut seed = SlotSolution::empty(plan.variables().len());
+                            seed.bindings[slot] = Some(value);
+                            let mut expected = all
+                                .iter()
+                                .filter(|solution| solution.get(slot) == Some(value))
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            let mut actual = check_cuts(
+                                &plan,
+                                JoinSnapshot {
+                                    seed: Some(&seed),
+                                    ..snapshot
+                                },
+                                strategy,
+                            );
+                            let order = |solutions: &mut Vec<SlotSolution<u64, 3>>| {
+                                solutions.sort_unstable_by(|left, right| {
+                                    left.bindings.cmp(&right.bindings)
+                                });
+                            };
+                            order(&mut expected);
+                            order(&mut actual);
+                            assert_eq!(actual, expected, "native slot {slot}, value {value}");
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(store.interner().resolves.load(Ordering::Relaxed), resolves);
+    }
+
+    #[test]
     fn positive_join_frames_resume_across_operators_and_delta_anchors() {
         let store = fixture();
         let resolves = store.interner().resolves.load(Ordering::Relaxed);
@@ -615,7 +691,7 @@ mod tests {
                 Delta { lo: 0, hi: 1 },
                 Delta {
                     lo: 70,
-                    hi: store.row_count(),
+                    hi: store.row_count() as u64,
                 },
                 Delta::all(0),
             ] {
@@ -624,6 +700,7 @@ mod tests {
                     let output = check_cuts(
                         &plan,
                         JoinSnapshot {
+                            seed: None,
                             rel: &store,
                             delta,
                             indexes: &indexes,
@@ -702,6 +779,7 @@ mod tests {
             let output = check_cuts(
                 &plan,
                 JoinSnapshot {
+                    seed: None,
                     rel: &store,
                     delta,
                     indexes: &indexes,
@@ -740,6 +818,7 @@ mod tests {
         let delta = Delta::all(store.row_slots());
         let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
         let snapshot = JoinSnapshot {
+            seed: None,
             rel: &store,
             delta,
             indexes: &indexes,
@@ -771,6 +850,7 @@ mod tests {
         let empty = RelationStore::<HostDictionary, 3>::with_dictionary(HostDictionary::default());
         let indexes = DeltaIndexes::build(&empty, [Delta::all(0)]).unwrap();
         let snapshot = JoinSnapshot {
+            seed: None,
             rel: &empty,
             delta: Delta::all(0),
             indexes: &indexes,

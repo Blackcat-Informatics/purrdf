@@ -178,6 +178,44 @@ where
     fn next_change(&mut self) -> ChangePoll<Self, N>;
 }
 
+/// Applying a host stream failed at its original source or model boundary.
+#[derive(Debug)]
+pub enum ChangeApplyError<D, C> {
+    /// Original host polling failure; no batch or acknowledgement was fabricated.
+    Source(C),
+    /// Original model refusal, including a transaction already in progress.
+    Model(crate::seminaive::MaintenanceError<D>),
+}
+
+impl<D: fmt::Display, C: fmt::Display> fmt::Display for ChangeApplyError<D, C> {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(error) => error.fmt(out),
+            Self::Model(error) => error.fmt(out),
+        }
+    }
+}
+
+impl<D: std::error::Error + 'static, C: std::error::Error + 'static> std::error::Error
+    for ChangeApplyError<D, C>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Source(error) => Some(error),
+            Self::Model(error) => Some(error),
+        }
+    }
+}
+
+impl<D: purrdf_hash::error::StructuredError, C: purrdf_hash::error::StructuredError>
+    purrdf_hash::error::StructuredError for ChangeApplyError<D, C>
+{
+    purrdf_hash::error_visit! {
+        Source(cause) => "datalog-change-source" { "cause" => Cause(cause) },
+        Model(cause) => "datalog-change-model" { "cause" => Cause(cause) },
+    }
+}
+
 /// One poll of a host source, retaining its native batch and original error type.
 pub type ChangePoll<T, const N: usize = 4> = Result<
     Option<

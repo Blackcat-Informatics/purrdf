@@ -840,7 +840,7 @@ struct LiveView {
     /// The store generation the view was built at.
     generation: u64,
     /// The retained append boundary the view reflects, including vacant slots.
-    rows: usize,
+    rows: u64,
     /// The surface bytes of the triples in the delta.
     delta_bytes: usize,
     /// The surface bytes every extension since the last compaction re-froze.
@@ -858,7 +858,7 @@ impl LiveView {
     /// A view with no delta over the compacted `core` and `sparql` datasets.
     fn compacted<const N: usize>(
         generation: u64,
-        rows: usize,
+        rows: u64,
         core: Arc<RdfDataset>,
         sparql: Arc<RdfDataset>,
         engine: &Engine<'_, '_, N>,
@@ -945,7 +945,7 @@ struct ProducerRecord {
     reads: Vec<ReadPattern>,
     /// The `(generation, append boundary)` of the store the rule last ran against; `None`
     /// before its first execution.
-    last: Option<(u64, usize)>,
+    last: Option<(u64, u64)>,
     /// The focus nodes executed since.
     focus: rules::FocusRecord,
 }
@@ -1337,7 +1337,7 @@ where
     /// # Errors
     ///
     /// An internal-invariant breach: a store surface the codec never saw.
-    fn new_triples(&self, model: &RuleStore<N>, since: usize) -> Result<Vec<[Term; 3]>, String> {
+    fn new_triples(&self, model: &RuleStore<N>, since: u64) -> Result<Vec<[Term; 3]>, String> {
         model
             .rows_from(since)
             .filter(|(_, row)| Arity::<N>::is_output_row(model, row))

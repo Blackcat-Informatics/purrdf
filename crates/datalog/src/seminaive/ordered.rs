@@ -203,7 +203,7 @@ where
                     barrier: 0,
                     start: 0,
                     end: 0,
-                    partial: vec![SlotSolution::empty(entry.plan.variables().len())],
+                    partial: vec![snapshot.initial(entry.plan)],
                     phase: if barriers.first() == Some(&0) {
                         Phase::Unit
                     } else {
@@ -558,6 +558,7 @@ mod tests {
                     let output = check_cuts(
                         entry,
                         JoinSnapshot {
+                            seed: None,
                             rel: &store,
                             delta,
                             indexes: &indexes,
@@ -628,6 +629,7 @@ mod tests {
             delta,
         };
         let snapshot = JoinSnapshot {
+            seed: None,
             rel: &store,
             delta,
             indexes: &indexes,
@@ -659,9 +661,10 @@ mod tests {
             .unwrap();
         assert!(callbacks.calls.lock().unwrap().is_empty());
         let round = super::super::RoundSnapshot {
+            probe: None,
             rel: &store,
-            depth: &[0; 10],
-            assumed: &[],
+            depth: (&[0; 10][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: Some(&indexes),
         };
         let counts = super::super::constant_pattern_counts(&plan, &store, delta).unwrap();
@@ -730,7 +733,7 @@ mod tests {
     {
         super::super::evidence::Capture::new(
             crate::evidence::DerivationEvidence::with_admission(
-                snapshot.rel.row_slots(),
+                snapshot.rel.retained_rows(),
                 purrdf_lex::allocation::Resident,
             ),
             crate::test_support::evidence_scope(),
@@ -989,9 +992,12 @@ mod tests {
                     delta,
                 };
                 let snapshot = super::super::RoundSnapshot {
+                    probe: None,
                     rel: &store,
-                    depth: &[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3],
-                    assumed: &[true; 10],
+                    depth: (&[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3][..]).into(),
+                    assumed: &(0..10)
+                        .map(|index| crate::id::RowId::from_index(index).unwrap())
+                        .collect(),
                     delta_indexes: Some(&indexes),
                 };
                 for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
@@ -1185,9 +1191,12 @@ mod tests {
                         })
                         .collect();
                     let snapshot = super::super::RoundSnapshot {
+                        probe: None,
                         rel: store,
-                        depth: &[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3],
-                        assumed: &[true; 10],
+                        depth: (&[0, 1, u32::MAX, 2, 3, 0, 0, 1, 2, 3][..]).into(),
+                        assumed: &(0..10)
+                            .map(|index| crate::id::RowId::from_index(index).unwrap())
+                            .collect(),
                         delta_indexes: None,
                     };
                     for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
@@ -1221,9 +1230,10 @@ mod tests {
             delta: Delta::all(10),
         });
         let snapshot = super::super::RoundSnapshot {
+            probe: None,
             rel: store,
-            depth: &[0; 10],
-            assumed: &[],
+            depth: (&[0; 10][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         let callbacks = || Callbacks {
@@ -1483,9 +1493,10 @@ mod tests {
             evaluate_round_with_evidence(
                 &[entry],
                 RoundSnapshot {
+                    probe: None,
                     rel: &state.rel,
-                    depth: &state.depth,
-                    assumed: &[],
+                    depth: state.depths(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 },
                 RoundExecution::Sequential,

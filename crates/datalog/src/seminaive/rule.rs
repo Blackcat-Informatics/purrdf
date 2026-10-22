@@ -86,6 +86,7 @@ where
             .check_read()
             .map_err(EvalError::Source)?;
         let join = JoinSnapshot {
+            seed: snapshot.probe.map(|probe| &probe.seed),
             rel: snapshot.rel,
             delta: entry.delta,
             indexes: snapshot
@@ -159,6 +160,7 @@ where
             .check_read()
             .map_err(EvalError::Source)?;
         let join = JoinSnapshot {
+            seed: snapshot.probe.map(|probe| &probe.seed),
             rel: snapshot.rel,
             delta: entry.delta,
             indexes: snapshot
@@ -266,6 +268,14 @@ where
                         state.active = None;
                         continue;
                     };
+                    if snapshot
+                        .probe
+                        .and_then(|probe| probe.target)
+                        .is_some_and(|(head, _)| head != state.head)
+                    {
+                        state.head += 1;
+                        continue;
+                    }
                     // The original terminal body row prepays only its first head.
                     if state.head != 0 && !governor.charge() {
                         break;

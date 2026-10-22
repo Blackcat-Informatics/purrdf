@@ -1688,10 +1688,7 @@ fn predicate_rows_keep_native_identities_and_lexical_graph_order() {
         ["a", "m", "z"]
     );
     for (row_id, row) in selected {
-        assert_eq!(
-            quads.rows_from(row_id.address().unwrap()).next(),
-            Some((row_id, row))
-        );
+        assert_eq!(quads.rows_from(row_id.index()).next(), Some((row_id, row)));
     }
 }
 
@@ -2953,7 +2950,10 @@ fn removed_append_slots_preserve_recursive_models_and_proofs() {
         chased.facts().facts_sorted(),
         cold_chased.facts().facts_sorted()
     );
-    assert_eq!(chased.budget().stored_facts(), chased.facts().row_slots());
+    assert_eq!(
+        chased.budget().stored_facts() as u64,
+        chased.facts().row_slots()
+    );
     assert!(matches!(
         purrdf_datalog::chase::chase_with(
             &rules,
@@ -3057,7 +3057,1915 @@ fn native_signed_transactions_preserve_watermarks_and_exact_cancellation() {
     ));
 }
 
+fn head_probes_preserve_native_targets_and_original_guard_batches() {
+    use dictionary::{DictionaryTerm, DictionaryValue};
+    use host_dictionary::{HostDictionary, SourceLost};
+    use purrdf_datalog::clause::ReadSource;
+    use purrdf_datalog::seminaive::{
+        EvaluationSession, ProbeError, ResumeProgress, SessionContext,
+    };
+    use purrdf_hash::hex::Digest32;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Echo(AtomicUsize);
+    impl GuardEvaluator<HostDictionary, 3> for Echo {
+        fn evaluate(
+            &self,
+            call: &GuardCall<'_, HostDictionary, 3>,
+        ) -> Result<GuardRows<u64>, purrdf_datalog::guard::CallbackError<SourceLost>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            let DictionaryTerm::Id(value) = call.inputs[0] else {
+                panic!("the original guard receives a native identity");
+            };
+            Ok(vec![vec![DictionaryValue::Id(value)]])
+        }
+    }
+    let atom = |predicate, object| {
+        ClauseAtom::triple(
+            ClauseTerm::var("x"),
+            ClauseTerm::iri(predicate),
+            ClauseTerm::var(object),
+        )
+    };
+    let program = compile(vec![
+        DlClause::datalog(
+            atom("https://example.org/result", "value"),
+            vec![atom("https://example.org/p", "y")],
+        )
+        .with_guards(vec![Guard::assign("echo", vec!["y".into()], "value")]),
+    ])
+    .unwrap();
+    let mut dictionary = HostDictionary {
+        surfaces: [
+            (7, "<https://example.org/p>".into()),
+            (11, "<https://example.org/result>".into()),
+        ]
+        .into_iter()
+        .collect(),
+        ..HostDictionary::default()
+    };
+    const FIRST: u64 = 1 << 54;
+    // This adapter deliberately compares canonical lexical spellings. The
+    // initial model's sorted publication therefore needs its original terms;
+    // subsequent bound-query projection counts start only after initialization.
+    for offset in 0..4096 {
+        dictionary.surfaces.insert(
+            FIRST + offset,
+            format!("<https://example.org/node/{offset:04}>"),
+        );
+        dictionary.surfaces.insert(
+            u64::MAX - offset,
+            format!("<https://example.org/value/{offset:04}>"),
+        );
+    }
+    let mut input = RelationStore::<_, 3>::with_dictionary(dictionary);
+    let target = [FIRST + 17, 11, u64::MAX - 17];
+    let mut original = None;
+    for offset in 0..4096 {
+        let (_, _, row) = input
+            .insert_ids([FIRST + offset, 7, u64::MAX - offset])
+            .unwrap()
+            .unwrap();
+        if offset == 17 {
+            original = Some(row);
+        }
+    }
+    let guards = Echo(AtomicUsize::new(0));
+    let options = EvalOptions::default()
+        .with_derivation_mode(DerivationMode::ModelOnly)
+        .with_max_join_steps(u64::MAX);
+    let mut session = EvaluationSession::new(
+        &program,
+        input,
+        &guards,
+        SessionContext {
+            snapshot: Digest32::new([0x61; 32]),
+            guards: Digest32::new([0x62; 32]),
+            evidence: Digest32::new([0x63; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        session.probe_head(0, 0, target),
+        Err(ProbeError::ModelIncomplete)
+    ));
+    let initialized = session
+        .resume(session.binding(), options, None)
+        .expect("the original native model initializes");
+    assert!(
+        matches!(initialized, ResumeProgress::Complete),
+        "{initialized:?}"
+    );
+    assert!(matches!(
+        session.probe_head(1, 0, target),
+        Err(ProbeError::RuleOutOfBounds {
+            rule: 1,
+            available: 1
+        })
+    ));
+    assert!(matches!(
+        session.probe_head(0, 1, target),
+        Err(ProbeError::HeadOutOfBounds {
+            rule: 0,
+            head: 1,
+            available: 1
+        })
+    ));
+    let calls = guards.0.load(Ordering::Relaxed);
+    let resolves = session
+        .partial_model()
+        .unwrap()
+        .facts()
+        .interner()
+        .resolves
+        .load(Ordering::Relaxed);
+    {
+        let mut probe = session.probe_head(0, 0, target).unwrap();
+        assert!(matches!(
+            probe.resume(0, None),
+            Ok(ResumeProgress::Paused(_))
+        ));
+        assert_eq!(probe.join_steps(), 0);
+        assert!(matches!(probe.witness(), Err(ProbeError::ProbeIncomplete)));
+        assert_eq!(guards.0.load(Ordering::Relaxed), calls);
+        let mut ceiling = 1;
+        loop {
+            if matches!(
+                probe.resume(ceiling, None).unwrap(),
+                ResumeProgress::Complete
+            ) {
+                break;
+            }
+            ceiling += 1;
+            assert!(
+                ceiling < 16,
+                "a bound row must not enumerate 4,095 unrelated rows"
+            );
+        }
+        assert_eq!(
+            guards.0.load(Ordering::Relaxed),
+            calls + 1,
+            "returned guard rows are never replayed"
+        );
+        assert!(probe.join_steps() <= 4);
+        let witness = probe.witness().unwrap().unwrap();
+        assert_eq!(
+            (witness.rule(), witness.head(), witness.terms()),
+            (0, 0, &target)
+        );
+        assert_eq!(
+            witness.premises().collect::<Vec<_>>(),
+            vec![(
+                ReadSource::Evaluation,
+                original.unwrap(),
+                &[target[0], 7, target[2]]
+            )]
+        );
+        assert_eq!(
+            session
+                .partial_model()
+                .unwrap()
+                .facts()
+                .interner()
+                .resolves
+                .load(Ordering::Relaxed),
+            resolves
+        );
+        let projected = witness.derivation().unwrap();
+        assert_eq!(projected.fact().subject, "<https://example.org/node/0017>");
+        assert_eq!(projected.sources().len(), 1);
+    }
+    {
+        let mut probe = session.probe_head(0, 0, [target[0], 11, 42]).unwrap();
+        assert!(matches!(
+            probe.resume(u64::MAX, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        assert!(
+            probe.witness().unwrap().is_none(),
+            "a different guard output cannot overwrite the requested native target"
+        );
+    }
+    {
+        let mut probe = session.probe_head(0, 0, target).unwrap();
+        let model = session.partial_model().unwrap();
+        let dictionary = model.facts().interner();
+        dictionary.lost.store(true, Ordering::Relaxed);
+        assert!(matches!(
+            probe.resume(u64::MAX, None),
+            Err(ProbeError::Failed(seminaive::EvalError::Source(
+                SourceLost(99)
+            )))
+        ));
+        dictionary.lost.store(false, Ordering::Relaxed);
+        assert!(matches!(
+            probe.resume(u64::MAX, None),
+            Err(ProbeError::Failed(seminaive::EvalError::Source(
+                SourceLost(99)
+            )))
+        ));
+    }
+    session.take_complete().unwrap();
+    assert!(matches!(
+        session.probe_head(0, 0, target),
+        Err(ProbeError::ModelTaken)
+    ));
+}
+
+fn head_probes_bind_variable_predicate_and_graph_partitions() {
+    use purrdf_datalog::proof::{ProofArena, ProofContext};
+    use purrdf_datalog::seminaive::{EvaluationSession, ResumeProgress, SessionContext};
+    use purrdf_hash::hex::Digest32;
+
+    let atom = |subject, predicate, object, graph| {
+        ClauseAtom::quad(
+            ClauseTerm::var(subject),
+            predicate,
+            ClauseTerm::var(object),
+            ClauseTerm::var(graph),
+        )
+    };
+    let rules = vec![DlClause::datalog(
+        atom("x", ClauseTerm::var("p"), "z", "g"),
+        vec![
+            atom("x", ClauseTerm::var("p"), "y", "g"),
+            atom("y", ClauseTerm::iri("https://example.org/next"), "z", "g"),
+        ],
+    )];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::new();
+    for row in [
+        ["a", "p", "b", "g1"],
+        ["b", "next", "c", "g1"],
+        ["a", "p", "b", "g2"],
+        ["b", "next", "d", "g2"],
+    ] {
+        let row = row.map(|term| format!("<https://example.org/{term}>"));
+        input
+            .insert_row(row.each_ref().map(String::as_str))
+            .unwrap();
+    }
+    for index in 0..1024 {
+        let subject = format!("<https://example.org/noise-{index}>");
+        let predicate = format!("<https://example.org/predicate-{index}>");
+        let graph = format!("<https://example.org/graph-{index}>");
+        input
+            .insert_row([&subject, &predicate, "<https://example.org/b>", &graph])
+            .unwrap();
+    }
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let cold = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+    let context = ProofContext::new(&rules, &input, cold.facts());
+    let mut session = EvaluationSession::new(
+        &program,
+        input.clone(),
+        &NoGuards,
+        SessionContext {
+            snapshot: Digest32::new([0x91; 32]),
+            guards: Digest32::new([0x92; 32]),
+            evidence: Digest32::new([0x93; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        session.resume(session.binding(), options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    for (object, graph, present) in [("c", "g1", true), ("d", "g2", true), ("c", "g2", false)] {
+        let model = session.partial_model().unwrap();
+        let target = ["a", "p", object, graph].map(|term| {
+            model
+                .facts()
+                .term_id(&format!("<https://example.org/{term}>"))
+                .unwrap()
+        });
+        let mut reference = session.probe_head(0, 0, target).unwrap();
+        assert!(matches!(
+            reference.resume(u64::MAX, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let steps = reference.join_steps();
+        assert!(
+            steps <= 4,
+            "bound query credits stay independent of 1,024 unrelated partitions"
+        );
+        let expected = reference
+            .witness()
+            .unwrap()
+            .map(|witness| witness.derivation().unwrap());
+        assert_eq!(expected.is_some(), present);
+        for cut in 0..=steps {
+            let mut probe = session.probe_head(0, 0, target).unwrap();
+            if !matches!(probe.resume(cut, None).unwrap(), ResumeProgress::Complete) {
+                assert!(matches!(
+                    probe.resume(steps, None),
+                    Ok(ResumeProgress::Complete)
+                ));
+            }
+            assert_eq!(probe.join_steps(), steps);
+            assert_eq!(
+                probe
+                    .witness()
+                    .unwrap()
+                    .map(|witness| witness.derivation().unwrap()),
+                expected
+            );
+        }
+        if let Some(derivation) = expected {
+            assert_eq!(
+                cold.derivations()
+                    .unwrap()
+                    .iter()
+                    .find(|proof| proof.fact() == derivation.fact()),
+                Some(&derivation)
+            );
+            let mut arena = ProofArena::default();
+            let premises = derivation
+                .sources()
+                .iter()
+                .map(|source| arena.axiom(source.clone()).unwrap())
+                .collect::<Vec<_>>();
+            let root = arena
+                .by_rule_head(derivation.fact().clone(), 0, 0, &premises)
+                .unwrap();
+            assert_eq!(arena.check(root, &context).unwrap(), *derivation.fact());
+        }
+    }
+    assert_eq!(
+        session.partial_model().unwrap().facts().row_count(),
+        cold.facts().row_count()
+    );
+}
+
+fn head_probes_retain_returned_guard_batches_at_every_credit_cut() {
+    use dictionary::DictionaryValue;
+    use purrdf_datalog::id::TermId;
+    use purrdf_datalog::seminaive::{EvaluationSession, ResumeProgress, SessionContext};
+    use purrdf_datalog::store::TermInterner;
+    use purrdf_hash::hex::Digest32;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct Stopped;
+    impl purrdf_datalog::stop::StopSignal for Stopped {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+    struct Batch {
+        calls: AtomicUsize,
+        values: [TermId; 3],
+    }
+    impl GuardEvaluator<TermInterner, 3> for Batch {
+        fn evaluate(
+            &self,
+            _: &GuardCall<'_, TermInterner, 3>,
+        ) -> Result<GuardRows, purrdf_datalog::guard::CallbackError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self
+                .values
+                .iter()
+                .map(|&value| vec![DictionaryValue::Id(value)])
+                .collect())
+        }
+    }
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["a", "seed", "b"]).unwrap();
+    let a = input.term_id("a").unwrap();
+    let b = input.term_id("b").unwrap();
+    let guards = Batch {
+        calls: AtomicUsize::new(0),
+        values: [b, a, b],
+    };
+    let program = compile(vec![
+        DlClause::datalog(
+            triple_pattern("x", "out", "z"),
+            vec![triple_pattern("x", "seed", "y")],
+        )
+        .with_guards(vec![Guard::assign("batch", vec!["y".into()], "z")]),
+    ])
+    .unwrap();
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let mut session = EvaluationSession::new(
+        &program,
+        input,
+        &guards,
+        SessionContext {
+            snapshot: Digest32::new([0x81; 32]),
+            guards: Digest32::new([0x82; 32]),
+            evidence: Digest32::new([0x83; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        session.resume(session.binding(), options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let predicate = session
+        .partial_model()
+        .unwrap()
+        .facts()
+        .term_id("out")
+        .unwrap();
+    for object in [a, b] {
+        let target = [a, predicate, object];
+        let mut reference = session.probe_head(0, 0, target).unwrap();
+        assert!(matches!(
+            reference.resume(u64::MAX, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let steps = reference.join_steps();
+        let expected = reference.witness().unwrap().unwrap().derivation().unwrap();
+        for cut in 0..=steps {
+            let before = guards.calls.load(Ordering::Relaxed);
+            let mut probe = session.probe_head(0, 0, target).unwrap();
+            assert!(matches!(
+                probe.resume(u64::MAX, Some(&Stopped)),
+                Ok(ResumeProgress::Paused(seminaive::EvalError::Stopped { .. }))
+            ));
+            assert_eq!(probe.join_steps(), 0);
+            assert_eq!(guards.calls.load(Ordering::Relaxed), before);
+            let first = probe.resume(cut, None).unwrap();
+            if !matches!(first, ResumeProgress::Complete) {
+                let consumed = probe.join_steps();
+                let callbacks = guards.calls.load(Ordering::Relaxed);
+                assert!(matches!(
+                    probe.resume(u64::MAX, Some(&Stopped)),
+                    Ok(ResumeProgress::Paused(seminaive::EvalError::Stopped { .. }))
+                ));
+                assert_eq!(probe.join_steps(), consumed);
+                assert_eq!(guards.calls.load(Ordering::Relaxed), callbacks);
+                assert!(matches!(
+                    probe.resume(cut, None),
+                    Ok(ResumeProgress::Paused(_))
+                ));
+                assert!(matches!(
+                    probe.resume(steps, None),
+                    Ok(ResumeProgress::Complete)
+                ));
+            }
+            assert_eq!(probe.join_steps(), steps, "cut {cut}");
+            assert_eq!(
+                probe.witness().unwrap().unwrap().derivation().unwrap(),
+                expected,
+                "cut {cut}"
+            );
+            assert_eq!(
+                guards.calls.load(Ordering::Relaxed),
+                before + 1,
+                "cut {cut}: the original three-row batch is never replayed"
+            );
+        }
+    }
+}
+
+fn head_probes_preserve_factor_cycles_negation_and_independent_proofs() {
+    use purrdf_datalog::clause::HeadDisjunct;
+    use purrdf_datalog::proof::{ProofArena, ProofContext};
+    use purrdf_datalog::seminaive::{
+        EvaluationSession, ResumeProgress, RoundExecution, SessionContext,
+    };
+    use purrdf_datalog::store::TermInterner;
+    use purrdf_hash::hex::Digest32;
+
+    let atom = |s: &str, p: &str, o: &str| {
+        ClauseAtom::triple(
+            ClauseTerm::var(s),
+            ClauseTerm::literal(p),
+            ClauseTerm::var(o),
+        )
+    };
+    let connected = vec![atom("x", "p", "y"), atom("y", "q", "z")];
+    let mut factored = connected.clone();
+    factored.push(atom("u", "noise", "v"));
+    let mut cyclic = connected.clone();
+    cyclic.push(atom("z", "r", "x"));
+    let mut negative = connected;
+    negative.push(atom("x", "blocked", "z").into_negated());
+    let rules = vec![
+        DlClause::new(
+            vec![HeadDisjunct::new(vec![
+                atom("x", "out", "z"),
+                atom("u", "aux", "v"),
+            ])],
+            Vec::new(),
+            factored,
+        ),
+        DlClause::datalog(atom("x", "cycle", "z"), cyclic),
+        DlClause::datalog(atom("x", "clear", "z"), negative),
+        DlClause::datalog(atom("x", "self", "x"), vec![atom("x", "p", "y")]),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["a", "p", "b"],
+        ["b", "q", "c"],
+        ["c", "r", "a"],
+        ["a", "p", "b2"],
+        ["b2", "q", "c"],
+        ["d", "p", "e"],
+        ["e", "q", "f"],
+        ["f", "r", "d"],
+        ["j", "noise", "k"],
+        ["l", "noise", "m"],
+        ["a", "blocked", "c"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    for execution in [RoundExecution::Sequential, RoundExecution::Parallel] {
+        let options = EvalOptions::default()
+            .with_derivation_mode(DerivationMode::Record)
+            .with_round_execution(execution);
+        let mut session = EvaluationSession::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            SessionContext {
+                snapshot: Digest32::new([0x71; 32]),
+                guards: Digest32::new([0x72; 32]),
+                evidence: Digest32::new([0x73; 32]),
+            },
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            session.resume(session.binding(), options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let before = session.partial_model().unwrap().facts().facts_sorted();
+        let mut selected = Vec::new();
+        for (rule, head, surfaces) in [
+            (0, 0, ["a", "out", "c"]),
+            (0, 1, ["j", "aux", "k"]),
+            (1, 0, ["a", "cycle", "c"]),
+            (2, 0, ["d", "clear", "f"]),
+        ] {
+            let model = session.partial_model().unwrap();
+            let target = surfaces.map(|surface| model.facts().term_id(surface).unwrap());
+            let mut reference = session.probe_head(rule, head, target).unwrap();
+            assert!(matches!(
+                reference.resume(u64::MAX, None),
+                Ok(ResumeProgress::Complete)
+            ));
+            let steps = reference.join_steps();
+            let expected = reference.witness().unwrap().unwrap().derivation().unwrap();
+            assert_eq!((expected.rule(), expected.head()), (rule, head));
+            for cut in 0..=steps {
+                let mut probe = session.probe_head(rule, head, target).unwrap();
+                let first = probe.resume(cut, None).unwrap();
+                if !matches!(first, ResumeProgress::Complete) {
+                    assert!(matches!(
+                        probe.resume(steps, None),
+                        Ok(ResumeProgress::Complete)
+                    ));
+                }
+                assert_eq!(probe.join_steps(), steps, "head {head}, cut {cut}");
+                assert_eq!(
+                    probe.witness().unwrap().unwrap().derivation().unwrap(),
+                    expected
+                );
+            }
+            selected.push(expected);
+        }
+        for (rule, surfaces) in [
+            (2, ["a", "clear", "c"]), // blocked negative premise
+            (3, ["a", "self", "c"]),  // repeated head variable cannot unify
+            (0, ["a", "p", "c"]),     // authored head constant differs
+        ] {
+            let model = session.partial_model().unwrap();
+            let target = surfaces.map(|surface| model.facts().term_id(surface).unwrap());
+            let mut probe = session.probe_head(rule, 0, target).unwrap();
+            assert!(matches!(
+                probe.resume(u64::MAX, None),
+                Ok(ResumeProgress::Complete)
+            ));
+            assert!(probe.witness().unwrap().is_none());
+            if rule != 2 {
+                assert_eq!(probe.join_steps(), 0);
+            }
+        }
+        assert_eq!(
+            session.partial_model().unwrap().facts().facts_sorted(),
+            before
+        );
+        let result = session.take_complete().unwrap();
+        let context = ProofContext::new(&rules, &input, result.facts());
+        for derivation in selected {
+            let original = result
+                .derivations()
+                .unwrap()
+                .iter()
+                .find(|proof| proof.fact() == derivation.fact())
+                .unwrap();
+            assert_eq!(
+                &derivation, original,
+                "the bound producer selects the canonical cold witness"
+            );
+            let mut arena = ProofArena::<3>::default();
+            let premises = derivation
+                .sources()
+                .iter()
+                .map(|source| arena.axiom(source.clone()).unwrap())
+                .collect::<Vec<_>>();
+            let root = arena
+                .by_rule_head(
+                    derivation.fact().clone(),
+                    derivation.rule(),
+                    derivation.head(),
+                    &premises,
+                )
+                .unwrap();
+            assert_eq!(arena.check(root, &context).unwrap(), *derivation.fact());
+        }
+    }
+}
+
+fn assert_native_grounding(
+    rules: &[DlClause<3>],
+    input: &RelationStore<purrdf_datalog::store::TermInterner, 3>,
+    model: &RelationStore<purrdf_datalog::store::TermInterner, 3>,
+    mut proofs: Vec<seminaive::Derivation<3>>,
+) {
+    proofs.sort_by_key(seminaive::Derivation::proof_height);
+    let mut arena = purrdf_datalog::proof::ProofArena::<3>::default();
+    let mut established = std::collections::BTreeMap::new();
+    for fact in input.facts_sorted() {
+        established.insert(fact.clone(), arena.axiom(fact).unwrap());
+    }
+    let context = purrdf_datalog::proof::ProofContext::new(rules, input, model);
+    for proof in proofs {
+        let premises = proof
+            .sources()
+            .iter()
+            .map(|source| established[source])
+            .collect::<Vec<_>>();
+        let root = arena
+            .by_rule_head(proof.fact().clone(), proof.rule(), proof.head(), &premises)
+            .unwrap();
+        assert_eq!(arena.check(root, &context).unwrap(), *proof.fact());
+        established.insert(proof.fact().clone(), root);
+    }
+    assert_eq!(
+        established.len(),
+        model.row_count(),
+        "every live fact has an independently checked grounding"
+    );
+}
+
+fn maintained_transactions_retract_cycles_repair_alternatives_and_negation() {
+    use purrdf_datalog::maintenance::ChangeBatch;
+    use purrdf_datalog::seminaive::{Maintained, ResumeProgress, SessionContext};
+    use purrdf_datalog::store::TermInterner;
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    let atom = |s: &str, p: &str, o: &str| triple_pattern(s, p, o);
+    let rules = vec![
+        DlClause::datalog(atom("x", "reach", "y"), vec![atom("x", "edge", "y")]),
+        DlClause::datalog(
+            atom("x", "reach", "z"),
+            vec![atom("x", "reach", "y"), atom("y", "edge", "z")],
+        ),
+        DlClause::datalog(atom("x", "p", "y"), vec![atom("x", "ground", "y")]),
+        DlClause::datalog(atom("x", "q", "y"), vec![atom("x", "p", "y")]),
+        DlClause::datalog(atom("x", "p", "y"), vec![atom("x", "q", "y")]),
+        DlClause::datalog(
+            atom("x", "clear", "y"),
+            vec![
+                atom("x", "reach", "y"),
+                atom("x", "blocked", "y").into_negated(),
+            ],
+        ),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [
+        ["a", "edge", "b"],
+        ["b", "edge", "c"],
+        ["a", "edge", "d"],
+        ["d", "edge", "c"],
+        ["x", "ground", "x"],
+        ["a", "blocked", "c"],
+    ] {
+        input.insert_row(row).unwrap();
+    }
+    let blocked = ["a", "blocked", "c"].map(|s| input.term_id(s).unwrap());
+    input.remove_ids(blocked).unwrap();
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let mut maintained = Maintained::<u64, Resident, _, 3>::new(
+        &program,
+        input.clone(),
+        &NoGuards,
+        SessionContext {
+            snapshot: Digest32::new([0x81; 32]),
+            guards: Digest32::new([0x82; 32]),
+            evidence: Digest32::new([0x83; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        maintained.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let target = ["a", "reach", "c"].map(|s| maintained.facts().unwrap().term_id(s).unwrap());
+    let original = maintained
+        .facts()
+        .unwrap()
+        .rows_from(0)
+        .find(|(_, ids)| *ids == target)
+        .unwrap()
+        .0;
+    for (index, (surfaces, delta)) in [
+        (["a", "edge", "b"], -1), // Survives through d, preserving its original handle.
+        (["x", "ground", "x"], -1), // Final grounding of a positive cycle disappears.
+        (["a", "blocked", "c"], 1),
+        (["a", "blocked", "c"], -1),
+        (["a", "edge", "b"], 1),
+        (["a", "edge", "d"], -1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let ids = surfaces.map(|s| maintained.facts().unwrap().term_id(s).unwrap());
+        maintained
+            .apply(ChangeBatch::new(index as u64, [(ids, delta)], Resident).unwrap())
+            .unwrap();
+        assert_eq!(maintained.pending_watermark(), Some(&(index as u64)));
+        assert!(
+            maintained.facts().is_err(),
+            "pending deletion cannot publish stale certainty"
+        );
+        if delta < 0 {
+            input.remove_ids(ids).unwrap();
+        } else {
+            input.insert_ids(ids).unwrap();
+        }
+        assert!(matches!(
+            maintained.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        assert_eq!(maintained.applied_watermark(), Some(&(index as u64)));
+        let cold = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+        let model = maintained.facts().unwrap();
+        assert_eq!(
+            model.facts_sorted(),
+            cold.facts().facts_sorted(),
+            "transaction {index}"
+        );
+        let mut proofs = Vec::new();
+        for (_, terms) in model.rows_from(0) {
+            if let Some(witness) = maintained.witness(terms).unwrap() {
+                let proof = witness.derivation().unwrap();
+                let expected = cold
+                    .derivations()
+                    .unwrap()
+                    .iter()
+                    .find(|p| p.fact() == proof.fact())
+                    .unwrap();
+                assert_eq!(&proof, expected, "transaction {index}");
+                proofs.push(proof);
+            }
+        }
+        assert_native_grounding(&rules, &input, model, proofs);
+        assert_eq!(
+            model
+                .rows_from(0)
+                .find(|(_, ids)| *ids == target)
+                .unwrap()
+                .0,
+            original,
+            "an alternative proof preserves the original native row handle"
+        );
+        if index >= 1 {
+            assert!(!model.contains_row(["x", "p", "x"]));
+            assert!(!model.contains_row(["x", "q", "x"]));
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PollStop {
+    remaining: std::sync::atomic::AtomicUsize,
+    polls: std::sync::atomic::AtomicUsize,
+}
+impl purrdf_datalog::stop::StopSignal for PollStop {
+    fn stopped(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.polls.fetch_add(1, Relaxed);
+        self.remaining
+            .try_update(Relaxed, Relaxed, |left| left.checked_sub(1))
+            .is_err()
+    }
+}
+
+fn maintained_transactions_resume_every_credit_cut_without_early_acknowledgement() {
+    use purrdf_datalog::maintenance::ChangeBatch;
+    use purrdf_datalog::seminaive::{Maintained, ResumeProgress, SessionContext};
+    use purrdf_datalog::store::TermInterner;
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    let program = compile(vec![
+        DlClause::datalog(
+            triple_pattern("x", "path", "y"),
+            vec![triple_pattern("x", "edge", "y")],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "path", "z"),
+            vec![
+                triple_pattern("x", "path", "y"),
+                triple_pattern("y", "edge", "z"),
+            ],
+        ),
+    ])
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    for row in [["a", "edge", "b"], ["b", "edge", "c"], ["a", "edge", "c"]] {
+        input.insert_row(row).unwrap();
+    }
+    input.insert_row(["noise", "unrelated", "noise"]).unwrap();
+    let unrelated = input.term_id("unrelated").unwrap();
+    let direct = ["a", "edge", "c"].map(|s| input.term_id(s).unwrap());
+    let context = SessionContext {
+        snapshot: Digest32::new([0x91; 32]),
+        guards: Digest32::new([0x92; 32]),
+        evidence: Digest32::new([0x93; 32]),
+    };
+    let options = EvalOptions::default();
+    let mut reference = Maintained::<String, Resident, _, 3>::new(
+        &program,
+        input.clone(),
+        &NoGuards,
+        context,
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        reference.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let baseline = reference.budget().join_steps();
+    reference
+        .apply(ChangeBatch::new("commit-original".to_owned(), [(direct, -1)], Resident).unwrap())
+        .unwrap();
+    assert!(matches!(
+        reference.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let total = reference.budget().join_steps();
+    let expected = reference.facts().unwrap().facts_sorted();
+    assert!(total > baseline);
+    for cut in baseline..=total {
+        let mut model = Maintained::<String, Resident, _, 3>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            context,
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        model
+            .apply(
+                ChangeBatch::new("commit-original".to_owned(), [(direct, -1)], Resident).unwrap(),
+            )
+            .unwrap();
+        let path = model.admit_terms(["a", "path", "c"].map(dictionary::DictionaryTerm::Surface));
+        assert!(
+            matches!(path, Err(seminaive::MaintenanceError::Busy)),
+            "pending input cannot rebind its dictionary"
+        );
+        let path = reference.facts().unwrap().term_id("path").unwrap();
+        let waiting = model.relation(path).unwrap();
+        assert_eq!(waiting.status(), seminaive::StratumStatus::Withheld);
+        assert!(waiting.rows().is_none());
+        assert!(waiting.applied_watermark().is_none());
+        assert_eq!(
+            waiting.target_watermark().map(String::as_str),
+            Some("commit-original")
+        );
+        let unchanged = model.relation(unrelated).unwrap();
+        assert_eq!(unchanged.status(), seminaive::StratumStatus::Complete);
+        assert_eq!(unchanged.rows().unwrap().count(), 1);
+        assert_eq!(
+            unchanged.applied_watermark().map(String::as_str),
+            Some("commit-original")
+        );
+        let first = model
+            .resume(options.with_max_join_steps(cut), None)
+            .unwrap();
+        if let ResumeProgress::Paused(error) = first {
+            assert_eq!(
+                model.pending_watermark().map(String::as_str),
+                Some("commit-original")
+            );
+            assert!(model.applied_watermark().is_none());
+            assert!(model.facts().is_err());
+            let prefix = model.relation(path).unwrap();
+            assert_eq!(prefix.status(), seminaive::StratumStatus::SoundLowerBound);
+            assert!(prefix.applied_watermark().is_none());
+            for (_, terms) in prefix.rows().unwrap() {
+                let surfaces = terms.map(|id| prefix.dictionary().resolve(id));
+                assert!(expected.iter().any(|fact| [
+                    fact.subject.as_str(),
+                    fact.predicate.as_str(),
+                    fact.object.as_str()
+                ] == surfaces));
+            }
+            if let seminaive::EvalError::BudgetExhausted { report, .. } = error {
+                assert_eq!(
+                    report.join_steps(),
+                    cut + 1,
+                    "refusal reports cumulative successful work plus the rejected credit"
+                );
+            } else {
+                panic!("unexpected refusal: {error:?}");
+            }
+            assert!(matches!(
+                model.resume(options, None),
+                Ok(ResumeProgress::Complete)
+            ));
+        }
+        assert_eq!(
+            model.budget().join_steps(),
+            total,
+            "cut {cut} replays no original native work"
+        );
+        assert_eq!(model.facts().unwrap().facts_sorted(), expected);
+        assert_eq!(
+            model.applied_watermark().map(String::as_str),
+            Some("commit-original")
+        );
+        assert!(model.pending_watermark().is_none());
+    }
+    let start = || {
+        let mut owner = Maintained::<String, Resident, _, 3>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            context,
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            owner.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        owner
+            .apply(
+                ChangeBatch::new("commit-original".to_owned(), [(direct, -1)], Resident).unwrap(),
+            )
+            .unwrap();
+        owner
+    };
+    let counting = PollStop {
+        remaining: std::sync::atomic::AtomicUsize::new(usize::MAX),
+        polls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let mut counted = start();
+    assert!(matches!(
+        counted.resume(options, Some(&counting)),
+        Ok(ResumeProgress::Complete)
+    ));
+    let polls = counting.polls.load(std::sync::atomic::Ordering::Relaxed);
+    for cut in 0..=polls {
+        let signal = PollStop {
+            remaining: std::sync::atomic::AtomicUsize::new(cut),
+            polls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let mut owner = start();
+        if let ResumeProgress::Paused(error) = owner.resume(options, Some(&signal)).unwrap() {
+            assert!(matches!(error, seminaive::EvalError::Stopped { .. }));
+            assert!(owner.facts().is_err());
+            assert!(owner.applied_watermark().is_none());
+            assert_eq!(
+                owner.pending_watermark().map(String::as_str),
+                Some("commit-original")
+            );
+            assert!(matches!(
+                owner.resume(options, None),
+                Ok(ResumeProgress::Complete)
+            ));
+        }
+        assert_eq!(owner.facts().unwrap().facts_sorted(), expected);
+        assert_eq!(
+            owner.budget().join_steps(),
+            total,
+            "stop cut {cut} replays no native work"
+        );
+        assert_eq!(
+            owner.model_delta().unwrap().unwrap().changes(),
+            counted.model_delta().unwrap().unwrap().changes()
+        );
+    }
+}
+
+fn maintained_preparation_resumes_every_metadata_credit_without_publishing() {
+    use purrdf_datalog::{
+        maintenance::ChangeBatch,
+        seminaive::{
+            Maintained, MaintenanceError, PreparationPause, PreparationProgress, ResumeProgress,
+            SessionContext,
+        },
+        store::TermInterner,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    let rules = vec![
+        DlClause::datalog(
+            triple_pattern("x", "active", "y"),
+            vec![
+                triple_pattern("x", "edge", "y"),
+                triple_pattern("u", "enabled", "v"),
+            ],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "aux", "y"),
+            vec![triple_pattern("x", "active", "y")],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "active", "y"),
+            vec![triple_pattern("x", "aux", "y")],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "clear", "y"),
+            vec![
+                triple_pattern("x", "active", "y"),
+                triple_pattern("x", "blocked", "y").into_negated(),
+            ],
+        ),
+    ];
+    let program = compile(rules).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["gate", "enabled", "yes"]).unwrap();
+    for index in 0..12 {
+        input
+            .insert_row([
+                &format!("subject-{index}"),
+                "edge",
+                &format!("object-{index}"),
+            ])
+            .unwrap();
+    }
+    input
+        .insert_row(["subject-0", "blocked", "object-0"])
+        .unwrap();
+    let blocked = ["subject-0", "blocked", "object-0"].map(|s| input.term_id(s).unwrap());
+    input.remove_ids(blocked).unwrap();
+    let enabled = ["gate", "enabled", "yes"].map(|s| input.term_id(s).unwrap());
+    let context = SessionContext {
+        snapshot: Digest32::new([0xf1; 32]),
+        guards: Digest32::new([0xf2; 32]),
+        evidence: Digest32::new([0xf3; 32]),
+    };
+    let options = EvalOptions::default();
+    let start = || {
+        let mut owner = Maintained::<u64, Resident, _, 3>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            context,
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            owner.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        owner
+            .begin(ChangeBatch::new(71, [(enabled, -1), (blocked, 1)], Resident).unwrap())
+            .unwrap();
+        owner
+    };
+    let mut reference = start();
+    assert_eq!(
+        reference.prepare_until(u128::MAX, None).unwrap(),
+        PreparationProgress::Ready
+    );
+    let work = reference.preparation_work();
+    assert!(work > 0);
+    assert!(matches!(
+        reference.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let expected = reference.facts().unwrap().facts_sorted();
+    let joins = reference.budget().join_steps();
+    let reference_delta = reference.model_delta().unwrap().unwrap();
+    let delta = reference_delta.changes();
+    println!("preparation_work={work} credit_cuts={}", work + 1);
+    for cut in 0..=work {
+        let mut owner = start();
+        assert_eq!(owner.pending_watermark(), Some(&71));
+        assert!(owner.applied_watermark().is_none());
+        assert!(owner.facts().is_err());
+        let progress = owner.prepare_until(cut, None).unwrap();
+        if let PreparationProgress::Paused { consumed, reason } = progress {
+            assert!(consumed <= cut);
+            assert!(
+                matches!(reason, PreparationPause::WorkLimit { limit, needed } if limit == cut && needed > cut)
+            );
+            assert!(owner.facts().is_err());
+            assert_eq!(owner.pending_watermark(), Some(&71));
+            assert!(owner.applied_watermark().is_none());
+            assert_eq!(
+                owner.prepare_until(work, None).unwrap(),
+                PreparationProgress::Ready
+            );
+        }
+        assert_eq!(
+            owner.preparation_work(),
+            work,
+            "metadata cut {cut} replays no admitted work"
+        );
+        assert!(
+            owner.facts().is_err(),
+            "preparation is not model completion"
+        );
+        assert!(matches!(
+            owner.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        assert_eq!(owner.facts().unwrap().facts_sorted(), expected);
+        assert_eq!(owner.budget().join_steps(), joins);
+        assert_eq!(owner.model_delta().unwrap().unwrap().changes(), delta);
+    }
+    let transaction_work = reference.transaction_work();
+    assert!(transaction_work > work);
+    println!(
+        "transaction_work={transaction_work} credit_cuts={}",
+        transaction_work + 1
+    );
+    for cut in 0..=transaction_work {
+        let mut owner = start();
+        match owner.resume_until(options, cut, None) {
+            Err(MaintenanceError::WorkLimit {
+                limit,
+                consumed,
+                needed,
+            }) => {
+                assert_eq!(limit, cut);
+                assert_eq!(consumed, owner.transaction_work());
+                assert!(consumed <= cut && needed > cut);
+                assert!(owner.facts().is_err());
+                assert!(owner.applied_watermark().is_none());
+                assert_eq!(owner.pending_watermark(), Some(&71));
+                assert!(
+                    matches!(
+                        owner.resume_until(options, transaction_work, None),
+                        Ok(ResumeProgress::Complete)
+                    ),
+                    "work cut {cut}"
+                );
+            }
+            Ok(ResumeProgress::Complete) => {}
+            other => panic!("unexpected transaction progress at work cut {cut}: {other:?}"),
+        }
+        assert_eq!(
+            owner.transaction_work(),
+            transaction_work,
+            "work cut {cut} replays no admitted work"
+        );
+        assert_eq!(owner.facts().unwrap().facts_sorted(), expected);
+        assert_eq!(owner.budget().join_steps(), joins);
+        assert_eq!(owner.model_delta().unwrap().unwrap().changes(), delta);
+    }
+    let mut rejected =
+        Maintained::<u64, Resident, _, 3>::new(&program, input, &NoGuards, context, options)
+            .unwrap();
+    assert!(matches!(
+        rejected.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let before = rejected.facts().unwrap().facts_sorted();
+    rejected
+        .begin(ChangeBatch::new(72, [(enabled, -2)], Resident).unwrap())
+        .unwrap();
+    assert!(matches!(
+        rejected.prepare_until(u128::MAX, None),
+        Err(MaintenanceError::Multiplicity { weight: -1 })
+    ));
+    assert!(rejected.pending_watermark().is_none());
+    assert!(rejected.applied_watermark().is_none());
+    assert_eq!(rejected.facts().unwrap().facts_sorted(), before);
+}
+
+fn maintained_reclaiming_terms_preserve_live_proofs_and_pin_the_latest_delta() {
+    use purrdf_datalog::{
+        dictionary::{DictionaryTerm, TermDictionary},
+        maintenance::ChangeBatch,
+        seminaive::{Maintained, ResumeProgress, SessionContext},
+        store::{ReclaimingInterner, TermExpired, TermInterner},
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    let rules = vec![
+        DlClause::datalog(
+            triple_pattern("x", "path", "y"),
+            vec![triple_pattern("x", "edge", "y")],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "path", "z"),
+            vec![
+                triple_pattern("x", "path", "y"),
+                triple_pattern("y", "edge", "z"),
+            ],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "clear", "y"),
+            vec![
+                triple_pattern("x", "path", "y"),
+                triple_pattern("x", "blocked", "y").into_negated(),
+            ],
+        ),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    let mut seed =
+        RelationStore::<ReclaimingInterner, 3>::with_dictionary(ReclaimingInterner::default());
+    for row in [
+        ["anchor", "edge", "value"],
+        ["value", "edge", "tail"],
+        ["anchor", "edge", "tail"],
+    ] {
+        input.insert_row(row).unwrap();
+        seed.insert_terms(row.map(DictionaryTerm::Surface)).unwrap();
+    }
+    let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+    let mut model = Maintained::<u64, Resident, _, 3>::new_reclaiming(
+        &program,
+        seed,
+        &NoGuards,
+        SessionContext {
+            snapshot: Digest32::new([0xe1; 32]),
+            guards: Digest32::new([0xe2; 32]),
+            evidence: Digest32::new([0xe3; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        model.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let initial = model.facts().unwrap();
+    let baseline = initial.interner().term_count();
+    let bytes = initial.term_bytes();
+    let survivor = initial.rows_from(0).next().unwrap().0;
+    let target =
+        ["anchor", "path", "tail"].map(|s| initial.interner().lookup_term(s).unwrap().unwrap());
+    let target_id = initial
+        .rows_from(0)
+        .find(|(_, row)| *row == target)
+        .unwrap()
+        .0;
+    let mut previous = None;
+    for index in 0..512_u64 {
+        let text = [
+            format!("fresh-subject-{index}"),
+            "edge".to_owned(),
+            format!("fresh-object-{index}"),
+        ];
+        let native = model
+            .admit_terms(text.each_ref().map(|s| DictionaryTerm::Surface(s)))
+            .unwrap();
+        assert!(previous.is_none_or(|old| native[0] > old));
+        previous = Some(native[0]);
+        for (phase, weight) in [1, -1, 0].into_iter().enumerate() {
+            let changes: Vec<_> = (weight != 0)
+                .then_some((native, weight))
+                .into_iter()
+                .collect();
+            model
+                .apply(ChangeBatch::new(index * 3 + phase as u64, changes, Resident).unwrap())
+                .unwrap();
+            assert!(matches!(
+                model.resume(options, None),
+                Ok(ResumeProgress::Complete)
+            ));
+            if weight < 0 {
+                assert!(
+                    matches!(model.resume(options, None), Ok(ResumeProgress::Complete)),
+                    "an already complete transaction retains its delta term pins"
+                );
+            }
+            if weight > 0 {
+                input
+                    .insert_row(text.each_ref().map(String::as_str))
+                    .unwrap();
+            }
+            if weight < 0 {
+                input
+                    .remove_row(text.each_ref().map(String::as_str))
+                    .unwrap();
+            }
+            let cold =
+                evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+            let facts = model.facts().unwrap();
+            let mut rendered = facts
+                .rows_from(0)
+                .map(|(_, row)| row.map(|id| facts.interner().resolve_term(id).unwrap().to_owned()))
+                .collect::<Vec<_>>();
+            rendered.sort_unstable();
+            let expected = cold
+                .facts()
+                .facts_sorted()
+                .into_iter()
+                .map(|fact| [fact.subject, fact.predicate, fact.object])
+                .collect::<Vec<_>>();
+            assert_eq!(rendered, expected);
+            assert_eq!(facts.rows_from(0).next().unwrap().0, survivor);
+            let proofs = model
+                .witnesses()
+                .unwrap()
+                .map(|w| w.derivation().unwrap())
+                .collect();
+            assert_native_grounding(&rules, &input, cold.facts(), proofs);
+            let dictionary = facts.interner();
+            if weight == 0 {
+                assert_eq!(
+                    dictionary.resolve_term(native[0]),
+                    Err(TermExpired { id: native[0] })
+                );
+                assert_eq!(dictionary.term_count(), baseline);
+                assert_eq!(facts.term_bytes(), bytes);
+            } else {
+                assert_eq!(dictionary.resolve_term(native[0]).unwrap(), text[0]);
+                assert_eq!(dictionary.term_count(), baseline + 2);
+                let delta = model.model_delta().unwrap().unwrap();
+                assert_eq!(delta.changes().len(), 3);
+                for &(row, _) in delta.changes() {
+                    for id in row {
+                        dictionary.resolve_term(id).unwrap();
+                    }
+                }
+            }
+        }
+    }
+    let direct = ["anchor", "edge", "tail"].map(|s| {
+        model
+            .facts()
+            .unwrap()
+            .interner()
+            .lookup_term(s)
+            .unwrap()
+            .unwrap()
+    });
+    model
+        .apply(ChangeBatch::new(1536, [(direct, -1)], Resident).unwrap())
+        .unwrap();
+    assert!(matches!(
+        model.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    input.remove_row(["anchor", "edge", "tail"]).unwrap();
+    let cold = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+    assert_eq!(
+        model
+            .facts()
+            .unwrap()
+            .rows_from(0)
+            .find(|(_, row)| *row == target)
+            .unwrap()
+            .0,
+        target_id
+    );
+    let proofs = model
+        .witnesses()
+        .unwrap()
+        .map(|w| w.derivation().unwrap())
+        .collect();
+    assert_native_grounding(&rules, &input, cold.facts(), proofs);
+    assert_eq!(model.facts().unwrap().interner().term_count(), baseline);
+}
+
+fn maintained_restoration_respects_a_reduced_fact_grant_before_publication() {
+    use purrdf_datalog::{
+        maintenance::ChangeBatch,
+        seminaive::{BudgetResource, Maintained, MaintenanceError, ResumeProgress, SessionContext},
+        store::TermInterner,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    let rules = vec![
+        DlClause::datalog(
+            triple_pattern("x", "path", "y"),
+            vec![triple_pattern("x", "edge", "y")],
+        ),
+        DlClause::datalog(
+            triple_pattern("x", "path", "y"),
+            vec![triple_pattern("x", "backup", "y")],
+        ),
+    ];
+    let program = compile(rules.clone()).unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    input.insert_row(["a", "edge", "b"]).unwrap();
+    input.insert_row(["a", "backup", "b"]).unwrap();
+    let options = EvalOptions::default();
+    let mut owner = Maintained::<u64, Resident, _, 3>::new(
+        &program,
+        input.clone(),
+        &NoGuards,
+        SessionContext {
+            snapshot: Digest32::new([0xf4; 32]),
+            guards: Digest32::new([0xf5; 32]),
+            evidence: Digest32::new([0xf6; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    assert!(matches!(
+        owner.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    let path = ["a", "path", "b"].map(|s| owner.facts().unwrap().term_id(s).unwrap());
+    let original = owner
+        .facts()
+        .unwrap()
+        .rows_from(0)
+        .find(|(_, row)| *row == path)
+        .unwrap()
+        .0;
+    // The canonical source-fact order precedes authored rule order.
+    let proof = owner.witness(path).unwrap().unwrap().derivation().unwrap();
+    let source = &proof.sources()[0];
+    let removed = [
+        source.subject.as_str(),
+        source.predicate.as_str(),
+        source.object.as_str(),
+    ]
+    .map(|s| owner.facts().unwrap().term_id(s).unwrap());
+    owner
+        .begin(ChangeBatch::new(83, [(removed, -1)], Resident).unwrap())
+        .unwrap();
+    let mut grant = 0;
+    loop {
+        match owner.resume_until(options, grant, None) {
+            Err(MaintenanceError::WorkLimit { needed, .. }) => {
+                if owner.budget().stored_facts() == 1 {
+                    break;
+                }
+                assert!(needed > grant);
+                grant = needed;
+            }
+            other => panic!("restoration must retain a boundary after over-deletion: {other:?}"),
+        }
+    }
+    let reduced = options.with_max_stored_facts(1);
+    assert!(matches!(
+        owner.resume_until(reduced, u128::MAX, None),
+        Ok(ResumeProgress::Paused(
+            seminaive::EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                ..
+            }
+        ))
+    ));
+    assert_eq!(
+        owner.budget().stored_facts(),
+        1,
+        "restoration refuses before the extra live fact"
+    );
+    assert!(owner.facts().is_err());
+    assert!(owner.applied_watermark().is_none());
+    assert_eq!(owner.pending_watermark(), Some(&83));
+    assert!(matches!(
+        owner.resume_until(options.with_max_stored_facts(2), u128::MAX, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    assert_eq!(
+        owner
+            .facts()
+            .unwrap()
+            .rows_from(0)
+            .find(|(_, row)| *row == path)
+            .unwrap()
+            .0,
+        original
+    );
+    assert_eq!(
+        owner.model_delta().unwrap().unwrap().changes(),
+        &[(removed, -1)]
+    );
+    input.remove_ids(removed).unwrap();
+    let cold = evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+    assert_eq!(
+        owner.facts().unwrap().facts_sorted(),
+        cold.facts().facts_sorted()
+    );
+    let proofs = owner
+        .witnesses()
+        .unwrap()
+        .map(|w| w.derivation().unwrap())
+        .collect();
+    assert_native_grounding(&rules, &input, cold.facts(), proofs);
+}
+
+fn maintained_reclaiming_settlement_resumes_every_stop_cut() {
+    use purrdf_datalog::{
+        dictionary::{DictionaryTerm, TermDictionary},
+        maintenance::ChangeBatch,
+        seminaive::{Maintained, ResumeProgress, SessionContext},
+        store::ReclaimingInterner,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    let program = compile(vec![DlClause::datalog(
+        triple_pattern("x", "path", "y"),
+        vec![triple_pattern("x", "edge", "y")],
+    )])
+    .unwrap();
+    let options = EvalOptions::default();
+    let start = || {
+        let mut seed =
+            RelationStore::<ReclaimingInterner, 3>::with_dictionary(ReclaimingInterner::default());
+        seed.insert_terms(["anchor", "edge", "value"].map(DictionaryTerm::Surface))
+            .unwrap();
+        let mut model = Maintained::<u64, Resident, _, 3>::new_reclaiming(
+            &program,
+            seed,
+            &NoGuards,
+            SessionContext {
+                snapshot: Digest32::new([0xe4; 32]),
+                guards: Digest32::new([0xe5; 32]),
+                evidence: Digest32::new([0xe6; 32]),
+            },
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let baseline = model.facts().unwrap().interner().term_count();
+        let mut rows = Vec::new();
+        for index in 0..8 {
+            let subject = format!("retire-subject-{index}");
+            let object = format!("retire-object-{index}");
+            rows.push(
+                model
+                    .admit_terms(
+                        [subject.as_str(), "edge", object.as_str()].map(DictionaryTerm::Surface),
+                    )
+                    .unwrap(),
+            );
+        }
+        model
+            .apply(ChangeBatch::new(1, rows.iter().map(|&row| (row, 1)), Resident).unwrap())
+            .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        model
+            .apply(ChangeBatch::new(2, rows.iter().map(|&row| (row, -1)), Resident).unwrap())
+            .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        assert_eq!(
+            model.facts().unwrap().interner().term_count(),
+            baseline + 16
+        );
+        model
+            .apply(ChangeBatch::new(3, [], Resident).unwrap())
+            .unwrap();
+        (model, rows, baseline)
+    };
+    let counting = PollStop {
+        remaining: AtomicUsize::new(usize::MAX),
+        polls: AtomicUsize::new(0),
+    };
+    let (mut reference, _, _) = start();
+    assert!(matches!(
+        reference.resume(options, Some(&counting)),
+        Ok(ResumeProgress::Complete)
+    ));
+    let polls = counting.polls.load(Relaxed);
+    assert!(
+        polls >= 16,
+        "each original candidate has a retirement boundary"
+    );
+    let expected = reference.facts().unwrap().rows_from(0).collect::<Vec<_>>();
+    for cut in 0..=polls {
+        let (mut model, rows, baseline) = start();
+        let signal = PollStop {
+            remaining: AtomicUsize::new(cut),
+            polls: AtomicUsize::new(0),
+        };
+        if let ResumeProgress::Paused(error) = model.resume(options, Some(&signal)).unwrap() {
+            assert!(matches!(error, seminaive::EvalError::Stopped { .. }));
+            assert!(model.facts().is_err());
+            assert_eq!(model.applied_watermark(), Some(&2));
+            assert_eq!(model.pending_watermark(), Some(&3));
+            assert!(matches!(
+                model.resume(options, None),
+                Ok(ResumeProgress::Complete)
+            ));
+        }
+        let facts = model.facts().unwrap();
+        assert_eq!(facts.rows_from(0).collect::<Vec<_>>(), expected);
+        assert_eq!(facts.interner().term_count(), baseline);
+        for row in rows {
+            assert!(facts.interner().resolve_term(row[0]).is_err());
+            assert!(facts.interner().resolve_term(row[2]).is_err());
+        }
+        assert_eq!(model.model_delta().unwrap().unwrap().changes(), []);
+        assert_eq!(model.applied_watermark(), Some(&3));
+        assert!(model.pending_watermark().is_none());
+    }
+}
+
+fn maintained_change_source_preserves_pending_positions_and_original_failures() {
+    use purrdf_datalog::{
+        id::TermId,
+        maintenance::{ChangeApplyError, ChangeBatch, ChangePoll, ChangeSource},
+        seminaive::{Maintained, MaintenanceError, ResumeProgress, SessionContext},
+        store::TermInterner,
+    };
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    #[derive(Debug)]
+    struct HostFailure(u64);
+    type Batch = ChangeBatch<String, Resident, TermId, 3>;
+    struct Source {
+        batches: std::collections::VecDeque<Result<Batch, HostFailure>>,
+        polls: usize,
+    }
+    impl ChangeSource<3> for Source {
+        type Id = TermId;
+        type Watermark = String;
+        type Admission = Resident;
+        type Error = HostFailure;
+        fn next_change(&mut self) -> ChangePoll<Self, 3> {
+            self.polls += 1;
+            self.batches.pop_front().transpose()
+        }
+    }
+    let program = compile(vec![DlClause::datalog(
+        triple_pattern("x", "path", "y"),
+        vec![triple_pattern("x", "edge", "y")],
+    )])
+    .unwrap();
+    let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+    let ids = input.insert_row(["a", "edge", "b"]).unwrap().unwrap();
+    let row = [ids.0, input.term_id("edge").unwrap(), ids.1];
+    input.remove_ids(row).unwrap();
+    let options = EvalOptions::default();
+    let mut model = Maintained::<String, Resident, _, 3>::new(
+        &program,
+        input,
+        &NoGuards,
+        SessionContext {
+            snapshot: Digest32::new([0xd1; 32]),
+            guards: Digest32::new([0xd2; 32]),
+            evidence: Digest32::new([0xd3; 32]),
+        },
+        options,
+    )
+    .unwrap();
+    let mut source = Source {
+        batches: std::collections::VecDeque::from([
+            Ok(ChangeBatch::new("first".to_owned(), [(row, 1)], Resident).unwrap()),
+            Ok(ChangeBatch::new("empty".to_owned(), [], Resident).unwrap()),
+            Err(HostFailure(37)),
+        ]),
+        polls: 0,
+    };
+    assert!(matches!(
+        model.apply_next(&mut source),
+        Err(ChangeApplyError::Model(MaintenanceError::InitialIncomplete))
+    ));
+    assert_eq!(source.polls, 0);
+    assert!(matches!(
+        model.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    assert!(model.apply_next(&mut source).unwrap());
+    assert_eq!(model.pending_watermark().map(String::as_str), Some("first"));
+    assert!(model.applied_watermark().is_none());
+    assert!(matches!(
+        model.apply_next(&mut source),
+        Err(ChangeApplyError::Model(MaintenanceError::Busy))
+    ));
+    assert_eq!(source.polls, 1);
+    assert!(matches!(
+        model.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    assert!(model.facts().unwrap().contains_row(["a", "path", "b"]));
+    assert!(model.apply_next(&mut source).unwrap());
+    assert_eq!(model.applied_watermark().map(String::as_str), Some("first"));
+    assert_eq!(model.pending_watermark().map(String::as_str), Some("empty"));
+    assert!(matches!(
+        model.resume(options, None),
+        Ok(ResumeProgress::Complete)
+    ));
+    assert_eq!(model.model_delta().unwrap().unwrap().changes(), []);
+    assert!(matches!(
+        model.apply_next(&mut source),
+        Err(ChangeApplyError::Source(HostFailure(37)))
+    ));
+    assert!(!model.apply_next(&mut source).unwrap());
+    assert_eq!(source.polls, 4);
+    assert_eq!(model.applied_watermark().map(String::as_str), Some("empty"));
+    assert!(model.pending_watermark().is_none());
+}
+
+fn maintained_transactions_match_seeded_random_signed_histories() {
+    use purrdf_datalog::maintenance::ChangeBatch;
+    use purrdf_datalog::seminaive::{Maintained, ResumeProgress, SessionContext};
+    use purrdf_datalog::store::TermInterner;
+    use purrdf_hash::hex::Digest32;
+    use purrdf_lex::allocation::Resident;
+    for seed in [7, 13, 47, 101, 211, 307, 503, 809] {
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let predicates = ["p0", "p1", "p2", "p3"];
+        let mut rules = Vec::new();
+        for predicate in predicates {
+            rules.push(DlClause::datalog(
+                triple_pattern("x", predicate, "y"),
+                vec![triple_pattern("x", "edge", "y")],
+            ));
+        }
+        for _ in 0..8 {
+            let head = predicates[rng.below_usize(predicates.len())];
+            let left = predicates[rng.below_usize(predicates.len())];
+            let right = predicates[rng.below_usize(predicates.len())];
+            let (head, body) = match rng.below(3) {
+                0 => (
+                    triple_pattern("x", head, "z"),
+                    vec![
+                        triple_pattern("x", left, "y"),
+                        triple_pattern("y", right, "z"),
+                    ],
+                ),
+                1 => (
+                    triple_pattern("y", head, "x"),
+                    vec![triple_pattern("x", left, "y")],
+                ),
+                _ => (
+                    triple_pattern("x", head, "x"),
+                    vec![triple_pattern("x", left, "y")],
+                ),
+            };
+            rules.push(DlClause::datalog(head, body));
+        }
+        rules.push(DlClause::datalog(
+            triple_pattern("x", "clear", "y"),
+            vec![
+                triple_pattern("x", predicates[rng.below_usize(predicates.len())], "y"),
+                triple_pattern("x", "blocked", "y").into_negated(),
+            ],
+        ));
+        rules.push(DlClause::datalog(
+            triple_pattern("x", "closed", "y"),
+            vec![
+                triple_pattern("x", "p0", "y"),
+                triple_pattern("x", "clear", "y").into_negated(),
+            ],
+        ));
+        let program = compile(rules).unwrap();
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        let mut rows = Vec::new();
+        for predicate in ["edge", "blocked"] {
+            for subject in ["a", "b", "c", "d"] {
+                for object in ["a", "b", "c", "d"] {
+                    let text = [subject, predicate, object];
+                    input.insert_row(text).unwrap();
+                    rows.push(text.map(|s| input.term_id(s).unwrap()));
+                }
+            }
+        }
+        for ids in &rows {
+            input.remove_ids(*ids).unwrap();
+        }
+        let context = SessionContext {
+            snapshot: Digest32::new([0xa1; 32]),
+            guards: Digest32::new([0xa2; 32]),
+            evidence: Digest32::new([0xa3; 32]),
+        };
+        let options = EvalOptions::default().with_derivation_mode(DerivationMode::Record);
+        let mut model = Maintained::<u64, Resident, _, 3>::new(
+            &program,
+            input.clone(),
+            &NoGuards,
+            context,
+            options,
+        )
+        .unwrap();
+        assert!(matches!(
+            model.resume(options, None),
+            Ok(ResumeProgress::Complete)
+        ));
+        let mut weights = [0_i64; 32];
+        for transaction in 0..96 {
+            let before = model
+                .facts()
+                .unwrap()
+                .rows_from(0)
+                .map(|(_, terms)| terms)
+                .collect::<std::collections::BTreeSet<_>>();
+            let index = rng.below_usize(rows.len());
+            let delta = if weights[index] > 0 && rng.below(2) == 0 {
+                -1
+            } else {
+                1
+            };
+            weights[index] += delta;
+            let ids = rows[index];
+            if weights[index] == 0 {
+                input.remove_ids(ids).unwrap();
+            } else {
+                input.insert_ids(ids).unwrap();
+            }
+            model
+                .apply(ChangeBatch::new(transaction, [(ids, delta)], Resident).unwrap())
+                .unwrap();
+            assert!(
+                matches!(model.resume(options, None), Ok(ResumeProgress::Complete)),
+                "seed {seed}, transaction {transaction}"
+            );
+            let after = model
+                .facts()
+                .unwrap()
+                .rows_from(0)
+                .map(|(_, terms)| terms)
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_delta = before
+                .difference(&after)
+                .map(|&terms| (terms, -1))
+                .chain(after.difference(&before).map(|&terms| (terms, 1)))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let delta = model.model_delta().unwrap().unwrap();
+            assert_eq!(delta.watermark(), &transaction);
+            assert_eq!(
+                delta
+                    .changes()
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+                expected_delta,
+                "exact net membership, seed {seed}, transaction {transaction}"
+            );
+            let rendered = delta
+                .changes()
+                .iter()
+                .map(|(terms, _)| {
+                    terms.map(|id| model.facts().unwrap().interner().resolve(id).to_owned())
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                rendered.windows(2).all(|pair| pair[0] < pair[1]),
+                "delta follows canonical content order"
+            );
+            let cold =
+                evaluate_guarded(&program, input.clone(), &NoGuards, &options, None).unwrap();
+            assert_eq!(
+                model.facts().unwrap().facts_sorted(),
+                cold.facts().facts_sorted(),
+                "seed {seed}, transaction {transaction}"
+            );
+            let mut proofs = Vec::new();
+            for (_, terms) in model.facts().unwrap().rows_from(0) {
+                if let Some(witness) = model.witness(terms).unwrap() {
+                    let actual = witness.derivation().unwrap();
+                    assert_eq!(
+                        &actual,
+                        cold.derivations()
+                            .unwrap()
+                            .iter()
+                            .find(|p| p.fact() == actual.fact())
+                            .unwrap(),
+                        "seed {seed}, transaction {transaction}"
+                    );
+                    proofs.push(actual);
+                }
+            }
+            assert_native_grounding(program.rules(), &input, model.facts().unwrap(), proofs);
+        }
+    }
+}
+
 purrdf_testkit::harness_main!(
+    maintained_restoration_respects_a_reduced_fact_grant_before_publication,
+    maintained_reclaiming_settlement_resumes_every_stop_cut,
+    maintained_preparation_resumes_every_metadata_credit_without_publishing,
+    maintained_reclaiming_terms_preserve_live_proofs_and_pin_the_latest_delta,
+    maintained_change_source_preserves_pending_positions_and_original_failures,
+    maintained_transactions_match_seeded_random_signed_histories,
+    maintained_transactions_resume_every_credit_cut_without_early_acknowledgement,
+    maintained_transactions_retract_cycles_repair_alternatives_and_negation,
+    head_probes_bind_variable_predicate_and_graph_partitions,
+    head_probes_retain_returned_guard_batches_at_every_credit_cut,
+    head_probes_preserve_factor_cycles_negation_and_independent_proofs,
+    head_probes_preserve_native_targets_and_original_guard_batches,
     native_signed_transactions_preserve_watermarks_and_exact_cancellation,
     removed_append_slots_preserve_recursive_models_and_proofs,
     resumable_models_preserve_partial_proofs_work_and_bindings,

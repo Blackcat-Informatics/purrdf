@@ -197,6 +197,21 @@ impl<E: std::error::Error + 'static> std::error::Error for DictionaryError<E> {
     }
 }
 
+/// Explicit retirement authority for a dictionary whose unused terms can expire.
+/// The model calls this only after releasing its last row, proof and result use.
+/// Providers retain their own declared symbols and external authority separately.
+pub trait ReclaimDictionary: TermDictionary {
+    /// Original identities whose retained metadata this dictionary owns.
+    /// Used once when the maintenance owner adopts the initial dictionary.
+    fn owned_terms(&self) -> impl Iterator<Item = Self::Id> + '_;
+
+    /// Release one original identity after its last semantic use.
+    ///
+    /// # Errors
+    /// Preserves the original source or storage failure; no replacement ID is minted.
+    fn release_term(&mut self, id: Self::Id) -> Result<(), DictionaryError<Self::Error>>;
+}
+
 /// The caller's identity space and dictionary, resident or provider-backed.
 ///
 /// IDs enter the store unchanged. Constant lookup and lexical proof/publication
@@ -212,6 +227,17 @@ pub trait TermDictionary: Send + Sync {
     type Lexical<'a>: AsRef<str>
     where
         Self: 'a;
+
+    /// Retained canonical ordering value for a partition-key component.
+    /// Its order must agree with `compare_terms` for original IDs. This may be
+    /// an original integer or a source-owned pin; it is never a new term identity.
+    type OrderKey: Ord + fmt::Debug + Send + Sync;
+
+    /// Retain a key without retaining a borrow of the mutable model itself.
+    ///
+    /// # Errors
+    /// Preserves the original source failure at this explicit indexing boundary.
+    fn order_key(&self, id: Self::Id) -> Result<Self::OrderKey, Self::Error>;
 
     /// Look up an authored constant without minting or remapping an ID.
     fn lookup_term(&self, surface: &str) -> Result<Option<Self::Id>, Self::Error>;

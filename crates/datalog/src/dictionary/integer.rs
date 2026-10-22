@@ -120,10 +120,15 @@ impl<'a, I: TermIdentity + Into<u64>> IntegerDictionary<'a, I> {
 impl<I: TermIdentity + Into<u64>> TermDictionary for IntegerDictionary<'_, I> {
     type Id = I;
     type Error = IntegerDictionaryError;
+    type OrderKey = I;
     type Lexical<'a>
         = &'a str
     where
         Self: 'a;
+
+    fn order_key(&self, id: I) -> Result<I, Self::Error> {
+        Ok(id)
+    }
 
     fn lookup_term(&self, surface: &str) -> Result<Option<I>, Self::Error> {
         Ok(self.symbols.get(surface).copied())
@@ -166,6 +171,19 @@ impl<I: TermIdentity + Into<u64>> TermDictionary for IntegerDictionary<'_, I> {
 
     fn resident_bytes(&self) -> usize {
         0
+    }
+}
+
+impl<I: TermIdentity + Into<u64>> super::ReclaimDictionary for IntegerDictionary<'_, I> {
+    fn owned_terms(&self) -> impl Iterator<Item = I> + '_ {
+        self.identities.iter().copied()
+    }
+
+    fn release_term(&mut self, id: I) -> Result<(), DictionaryError<Self::Error>> {
+        if !self.symbols.values().any(|&symbol| symbol == id) {
+            self.identities.remove(&id);
+        }
+        Ok(())
     }
 }
 

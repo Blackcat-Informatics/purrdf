@@ -225,6 +225,7 @@ where
         None
     };
     let snapshot = JoinSnapshot {
+        seed: None,
         rel: snapshot.rel,
         delta: entry.delta,
         indexes: snapshot
@@ -426,6 +427,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     let join = JoinSnapshot {
+        seed: None,
         rel: snapshot.rel,
         delta: entry.delta,
         indexes: snapshot
@@ -932,6 +934,7 @@ where
     let result = (|| -> Result<RoundBuffer<'r, D::Id, N>, EvalError<D::Error>> {
         let mut buffer = RoundBuffer::new();
         let join = JoinSnapshot {
+            seed: None,
             rel: snapshot.rel,
             delta: entry.delta,
             indexes: snapshot
@@ -1188,6 +1191,7 @@ mod tests {
         let matches = join_body(
             &plan,
             JoinSnapshot {
+                seed: None,
                 rel: &rel,
                 delta: Delta::all(2),
                 indexes: &DeltaIndexes { runs: Vec::new() },
@@ -1198,9 +1202,10 @@ mod tests {
         )
         .unwrap();
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &[0, 0],
-            assumed: &[],
+            depth: (&[0, 0][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         let delta = Delta { lo: 1, hi: 2 };
@@ -1333,9 +1338,10 @@ mod tests {
         let mut missing = matches;
         missing[1].sources[0].terms[2] = 17;
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &[0, 0],
-            assumed: &[],
+            depth: (&[0, 0][..]).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         assert!(matches!(
@@ -1678,9 +1684,10 @@ mod tests {
                 let rel = seeded(&input);
                 let depth = vec![0; input.len()];
                 let snapshot = RoundSnapshot {
+                    probe: None,
                     rel: &rel,
-                    depth: &depth,
-                    assumed: &[],
+                    depth: (&depth).into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };
                 let entry = RuleEntry {
@@ -1689,8 +1696,8 @@ mod tests {
                     plan: &plan,
                     runtime: &runtime,
                     delta: Delta {
-                        lo: old,
-                        hi: input.len(),
+                        lo: old as u64,
+                        hi: input.len() as u64,
                     },
                 };
                 let mut governor = StepGovernor::new(u64::MAX);
@@ -1747,9 +1754,10 @@ mod tests {
             let rel = seeded(&input);
             let depth = vec![0; input.len()];
             let snapshot = RoundSnapshot {
+                probe: None,
                 rel: &rel,
-                depth: &depth,
-                assumed: &[],
+                depth: (&depth).into(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
             let entry = RuleEntry {
@@ -1757,7 +1765,7 @@ mod tests {
                 rule: &rule,
                 plan: &plan,
                 runtime: &runtime,
-                delta: Delta::all(input.len()),
+                delta: Delta::all(input.len() as u64),
             };
             let mut governor = StepGovernor::new(u64::MAX);
             let mut stored_rows = 0;
@@ -1780,7 +1788,7 @@ mod tests {
                             let original = &matches[witness.row];
                             assert_eq!(original.sources.len(), factor.positions.len());
                             assert_eq!(
-                                source_heights(&original.sources, &depth),
+                                source_heights(&original.sources, (&depth).into()),
                                 (witness.maximum, witness.sum)
                             );
                         }
@@ -1816,14 +1824,15 @@ mod tests {
                 plan: &plan,
                 runtime: &runtime,
                 delta: Delta {
-                    lo,
-                    hi: input.len(),
+                    lo: lo as u64,
+                    hi: input.len() as u64,
                 },
             };
             let snapshot = RoundSnapshot {
+                probe: None,
                 rel: &rel,
-                depth: &depth,
-                assumed: &[],
+                depth: (&depth).into(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
             let planned = evaluate_rule(
@@ -1893,9 +1902,10 @@ mod tests {
                 .map(|index| u32::try_from(index % 3).expect("three source heights"))
                 .collect();
             let snapshot = RoundSnapshot {
+                probe: None,
                 rel: &rel,
-                depth: &depth,
-                assumed: &[],
+                depth: (&depth).into(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
             for lo in 0..=input.len() {
@@ -1905,7 +1915,10 @@ mod tests {
                         rule: &rule,
                         plan: &plan,
                         runtime: &runtime,
-                        delta: Delta { lo, hi },
+                        delta: Delta {
+                            lo: lo as u64,
+                            hi: hi as u64,
+                        },
                     };
                     let run = |strategy| {
                         evaluate_rule(
@@ -1968,9 +1981,10 @@ mod tests {
         let rel = seeded(&input);
         let depth = vec![0; input.len()];
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &depth,
-            assumed: &[],
+            depth: (&depth).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         let entry = RuleEntry {
@@ -1979,8 +1993,8 @@ mod tests {
             plan: &plan,
             runtime: &runtime,
             delta: Delta {
-                lo: old,
-                hi: input.len(),
+                lo: old as u64,
+                hi: input.len() as u64,
             },
         };
         let mut governor = StepGovernor::new(u64::MAX);
@@ -2187,9 +2201,10 @@ mod tests {
                 let rel = seeded(&shuffled);
                 let depth = vec![0; shuffled.len()];
                 let snapshot = RoundSnapshot {
+                    probe: None,
                     rel: &rel,
-                    depth: &depth,
-                    assumed: &[],
+                    depth: (&depth).into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };
                 for lo in 0..=shuffled.len() {
@@ -2199,7 +2214,10 @@ mod tests {
                             rule: &rule,
                             plan: &plan,
                             runtime: &runtime,
-                            delta: Delta { lo, hi },
+                            delta: Delta {
+                                lo: lo as u64,
+                                hi: hi as u64,
+                            },
                         };
                         let run = |strategy| {
                             evaluate_rule(
@@ -2299,9 +2317,10 @@ mod tests {
         let rel = seeded(&input);
         let depth = vec![0; input.len()];
         let snapshot = RoundSnapshot {
+            probe: None,
             rel: &rel,
-            depth: &depth,
-            assumed: &[],
+            depth: (&depth).into(),
+            assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
         let entry = RuleEntry {
@@ -2309,7 +2328,7 @@ mod tests {
             rule: &rule,
             plan: &plan,
             runtime: &runtime,
-            delta: Delta::all(input.len()),
+            delta: Delta::all(input.len() as u64),
         };
         let buffer = evaluate_rule(
             entry,
@@ -2621,14 +2640,18 @@ mod tests {
                     depth[source] = heights[index];
                 }
                 let snapshot = RoundSnapshot {
+                    probe: None,
                     rel: &rel,
-                    depth: &depth,
-                    assumed: &[],
+                    depth: (&depth).into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };
                 for lo in 0..=input.len() {
                     for hi in lo..=input.len() {
-                        let delta = Delta { lo, hi };
+                        let delta = Delta {
+                            lo: lo as u64,
+                            hi: hi as u64,
+                        };
                         let entry = RuleEntry {
                             index: 0,
                             rule: &rule,
@@ -2658,7 +2681,7 @@ mod tests {
                             planned.entries, binary.entries,
                             "seed={seed}, heights={heights:?}, delta={lo}..{hi}"
                         );
-                        if delta == Delta::all(input.len()) {
+                        if delta == Delta::all(input.len() as u64) {
                             let winner = planned.entries.values().next().expect("one head fires");
                             assert_eq!(
                                 winner.source_facts(&rel).unwrap()[1].subject,
@@ -2742,7 +2765,7 @@ mod tests {
         assert_eq!(matches[frontier.at(u32::MAX).lexical.row], matches[0]);
         assert!(saturated_sum([frontier.at(u32::MAX).summed.sum, 1]));
         assert_eq!(
-            source_heights(&matches[0].sources, &[u32::MAX, u32::MAX]),
+            source_heights(&matches[0].sources, (&[u32::MAX, u32::MAX][..]).into()),
             (u32::MAX, u64::from(u32::MAX))
         );
     }

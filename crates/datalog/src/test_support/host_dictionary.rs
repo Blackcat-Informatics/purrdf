@@ -49,6 +49,11 @@ impl TermDictionary for HostDictionary {
     type Id = u64;
     type Error = SourceLost;
     type Lexical<'a> = HostPin<'a>;
+    type OrderKey = String;
+    fn order_key(&self, id: u64) -> Result<String, SourceLost> {
+        self.check_read()?;
+        self.surfaces.get(&id).cloned().ok_or(SourceLost(id))
+    }
     fn lookup_term(&self, surface: &str) -> Result<Option<u64>, SourceLost> {
         self.check_read()?;
         self.lookups

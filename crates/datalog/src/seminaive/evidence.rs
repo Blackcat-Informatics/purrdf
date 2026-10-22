@@ -248,7 +248,7 @@ where
     ) -> Result<bool, EvalError<D::Error>> {
         store.interner().check_read().map_err(EvalError::Source)?;
         let original_rows = self.rows.row_count();
-        for (row, _) in store.rows_from(original_rows) {
+        for (row, _) in store.rows_from(original_rows as u64) {
             let mut witness = None;
             for (key, id) in &self.pending {
                 if stored_row(key, store).map_err(EvalError::Source)? == Some(row) {

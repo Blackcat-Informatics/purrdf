@@ -93,6 +93,12 @@ canonical lexical order and original dictionary pins. A native dictionary may
 compare original IDs directly. `compare_rows` applies that contract in position
 order and preserves source errors.
 
+Implementations also provide `OrderKey` and `order_key(id)`. The owned ordering
+value must agree with `compare_terms` and remain valid while its partition is
+retained. A lexical dictionary can retain the canonical spelling; a native
+integer dictionary returns the original integer. This value orders partition
+metadata and does not replace the dictionary's term identity.
+
 `dictionary::IntegerDictionary<u32>` and `IntegerDictionary<u64>` provide the
 native alternative. Construct one with an explicit `with_symbols` table for the
 program's named constants, insert `DictionaryTerm::Id` rows and return
@@ -105,6 +111,42 @@ lexical derivations therefore require a dictionary with actual spellings.
 The rule evaluator continues to use triple or quad shapes. Separately,
 `RowColumns<I, N, R>` and `RowIndex` store and index caller-selected row widths;
 they do not add an arbitrary-arity rule language.
+
+Store append boundaries (`row_slots`, `rows_from`) now use `u64`. Keep these
+logical coordinates separate from physical slice lengths. Maintained stores can
+retire row metadata and empty partitions without renumbering surviving handles;
+partition IDs must be resolved through the store rather than cast to array slots.
+
+`seminaive::Maintained` owns a materialized model and accepts signed
+`maintenance::ChangeBatch` transactions over its original dictionary IDs.
+`apply` retains a transaction; `resume` completes it or preserves its pending
+state under a governor refusal. Read `model_delta` and `applied_watermark` only
+after completion. `relation` distinguishes complete, sound lower-bound and
+withheld extensions, with the host's original applied and target positions.
+Native witnesses borrow their original dictionary; request lexical derivations
+explicitly at the presentation boundary.
+
+Use `begin` and `resume_until` to retain transaction preparation and execution
+under one cumulative operation allowance. `transaction_work` includes admitted
+row, dependency, comparison and task steps, retained table-scan layout bounds,
+and original native join steps. A `MaintenanceError::WorkLimit` preserves the
+transaction and states its consumed and next required allowance. Original
+`EvalOptions` limits still govern facts, terms and native joins.
+
+Use `apply_next` to poll a `ChangeSource` directly. It refuses a busy model before
+polling, preserves the host's original failure as `ChangeApplyError::Source`, and
+returns `false` only for an unavailable batch. An accepted batch, including an
+empty transaction, advances its applied position only after `resume` completes.
+
+For fresh-term streams, construct the store with `store::ReclaimingInterner` and
+use `Maintained::new_reclaiming`. `RelationStore::into_reclaiming` transfers an
+existing store's arrangements and IDs unchanged. The explicit `ReclaimDictionary`
+protocol retires unused dictionary metadata; ordinary `TermInterner` keeps its
+permanent-ID contract. Current live facts and proofs retain their terms. The
+latest `ModelDelta`, including deleted facts, also pins its spellings until the
+next transaction completes. A saved raw ID alone does not pin a term;
+`TermExpired` reports an ID whose owner has released it. `IntegerDictionary`
+retains declared program symbols and the host's external identity authority.
 
 ## Query-algebra projections
 

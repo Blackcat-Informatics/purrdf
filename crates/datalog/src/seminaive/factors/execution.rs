@@ -85,6 +85,7 @@ where
             .check_read()
             .map_err(EvalError::Source)?;
         let join = JoinSnapshot {
+            seed: snapshot.probe.map(|probe| &probe.seed),
             rel: snapshot.rel,
             delta: entry.delta,
             indexes: snapshot
@@ -103,7 +104,11 @@ where
                         }
                     }
                     self.phase = if can_match {
-                        Phase::Ground(Box::new(filters::Ground::new(entry, evidence.is_some())))
+                        Phase::Ground(Box::new(filters::Ground::new(
+                            entry,
+                            evidence.is_some(),
+                            snapshot.probe.map(|probe| &probe.seed),
+                        )))
                     } else {
                         Phase::Complete
                     };
@@ -159,6 +164,14 @@ where
                         self.phase = Phase::Complete;
                         continue;
                     };
+                    if snapshot
+                        .probe
+                        .and_then(|probe| probe.target)
+                        .is_some_and(|(head, _)| head != state.head)
+                    {
+                        state.head += 1;
+                        continue;
+                    }
                     if state.projections.is_none() {
                         state.projections = Some(
                             entry

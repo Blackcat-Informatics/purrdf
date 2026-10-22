@@ -520,6 +520,8 @@ impl std::fmt::Display for Generalization {
 pub struct FreezeWarrant {
     /// The regime the closures were computed under.
     regime: Regime,
+    /// Original asserted premise in term-value order, separate from its derived closure.
+    premise: Vec<Triple>,
     /// What each existential of the RESIDUAL conclusion triples was bound to.
     binding: Binding,
     /// The premise's own closure, which the residual triples and the typings map into.
@@ -822,9 +824,13 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         typings_per_axiom.push(typings);
     }
 
-    let held = default_graph_triples(premise);
+    let mut held = default_graph_triples(premise);
+    // Dataset IDs reflect interning order; bind the asserted term values instead.
+    held.sort_unstable();
     let mut fresh = FreshBlanks::avoiding(&[premise, conclusion]);
-    let mut refuter = Refuter::new(regime).under(*options);
+    let refuter = Refuter::new(regime)
+        .map_err(EntailError::with_read_error)?
+        .under(*options);
     let mut seeded = refuter.seed(premise)?;
     let mut generalizations = Vec::with_capacity(reading.axioms.len());
     for (axiom, typings) in reading.axioms.iter().zip(typings_per_axiom) {
@@ -837,7 +843,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
                 .map(|atom| instantiate(atom, &axiom.triple, &constants))
                 .collect();
             let head = instantiate(&implication.head, &axiom.triple, &constants);
-            let closed = refuter.close(&mut seeded, &body)?;
+            let closed = seeded.close(&body)?;
             let mut triples = held.clone();
             triples.extend(body.iter().cloned());
             triples.extend(closed.derived);
@@ -868,6 +874,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
     Ok(Attempt::Entailed(Box::new(Established {
         warrant: EntailmentWarrant::Freeze(FreezeWarrant {
             regime,
+            premise: held,
             // The residual is the FOLD's, not this lane's; `entails` fills it in at the end.
             binding: Binding::new(),
             closure: closure.clone(),
@@ -902,7 +909,11 @@ pub(crate) fn verify_freeze(
     if reading.axioms.len() != w.generalizations.len() {
         return None;
     }
-    let held: Vec<Triple> = default_graph_triples(premise);
+    let mut held: Vec<Triple> = default_graph_triples(premise);
+    held.sort_unstable();
+    if held != w.premise {
+        return None;
+    }
     // The non-occurrence hypothesis is decided against the caller's OWN documents.
     let mut forbidden: BTreeSet<String> = labels_of(premise);
     forbidden.extend(labels_of(conclusion));

@@ -176,7 +176,7 @@ impl<I: TermIdentity> Cursor<I> {
     where
         Arity<N>: StoreShape<N>,
     {
-        let partition = run.rel.partition_at(self.partition.resident_index());
+        let partition = run.rel.partition_with_id(self.partition);
         let partition = if self.delta_source {
             run.indexes
                 .get(run.delta, run.rel.row_slots())

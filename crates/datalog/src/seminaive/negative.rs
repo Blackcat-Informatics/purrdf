@@ -103,7 +103,7 @@ where
                 self.rows = Some(Rows {
                     partition,
                     position: RowPosition::new(
-                        rel.partition_at(partition.resident_index()).arrangement(),
+                        rel.partition_with_id(partition).arrangement(),
                         self.bound,
                     ),
                     first: true,
@@ -113,10 +113,9 @@ where
             }
             let rows = self.rows.as_mut().expect("the partition was admitted");
             if rows.pending.is_none() {
-                rows.pending = rows.position.next(
-                    rel.partition_at(rows.partition.resident_index())
-                        .arrangement(),
-                );
+                rows.pending = rows
+                    .position
+                    .next(rel.partition_with_id(rows.partition).arrangement());
                 #[cfg(test)]
                 if rows.pending.is_some() {
                     self.row_visits += 1;
@@ -132,8 +131,7 @@ where
             rows.first = false;
             rows.pending = None;
             return ScanStep::Matched(
-                rel.partition_at(rows.partition.resident_index())
-                    .row(subject, object),
+                rel.partition_with_id(rows.partition).row(subject, object),
                 row,
             );
         }
