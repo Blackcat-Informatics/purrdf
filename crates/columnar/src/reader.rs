@@ -492,6 +492,7 @@ fn decode_reifier_rows(
     Ok(rows)
 }
 
+/// Verify every decoded payload, retaining its original digest cause and row.
 fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
     let digests = bytes_column(data, 0)?;
     let payloads = bytes_column(data, 1)?;
@@ -529,6 +530,7 @@ fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
     Ok(store)
 }
 
+/// Freeze native rows without extracting or rendering the kernel diagnostic.
 fn reconstruct_dataset(
     dictionary: &Dictionary,
     quads: &[QuadRow],
@@ -812,6 +814,7 @@ mod tests {
         ));
     }
 
+    /// Reject changed payloads through their original row-bearing integrity cause.
     #[test]
     fn semantic_reader_rehashes_blob_payloads() {
         let (dataset, blobs) = fixture();

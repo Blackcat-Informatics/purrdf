@@ -101,6 +101,7 @@ impl ColumnarError {
 }
 
 impl fmt::Display for ColumnarError {
+    /// Render the established human prefix from the retained native cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "columnar storage: {error}"),

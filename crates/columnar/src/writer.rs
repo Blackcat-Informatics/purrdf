@@ -73,7 +73,7 @@ pub fn project<D: DatasetView>(
         .map_err(ColumnarWriteError::SourceRead)?
 }
 
-/// Build the fixed-schema tables inside the source's completed-read boundary.
+/// Build fixed-schema tables inside the completed-read boundary, retaining native causes.
 fn project_read<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
