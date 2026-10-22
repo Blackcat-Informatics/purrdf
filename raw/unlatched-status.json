@@ -1,0 +1,55 @@
+[
+  {
+    "gate": "unlatched-native",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--test",
+      "structured_errors",
+      "--",
+      "--exact",
+      "original_parquet_bounds_survive_file_disposal_without_narrowing",
+      "public_projection_and_write_preserve_source_owners_and_fields",
+      "human_presentation_preserves_codec_and_source_messages"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "unlatched-wasm",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--test",
+      "structured_errors",
+      "--",
+      "--exact",
+      "original_parquet_bounds_survive_file_disposal_without_narrowing",
+      "public_projection_and_write_preserve_source_owners_and_fields",
+      "human_presentation_preserves_codec_and_source_messages"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "unlatched-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  }
+]

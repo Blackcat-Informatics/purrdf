@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Parent: #558. This is a complete source-failure preservation delivery within that existing contract; it does not replace or close the parent.\n\n## Verified defect\n\nOn main 68d554993, `purrdf-columnar::project` formats the original `DatasetView::checked_read` failure into `ColumnarError::SourceRead { detail: String }`. The writer's iterative term resolver does the same to `DatasetView::resolve` failures. The visitor therefore emits only text, losing the original variant/fields and potentially invoking a caller error's Display before it can be returned. A third textual match is the recursive test reference, not a production boundary.\n\n## Required delivery\n\n- Preserve the original caller read error by value through public `project` and `write`, including initial/completed-read failure and iterative term resolution. Use a typed source/codec carrier at the existing columnar error home; do not add a second projection/resolver, string fallback, silent recovery or duplicate source-error implementation.\n- Expose the original nested source fields through the single borrowed structured-error protocol and std error chain. Keep source identity, full-width values, ownership/destruction, refusal priority, deterministic byte output and human presentation. Do not clone or render the source error merely to transport/inspect it.\n- Wire all actual callers, exports and the recursive reference through that production implementation. Breaking API correction is authorized for v4; remove the obsolete lossy columnar source variant rather than maintaining an alternative string path. Native codec reader errors and their existing inspection remain intact.\n- Keep named/empty graphs, quoted terms, content-store validation and both Parquet compression modes on their current owners.\n\n## Acceptance\n\n- Exercise both public projection and writing with real faulting DatasetView producers at completed-read and term-resolution boundaries. Original custom source fields, including full-width counts, must survive without Display; verify original owner/clone/destruction behavior and zero-allocation borrowed inspection.\n- Exercise the same original failures and exact typed fields through the actual packaged WASM runner, not compilation alone.\n- Preserve codec goldens, successful deterministic round trips and existing malformed/limit inspection controls; compile affected production callers early and qualify native/portable surfaces. Run normal required hooks without bypass.\n\n## Retained parent scope\n\nColumnar Malformed detail strings still need the full producer audit and typed native/data reasons under #558, as do other shipping families and complete host/inventory acceptance. This child owns source-failure transport only. The four existing parent donor worktrees remain preserved; no ambiguous setup is forced.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-21T23:11:17Z",
+  "labels": [],
+  "milestone": null,
+  "number": 673,
+  "state": "OPEN",
+  "title": "Preserve original source failures through columnar projection and writing",
+  "updatedAt": "2026-10-21T23:11:17Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/673"
+}

@@ -1,0 +1,40 @@
+[
+  {
+    "gate": "ci-exact-source",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--target",
+      "wasm32-unknown-unknown",
+      "-p",
+      "purrdf-columnar",
+      "--test",
+      "structured_errors",
+      "--",
+      "--exact",
+      "original_parquet_bounds_survive_file_disposal_without_narrowing",
+      "public_projection_and_write_preserve_source_owners_and_fields",
+      "human_presentation_preserves_codec_and_source_messages"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "ci-exact-golden",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--target",
+      "wasm32-unknown-unknown",
+      "-p",
+      "purrdf-columnar",
+      "--test",
+      "golden_bytes",
+      "--",
+      "--exact",
+      "seeded_files_are_the_pinned_bytes"
+    ],
+    "exit_code": 0
+  }
+]

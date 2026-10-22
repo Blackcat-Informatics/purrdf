@@ -1,0 +1,19 @@
+[
+  {
+    "gate": "final-census",
+    "command": [
+      "python3",
+      "scripts/check-shared-helpers.py"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "make-wasm-route",
+    "command": [
+      "make",
+      "-n",
+      "wasm-test"
+    ],
+    "exit_code": 0
+  }
+]

@@ -1,0 +1,15 @@
+ok: a panicking case fails the run
+ok: the passing neighbour of the panicking case passes
+ok: the case list is the fixture's, in its order
+ok: an unimplemented flag is refused
+ok: an implemented flag is accepted
+ok: a_host_clock_read_inside_the_seal_fails: a sealed Date.now read fails by name
+ok: a_host_entropy_read_inside_the_seal_fails: a sealed Math.random read fails by name
+ok: a_host_clock_read_after_a_nested_seal_fails: a sealed Date.now read fails by name
+ok: a_host_clock_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_entropy_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_clock_read_after_the_seal_passes: the unsealed neighbour passes
+ok: the_seal_returns_the_computations_value_passes: the unsealed neighbour passes
+ok: a module that never reports an exit status is refused
+ok: the print fixture reports its status and its lines reach the console
+OK: the wasm32 test runner fails a panicking case, a refused flag, sealed host reads and a silent module, and passes each neighbour

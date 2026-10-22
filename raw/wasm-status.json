@@ -1,0 +1,25 @@
+[
+  {
+    "gate": "wasm-runner-preflight",
+    "command": [
+      "bash",
+      "scripts/check-wasm-test-runner.sh"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "wasm-source-controls",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--test",
+      "structured_errors"
+    ],
+    "exit_code": 0
+  }
+]

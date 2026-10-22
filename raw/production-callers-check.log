@@ -1,0 +1,50 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/sparql-algebra)
+    Checking cpubits v0.1.1
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/sparql-results)
+   Compiling target-lexicon v0.13.5
+    Checking fastrand v2.4.1
+    Checking structured-zstd v0.0.49
+   Compiling proc-macro2 v1.0.106
+    Checking ctutils v0.4.2
+    Checking cipher v0.5.2
+    Checking universal-hash v0.6.1
+    Checking ctr v0.10.1
+    Checking polyval v0.7.3
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/ed25519)
+    Checking ghash v0.6.0
+   Compiling quote v1.0.46
+    Checking visual-hashing v1.0.0
+    Checking aes-gcm v0.11.1
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/datalog)
+   Compiling heck v0.5.0
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/markdown)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/mime)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/gts)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/columnar)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/json)
+    Checking once_cell v1.21.4
+   Compiling pyo3-build-config v0.29.0
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+   Compiling syn v2.0.118
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/entail)
+   Compiling pyo3-macros-backend v0.29.0
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/sparql-eval)
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/purrdf)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 47.08s

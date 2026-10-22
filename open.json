@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 673,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures",
+  "branch": "paudley/673-preserve-original-source-failures",
+  "slug": "preserve-original-source-failures",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/.stage/preserve-original-source-failures",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "68d5549936e83608eda517fde81b2640f318b69c",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures",
+    "branch:paudley/673-preserve-original-source-failures",
+    "stage:/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/.stage/preserve-original-source-failures",
+    "issue:/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/.stage/preserve-original-source-failures/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-21T17:11:30-0600"
+}

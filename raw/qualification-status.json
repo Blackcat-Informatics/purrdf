@@ -1,0 +1,37 @@
+[
+  {
+    "gate": "strict-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "rustdoc",
+    "command": [
+      "cargo",
+      "doc",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--no-deps"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "helpers",
+    "command": [
+      "make",
+      "helpers-hygiene"
+    ],
+    "exit_code": 0
+  }
+]

@@ -1,0 +1,11 @@
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/673-preserve-original-source-failures/crates/columnar)
+    Finished `test` profile [optimized] target(s) in 0.89s
+     Running tests/structured_errors.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-columnar/293f4fd772f7da68/out/structured_errors-293f4fd772f7da68)
+
+running 3 tests
+test original_parquet_bounds_survive_file_disposal_without_narrowing ... ok
+test human_presentation_preserves_codec_and_source_messages ... ok
+test public_projection_and_write_preserve_source_owners_and_fields ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

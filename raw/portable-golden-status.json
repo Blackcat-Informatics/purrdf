@@ -1,0 +1,30 @@
+[
+  {
+    "gate": "native-portable-golden",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--test",
+      "golden_bytes"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "wasm-portable-golden",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-columnar",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--test",
+      "golden_bytes"
+    ],
+    "exit_code": 0
+  }
+]

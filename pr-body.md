@@ -1,0 +1,7 @@
+Columnar projection and writing currently render source-read failures into strings, losing the original fields and invoking caller formatting before returning an error. Preserve the original cause by value in `ColumnarWriteError<E>`, through the public APIs and their existing iterative resolver. Native codec errors remain nested originals; borrowed inspection and the standard source chain retain the actual cause. The obsolete string source variant is removed, with the v4 API correction documented.
+
+Validation passes 31 native library cases, three inspection cases covering 18 public source-failure paths, and the existing ten frozen file digests across both compression modes. Actual packaged Node/WASM repeats the inspection and golden cases after runner preflight. Controls verify full-width fields, provider-only clones, original source pins/owners, failure priority, unchanged human prefixes and zero allocation calls/requested/retained/peak bytes during inspection. A term refusal without a session latch also exercises the resolver's own returned cause directly. Python and umbrella libraries compile; strict all-target Clippy, rustdoc and helper hygiene pass. The existing WASM CI route runs every new case with exact selection; fixture bytes and expected digests are unchanged.
+
+Parent #558 remains open for the complete shipping inventory, other native malformed-data producers and full host acceptance. This delivery completes original columnar source-failure transport only. Independent review and hosted qualification remain pending.
+
+Closes #673.
