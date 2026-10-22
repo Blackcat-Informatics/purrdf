@@ -6,6 +6,21 @@
 use purrdf_core::FastMap;
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
 
+/// The body owns only newly constructed local payloads; failed locals die
+/// before their original refund. Preserve a refused refund as exact debt.
+pub(crate) fn construct_in<T, A: Admission + ?Sized>(
+    memory: &mut Memory<'_, A>,
+    retired: &mut usize,
+    body: impl FnOnce(&mut Memory<'_, A>) -> Result<T, StorageError>,
+) -> Result<T, StorageError> {
+    let before = memory.admitted_bytes();
+    let result = memory.scope(body);
+    if result.is_err() {
+        record_factory_retirement(retired, before, 0, 0, memory.admitted_bytes());
+    }
+    result
+}
+
 pub(crate) fn reserve_ordered_in<K, V, A: Admission + ?Sized>(
     table: &mut OrderedTable<K, V>,
     memory: &mut Memory<'_, A>,

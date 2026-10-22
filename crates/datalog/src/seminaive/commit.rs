@@ -250,6 +250,10 @@ where
             .check_read()
             .map_err(EvalError::Source)?;
         while !self.complete {
+            state
+                .rel
+                .flush_metadata_retirement_in(memory)
+                .map_err(EvalError::Storage)?;
             if self.pending.is_none() {
                 self.pending = self.winners.next();
             }
@@ -427,6 +431,10 @@ where
                 native.record(row, terms, proof, existing.is_none());
                 native.flush_retired(memory).map_err(EvalError::Storage)?;
             }
+            state
+                .rel
+                .flush_metadata_retirement_in(memory)
+                .map_err(EvalError::Storage)?;
         }
         state
             .rel

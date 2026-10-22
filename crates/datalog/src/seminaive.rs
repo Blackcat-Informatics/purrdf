@@ -3764,15 +3764,6 @@ where
     }
 }
 
-impl<'a, I: TermIdentity, const N: usize> From<&'a Vec<u32>> for Depths<'a, I, N>
-where
-    Arity<N>: StoreShape<N>,
-{
-    fn from(values: &'a Vec<u32>) -> Self {
-        Self::Dense(values)
-    }
-}
-
 /// The immutable snapshot every rule task reads during one round.
 ///
 /// No task may mutate any of it; the single sorted commit begins only after every task
@@ -4530,7 +4521,7 @@ where
         self.native
             .as_ref()
             .filter(|native| native.uses_native_heights())
-            .map_or_else(|| (&self.depth).into(), Depths::Native)
+            .map_or_else(|| self.depth.as_slice().into(), Depths::Native)
     }
 
     /// Record one asserted row without tying its logical ID to a resident address.
@@ -5202,7 +5193,7 @@ mod tests {
             RoundSnapshot {
                 probe: None,
                 rel: &store,
-                depth: (&depth).into(),
+                depth: depth.as_slice().into(),
                 assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             },
@@ -5299,7 +5290,7 @@ mod tests {
                 RoundSnapshot {
                     probe: None,
                     rel: &store,
-                    depth: (&vec![0; store.row_count()]).into(),
+                    depth: vec![0; store.row_count()].as_slice().into(),
                     assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 },

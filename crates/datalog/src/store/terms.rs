@@ -93,13 +93,12 @@ impl TermArena {
             }
         }
     }
-    pub(super) fn pop(&mut self) {
+    pub(super) fn pop(&mut self, id: TermId) {
         match self {
             Self::Dense(values) => {
                 values.pop().expect("rolling back a newly minted term");
             }
             Self::Sparse { values, next } => {
-                let id = TermId::from_index(*next - 1).expect("an already minted logical term");
                 values
                     .remove(&id)
                     .expect("only unpublished contiguous terms are rolled back");
@@ -107,7 +106,7 @@ impl TermArena {
             }
         }
     }
-    pub(super) fn iter(&self) -> impl Iterator<Item = (TermId, &String)> {
+    pub(super) fn iter(&self) -> impl Iterator<Item = Result<(TermId, &String), StorageError>> {
         let dense = match self {
             Self::Dense(values) => Some(values.iter().enumerate()),
             Self::Sparse { .. } => None,
@@ -119,13 +118,13 @@ impl TermArena {
         dense
             .into_iter()
             .flatten()
-            .map(|(index, value)| {
-                (
-                    TermId::from_address(index).expect("an existing resident lexical identity"),
-                    value,
-                )
-            })
-            .chain(sparse.into_iter().flatten().map(|(&id, value)| (id, value)))
+            .map(|(index, value)| TermId::from_address(index).map(|id| (id, value)))
+            .chain(
+                sparse
+                    .into_iter()
+                    .flatten()
+                    .map(|(&id, value)| Ok((id, value))),
+            )
     }
     pub(super) fn into_reclaiming(self) -> Result<Self, StorageError> {
         let Self::Dense(values) = self else {
@@ -299,7 +298,10 @@ pub(super) fn intern_transaction<O: InternOwner, T, const N: usize>(
         validate(owner, ids)
     })();
     if result.is_err() {
-        owner.core_mut().rollback_to(checkpoint);
+        owner
+            .core_mut()
+            .rollback_to(checkpoint)
+            .map_err(DictionaryError::Storage)?;
     }
     result
 }
@@ -345,7 +347,10 @@ impl TermDictionary for ReclaimingInterner {
 
 impl crate::dictionary::ReclaimDictionary for ReclaimingInterner {
     fn owned_terms(&self) -> impl Iterator<Item = TermId> + '_ {
-        self.inner.surfaces.iter().map(|(id, _)| id)
+        let TermArena::Sparse { values, .. } = &self.inner.surfaces else {
+            unreachable!("reclaiming ownership always uses removable lexical metadata");
+        };
+        values.ordered().map(|(&id, _)| id)
     }
 
     fn release_term(&mut self, id: TermId) -> Result<(), DictionaryError<TermExpired>> {

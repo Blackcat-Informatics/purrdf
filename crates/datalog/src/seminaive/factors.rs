@@ -1687,7 +1687,7 @@ mod tests {
                 let snapshot = RoundSnapshot {
                     probe: None,
                     rel: &rel,
-                    depth: (&depth).into(),
+                    depth: depth.as_slice().into(),
                     assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };
@@ -1757,7 +1757,7 @@ mod tests {
             let snapshot = RoundSnapshot {
                 probe: None,
                 rel: &rel,
-                depth: (&depth).into(),
+                depth: depth.as_slice().into(),
                 assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
@@ -1789,7 +1789,7 @@ mod tests {
                             let original = &matches[witness.row];
                             assert_eq!(original.sources.len(), factor.positions.len());
                             assert_eq!(
-                                source_heights(&original.sources, (&depth).into()),
+                                source_heights(&original.sources, depth.as_slice().into()),
                                 (witness.maximum, witness.sum)
                             );
                         }
@@ -1832,7 +1832,7 @@ mod tests {
             let snapshot = RoundSnapshot {
                 probe: None,
                 rel: &rel,
-                depth: (&depth).into(),
+                depth: depth.as_slice().into(),
                 assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
@@ -1905,7 +1905,7 @@ mod tests {
             let snapshot = RoundSnapshot {
                 probe: None,
                 rel: &rel,
-                depth: (&depth).into(),
+                depth: depth.as_slice().into(),
                 assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             };
@@ -1984,7 +1984,7 @@ mod tests {
         let snapshot = RoundSnapshot {
             probe: None,
             rel: &rel,
-            depth: (&depth).into(),
+            depth: depth.as_slice().into(),
             assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
@@ -2204,7 +2204,7 @@ mod tests {
                 let snapshot = RoundSnapshot {
                     probe: None,
                     rel: &rel,
-                    depth: (&depth).into(),
+                    depth: depth.as_slice().into(),
                     assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };
@@ -2320,7 +2320,7 @@ mod tests {
         let snapshot = RoundSnapshot {
             probe: None,
             rel: &rel,
-            depth: (&depth).into(),
+            depth: depth.as_slice().into(),
             assumed: &purrdf_core::FastSet::default(),
             delta_indexes: None,
         };
@@ -2643,7 +2643,7 @@ mod tests {
                 let snapshot = RoundSnapshot {
                     probe: None,
                     rel: &rel,
-                    depth: (&depth).into(),
+                    depth: depth.as_slice().into(),
                     assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 };

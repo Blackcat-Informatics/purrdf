@@ -1878,6 +1878,10 @@ where
             .expect("native proof owner")
             .flush_retired(memory)
             .map_err(EvalError::Storage)?;
+        state
+            .rel
+            .flush_metadata_retirement_in(memory)
+            .map_err(EvalError::Storage)?;
     }
 
     while pending.phase == MutationPhase::Tasks {

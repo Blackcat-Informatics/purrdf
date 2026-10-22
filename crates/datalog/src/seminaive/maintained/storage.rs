@@ -971,6 +971,251 @@ mod tests {
     }
 
     #[test]
+    fn original_sealed_object_permutations_are_constructed_under_the_supplied_grant() {
+        use crate::{
+            clause::DlClause,
+            guard::NoGuards,
+            seminaive::{
+                EvalError, EvalOptions, Maintained, ResumeProgress, SessionContext, compile,
+            },
+            store::{Bound, RelationStore, TermInterner},
+        };
+        use purrdf_hash::hex::Digest32;
+        use purrdf_lex::allocation::Resident;
+        struct Observed<'a> {
+            grant: Grant<'a>,
+            last_growth: usize,
+        }
+        impl Admission for Observed<'_> {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                let previous = self.grant.live.get();
+                self.grant.resize(bytes)?;
+                if bytes > previous {
+                    self.last_growth = bytes - previous;
+                }
+                Ok(())
+            }
+        }
+        let live = Cell::new(0);
+        let mut grant = Observed {
+            grant: Grant {
+                live: &live,
+                maximum: usize::MAX,
+                grows: 0,
+                maximum_grows: usize::MAX,
+                refuse_shrink: false,
+                destroyed: None,
+            },
+            last_growth: 0,
+        };
+        let program = compile(Vec::<DlClause<3>>::new()).unwrap();
+        let options = EvalOptions::default();
+        let context = SessionContext {
+            snapshot: Digest32::new([71; 32]),
+            guards: Digest32::new([72; 32]),
+            evidence: Digest32::new([73; 32]),
+        };
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for index in 0..64 {
+            input
+                .insert_row([&format!("subject-{index}"), "in", "o"])
+                .unwrap();
+        }
+        let original = input.rows_from(0).collect::<Vec<_>>();
+        let mut model = Maintained::<u64, Resident, _, 3, _>::new_in(
+            &program, input, &NoGuards, context, options, &mut grant,
+        )
+        .unwrap();
+        model.storage.admission.grant.maximum_grows = model.storage.admission.grant.grows;
+        let mut refusals = 0;
+        loop {
+            match model.resume(options, None).unwrap() {
+                ResumeProgress::Complete => break,
+                ResumeProgress::Paused(EvalError::Storage(StorageError::AdmissionFailed)) => {
+                    refusals += 1;
+                    assert!(
+                        refusals < 128,
+                        "the original finite index retains admitted progress"
+                    );
+                    assert_eq!(
+                        model
+                            .session
+                            .state
+                            .as_ref()
+                            .unwrap()
+                            .rel
+                            .rows_from(0)
+                            .collect::<Vec<_>>(),
+                        original
+                    );
+                    let held = live.get();
+                    assert!(matches!(
+                        model.resume(options, None).unwrap(),
+                        ResumeProgress::Paused(EvalError::Storage(StorageError::AdmissionFailed))
+                    ));
+                    assert_eq!(live.get(), held);
+                    assert_eq!(model.storage.live(), held);
+                    model.storage.admission.grant.maximum_grows += 1;
+                }
+                other @ ResumeProgress::Paused(_) => {
+                    panic!("unexpected original index refusal: {other:?}")
+                }
+            }
+        }
+        assert!(refusals > 0);
+        assert_eq!(
+            model.storage.admission.last_growth,
+            64 * size_of::<usize>(),
+            "the final original permutation is allocated by the provided owner"
+        );
+        let facts = model.facts().unwrap();
+        let predicate = facts.term_id("in").unwrap();
+        let object = facts.term_id("o").unwrap();
+        assert_eq!(
+            facts
+                .partition_for(&[None, Some(predicate), None])
+                .unwrap()
+                .select(Bound::Object(object))
+                .remaining_count(),
+            64
+        );
+        assert_eq!(facts.rows_from(0).collect::<Vec<_>>(), original);
+        assert_eq!(model.budget().join_steps(), 0);
+        assert_eq!(live.get(), model.storage.live());
+        drop(model);
+        assert_eq!(live.get(), 0);
+    }
+
+    #[test]
+    fn sealing_and_size_tier_merges_admit_buffers_before_original_publication() {
+        use crate::{
+            clause::{ClauseAtom, ClauseTerm, DlClause},
+            dictionary::DictionaryTerm,
+            guard::NoGuards,
+            maintenance::ChangeBatch,
+            seminaive::{
+                EvalError, EvalOptions, Maintained, ResumeProgress, SessionContext, compile,
+            },
+            store::{RelationStore, TermInterner},
+        };
+        use purrdf_hash::hex::Digest32;
+        use purrdf_lex::allocation::Resident;
+        let atom = |predicate| {
+            ClauseAtom::triple(
+                ClauseTerm::var("s"),
+                ClauseTerm::literal(predicate),
+                ClauseTerm::var("o"),
+            )
+        };
+        let program = compile(vec![DlClause::datalog(atom("out"), vec![atom("in")])]).unwrap();
+        let options = EvalOptions::default();
+        let context = SessionContext {
+            snapshot: Digest32::new([61; 32]),
+            guards: Digest32::new([62; 32]),
+            evidence: Digest32::new([63; 32]),
+        };
+        let live = Cell::new(0);
+        let mut grant = Grant {
+            live: &live,
+            maximum: usize::MAX,
+            grows: 0,
+            maximum_grows: usize::MAX,
+            refuse_shrink: false,
+            destroyed: None,
+        };
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for index in 0..63 {
+            input
+                .insert_row([&format!("subject-{index}"), "in", "o"])
+                .unwrap();
+        }
+        let mut model = Maintained::<u64, Resident, _, 3, _>::new_in(
+            &program, input, &NoGuards, context, options, &mut grant,
+        )
+        .unwrap();
+        assert_eq!(
+            model.resume(options, None).unwrap(),
+            ResumeProgress::Complete
+        );
+        let input_predicate = model.facts().unwrap().term_id("in").unwrap();
+        let original = model.facts().unwrap().rows_from(0).collect::<Vec<_>>();
+        let mut start = 63;
+        for (watermark, count) in [(70, 1), (71, 64), (72, 64)] {
+            model.storage.admission.maximum_grows = usize::MAX;
+            let mut changes = Vec::new();
+            for index in start..start + count {
+                let text = format!("subject-{index}");
+                let terms = model
+                    .admit_terms([text.as_str(), "in", "o"].map(DictionaryTerm::Surface))
+                    .unwrap();
+                changes.push((terms, 1));
+            }
+            model
+                .apply(ChangeBatch::new(watermark, changes, Resident).unwrap())
+                .unwrap();
+            model.storage.admission.maximum_grows = model.storage.admission.grows;
+            let mut refusals = 0;
+            loop {
+                match model.resume(options, None).unwrap() {
+                    ResumeProgress::Complete => break,
+                    ResumeProgress::Paused(EvalError::Storage(StorageError::AdmissionFailed)) => {
+                        refusals += 1;
+                        assert!(
+                            refusals < 2048,
+                            "the original finite merge retains admitted factory progress"
+                        );
+                        let state = model.session.state.as_ref().unwrap();
+                        let inputs = state.rel.rows_for_predicate(input_predicate).count();
+                        assert_eq!(
+                            state.rel.row_count(),
+                            inputs + state.native.as_ref().unwrap().nodes.len(),
+                            "no row is published without its original admitted proof"
+                        );
+                        assert_eq!(model.pending_watermark(), Some(&watermark));
+                        assert_ne!(model.applied_watermark(), Some(&watermark));
+                        let joins = model.budget().join_steps();
+                        let held = live.get();
+                        assert!(matches!(
+                            model.resume(options, None).unwrap(),
+                            ResumeProgress::Paused(EvalError::Storage(
+                                StorageError::AdmissionFailed
+                            ))
+                        ));
+                        assert_eq!(model.budget().join_steps(), joins);
+                        assert_eq!(live.get(), held);
+                        assert_eq!(model.storage.live(), held);
+                        model.storage.admission.maximum_grows += 1;
+                    }
+                    other @ ResumeProgress::Paused(_) => {
+                        panic!("unexpected original seal refusal: {other:?}")
+                    }
+                }
+            }
+            assert!(refusals > 0);
+            start += count;
+            assert_eq!(model.applied_watermark(), Some(&watermark));
+            assert_eq!(model.facts().unwrap().row_count(), start * 2);
+            assert_eq!(model.witnesses().unwrap().len(), start);
+            assert_eq!(
+                model.model_delta().unwrap().unwrap().changes().len(),
+                count * 2
+            );
+            assert_eq!(
+                model
+                    .facts()
+                    .unwrap()
+                    .rows_from(0)
+                    .take(original.len())
+                    .collect::<Vec<_>>(),
+                original
+            );
+        }
+        assert_eq!(live.get(), model.storage.live());
+        drop(model);
+        assert_eq!(live.get(), 0);
+    }
+
+    #[test]
     fn rejected_batches_and_settled_reclamation_retry_every_original_release() {
         use crate::{
             clause::{ClauseAtom, ClauseTerm, DlClause},

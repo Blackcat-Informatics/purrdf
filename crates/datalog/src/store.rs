@@ -97,6 +97,7 @@ use std::sync::OnceLock;
 
 mod columns;
 mod index;
+mod seal;
 pub use columns::RowColumns;
 pub use index::{RowIndex, RowIndexError};
 mod rows;
@@ -201,7 +202,8 @@ impl TermInterner {
                 unreachable!("an empty index has no retained entries")
             })
             .map_err(|_| StorageError::AllocationFailed)?;
-        for (id, value) in surfaces.iter() {
+        for entry in surfaces.iter() {
+            let (id, value) = entry?;
             by_surface.insert_unique(surface_hash(value), id, |&id| {
                 surface_hash(surfaces.get(id).expect("a retained indexed surface"))
             });
@@ -229,10 +231,9 @@ impl TermInterner {
     }
 
     /// Undo only the new lexical identities of a failed enclosing insertion.
-    fn rollback_to(&mut self, checkpoint: u64) {
+    fn rollback_to(&mut self, checkpoint: u64) -> Result<(), StorageError> {
         while self.surfaces.next() > checkpoint {
-            let id = TermId::from_index(self.surfaces.next() - 1)
-                .expect("a freshly minted original term");
+            let id = TermId::from_index(self.surfaces.next() - 1)?;
             let value = self
                 .surfaces
                 .get(id)
@@ -243,8 +244,9 @@ impl TermInterner {
                 .expect("every retained lexical identity has its original index entry");
             entry.remove();
             self.bytes -= value.len();
-            self.surfaces.pop();
+            self.surfaces.pop(id);
         }
+        Ok(())
     }
 
     /// The lexical surface `id` was interned from.
@@ -507,10 +509,20 @@ fn gallop_lower_bound<I: TermIdentity>(xs: &[I], from: usize, key: I) -> usize {
 /// cleanly. A permutation of resident `usize` positions, never a hash map or per-key
 /// `Vec`: one address per row, materialised only when an object bound is actually
 /// probed.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct ObjectIndex {
     /// Row positions of the batch, sorted by `(object_id, subject_id)`.
-    perm: Box<[usize]>,
+    perm: Vec<usize>,
+    admitted: bool,
+}
+
+impl Clone for ObjectIndex {
+    fn clone(&self) -> Self {
+        Self {
+            perm: self.perm.clone(),
+            admitted: false,
+        }
+    }
 }
 
 /// One sealed sorted batch: a relation's `(subject, object)` rows in canonical
@@ -520,56 +532,122 @@ struct ObjectIndex {
 /// column to the term's contiguous run with NO secondary structure. The
 /// `(object, subject)` access path is the lazily-built [`ObjectIndex`]. Generic over
 /// the weight monoid `W` (the Z-set seam); the production instantiation is `W = ()`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Batch<W: Weight = (), I: TermIdentity = TermId> {
-    /// Subject column, ascending (subject-major within the `(subject, object)` sort).
-    subj: Vec<I>,
-    /// Object column, ascending within each subject run.
-    obj: Vec<I>,
-    /// Store-global dense [`RowId`] per row, parallel to the columns.
-    row_id: Vec<Option<RowId>>,
+    /// Subject/object columns and original handles, in subject-major order.
+    data: RowColumns<I, 2, Option<RowId>>,
     /// Live handles; all-live runs retain their indexed count fast path.
     live: usize,
     /// Multiplicity per row; `Vec<()>` is zero-sized under set semantics.
     weight: Vec<W>,
     /// The lazily-built `(object, subject)` access path (built on first object probe).
     object_index: OnceLock<ObjectIndex>,
+    admitted: bool,
+}
+
+impl<W: Weight, I: TermIdentity> Clone for Batch<W, I> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            live: self.live,
+            weight: self.weight.clone(),
+            object_index: self.object_index.clone(),
+            admitted: false,
+        }
+    }
 }
 
 impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// Build a batch from rows ALREADY sorted ascending by `(subject_id, object_id)`
     /// and free of duplicate keys. Weights default to [`Weight::UNIT`].
+    #[cfg(test)]
     fn from_sorted(rows: &[(I, I, RowId)]) -> Self {
-        let mut subj = Vec::with_capacity(rows.len());
-        let mut obj = Vec::with_capacity(rows.len());
-        let mut row_id = Vec::with_capacity(rows.len());
-        let mut weight = Vec::with_capacity(rows.len());
-        for &(s, o, r) in rows {
-            subj.push(s);
-            obj.push(o);
-            row_id.push(Some(r));
-            weight.push(W::UNIT);
+        let mut batch = Self::empty(false);
+        batch
+            .reserve_in(rows.len(), &mut Memory::new(&mut Resident), &mut 0)
+            .expect("constructing original sorted batch columns");
+        for &(subject, object, row) in rows {
+            batch.push_reserved(subject, object, row, W::UNIT);
         }
+        batch
+    }
+
+    fn empty(admitted: bool) -> Self {
         Self {
-            subj,
-            obj,
-            row_id,
-            live: rows.len(),
-            weight,
+            data: RowColumns::default(),
+            live: 0,
+            weight: Vec::new(),
             object_index: OnceLock::new(),
+            admitted,
+        }
+    }
+
+    fn storage_bytes(&self) -> Result<usize, StorageError> {
+        let data = self.data.storage_bytes()?;
+        self.weight
+            .capacity()
+            .checked_mul(size_of::<W>())
+            .and_then(|bytes| data.checked_add(bytes))
+            .ok_or(StorageError::SizeOverflow)
+    }
+
+    fn retire(self) -> usize {
+        let mut bytes = if self.admitted {
+            self.storage_bytes().expect("original batch column layouts")
+        } else {
+            0
+        };
+        if let Some(index) = self.object_index.get().filter(|index| index.admitted) {
+            bytes = bytes
+                .checked_add(index.perm.capacity() * size_of::<usize>())
+                .expect("original batch permutation layout");
+        }
+        drop(self);
+        bytes
+    }
+
+    fn reserve_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        self.data.reserve_capacity_in(required, memory, retired)?;
+        crate::allocation::reserve_array_in(&mut self.weight, memory, retired, |values, memory| {
+            memory.reserve(values, required)
+        })
+    }
+
+    fn push_reserved(&mut self, subject: I, object: I, row: RowId, weight: W) {
+        assert!(
+            self.weight.capacity() > self.len(),
+            "batch weights are admitted before publication"
+        );
+        self.data.push_reserved([subject, object], Some(row));
+        self.weight.push(weight);
+        self.live += 1;
+    }
+
+    fn fill_sorted(&mut self, rows: &[(I, I, RowId)]) {
+        assert!(self.object_index.get().is_none());
+        self.data.clear();
+        self.weight.clear();
+        self.live = 0;
+        for &(subject, object, row) in rows {
+            self.push_reserved(subject, object, row, W::UNIT);
         }
     }
 
     /// The number of rows in the batch.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        self.row_id.len()
+        self.data.len()
     }
 
     /// The `(subject_id, object_id, row_id)` id row at column position `p`.
     #[inline]
     pub(crate) fn row_at(&self, p: usize) -> Option<(I, I, RowId)> {
-        self.row_id[p].map(|row| (self.subj[p], self.obj[p], row))
+        self.data.handles()[p].map(|row| (self.data.column(0)[p], self.data.column(1)[p], row))
     }
 
     pub(crate) fn all_live(&self) -> bool {
@@ -582,21 +660,22 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     }
 
     pub(crate) fn is_live(&self, position: usize) -> bool {
-        self.row_id[position].is_some()
+        self.data.handles()[position].is_some()
     }
 
     /// Physical key ordering remains available after its live handle is removed.
     pub(crate) fn key_at(&self, position: usize) -> (I, I) {
-        (self.subj[position], self.obj[position])
+        (self.data.column(0)[position], self.data.column(1)[position])
     }
 
     /// The `[lo, hi)` column-position run whose subject is `s`, located by galloping
     /// the sorted `subj` column (subject grouping is contiguous in the primary sort).
     pub(crate) fn subject_run(&self, s: I) -> (usize, usize) {
-        let lo = gallop_lower_bound(&self.subj, 0, s);
+        let subjects = self.data.column(0);
+        let lo = gallop_lower_bound(subjects, 0, s);
         // `hi` is the first position past `s`'s contiguous run — a binary search of the
         // sorted suffix, so a `Both` probe stays O(log n) rather than O(run length).
-        let hi = lo + self.subj[lo..].partition_point(|&x| x <= s);
+        let hi = lo + subjects[lo..].partition_point(|&x| x <= s);
         (lo, hi)
     }
 
@@ -604,7 +683,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// subject run, then binary-search its ascending `obj` sub-column for `o`.
     pub(crate) fn both_pos(&self, s: I, o: I) -> Option<usize> {
         let (lo, hi) = self.subject_run(s);
-        let run = &self.obj[lo..hi];
+        let run = &self.data.column(1)[lo..hi];
         run.binary_search(&o).ok().map(|off| lo + off)
     }
 
@@ -617,7 +696,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// Vacate the indexed handle without moving keys or rebuilding a permutation.
     fn remove(&mut self, subject: I, object: I) -> Option<RowId> {
         let position = self.both_pos(subject, object)?;
-        let row = self.row_id[position].take()?;
+        let row = self.data.replace_handle(position, None).flatten()?;
         self.live -= 1;
         Some(row)
     }
@@ -626,8 +705,8 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// its slice into a cursor's retained position.
     pub(crate) fn object_run(&self, o: I) -> (usize, usize) {
         let perm = self.object_order();
-        let lo = perm.partition_point(|&p| self.obj[p] < o);
-        let hi = perm.partition_point(|&p| self.obj[p] <= o);
+        let lo = perm.partition_point(|&p| self.data.column(1)[p] < o);
+        let hi = perm.partition_point(|&p| self.data.column(1)[p] <= o);
         (lo, hi)
     }
 
@@ -639,18 +718,51 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
         &self
             .object_index
             .get_or_init(|| {
-                let mut perm: Vec<usize> = (0..self.len()).collect();
-                // Sort positions by (object_id, subject_id) — the secondary access
-                // order. `(object, subject)` keys are unique within a batch (the
-                // primary sort is key-disjoint), so no equal elements exist whose order
-                // would need preserving: the unstable sort is a pure win (no scratch
-                // allocation, lower constants) and cannot introduce nondeterminism.
-                index::sort_row_positions(&mut perm, &[&self.subj, &self.obj], &[1, 0]);
-                ObjectIndex {
-                    perm: perm.into_boxed_slice(),
-                }
+                self.object_index_in(false, &mut Memory::new(&mut Resident))
+                    .expect("constructing original resident object permutation")
             })
             .perm
+    }
+
+    fn object_index_in<A: Admission + ?Sized>(
+        &self,
+        admitted: bool,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<ObjectIndex, StorageError> {
+        memory.scope(|memory| {
+            let mut perm = Vec::new();
+            memory.reserve(&mut perm, self.len())?;
+            if let Some(previous) = self.object_index.get() {
+                perm.extend_from_slice(&previous.perm);
+            } else {
+                perm.extend(0..self.len());
+                index::sort_row_positions(
+                    &mut perm,
+                    &[self.data.column(0), self.data.column(1)],
+                    &[1, 0],
+                );
+            }
+            Ok(ObjectIndex { perm, admitted })
+        })
+    }
+
+    fn prepare_object_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        if self.object_index.get().is_some_and(|index| index.admitted) {
+            return Ok(());
+        }
+        let index = crate::allocation::construct_in(memory, retired, |memory| {
+            self.object_index_in(true, memory)
+        })?;
+        let previous = self.object_index.take();
+        self.object_index
+            .set(index)
+            .expect("replacing the original resident object permutation");
+        drop(previous);
+        Ok(())
     }
 }
 
@@ -663,57 +775,66 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
 /// the row. Set-semantics insertion keeps live keys disjoint, but reinsertion
 /// can collide with a retired cell. Vacant cells carry no weight into the merge
 /// and cannot replace the fresh reinsertion handle.
+#[cfg(test)]
 fn merge_batches<W: Weight, I: TermIdentity>(
     left: &Batch<W, I>,
     right: &Batch<W, I>,
 ) -> Result<Batch<W, I>, W::Error> {
-    let cap = left.len() + right.len();
-    let mut subj = Vec::with_capacity(cap);
-    let mut obj = Vec::with_capacity(cap);
-    let mut row_id = Vec::with_capacity(cap);
-    let mut weight = Vec::with_capacity(cap);
+    let cap = left
+        .len()
+        .checked_add(right.len())
+        .expect("original merge layout");
+    let mut merged = Batch::empty(false);
+    merged
+        .reserve_in(cap, &mut Memory::new(&mut Resident), &mut 0)
+        .expect("constructing original merge columns");
+    merge_batches_into(left, right, &mut merged)?;
+    Ok(merged)
+}
+
+fn merge_batches_into<W: Weight, I: TermIdentity>(
+    left: &Batch<W, I>,
+    right: &Batch<W, I>,
+    merged: &mut Batch<W, I>,
+) -> Result<(), W::Error> {
+    merged.data.clear();
+    merged.weight.clear();
+    merged.live = 0;
+    assert!(
+        merged.object_index.get().is_none(),
+        "merge output has no published permutation"
+    );
     let (mut i, mut j) = (0usize, 0usize);
-    let push = |subj: &mut Vec<I>,
-                obj: &mut Vec<I>,
-                row_id: &mut Vec<Option<RowId>>,
-                weight: &mut Vec<W>,
-                b: &Batch<W, I>,
-                p: usize| {
-        if b.row_id[p].is_some() {
-            subj.push(b.subj[p]);
-            obj.push(b.obj[p]);
-            row_id.push(b.row_id[p]);
-            weight.push(b.weight[p]);
+    let push = |merged: &mut Batch<W, I>, b: &Batch<W, I>, p: usize| {
+        if let Some((subject, object, row)) = b.row_at(p) {
+            merged.push_reserved(subject, object, row, b.weight[p]);
         }
     };
     while i < left.len() && j < right.len() {
-        let lk = (left.subj[i], left.obj[i]);
-        let rk = (right.subj[j], right.obj[j]);
+        let lk = left.key_at(i);
+        let rk = right.key_at(j);
         match lk.cmp(&rk) {
             Ordering::Less => {
-                push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i);
+                push(merged, left, i);
                 i += 1;
             }
             Ordering::Greater => {
-                push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
+                push(merged, right, j);
                 j += 1;
             }
             Ordering::Equal => {
                 // Combine live weights; a retired copy cannot compete with a
                 // fresh reinsertion or retain its old handle.
-                match (left.row_id[i], right.row_id[j]) {
+                match (left.data.handles()[i], right.data.handles()[j]) {
                     (Some(left_row), Some(right_row)) => {
                         let w = left.weight[i].combine(right.weight[j])?;
                         if !w.is_annihilated() {
-                            subj.push(left.subj[i]);
-                            obj.push(left.obj[i]);
-                            row_id.push(Some(left_row.min(right_row)));
-                            weight.push(w);
+                            merged.push_reserved(lk.0, lk.1, left_row.min(right_row), w);
                         }
                     }
-                    (Some(_), None) => push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i),
+                    (Some(_), None) => push(merged, left, i),
                     (None, Some(_)) => {
-                        push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
+                        push(merged, right, j);
                     }
                     (None, None) => {}
                 }
@@ -723,21 +844,14 @@ fn merge_batches<W: Weight, I: TermIdentity>(
         }
     }
     while i < left.len() {
-        push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i);
+        push(merged, left, i);
         i += 1;
     }
     while j < right.len() {
-        push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
+        push(merged, right, j);
         j += 1;
     }
-    Ok(Batch {
-        live: row_id.len(),
-        subj,
-        obj,
-        row_id,
-        weight,
-        object_index: OnceLock::new(),
-    })
+    Ok(())
 }
 
 // ── Relations ───────────────────────────────────────────────────────────────────
@@ -791,7 +905,10 @@ impl<I: TermIdentity> Tail<I> {
         retired: &mut usize,
     ) -> Result<(), StorageError> {
         if self.supplemental {
-            self.data.reserve_rows_in(1, memory, retired)
+            // A maintained tail owns one complete publication chunk. Its
+            // next append must not copy a source-prefix-dependent capacity.
+            self.data
+                .reserve_capacity_in(TAIL_SEAL_THRESHOLD, memory, retired)
         } else {
             self.reserve_row()
         }
@@ -802,7 +919,7 @@ impl<I: TermIdentity> Tail<I> {
         memory: &mut Memory<'_, A>,
     ) -> Result<Self, StorageError> {
         Ok(Self {
-            data: self.data.copy_in(memory)?,
+            data: self.data.copy_in(TAIL_SEAL_THRESHOLD, memory)?,
             supplemental: true,
         })
     }
@@ -890,13 +1007,6 @@ impl<I: TermIdentity> Tail<I> {
         })?;
         self.data.replace_handle(position, None).flatten()
     }
-
-    /// Empty the tail, returning its rows in insertion order.
-    fn take_rows(&mut self) -> Vec<(I, I, RowId)> {
-        let rows = self.iter().collect();
-        self.data.clear();
-        rows
-    }
 }
 
 /// The size a mutable tail may reach before it is sealed into a sorted batch.
@@ -914,7 +1024,7 @@ pub(crate) const TAIL_SEAL_THRESHOLD: usize = 64;
 /// Term interning lives at the [`RelationStore`] level (one dictionary shared by every
 /// relation), so `insert` borrows the store's interner. Production set semantics fix
 /// the weight monoid at `W = ()`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Relation<I: TermIdentity = TermId> {
     /// Sealed sorted batches, newest last. Live keys are disjoint across batches;
     /// a vacant key may recur in a newer batch after reinsertion.
@@ -926,6 +1036,21 @@ pub(crate) struct Relation<I: TermIdentity = TermId> {
     len: usize,
     /// Maintained snapshots prepare object access during construction/publication.
     maintain_objects: bool,
+    seal_preparation: Option<Box<seal::Preparation<I>>>,
+    retired_bytes: usize,
+}
+
+impl<I: TermIdentity> Clone for Relation<I> {
+    fn clone(&self) -> Self {
+        Self {
+            batches: self.batches.clone(),
+            tail: self.tail.clone(),
+            len: self.len,
+            maintain_objects: self.maintain_objects,
+            seal_preparation: None,
+            retired_bytes: 0,
+        }
+    }
 }
 
 impl<I: TermIdentity> Default for Relation<I> {
@@ -935,6 +1060,8 @@ impl<I: TermIdentity> Default for Relation<I> {
             tail: Tail::default(),
             len: 0,
             maintain_objects: false,
+            seal_preparation: None,
+            retired_bytes: 0,
         }
     }
 }
@@ -951,16 +1078,101 @@ impl<I: TermIdentity> Relation<I> {
     }
 
     fn retire(self) -> usize {
-        let bytes = if self.tail.supplemental {
-            self.tail
-                .data
-                .storage_bytes()
-                .expect("original tail column layouts")
-        } else {
-            0
-        };
-        drop(self);
+        let Self {
+            batches,
+            tail,
+            seal_preparation,
+            retired_bytes,
+            ..
+        } = self;
+        let mut bytes = retired_bytes;
+        if tail.supplemental {
+            bytes = bytes
+                .checked_add(
+                    tail.data
+                        .storage_bytes()
+                        .expect("original tail column layouts"),
+                )
+                .and_then(|bytes| bytes.checked_add(batches.capacity() * size_of::<Batch<(), I>>()))
+                .expect("original relation layouts");
+        }
+        for batch in batches {
+            bytes = bytes
+                .checked_add(batch.retire())
+                .expect("original sealed column layouts");
+        }
+        if let Some(frame) = seal_preparation {
+            bytes = bytes
+                .checked_add(frame.retire())
+                .expect("original prepared seal layouts");
+        }
+        drop(tail);
         bytes
+    }
+
+    fn reserve_row_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        self.tail.reserve_row_in(memory, retired)?;
+        if self
+            .tail
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?
+            >= TAIL_SEAL_THRESHOLD
+        {
+            self.prepare_seal_in(1, memory, retired)?;
+        }
+        Ok(())
+    }
+
+    fn prepare_seal_in<A: Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        let shape = seal::Shape::of(self, additional)?;
+        let required = shape.batch_count(self.batches.len());
+        if self.tail.supplemental {
+            crate::allocation::reserve_array_growth(&mut self.batches, required, memory, retired)?;
+            if self.seal_preparation.is_none() {
+                self.seal_preparation = Some(crate::allocation::construct_in(
+                    memory,
+                    retired,
+                    |memory| memory.boxed(seal::Preparation::new(shape, true)),
+                )?);
+            }
+            self.seal_preparation
+                .as_mut()
+                .expect("original seal owner")
+                .reserve(shape, true, memory, retired)
+        } else {
+            let bytes = self.batches.capacity() * size_of::<Batch<(), I>>();
+            crate::allocation::reserve_array_growth(
+                &mut self.batches,
+                required,
+                &mut Memory::resume(&mut Resident, bytes),
+                &mut 0,
+            )?;
+            if self.seal_preparation.is_none() {
+                self.seal_preparation =
+                    Some(Memory::new(&mut Resident).boxed(seal::Preparation::new(shape, false))?);
+            }
+            let frame = self
+                .seal_preparation
+                .as_mut()
+                .expect("original resident seal owner");
+            let bytes = frame.storage_bytes()?;
+            frame.reserve(
+                shape,
+                self.maintain_objects,
+                &mut Memory::resume(&mut Resident, bytes),
+                &mut 0,
+            )
+        }
     }
     /// Publish an already-admitted, absent `(subject_id, object_id)` row with
     /// its original store-assigned `row_id`.
@@ -969,11 +1181,21 @@ impl<I: TermIdentity> Relation<I> {
     /// tail — no per-row hashing, no postings maintenance. A new row is appended to the
     /// unsorted tail; when the tail reaches [`TAIL_SEAL_THRESHOLD`] it is sealed into a
     /// sorted batch and the batch log consolidates.
+    #[cfg(test)]
     fn insert(&mut self, s_id: I, o_id: I, row_id: RowId) {
+        self.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)
+            .expect("original resident row preparation");
+        self.insert_reserved(s_id, o_id, row_id);
+    }
+
+    fn insert_reserved(&mut self, s_id: I, o_id: I, row_id: RowId) {
         self.tail.push(s_id, o_id, row_id);
         self.len += 1;
         if self.tail.len() >= TAIL_SEAL_THRESHOLD {
-            self.seal();
+            self.seal_preparation
+                .take()
+                .expect("sealing storage is admitted before publication")
+                .publish(self);
         }
     }
 
@@ -1028,41 +1250,17 @@ impl<I: TermIdentity> Relation<I> {
     /// the sort is a plain columnar build with no combine. Consolidation then merges the
     /// batch log geometrically. Row ids are already stamped, so sealing is a pure
     /// storage reorganisation — it never changes the row set, the row ids, or the count.
+    #[cfg(test)]
     fn seal(&mut self) {
         if self.tail.is_empty() {
             return;
         }
-        let mut rows = self.tail.take_rows();
-        rows.sort_unstable_by_key(|&(s, o, _)| (s, o));
-        self.batches.push(Batch::from_sorted(&rows));
-        self.consolidate();
-        if self.maintain_objects {
-            for batch in &self.batches {
-                batch.object_order();
-            }
-        }
-    }
-
-    /// Geometric (size-tiered) consolidation: while the newest two batches are within a
-    /// factor of two in size, merge them into one sorted batch. This bounds the live
-    /// batch count logarithmically, so a probe gallops O(log n) runs.
-    fn consolidate(&mut self) {
-        while self.batches.len() >= 2 {
-            let n = self.batches.len();
-            let (a, b) = (self.batches[n - 2].len(), self.batches[n - 1].len());
-            if b * 2 < a {
-                break;
-            }
-            let right = self.batches.pop().expect("len >= 2");
-            let left = self.batches.pop().expect("len >= 2");
-            let merged = match merge_batches(&left, &right) {
-                Ok(batch) => batch,
-                // `W = ()` is infallible: its error type is uninhabited, so this arm is
-                // a compile-time proof that set-semantics consolidation cannot fail.
-                Err(never) => match never {},
-            };
-            self.batches.push(merged);
-        }
+        self.prepare_seal_in(0, &mut Memory::new(&mut Resident), &mut 0)
+            .expect("original resident seal preparation");
+        self.seal_preparation
+            .take()
+            .expect("prepared original seal")
+            .publish(self);
     }
 
     /// The number of rows in this relation (batches + tail).
@@ -1760,12 +1958,14 @@ where
             let mut relations = Vec::new();
             memory.reserve(&mut relations, self.relations.len())?;
             for original in &self.relations {
-                relations.push(Relation {
+                let mut replacement = Relation {
                     tail: original.tail.copy_in(memory)?,
                     len: original.len,
                     maintain_objects: original.maintain_objects,
                     ..Relation::supplemental()
-                });
+                };
+                memory.reserve(&mut replacement.batches, original.batches.len())?;
+                relations.push(replacement);
             }
             self.interner
                 .check_read()
@@ -1775,7 +1975,7 @@ where
         // Existing sealed arrangements retain their original inner owners;
         // mutable tail columns were constructed under the new admission.
         for (replacement, original) in relations.iter_mut().zip(&mut self.relations) {
-            replacement.batches = std::mem::take(&mut original.batches);
+            replacement.batches.append(&mut original.batches);
         }
         self.relations = relations;
         self.keys = keys;
@@ -1784,6 +1984,7 @@ where
         self.by_key = lookup;
         self.metadata_supplemental = true;
         self.spare_relation = Relation::supplemental();
+        self.maintenance_indexes = false;
         Ok(())
     }
 
@@ -1817,14 +2018,19 @@ where
         supplemental: bool,
     ) -> Result<(), DictionaryError<D::Error>> {
         self.flush_metadata_retirement_in(memory)?;
-        if supplemental && self.order.is_supplemental() || !supplemental && self.order.is_sparse() {
+        if self.maintenance_indexes
+            && (supplemental && self.order.is_supplemental()
+                || !supplemental && self.order.is_sparse())
+        {
             return Ok(());
         }
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
         self.reserve_partition_slots_in(self.relations.len(), memory)?;
-        let (directory, sparse_rows) = if supplemental {
+        let (directory, sparse_rows) = if supplemental && self.order.is_supplemental() {
+            (None, self.row_log.prepare_sparse()?)
+        } else if supplemental {
             assert!(
                 self.row_log.is_supplemental() && self.metadata_supplemental,
                 "maintained metadata keeps its original supplied owner"
@@ -1852,7 +2058,7 @@ where
                 .directory_preparation
                 .take()
                 .expect("completed original directory preparation");
-            (frame.directory, rows)
+            (Some(frame.directory), rows)
         } else {
             let entries = self
                 .keys
@@ -1868,28 +2074,41 @@ where
             self.interner
                 .check_read()
                 .map_err(DictionaryError::Source)?;
-            (directory, rows)
+            (Some(directory), rows)
         };
         for slot in 0..self.keys.len() {
             if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
-                let (_, key) = self.keys[slot].take().expect("dense keys are occupied");
+                let (id, key) = self.keys[slot].take().expect("occupied empty key");
+                if directory.is_none() {
+                    assert_eq!(self.order.remove(id, Arity::<N>::key_term(key, 0)), slot);
+                }
                 self.by_key.remove(&key);
                 self.retire_relation_slot(slot);
                 self.free_partitions.push(slot);
             }
         }
-        self.order = directory;
-        self.maintenance_indexes = true;
+        if let Some(directory) = directory {
+            self.order = directory;
+        }
         if let Some(rows) = sparse_rows {
             self.row_log = rows;
         }
+        self.flush_metadata_retirement_in(memory)?;
         for relation in &mut self.relations {
             relation.maintain_objects = true;
-            for batch in &relation.batches {
-                batch.object_order();
+            for batch in &mut relation.batches {
+                if supplemental {
+                    batch.prepare_object_in(memory, &mut self.metadata_retired_bytes)?;
+                } else {
+                    batch.object_order();
+                }
             }
         }
-        self.interner.check_read().map_err(DictionaryError::Source)
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        self.maintenance_indexes = true;
+        Ok(())
     }
 
     /// Retire one emptied key after every native frame has finished using it.
@@ -1992,9 +2211,7 @@ where
         ));
         self.row_log.reserve_in(memory)?;
         assert!(!self.relations[slot].contains(original.subject, original.object));
-        self.relations[slot]
-            .tail
-            .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
+        self.relations[slot].reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -2012,7 +2229,8 @@ where
         if self.relations[slot].row_count() == 0 {
             self.live_partitions += 1;
         }
-        self.relations[slot].insert(subject, object, row);
+        self.relations[slot].insert_reserved(subject, object, row);
+        self.record_relation_retirement(slot);
         self.row_log
             .restore_in((row, partition, subject, object), memory);
         self.row_count += 1;
@@ -2116,6 +2334,14 @@ where
             .expect("retired native columns fit their original grant");
     }
 
+    fn record_relation_retirement(&mut self, slot: usize) {
+        let bytes = std::mem::take(&mut self.relations[slot].retired_bytes);
+        self.metadata_retired_bytes = self
+            .metadata_retired_bytes
+            .checked_add(bytes)
+            .expect("retired native sealing layouts fit their original grant");
+    }
+
     fn reserve_partition_slots_in<A: Admission + ?Sized>(
         &mut self,
         required: usize,
@@ -2164,9 +2390,7 @@ where
         self.row_log.reserve_in(memory)?;
         let mut predicate_bucket = None;
         if let Some(slot) = existing {
-            self.relations[slot]
-                .tail
-                .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
+            self.relations[slot].reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
         } else {
             if self.metadata_supplemental {
                 crate::allocation::reserve_ordered_in(
@@ -2210,7 +2434,6 @@ where
             }
             self.spare_relation.maintain_objects = self.maintenance_indexes;
             self.spare_relation
-                .tail
                 .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
             predicate_bucket = self.order.admit_in(predicate, memory)?;
         }
@@ -2292,7 +2515,8 @@ where
         if self.relations[slot].row_count() == 0 {
             self.live_partitions += 1;
         }
-        self.relations[slot].insert(subject_id, object_id, row_id);
+        self.relations[slot].insert_reserved(subject_id, object_id, row_id);
+        self.record_relation_retirement(slot);
         self.row_count += 1;
         self.row_log
             .append_in((row_id, partition_id, subject_id, object_id), memory);
@@ -2584,8 +2808,8 @@ where
                 .relations
                 .get_mut(&partition)
                 .expect("the delta arrangement was admitted");
-            relation.tail.reserve_row()?;
-            relation.insert(subject, object, row);
+            relation.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)?;
+            relation.insert_reserved(subject, object, row);
         }
         // This private physical run uses original partition ordinals. It never
         // resolves a term; public store traversal and sorted commits retain
@@ -3770,12 +3994,13 @@ mod tests {
                 assert_eq!(batch.object_order().len(), batch.len());
                 for position in 0..batch.len() {
                     let vacant = match vacancy {
-                        0 => position % 3 == 0 || batch.obj[position] == 0,
+                        0 => position % 3 == 0 || batch.data.column(1)[position] == 0,
                         1 => leg == 0,
                         _ => true,
                     };
                     if vacant {
-                        removed.insert(batch.row_id[position].take().unwrap());
+                        removed
+                            .insert(batch.data.replace_handle(position, None).flatten().unwrap());
                         batch.live -= 1;
                     }
                 }
@@ -4755,14 +4980,9 @@ mod tests {
     /// signed delta rides. Set-semantics `insert` never mints a non-unit weight, so the
     /// seam is exercised here by constructing weighted batches directly.
     fn weighted_row(s: TermId, o: TermId, r: RowId, w: i64) -> Batch<i64> {
-        Batch {
-            subj: vec![s],
-            obj: vec![o],
-            row_id: vec![Some(r)],
-            live: 1,
-            weight: vec![w],
-            object_index: OnceLock::new(),
-        }
+        let mut batch = Batch::from_sorted(&[(s, o, r)]);
+        batch.weight[0] = w;
+        batch
     }
 
     /// The consolidation merge is generic over the [`Weight`] monoid and compiles for
@@ -4787,7 +5007,7 @@ mod tests {
         assert_eq!(summed.len(), 1, "a non-annihilating combine keeps one row");
         assert_eq!(summed.weight[0], 3, "weights sum: 1 + 2 = 3");
         assert_eq!(
-            summed.row_id[0],
+            summed.data.handles()[0],
             Some(RowId::from_index(2).unwrap()),
             "the lower row id deterministically survives a key collision"
         );
@@ -4812,7 +5032,11 @@ mod tests {
         let forward = merge_batches(&left, &right).expect("combines");
         let backward = merge_batches(&right, &left).expect("combines");
         assert_eq!(forward.weight, backward.weight, "combine commutes");
-        assert_eq!(forward.row_id, backward.row_id, "the lower row id wins");
+        assert_eq!(
+            forward.data.handles(),
+            backward.data.handles(),
+            "the lower row id wins"
+        );
         assert_eq!(forward.weight[0], 3);
     }
 
@@ -5069,8 +5293,7 @@ mod tests {
     }
 
     /// The columns read back as the tuples they were pushed as, in insertion
-    /// order, by position and by iteration, and draining the tail returns them
-    /// in that order and leaves it empty.
+    /// order, by position and by iteration; clearing the columns leaves it empty.
     #[test]
     fn tail_columns_round_trip_rows_in_insertion_order() {
         let mut rng = purrdf_testkit::rng::SplitMix64::new(0xC011);
@@ -5079,7 +5302,7 @@ mod tests {
             let by_position: Vec<_> = (0..tail.len()).map(|i| tail.row(i)).collect();
             assert_eq!(by_position, rows);
             assert_eq!(tail.iter().collect::<Vec<_>>(), rows);
-            assert_eq!(tail.take_rows(), rows);
+            tail.data.clear();
             assert!(tail.is_empty());
             assert_eq!(tail.len(), 0);
             assert_eq!(tail.iter().count(), 0);

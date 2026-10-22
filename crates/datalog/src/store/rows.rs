@@ -9,6 +9,9 @@ use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident};
 
 type Row<I> = (RowId, PartitionId, I, I);
 
+/// Row publication coordinates and their independently reclaimable physical cells.
+/// Unlike lexical ownership, this log also retains native partition locations
+/// and supplemental storage debt; its watermark is the next original row ID.
 #[derive(Debug)]
 pub(super) enum RowLog<I: TermIdentity> {
     Dense(Vec<LoggedRow<I>>),

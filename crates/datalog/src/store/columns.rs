@@ -127,13 +127,30 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
         crate::allocation::reserve_array_growth(&mut self.rows, required, memory, retired)
     }
 
+    pub(crate) fn reserve_capacity_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        for column in &mut self.columns {
+            crate::allocation::reserve_array_in(column, memory, retired, |values, memory| {
+                memory.reserve(values, required)
+            })?;
+        }
+        crate::allocation::reserve_array_in(&mut self.rows, memory, retired, |values, memory| {
+            memory.reserve(values, required)
+        })
+    }
+
     pub(crate) fn copy_in<A: Admission + ?Sized>(
         &self,
+        minimum_capacity: usize,
         memory: &mut Memory<'_, A>,
     ) -> Result<Self, StorageError> {
         memory.scope(|memory| {
             let mut copied = Self::default();
-            copied.reserve_rows_in(self.len(), memory, &mut 0)?;
+            copied.reserve_capacity_in(minimum_capacity.max(self.len()), memory, &mut 0)?;
             for (to, from) in copied.columns.iter_mut().zip(&self.columns) {
                 to.extend_from_slice(from);
             }
