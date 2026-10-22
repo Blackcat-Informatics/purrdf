@@ -11,6 +11,17 @@ use std::fmt;
 pub enum ColumnarError {
     /// Logical capacity or physical storage refused RDF reconstruction.
     Storage(purrdf_lex::allocation::StorageError),
+    /// Original content-store integrity refusal during projection.
+    ContentStore(purrdf_core::ContentStoreError),
+    /// Original blob integrity refusal at its decoded row.
+    BlobContent {
+        /// Zero-based blob table row.
+        row: usize,
+        /// The original content-store cause, including both digest identities.
+        cause: purrdf_core::ContentStoreError,
+    },
+    /// Original reconstruction diagnostic, retaining its native attachments.
+    Reconstruction(purrdf_core::RdfDiagnostic),
     /// Input ended before a required byte range was available.
     Truncated {
         /// Structure being decoded.
@@ -48,6 +59,11 @@ pub enum ColumnarError {
 impl purrdf_hash::error::StructuredError for ColumnarError {
     purrdf_hash::error_visit! {
         Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
+        ContentStore(cause) => "columnar-content-store" { "cause" => Cause(cause) },
+        BlobContent { row, cause } => "columnar-blob-content" {
+            "row" => Unsigned(*row as u128), "cause" => Cause(cause),
+        },
+        Reconstruction(cause) => "columnar-reconstruction" { "cause" => Cause(cause) },
         Truncated { context, needed, available } => "columnar-truncated" {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
@@ -85,9 +101,23 @@ impl ColumnarError {
 }
 
 impl fmt::Display for ColumnarError {
+    /// Render the established human prefix from the retained native cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "columnar storage: {error}"),
+            Self::ContentStore(cause) => {
+                write!(f, "columnar content store is malformed: {cause}")
+            }
+            Self::BlobContent { row, cause } => {
+                write!(f, "columnar blobs.bytes is malformed: row {row}: {cause}")
+            }
+            Self::Reconstruction(cause) => {
+                if let Some(storage) = cause.storage_error() {
+                    write!(f, "columnar storage: {storage}")
+                } else {
+                    write!(f, "columnar RDF reconstruction is malformed: {cause}")
+                }
+            }
             Self::Truncated {
                 context,
                 needed,
@@ -114,7 +144,12 @@ impl fmt::Display for ColumnarError {
     }
 }
 
-purrdf_lex::error_source!(ColumnarError { Storage });
+purrdf_lex::error_source!(ColumnarError => {
+    Self::Storage(cause) => cause,
+    Self::ContentStore(cause) => cause,
+    Self::BlobContent { cause, .. } => cause,
+    Self::Reconstruction(cause) => cause,
+});
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });
 

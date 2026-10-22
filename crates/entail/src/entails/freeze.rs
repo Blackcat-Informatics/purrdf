@@ -516,6 +516,8 @@ impl std::fmt::Display for Generalization {
 /// [`Self::binding`] is the ordinary homomorphism that discharged the residual triples and
 /// [`Self::generalizations`] is one generalisation per axiom; every conclusion triple is
 /// discharged by exactly one of the two.
+/// Verification binds the original asserted default-graph term values, independently of
+/// dataset-local IDs and insertion order; a replacement premise cannot reuse the evidence.
 #[derive(Debug, Clone)]
 pub struct FreezeWarrant {
     /// The regime the closures were computed under.

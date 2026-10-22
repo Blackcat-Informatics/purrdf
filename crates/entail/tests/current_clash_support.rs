@@ -1130,7 +1130,7 @@ fn signed_refutation_scenarios_preserve_public_warrants_and_source_binding() {
     assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
 }
 
-fn signed_frozen_scenarios_preserve_public_generalization_warrants() {
+fn frozen_warrants_reject_empty_and_weakened_premises() {
     use purrdf_core::TermFactory;
     use purrdf_entail::Regime;
     use purrdf_entail::entails::{
@@ -1211,7 +1211,7 @@ fn signed_frozen_scenarios_preserve_public_generalization_warrants() {
 
 purrdf_testkit::harness_main!(
     signed_refutation_scenarios_preserve_public_warrants_and_source_binding,
-    signed_frozen_scenarios_preserve_public_generalization_warrants,
+    frozen_warrants_reject_empty_and_weakened_premises,
     public_dataset_views_preserve_source_identity_and_causal_verification,
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,

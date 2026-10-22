@@ -13,6 +13,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 ## 投影失败
 
+原生完整性错误通过 `ColumnarError::ContentStore` 或 `BlobContent { row, cause }` 保留原始 `ContentStoreError`，其中行号从零开始。结构化错误协议直接借用两个 SHA-256 摘要的原始字节。`Reconstruction` 保留完整的原始 `RdfDiagnostic`，包括存储错误和原生原因附件。标准错误链直接借用这些原因；传递时不格式化、克隆或分配替代原因。既有的人类可读消息前缀和冻结字节保持不变。
+
 `project` 和 `write` 返回 `ColumnarWriteError<D::ReadError>`。`SourceRead` 变体按值保留原始 `DatasetView` 错误，`Codec` 变体保留原有的 `ColumnarError`。传递源错误时不会格式化或克隆它，标准错误链直接借用原始原因。源错误实现结构化错误协议时，检查会报告其原始嵌套字段。`read` 和已准备投影的 `to_parquet` 仍返回 `ColumnarError`。
 
 ## 表
