@@ -15,6 +15,9 @@ use super::{
     StopSignal, TermDictionary, TermIdentity, check_budget, commit, is_stopped, probe,
 };
 use crate::{
+    allocation::{
+        flush_retired_bytes, record_factory_retirement, reserve_array_in, reserve_index_in,
+    },
     dictionary::{DictionaryError, DictionaryTerm, ReclaimDictionary},
     id::RowId,
     maintenance::{ChangeApplyError, ChangeBatch, ChangeSource},
@@ -94,83 +97,6 @@ impl<I: Copy + std::hash::Hash + Eq> RowSet<I> {
     fn scan_work(&self) -> usize {
         self.retained
     }
-}
-
-fn reserve_index_in<K: Eq + std::hash::Hash, V, A: Admission + ?Sized>(
-    map: &mut FastMap<K, V>,
-    retained: &mut usize,
-    additional: usize,
-    memory: &mut Memory<'_, A>,
-    retired: &mut usize,
-) -> Result<(), StorageError> {
-    let required = map
-        .len()
-        .checked_add(additional)
-        .ok_or(StorageError::SizeOverflow)?;
-    if required <= map.capacity() {
-        return Ok(());
-    }
-    let before = memory.admitted_bytes();
-    let old = *retained;
-    let result =
-        purrdf_core::hash::reserve_map_with_retained_memory(map, retained, required, memory);
-    if result.is_err() {
-        record_factory_retirement(retired, before, old, *retained, memory.admitted_bytes());
-    }
-    result
-}
-
-/// Native factories already admit their replacement before allocation. If the
-/// old allocation dies but its shrink refuses, retain that still-held charge;
-/// this bookkeeping admits no payload after construction and clones no grant.
-fn record_factory_retirement(
-    retired: &mut usize,
-    before: usize,
-    old: usize,
-    new: usize,
-    after: usize,
-) {
-    let retained = before
-        .checked_sub(old)
-        .and_then(|bytes| bytes.checked_add(new))
-        .expect("a native factory retains its original protected layout");
-    let released = after
-        .checked_sub(retained)
-        .expect("a native factory never releases a surviving layout");
-    *retired = retired
-        .checked_add(released)
-        .expect("outstanding released layouts fit their original grant");
-}
-
-pub(super) fn reserve_array_in<T, A: Admission + ?Sized>(
-    values: &mut Vec<T>,
-    memory: &mut Memory<'_, A>,
-    retired: &mut usize,
-    reserve: impl FnOnce(&mut Vec<T>, &mut Memory<'_, A>) -> Result<(), StorageError>,
-) -> Result<(), StorageError> {
-    let before = memory.admitted_bytes();
-    let old = values
-        .capacity()
-        .checked_mul(size_of::<T>())
-        .expect("an original valid array layout");
-    let result = reserve(values, memory);
-    if result.is_err() {
-        let new = values
-            .capacity()
-            .checked_mul(size_of::<T>())
-            .expect("a native valid array layout");
-        record_factory_retirement(retired, before, old, new, memory.admitted_bytes());
-    }
-    result
-}
-
-fn flush_retired_bytes<A: Admission + ?Sized>(
-    bytes: &mut usize,
-    memory: &mut Memory<'_, A>,
-) -> Result<(), StorageError> {
-    memory.release_bytes(*bytes)?;
-    *bytes = 0;
-    Ok(())
 }
 
 impl<'a, I> IntoIterator for &'a RowSet<I> {
@@ -864,6 +790,11 @@ where
         let impacts = storage
             .with_memory(|memory| Impacts::new_in(exe.rules(), memory))
             .map_err(EvalError::Storage)?;
+        let mut edb = edb;
+        let before_store = storage.live();
+        storage
+            .with_memory(|memory| edb.admit_native_metadata_in(memory))
+            .map_err(native_error)?;
         let mut session = EvaluationSession::new(
             exe,
             edb,
@@ -871,12 +802,9 @@ where
             context,
             options.with_derivation_mode(super::DerivationMode::ModelOnly),
         )?;
-        session
-            .state
-            .as_mut()
-            .expect("new session owns its seed")
-            .native
-            .get_or_insert_with(Supports::default);
+        let state = session.state.as_mut().expect("new session owns its seed");
+        state.account_native_memory(before_store, storage.live());
+        state.native.get_or_insert_with(Supports::default);
         Ok(Self {
             session,
             weights,
@@ -1520,19 +1448,18 @@ where
                     .state
                     .as_mut()
                     .expect("initial state remains owned");
-                let preparation = state
-                    .rel
-                    .prepare_maintenance_indexes()
-                    .map_err(native_error)
-                    .and_then(|()| {
-                        let before = self.storage.live();
-                        let result = self.storage.with_memory(|memory| {
+                let before = self.storage.live();
+                let preparation = self.storage.with_memory(|memory| {
+                    state
+                        .rel
+                        .prepare_maintenance_indexes_in(memory)
+                        .map_err(native_error)
+                        .and_then(|()| {
                             self.initial_reclaim
                                 .resume(state, &[], memory, |_| !is_stopped(stop))
-                        });
-                        state.account_native_memory(before, self.storage.live());
-                        result
-                    });
+                        })
+                });
+                state.account_native_memory(before, self.storage.live());
                 if matches!(preparation, Ok(false)) {
                     return Ok(ResumeProgress::Paused(EvalError::Stopped {
                         report: state.report(),
@@ -1749,6 +1676,10 @@ where
         .flush_retired(memory)
         .map_err(EvalError::Storage)?;
     flush_retired_bytes(&mut pending.retired_bytes, memory).map_err(EvalError::Storage)?;
+    state
+        .rel
+        .flush_metadata_retirement_in(memory)
+        .map_err(EvalError::Storage)?;
     if pending.phase == MutationPhase::Complete {
         state
             .rel
@@ -1928,7 +1859,7 @@ where
                 );
                 state
                     .rel
-                    .insert_ids(terms)
+                    .insert_terms_in(terms.map(DictionaryTerm::Id), memory)
                     .map_err(native_error)?
                     .expect("absent input inserts")
                     .2
@@ -2198,22 +2129,21 @@ where
         pending.tasks.is_empty(),
         "settled native work has no queued task"
     );
-    let tasks = std::mem::take(&mut pending.tasks);
-    let bytes = tasks.storage_bytes().map_err(EvalError::Storage)?;
-    drop(tasks);
-    pending.retired_bytes = pending
-        .retired_bytes
-        .checked_add(bytes)
-        .expect("retired task arenas fit their original grant");
-    flush_retired_bytes(&mut pending.retired_bytes, memory).map_err(EvalError::Storage)?;
+    let task_bytes = pending.tasks.storage_bytes().map_err(EvalError::Storage)?;
     state
         .rel
         .interner()
         .check_read()
         .map_err(EvalError::Source)?;
     // Every native result and source check is complete. Keep this state across
-    // a refused release so readers and retries never need the retired labels.
+    // every final release so retries cannot clear or charge membership twice.
     pending.phase = MutationPhase::Complete;
+    let tasks = std::mem::take(&mut pending.tasks);
+    drop(tasks);
+    pending.retired_bytes = pending
+        .retired_bytes
+        .checked_add(task_bytes)
+        .expect("retired task arenas fit their original grant");
     let changes = std::mem::take(&mut pending.changes);
     let delete = std::mem::take(&mut pending.delete);
     let altered = std::mem::take(&mut pending.altered);
@@ -2233,6 +2163,10 @@ where
         .checked_add(bytes)
         .expect("settled retirement fits its original grant");
     flush_retired_bytes(&mut pending.retired_bytes, memory).map_err(EvalError::Storage)?;
+    state
+        .rel
+        .flush_metadata_retirement_in(memory)
+        .map_err(EvalError::Storage)?;
     Ok(true)
 }
 

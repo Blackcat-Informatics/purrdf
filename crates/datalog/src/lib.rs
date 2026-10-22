@@ -291,6 +291,7 @@
 // caller.
 pub use purrdf_core::binding_pattern;
 pub mod admission;
+mod allocation;
 pub mod cache;
 pub mod chase;
 pub mod clause;

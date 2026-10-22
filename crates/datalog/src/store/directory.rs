@@ -7,13 +7,36 @@ use super::{
     Arity, DictionaryError, DictionaryTerm, PartitionId, StoreKey, StoreShape, TermDictionary,
     TermIdentity,
 };
+use crate::allocation::{flush_retired_bytes, reserve_index_in, reserve_ordered_in};
 use purrdf_core::FastMap;
 use purrdf_lex::allocation::{
-    Memory, OrderedEntry, OrderedSlot, OrderedTable, Resident, StorageError,
+    Admission, Memory, OrderedEntry, OrderedSlot, OrderedTable, Resident, StorageError,
 };
 use std::cmp::Ordering;
 
 type Ordered<K> = OrderedTable<K, (PartitionId, usize)>;
+
+#[derive(Debug, Default)]
+pub(super) struct SupplementalBytes {
+    predicates: usize,
+    locations: usize,
+    retired: usize,
+}
+
+#[derive(Debug)]
+pub(super) struct Preparation<I: TermIdentity, K: Copy> {
+    pub(super) directory: Directory<I, K>,
+    pub(super) next: usize,
+}
+
+impl<I: TermIdentity, K: Copy> Default for Preparation<I, K> {
+    fn default() -> Self {
+        Self {
+            directory: Directory::sparse(true),
+            next: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Located {
@@ -34,6 +57,7 @@ pub(super) enum Directory<I: TermIdentity, K: Copy> {
         locations: FastMap<PartitionId, Located>,
         spare: Ordered<K>,
         bytes: usize,
+        admitted: Option<SupplementalBytes>,
     },
 }
 
@@ -84,6 +108,7 @@ impl<I: TermIdentity, K: Copy> Clone for Directory<I, K> {
                     locations: locations.clone(),
                     spare,
                     bytes: memory.admitted_bytes(),
+                    admitted: None,
                 }
             }
         }
@@ -205,6 +230,10 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
         &mut self,
         predicate: Option<I>,
     ) -> Result<Option<Vec<usize>>, StorageError> {
+        assert!(
+            !self.is_supplemental(),
+            "supplemental directory growth lends its original memory"
+        );
         let mut bucket = None;
         match self {
             Self::Dense { order, predicates } => {
@@ -240,6 +269,69 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
             }
         }
         Ok(bucket)
+    }
+
+    pub(super) const fn is_supplemental(&self) -> bool {
+        matches!(
+            self,
+            Self::Sparse {
+                admitted: Some(_),
+                ..
+            }
+        )
+    }
+
+    pub(super) fn flush_retired_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if let Self::Sparse {
+            admitted: Some(admitted),
+            ..
+        } = self
+        {
+            flush_retired_bytes(&mut admitted.retired, memory)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn admit_in<A: Admission + ?Sized>(
+        &mut self,
+        predicate: Option<I>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Option<Vec<usize>>, StorageError> {
+        let Self::Sparse {
+            order,
+            predicates,
+            locations,
+            spare,
+            admitted: Some(admitted),
+            ..
+        } = self
+        else {
+            return self.admit(predicate);
+        };
+        flush_retired_bytes(&mut admitted.retired, memory)?;
+        reserve_index_in(
+            predicates,
+            &mut admitted.predicates,
+            1,
+            memory,
+            &mut admitted.retired,
+        )?;
+        reserve_index_in(
+            locations,
+            &mut admitted.locations,
+            1,
+            memory,
+            &mut admitted.retired,
+        )?;
+        reserve_ordered_in(order, memory, &mut admitted.retired)?;
+        let tree = predicate
+            .and_then(|id| predicates.get_mut(&id))
+            .unwrap_or(spare);
+        reserve_ordered_in(tree, memory, &mut admitted.retired)?;
+        Ok(None)
     }
 
     pub(super) fn publish(
@@ -320,6 +412,7 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
             locations,
             spare,
             bytes,
+            admitted,
         } = self
         else {
             panic!("only maintained directories retire keys");
@@ -351,12 +444,23 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
             // Keep one reusable arena owned by the directory. Retiring another
             // empty arena destroys its payload before returning its exact grant.
             let retired = core::mem::replace(spare, tree);
-            let mut resident = Resident;
-            let mut memory = Memory::resume(&mut resident, *bytes);
-            retired
-                .release(&mut memory)
-                .expect("releasing original directory storage");
-            *bytes = memory.admitted_bytes();
+            if let Some(admitted) = admitted {
+                let released = retired
+                    .storage_bytes()
+                    .expect("the original directory arena layout");
+                drop(retired);
+                admitted.retired = admitted
+                    .retired
+                    .checked_add(released)
+                    .expect("retired directory storage fits its original grant");
+            } else {
+                let mut resident = Resident;
+                let mut memory = Memory::resume(&mut resident, *bytes);
+                retired
+                    .release(&mut memory)
+                    .expect("releasing original directory storage");
+                *bytes = memory.admitted_bytes();
+            }
         }
         slot
     }
@@ -368,24 +472,57 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
     where
         Arity<N>: StoreShape<N, Key<I> = K>,
     {
-        let mut directory = Self::Sparse {
+        Self::from_live_with::<D, N, _>(dictionary, entries, &mut Memory::new(&mut Resident), false)
+    }
+
+    fn from_live_with<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
+        dictionary: &D,
+        entries: impl IntoIterator<Item = (usize, PartitionId, StoreKey<I, N>)>,
+        memory: &mut Memory<'_, A>,
+        supplemental: bool,
+    ) -> Result<Self, DictionaryError<D::Error>>
+    where
+        Arity<N>: StoreShape<N, Key<I> = K>,
+    {
+        memory.try_scope(|memory| {
+            let mut directory = Self::sparse(supplemental);
+            for entry in entries {
+                directory.insert_live_in::<D, N, A>(dictionary, entry, memory)?;
+            }
+            dictionary.check_read().map_err(DictionaryError::Source)?;
+            Ok(directory)
+        })
+    }
+
+    fn sparse(supplemental: bool) -> Self {
+        Self::Sparse {
             order: OrderedTable::default(),
             predicates: FastMap::default(),
             locations: FastMap::default(),
             spare: OrderedTable::default(),
             bytes: 0,
-        };
-        for (slot, id, key) in entries {
-            let predicate = Arity::<N>::key_term(key, 0);
-            directory.admit(Some(predicate))?;
-            let prepared = directory.prepare_sparse::<D, N>(dictionary, key)?;
-            let position = prepared.publish(id, slot);
-            directory.publish(slot, id, predicate, position, None, |_| {
-                unreachable!("sparse publication reads its retained key")
-            });
+            admitted: supplemental.then(SupplementalBytes::default),
         }
-        dictionary.check_read().map_err(DictionaryError::Source)?;
-        Ok(directory)
+    }
+
+    pub(super) fn insert_live_in<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
+        &mut self,
+        dictionary: &D,
+        entry: (usize, PartitionId, StoreKey<I, N>),
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), DictionaryError<D::Error>>
+    where
+        Arity<N>: StoreShape<N, Key<I> = K>,
+    {
+        let (slot, id, key) = entry;
+        let predicate = Arity::<N>::key_term(key, 0);
+        self.admit_in(Some(predicate), memory)?;
+        let prepared = self.prepare_sparse_in::<D, N, A>(dictionary, key, memory)?;
+        let position = prepared.publish(id, slot);
+        self.publish(slot, id, predicate, position, None, |_| {
+            unreachable!("sparse publication reads its retained key")
+        });
+        Ok(())
     }
 
     pub(super) fn prepare_sparse<D: TermDictionary<Id = I>, const N: usize>(
@@ -396,11 +533,56 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
     where
         Arity<N>: StoreShape<N, Key<I> = K>,
     {
+        assert!(
+            !self.is_supplemental(),
+            "supplemental preparation lends its original memory"
+        );
+        let Self::Sparse { bytes, .. } = self else {
+            panic!("original sparse directory")
+        };
+        let bytes = *bytes;
+        self.prepare_sparse_with::<D, N, _>(
+            dictionary,
+            key,
+            &mut Memory::resume(&mut Resident, bytes),
+        )
+    }
+
+    pub(super) fn prepare_sparse_in<
+        D: TermDictionary<Id = I>,
+        const N: usize,
+        A: Admission + ?Sized,
+    >(
+        &mut self,
+        dictionary: &D,
+        key: K,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Prepared<'_, K>, DictionaryError<D::Error>>
+    where
+        Arity<N>: StoreShape<N, Key<I> = K>,
+    {
+        if self.is_supplemental() {
+            self.prepare_sparse_with::<D, N, A>(dictionary, key, memory)
+        } else {
+            self.prepare_sparse::<D, N>(dictionary, key)
+        }
+    }
+
+    fn prepare_sparse_with<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
+        &mut self,
+        dictionary: &D,
+        key: K,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Prepared<'_, K>, DictionaryError<D::Error>>
+    where
+        Arity<N>: StoreShape<N, Key<I> = K>,
+    {
         let Self::Sparse {
             order,
             predicates,
             spare,
             bytes,
+            admitted,
             ..
         } = self
         else {
@@ -436,13 +618,28 @@ impl<I: TermIdentity, K: Copy> Directory<I, K> {
             }
             Ok(Ordering::Equal)
         };
-        let mut resident = Resident;
-        let mut memory = Memory::resume(&mut resident, *bytes);
-        let order = order.prepare_insert(key, &mut memory, &mut compare);
-        *bytes = memory.admitted_bytes();
+        let before = memory.admitted_bytes();
+        let order = order.prepare_insert(key, memory, &mut compare);
+        if admitted.is_none() {
+            *bytes = memory.admitted_bytes();
+        } else {
+            assert_eq!(
+                memory.admitted_bytes(),
+                before,
+                "directory preparation was pre-admitted"
+            );
+        }
         let order = order?;
-        let predicate = tree.prepare_insert(key, &mut memory, &mut compare);
-        *bytes = memory.admitted_bytes();
+        let predicate = tree.prepare_insert(key, memory, &mut compare);
+        if admitted.is_none() {
+            *bytes = memory.admitted_bytes();
+        } else {
+            assert_eq!(
+                memory.admitted_bytes(),
+                before,
+                "predicate preparation was pre-admitted"
+            );
+        }
         let predicate = predicate?;
         assert!(
             !order.is_occupied() && !predicate.is_occupied(),

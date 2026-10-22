@@ -4,7 +4,8 @@
 //! Append coordinates remain logical u64 identities after vacant metadata is reclaimed.
 
 use super::{LoggedRow, PartitionId, RowId, StorageError, TermIdentity};
-use purrdf_lex::allocation::{Memory, OrderedTable, Resident};
+use crate::allocation::{flush_retired_bytes, reserve_ordered_in};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident};
 
 type Row<I> = (RowId, PartitionId, I, I);
 
@@ -14,6 +15,8 @@ pub(super) enum RowLog<I: TermIdentity> {
     Sparse {
         live: OrderedTable<u64, Row<I>>,
         next: u64,
+        supplemental: bool,
+        retired_bytes: usize,
     },
 }
 
@@ -21,11 +24,13 @@ impl<I: TermIdentity> Clone for RowLog<I> {
     fn clone(&self) -> Self {
         match self {
             Self::Dense(rows) => Self::Dense(rows.clone()),
-            Self::Sparse { live, next } => Self::Sparse {
+            Self::Sparse { live, next, .. } => Self::Sparse {
                 live: live
                     .try_clone(&mut Memory::new(&mut Resident))
                     .expect("cloning resident row metadata requires physical storage"),
                 next: *next,
+                supplemental: false,
+                retired_bytes: 0,
             },
         }
     }
@@ -35,9 +40,14 @@ impl<I: TermIdentity> PartialEq for RowLog<I> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Dense(a), Self::Dense(b)) => a == b,
-            (Self::Sparse { live: a, next: an }, Self::Sparse { live: b, next: bn }) => {
-                an == bn && a.ordered().eq(b.ordered())
-            }
+            (
+                Self::Sparse {
+                    live: a, next: an, ..
+                },
+                Self::Sparse {
+                    live: b, next: bn, ..
+                },
+            ) => an == bn && a.ordered().eq(b.ordered()),
             _ => false,
         }
     }
@@ -70,6 +80,10 @@ impl<I: TermIdentity> RowLog<I> {
     }
 
     pub(super) fn reserve(&mut self) -> Result<(), StorageError> {
+        assert!(
+            !self.is_supplemental(),
+            "supplemental row growth retains its original memory"
+        );
         match self {
             Self::Dense(rows) => rows
                 .try_reserve(1)
@@ -81,24 +95,71 @@ impl<I: TermIdentity> RowLog<I> {
         }
     }
 
+    pub(super) const fn is_supplemental(&self) -> bool {
+        matches!(
+            self,
+            Self::Sparse {
+                supplemental: true,
+                ..
+            }
+        )
+    }
+
+    pub(super) fn reserve_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        let Self::Sparse {
+            live,
+            supplemental: true,
+            retired_bytes,
+            ..
+        } = self
+        else {
+            return self.reserve();
+        };
+        flush_retired_bytes(retired_bytes, memory)?;
+        reserve_ordered_in(live, memory, retired_bytes)
+    }
+
+    /// Build new metadata under the supplied owner; existing buffers keep theirs.
+    pub(super) fn copy_sparse_in<A: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(|memory| {
+            let mut live = OrderedTable::default();
+            for row in self.from(0) {
+                assert!(live.insert(row.0.index(), row, memory)?.is_none());
+            }
+            Ok(Self::Sparse {
+                live,
+                next: self.next(),
+                supplemental: true,
+                retired_bytes: 0,
+            })
+        })
+    }
+
     /// One-time construction changes metadata layout, never arrangements or identities.
     pub(super) fn prepare_sparse(&self) -> Result<Option<Self>, StorageError> {
         if self.is_sparse() {
             return Ok(None);
         }
-        let mut live = OrderedTable::default();
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        for row in self.from(0) {
-            assert!(live.insert(row.0.index(), row, &mut memory)?.is_none());
+        let mut rows = self.copy_sparse_in(&mut memory)?;
+        if let Self::Sparse { supplemental, .. } = &mut rows {
+            *supplemental = false;
         }
-        Ok(Some(Self::Sparse {
-            live,
-            next: self.next(),
-        }))
+        Ok(Some(rows))
     }
 
-    pub(super) fn append(&mut self, row: Row<I>) {
+    pub(super) fn append_in<A: Admission + ?Sized>(
+        &mut self,
+        row: Row<I>,
+        memory: &mut Memory<'_, A>,
+    ) {
         assert_eq!(
             row.0.index(),
             self.next(),
@@ -106,8 +167,13 @@ impl<I: TermIdentity> RowLog<I> {
         );
         match self {
             Self::Dense(rows) => rows.push((Some(row.0), row.1, row.2, row.3)),
-            Self::Sparse { live, next, .. } => {
-                publish_live(live, row);
+            Self::Sparse {
+                live,
+                next,
+                supplemental,
+                ..
+            } => {
+                publish_live(live, row, *supplemental, memory);
                 *next += 1; // The preceding checked RowId mint refuses u64::MAX.
             }
         }
@@ -139,12 +205,18 @@ impl<I: TermIdentity> RowLog<I> {
         }
     }
 
-    pub(super) fn restore(&mut self, row: Row<I>) {
+    pub(super) fn restore_in<A: Admission + ?Sized>(
+        &mut self,
+        row: Row<I>,
+        memory: &mut Memory<'_, A>,
+    ) {
         self.check_restore(row);
         match self {
             Self::Dense(rows) => rows[row.0.resident_index()].0 = Some(row.0),
-            Self::Sparse { live, .. } => {
-                publish_live(live, row);
+            Self::Sparse {
+                live, supplemental, ..
+            } => {
+                publish_live(live, row, *supplemental, memory);
             }
         }
     }
@@ -172,18 +244,33 @@ impl<I: TermIdentity> RowLog<I> {
     }
 }
 
-fn publish_live<I: TermIdentity>(live: &mut OrderedTable<u64, Row<I>>, row: Row<I>) {
+fn publish_live<I: TermIdentity, A: Admission + ?Sized>(
+    live: &mut OrderedTable<u64, Row<I>>,
+    row: Row<I>,
+    supplemental: bool,
+    memory: &mut Memory<'_, A>,
+) {
     let bytes = live
         .storage_bytes()
         .expect("the admitted row arena has a valid layout");
-    assert!(
+    let inserted = if supplemental {
+        live.insert(row.0.index(), row, memory)
+    } else {
         live.insert(
             row.0.index(),
             row,
-            &mut Memory::resume(&mut Resident, bytes)
+            &mut Memory::resume(&mut Resident, bytes),
         )
-        .expect("row storage was physically reserved before publication")
-        .is_none()
+    };
+    assert!(
+        inserted
+            .expect("row storage was physically reserved before publication")
+            .is_none()
+    );
+    assert_eq!(
+        live.storage_bytes().expect("published row arena layout"),
+        bytes,
+        "publication cannot grow its admitted row arena"
     );
 }
 
@@ -201,6 +288,227 @@ mod tests {
     };
     use purrdf_hash::hex::Digest32;
     use purrdf_lex::allocation::Resident;
+
+    #[test]
+    fn supplemental_native_metadata_factories_preserve_original_publication_and_clones() {
+        use crate::dictionary::{DictionaryError, DictionaryTerm};
+        use std::cell::Cell;
+
+        struct Grant<'a> {
+            live: &'a Cell<usize>,
+            maximum: usize,
+            refuse_shrink: bool,
+            requested: usize,
+        }
+        impl Admission for Grant<'_> {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.maximum {
+                    self.requested = bytes;
+                    return Err(StorageError::AdmissionFailed);
+                }
+                if self.refuse_shrink && bytes < self.live.get() {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live.set(bytes);
+                Ok(())
+            }
+        }
+        let live = Cell::new(0);
+        let mut grant = Grant {
+            live: &live,
+            maximum: usize::MAX,
+            refuse_shrink: false,
+            requested: 0,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let mut input = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for subject in ["a", "b", "c"] {
+            input.insert_row([subject, "in", "o"]).unwrap();
+        }
+        let original = input.rows_from(0).collect::<Vec<_>>();
+        input.admit_native_metadata_in(&mut memory).unwrap();
+        assert!(input.row_log.is_supplemental());
+        assert_eq!(input.rows_from(0).collect::<Vec<_>>(), original);
+        assert!(live.get() > 0);
+        assert_eq!(live.get(), memory.admitted_bytes());
+        let held = live.get();
+        let RowLog::Sparse { live: rows, .. } = &input.row_log else {
+            panic!("native row arena")
+        };
+        let row_bytes = rows.storage_bytes().unwrap();
+        assert!(held > row_bytes && input.lookup_supplemental);
+        memory.admission_mut().maximum = held;
+        let mut independent = input.clone();
+        assert!(!independent.row_log.is_supplemental());
+        assert!(!independent.lookup_supplemental);
+        independent.insert_row(["independent", "in", "o"]).unwrap();
+        assert_eq!(
+            live.get(),
+            held,
+            "clones construct their own resident metadata"
+        );
+        drop(independent);
+        input
+            .insert_terms_in(["d", "in", "o"].map(DictionaryTerm::Surface), &mut memory)
+            .unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                input.insert_terms_in(
+                    ["fresh", "in", "o"].map(DictionaryTerm::Surface),
+                    &mut memory
+                ),
+                Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+            ));
+            assert_eq!(input.row_count(), 4);
+            assert_eq!(input.term_id("fresh"), None);
+            assert_eq!(memory.admitted_bytes(), held);
+            assert_eq!(live.get(), held);
+        }
+        memory.admission_mut().maximum = usize::MAX;
+        memory.admission_mut().refuse_shrink = true;
+        assert!(matches!(
+            input.insert_terms_in(
+                ["fresh", "in", "o"].map(DictionaryTerm::Surface),
+                &mut memory
+            ),
+            Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+        ));
+        let protected = live.get();
+        assert!(protected > held);
+        let RowLog::Sparse { retired_bytes, .. } = &input.row_log else {
+            panic!("original sparse owner")
+        };
+        assert_eq!(*retired_bytes, row_bytes);
+        assert!(matches!(
+            input.insert_terms_in(
+                ["fresh", "in", "o"].map(DictionaryTerm::Surface),
+                &mut memory
+            ),
+            Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(live.get(), protected);
+        assert_eq!(input.row_count(), 4);
+        assert_eq!(input.term_id("fresh"), None);
+        memory.admission_mut().refuse_shrink = false;
+        input
+            .insert_terms_in(
+                ["fresh", "in", "o"].map(DictionaryTerm::Surface),
+                &mut memory,
+            )
+            .unwrap();
+        assert_eq!(live.get(), protected - row_bytes);
+        assert_eq!(memory.admitted_bytes(), live.get());
+        assert_eq!(input.rows_from(0).take(3).collect::<Vec<_>>(), original);
+        assert_eq!(input.rows_from(0).last().unwrap().0.index(), 4);
+        let lookup_bytes = input.by_key.storage_bytes().unwrap();
+        let held = live.get();
+        memory.admission_mut().maximum = held;
+        for _ in 0..2 {
+            assert!(matches!(
+                input.insert_terms_in(
+                    ["fresh", "other", "o"].map(DictionaryTerm::Surface),
+                    &mut memory
+                ),
+                Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+            ));
+            assert_eq!(input.row_count(), 5);
+            assert_eq!(input.term_id("other"), None);
+            assert_eq!(live.get(), held);
+        }
+        memory.admission_mut().maximum = usize::MAX;
+        memory.admission_mut().refuse_shrink = true;
+        assert!(matches!(
+            input.insert_terms_in(
+                ["fresh", "other", "o"].map(DictionaryTerm::Surface),
+                &mut memory
+            ),
+            Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(input.lookup_retired_bytes, lookup_bytes);
+        let protected = live.get();
+        assert!(matches!(
+            input.insert_terms_in(
+                ["fresh", "other", "o"].map(DictionaryTerm::Surface),
+                &mut memory
+            ),
+            Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(live.get(), protected);
+        assert_eq!(input.row_count(), 5);
+        assert_eq!(input.term_id("other"), None);
+        memory.admission_mut().refuse_shrink = false;
+        input
+            .insert_terms_in(
+                ["fresh", "other", "o"].map(DictionaryTerm::Surface),
+                &mut memory,
+            )
+            .unwrap();
+        assert_eq!(live.get(), protected - lookup_bytes);
+        assert_eq!(input.lookup_retired_bytes, 0);
+        assert_eq!(input.rows_from(0).last().unwrap().0.index(), 5);
+        input.prepare_maintenance_indexes_in(&mut memory).unwrap();
+        assert!(input.order.is_supplemental());
+        let lookup_bytes = input.by_key.storage_bytes().unwrap();
+        memory.admission_mut().maximum = live.get();
+        let mut directory_refused = false;
+        loop {
+            match input.insert_terms_in(
+                ["fresh", "third", "o"].map(DictionaryTerm::Surface),
+                &mut memory,
+            ) {
+                Ok(Some(_)) => break,
+                Err(DictionaryError::Storage(StorageError::AdmissionFailed)) => {
+                    directory_refused |= input.by_key.storage_bytes().unwrap() > lookup_bytes;
+                    assert_eq!(input.row_count(), 6);
+                    assert_eq!(input.term_id("third"), None);
+                    let held = live.get();
+                    assert!(matches!(
+                        input.insert_terms_in(
+                            ["fresh", "third", "o"].map(DictionaryTerm::Surface),
+                            &mut memory
+                        ),
+                        Err(DictionaryError::Storage(StorageError::AdmissionFailed))
+                    ));
+                    assert_eq!(live.get(), held);
+                    assert_eq!(memory.admitted_bytes(), held);
+                    let requested = memory.admission_mut().requested;
+                    assert!(requested > memory.admission_mut().maximum);
+                    memory.admission_mut().maximum = requested;
+                }
+                other => panic!("unexpected original directory admission: {other:?}"),
+            }
+        }
+        assert!(
+            directory_refused,
+            "directory factories refuse after original lookup growth"
+        );
+        assert_eq!(input.rows_from(0).last().unwrap().0.index(), 6);
+        memory.admission_mut().maximum = usize::MAX;
+        memory.admission_mut().refuse_shrink = true;
+        for predicate in ["third", "other"] {
+            let ids = ["fresh", predicate, "o"].map(|surface| input.term_id(surface).unwrap());
+            input.remove_ids(ids).unwrap().unwrap();
+            input.retire_empty_partition(ids).unwrap();
+        }
+        let held = live.get();
+        for _ in 0..2 {
+            assert_eq!(
+                input.flush_metadata_retirement_in(&mut memory),
+                Err(StorageError::AdmissionFailed)
+            );
+            assert_eq!(live.get(), held);
+            assert_eq!(memory.admitted_bytes(), held);
+            assert_eq!(input.row_count(), 5);
+        }
+        memory.admission_mut().refuse_shrink = false;
+        input.flush_metadata_retirement_in(&mut memory).unwrap();
+        assert!(live.get() < held);
+        assert_eq!(input.rows_from(0).take(3).collect::<Vec<_>>(), original);
+        let bytes = memory.admitted_bytes();
+        drop(input);
+        memory.release_bytes(bytes).unwrap();
+        assert_eq!(live.get(), 0);
+    }
 
     #[test]
     fn maintained_partition_order_uses_original_integer_keys_without_text() {
@@ -339,8 +647,10 @@ mod tests {
         let token = input.withdraw_ids(ids).unwrap().unwrap();
         assert_eq!(token.id(), original);
         assert_eq!(input.retained_rows(), 2);
-        input.admit_restore(&token).unwrap();
-        input.restore_row(token);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        input.admit_restore_in(&token, &mut memory).unwrap();
+        input.restore_row_in(token, &mut memory);
         assert_eq!(input.rows_from(wide).next().unwrap(), (original, ids));
         assert_eq!(input.row_slots(), wide + 1);
         let atom = |s: &str, p: &str, o: &str| {

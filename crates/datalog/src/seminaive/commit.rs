@@ -102,7 +102,7 @@ where
         retired: &mut usize,
     ) -> Result<PreparationSlot<'r, I, N>, StorageError> {
         let mut slot = Vec::new();
-        super::maintained::reserve_array_in(&mut slot, memory, retired, |slot, memory| {
+        crate::allocation::reserve_array_in(&mut slot, memory, retired, |slot, memory| {
             memory.reserve(slot, 1)
         })?;
         Ok(PreparationSlot(slot))
@@ -156,7 +156,7 @@ where
             if !allow(1) {
                 return Ok(false);
             }
-            super::maintained::reserve_array_in(
+            crate::allocation::reserve_array_in(
                 &mut frame.winners,
                 memory,
                 retired,
@@ -359,7 +359,7 @@ where
             } else if let Some((row, ids)) = restored {
                 state
                     .rel
-                    .admit_restore(
+                    .admit_restore_in(
                         state
                             .native
                             .as_ref()
@@ -367,6 +367,7 @@ where
                             .withdrawn
                             .get(&ids)
                             .expect("the original withdrawal token remains owned"),
+                        memory,
                     )
                     .map_err(|error| match error {
                         DictionaryError::Source(error) => EvalError::Source(error),
@@ -379,12 +380,12 @@ where
                     .withdrawn
                     .remove(&ids)
                     .expect("the admitted original token is moved exactly once");
-                state.rel.restore_row(original);
+                state.rel.restore_row_in(original, memory);
                 row
             } else {
                 state
                     .rel
-                    .insert_terms(terms)
+                    .insert_terms_in(terms, memory)
                     .map_err(|error| match error {
                         DictionaryError::Source(error) => EvalError::Source(error),
                         DictionaryError::Storage(error) => EvalError::Storage(error),

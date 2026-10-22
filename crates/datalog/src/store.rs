@@ -114,7 +114,7 @@ use crate::dictionary::{
     DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row,
 };
 use crate::id::{PartitionId, RowId, TermId};
-use purrdf_lex::allocation::{Memory, OrderedTable, Resident, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
 
 // ── Interners ───────────────────────────────────────────────────────────────────
 
@@ -1476,9 +1476,12 @@ where
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
     by_key: OrderedTable<StoreKey<D::Id, N>, usize>,
+    lookup_supplemental: bool,
+    lookup_retired_bytes: usize,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
     order: Directory<D::Id, StoreKey<D::Id, N>>,
+    directory_preparation: Option<directory::Preparation<D::Id, StoreKey<D::Id, N>>>,
     /// Retired physical slots can be reused without reusing a logical identity.
     free_partitions: Vec<usize>,
     next_partition: u64,
@@ -1516,6 +1519,9 @@ where
                 .try_clone(&mut Memory::new(&mut Resident))
                 .expect("cloning original partition lookup storage"),
             order: self.order.clone(),
+            directory_preparation: None,
+            lookup_supplemental: false,
+            lookup_retired_bytes: 0,
             free_partitions: self.free_partitions.clone(),
             next_partition: self.next_partition,
             row_count: self.row_count,
@@ -1628,7 +1634,10 @@ where
             relations: Vec::new(),
             keys: Vec::new(),
             by_key: OrderedTable::default(),
+            lookup_supplemental: false,
+            lookup_retired_bytes: 0,
             order: Directory::default(),
+            directory_preparation: None,
             free_partitions: Vec::new(),
             next_partition: 0,
             row_count: 0,
@@ -1665,9 +1674,62 @@ where
         self.interner.with_interned(terms, |_, ids| Ok(ids))
     }
 
+    /// Construct new native metadata before transferring it to supplemental ownership.
+    pub(crate) fn admit_native_metadata_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), DictionaryError<D::Error>> {
+        assert!(
+            !self.row_log.is_supplemental() && !self.lookup_supplemental,
+            "the original native metadata transfers once"
+        );
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        let (rows, lookup) = memory.try_scope(|memory| {
+            let rows = self.row_log.copy_sparse_in(memory)?;
+            let lookup = self.by_key.try_clone(memory)?;
+            self.interner
+                .check_read()
+                .map_err(DictionaryError::Source)?;
+            Ok::<_, DictionaryError<D::Error>>((rows, lookup))
+        })?;
+        self.row_log = rows;
+        self.by_key = lookup;
+        self.lookup_supplemental = true;
+        Ok(())
+    }
+
     /// Prepare original secondary arrangements before exposing a maintained model.
+    #[cfg(test)]
     pub(crate) fn prepare_maintenance_indexes(&mut self) -> Result<(), DictionaryError<D::Error>> {
-        if self.order.is_sparse() {
+        self.prepare_maintenance_indexes_with(&mut Memory::new(&mut Resident), false)
+    }
+
+    pub(crate) fn prepare_maintenance_indexes_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), DictionaryError<D::Error>> {
+        self.prepare_maintenance_indexes_with(memory, true)
+    }
+
+    pub(crate) fn flush_metadata_retirement_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if self.lookup_supplemental {
+            crate::allocation::flush_retired_bytes(&mut self.lookup_retired_bytes, memory)?;
+        }
+        self.order.flush_retired_in(memory)
+    }
+
+    fn prepare_maintenance_indexes_with<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        supplemental: bool,
+    ) -> Result<(), DictionaryError<D::Error>> {
+        self.flush_metadata_retirement_in(memory)?;
+        if supplemental && self.order.is_supplemental() || !supplemental && self.order.is_sparse() {
             return Ok(());
         }
         self.interner
@@ -1676,21 +1738,54 @@ where
         self.free_partitions
             .try_reserve(self.relations.len())
             .map_err(|_| StorageError::AllocationFailed)?;
-        let directory = Directory::from_live::<D, N>(
-            &self.interner,
-            self.order
-                .dense_order()
+        let (directory, sparse_rows) = if supplemental {
+            assert!(
+                self.row_log.is_supplemental() && self.lookup_supplemental,
+                "maintained metadata keeps its original supplied owner"
+            );
+            let frame = self
+                .directory_preparation
+                .get_or_insert_with(directory::Preparation::default);
+            while frame.next < self.keys.len() {
+                let slot = frame.next;
+                if self.relations[slot].row_count() != 0 {
+                    let (id, key) = self.keys[slot].expect("live original key");
+                    frame.directory.insert_live_in::<D, N, A>(
+                        &self.interner,
+                        (slot, id, key),
+                        memory,
+                    )?;
+                }
+                frame.next += 1;
+            }
+            self.interner
+                .check_read()
+                .map_err(DictionaryError::Source)?;
+            let rows = self.row_log.prepare_sparse()?;
+            let frame = self
+                .directory_preparation
+                .take()
+                .expect("completed original directory preparation");
+            (frame.directory, rows)
+        } else {
+            let entries = self
+                .keys
                 .iter()
-                .copied()
-                .filter(|&slot| self.relations[slot].row_count() != 0)
-                .map(|slot| {
-                    let (id, key) = self.keys[slot].expect("dense keys are occupied");
+                .enumerate()
+                .filter(|(slot, key)| key.is_some() && self.relations[*slot].row_count() != 0)
+                .map(|(slot, key)| {
+                    let (id, key) = key.expect("live key");
                     (slot, id, key)
-                }),
-        )?;
-        let sparse_rows = self.row_log.prepare_sparse()?;
+                });
+            let directory = Directory::from_live::<D, N>(&self.interner, entries)?;
+            let rows = self.row_log.prepare_sparse()?;
+            self.interner
+                .check_read()
+                .map_err(DictionaryError::Source)?;
+            (directory, rows)
+        };
         for slot in 0..self.keys.len() {
-            if self.relations[slot].row_count() == 0 {
+            if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
                 let (_, key) = self.keys[slot].take().expect("dense keys are occupied");
                 self.by_key.remove(&key);
                 self.relations[slot] = Relation::default();
@@ -1792,9 +1887,10 @@ where
     /// Restore a quarantined row to its original handle after native re-grounding.
     /// Only the exclusive maintenance owner can request this; public reinsertion
     /// continues to mint a new handle. Original append coordinates are immutable.
-    pub(crate) fn admit_restore(
+    pub(crate) fn admit_restore_in<A: Admission + ?Sized>(
         &mut self,
         original: &WithdrawnRow<D::Id>,
+        memory: &mut Memory<'_, A>,
     ) -> Result<(), DictionaryError<D::Error>> {
         self.interner
             .check_read()
@@ -1806,7 +1902,7 @@ where
             original.subject,
             original.object,
         ));
-        self.row_log.reserve()?;
+        self.row_log.reserve_in(memory)?;
         assert!(!self.relations[slot].contains(original.subject, original.object));
         self.relations[slot].tail.reserve_row()?;
         self.interner
@@ -1816,14 +1912,19 @@ where
     }
 
     /// Publish the admitted original token, with no intervening source callback.
-    pub(crate) fn restore_row(&mut self, original: WithdrawnRow<D::Id>) {
+    pub(crate) fn restore_row_in<A: Admission + ?Sized>(
+        &mut self,
+        original: WithdrawnRow<D::Id>,
+        memory: &mut Memory<'_, A>,
+    ) {
         let (row, partition, subject, object) = original.into_parts();
         let slot = self.order.slot(partition);
         if self.relations[slot].row_count() == 0 {
             self.live_partitions += 1;
         }
         self.relations[slot].insert(subject, object, row);
-        self.row_log.restore((row, partition, subject, object));
+        self.row_log
+            .restore_in((row, partition, subject, object), memory);
         self.row_count += 1;
     }
 
@@ -1835,6 +1936,18 @@ where
     pub fn insert_terms(
         &mut self,
         terms: [DictionaryTerm<'_, D::Id>; N],
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        assert!(
+            !self.row_log.is_supplemental(),
+            "supplemental insertion lends its original memory"
+        );
+        self.insert_terms_in(terms, &mut Memory::new(&mut Resident))
+    }
+
+    pub(crate) fn insert_terms_in<A: Admission + ?Sized>(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+        memory: &mut Memory<'_, A>,
     ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
         self.interner
             .check_read()
@@ -1859,7 +1972,7 @@ where
         {
             return Ok(None);
         }
-        let admission = self.admit_row(existing, known[1])?;
+        let admission = self.admit_row(existing, known[1], memory)?;
         let ordered = Arity::<N>::MINT_ORDER
             .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
@@ -1880,7 +1993,11 @@ where
             let position = if existing.is_some() {
                 None
             } else if order.is_sparse() {
-                Some(order.prepare_sparse::<D, N>(dictionary, Arity::<N>::key(&ids))?)
+                Some(order.prepare_sparse_in::<D, N, A>(
+                    dictionary,
+                    Arity::<N>::key(&ids),
+                    memory,
+                )?)
             } else {
                 Some(directory::Prepared::Dense(
                     partition_position::<D, N>(
@@ -1896,14 +2013,20 @@ where
             Ok((ids, position))
         })?;
         let position = position.map(|prepared| prepared.publish(partition_id, partition_slot));
-        Ok(Some(self.publish_row(ids, existing, position, admission)))
+        Ok(Some(
+            self.publish_row(ids, existing, position, admission, memory),
+        ))
     }
 
-    fn admit_row(
+    fn admit_row<A: Admission + ?Sized>(
         &mut self,
         existing: Option<usize>,
         predicate: Option<D::Id>,
+        memory: &mut Memory<'_, A>,
     ) -> Result<RowAdmission<D::Id>, StorageError> {
+        if self.lookup_supplemental {
+            crate::allocation::flush_retired_bytes(&mut self.lookup_retired_bytes, memory)?;
+        }
         // Admit both live cardinality and the never-reused append identity before
         // reserving dependent storage or interning a new lexical surface.
         RowId::from_address(self.row_count)?;
@@ -1920,7 +2043,7 @@ where
                 PartitionId::from_index_with_limit(self.next_partition, limit)?
             }
         };
-        self.row_log.reserve()?;
+        self.row_log.reserve_in(memory)?;
         let mut new_relation = Relation {
             maintain_objects: self.maintenance_indexes,
             ..Relation::default()
@@ -1929,10 +2052,17 @@ where
         if let Some(slot) = existing {
             self.relations[slot].tail.reserve_row()?;
         } else {
-            self.by_key.reserve_insert(&mut Memory::resume(
-                &mut Resident,
-                self.by_key.storage_bytes()?,
-            ))?;
+            if self.lookup_supplemental {
+                crate::allocation::reserve_ordered_in(
+                    &mut self.by_key,
+                    memory,
+                    &mut self.lookup_retired_bytes,
+                )?;
+            } else {
+                let old = self.by_key.storage_bytes()?;
+                self.by_key
+                    .reserve_insert(&mut Memory::resume(&mut Resident, old))?;
+            }
             if self.free_partitions.is_empty() {
                 self.relations
                     .try_reserve(1)
@@ -1950,7 +2080,7 @@ where
                     .map_err(|_| StorageError::AllocationFailed)?;
             }
             new_relation.tail.reserve_row()?;
-            predicate_bucket = self.order.admit(predicate)?;
+            predicate_bucket = self.order.admit_in(predicate, memory)?;
         }
         Ok(RowAdmission {
             row_id,
@@ -1960,12 +2090,13 @@ where
         })
     }
 
-    fn publish_row(
+    fn publish_row<A: Admission + ?Sized>(
         &mut self,
         ids: [D::Id; N],
         existing: Option<usize>,
         position: Option<Position>,
         admission: RowAdmission<D::Id>,
+        memory: &mut Memory<'_, A>,
     ) -> (D::Id, D::Id, RowId) {
         let (subject_id, object_id) = (ids[0], ids[2]);
         let key = Arity::<N>::key(&ids);
@@ -1997,9 +2128,14 @@ where
                 .by_key
                 .storage_bytes()
                 .expect("original admitted lookup layout");
-            assert!(
+            let inserted = if self.lookup_supplemental {
+                self.by_key.insert(key, slot, memory)
+            } else {
                 self.by_key
                     .insert(key, slot, &mut Memory::resume(&mut Resident, lookup_bytes))
+            };
+            assert!(
+                inserted
                     .expect("lookup capacity was reserved before the dictionary transaction")
                     .is_none()
             );
@@ -2021,7 +2157,7 @@ where
         self.relations[slot].insert(subject_id, object_id, row_id);
         self.row_count += 1;
         self.row_log
-            .append((row_id, partition_id, subject_id, object_id));
+            .append_in((row_id, partition_id, subject_id, object_id), memory);
         (subject_id, object_id, row_id)
     }
 }
@@ -2460,7 +2596,10 @@ where
             relations: self.relations,
             keys: self.keys,
             by_key: self.by_key,
+            lookup_supplemental: self.lookup_supplemental,
+            lookup_retired_bytes: self.lookup_retired_bytes,
             order: self.order,
+            directory_preparation: self.directory_preparation,
             free_partitions: self.free_partitions,
             next_partition: self.next_partition,
             row_count: self.row_count,

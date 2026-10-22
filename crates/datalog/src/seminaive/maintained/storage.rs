@@ -216,6 +216,7 @@ mod tests {
         assert_eq!(
             live.get(),
             weights_bytes
+                + model.session.state.as_ref().unwrap().native_bytes
                 + model.levels.capacity() * size_of::<usize>()
                 + model.impacts.predicates.capacity() * size_of::<String>()
                 + model.impacts.edges.capacity() * size_of::<crate::plan::DependencyEdge>()
@@ -368,6 +369,10 @@ mod tests {
                     ResumeProgress::Complete => break,
                     ResumeProgress::Paused(EvalError::Storage(StorageError::AdmissionFailed)) => {
                         pauses += 1;
+                        assert!(
+                            pauses < 128,
+                            "the small original model must retain factory progress"
+                        );
                         let state = model.session.state.as_ref().unwrap();
                         assert_eq!(
                             state.rel.row_count(),
@@ -1060,12 +1065,12 @@ mod tests {
                         refusals += 1;
                         let joins = model.budget().join_steps();
                         let held = live.get();
-                        settled_release |= model.pending.as_ref().is_some_and(|pending| {
+                        let work = model.transaction_work();
+                        let complete = model.pending.as_ref().is_some_and(|pending| {
                             pending.phase == super::super::MutationPhase::Complete
                         });
-                        if model.pending.as_ref().is_some_and(|pending| {
-                            pending.phase == super::super::MutationPhase::Complete
-                        }) {
+                        settled_release |= complete;
+                        if complete {
                             let relation = model.relation(terms[1]).unwrap();
                             assert_eq!(
                                 relation.status(),
@@ -1083,6 +1088,13 @@ mod tests {
                             ))
                         ));
                         assert_eq!(model.budget().join_steps(), joins);
+                        if complete {
+                            assert_eq!(
+                                model.transaction_work(),
+                                work,
+                                "completed native settlement is never charged again"
+                            );
+                        }
                         assert_eq!(model.storage.live(), held);
                         assert_eq!(live.get(), held);
                         model.storage.admission.maximum += 1;
