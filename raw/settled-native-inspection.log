@@ -1,0 +1,14 @@
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/columnar)
+    Finished `test` profile [optimized] target(s) in 7.10s
+     Running tests/structured_errors.rs (/opt/.cargo/bd/5e670be11771f3/debug/build/purrdf-columnar/293f4fd772f7da68/out/structured_errors-293f4fd772f7da68)
+
+running 6 tests
+test original_parquet_bounds_survive_file_disposal_without_narrowing ... ok
+test human_presentation_preserves_codec_and_source_messages ... ok
+test native_cause_transport_preserves_storage_and_full_width_rows ... ok
+test public_projection_and_write_preserve_source_owners_and_fields ... ok
+test public_blob_read_preserves_original_integrity_cause ... ok
+test public_reconstruction_preserves_original_diagnostic ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

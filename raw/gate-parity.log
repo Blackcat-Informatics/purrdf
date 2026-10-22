@@ -1,0 +1,1 @@
+OK: all 71 hygiene gates in `make check` also run in a pull-request workflow, and vice versa

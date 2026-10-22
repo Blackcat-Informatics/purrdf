@@ -1,0 +1,30 @@
+{
+  "baseRefName": "main",
+  "body": "Columnar integrity and RDF reconstruction failures previously rendered native\nerrors into `Malformed` strings or extracted storage errors while discarding\ntheir enclosing diagnostic. They now move the original causes into\n`ColumnarError::ContentStore`, `BlobContent { row, cause }` and\n`Reconstruction(RdfDiagnostic)`. The standard source chain and structured visitor\nborrow those original objects, including complete digest bytes, zero-based rows\nand diagnostic attachments. Human message prefixes and successful Parquet bytes\nremain unchanged; existing `Clone`/`Eq` traits remain.\n\nCloses #677. This delivers one remaining native-cause unit under #558; the parent\nretains its full shipping inventory, other malformed/UTF-8 producers and host\nacceptance. The existing generic source-session transport remains at its merged\nhome. No donor replay, new hashing/rendering owner, dependency or feature change.\n\nValidation covers actual core insertion and integrity verification; public\ncorrupt-blob and invalid-RDF reads after input disposal; full-width fields;\noriginal standard-error downcasts; storage diagnostics with detail/location and a\nnative attachment whose owner is released with the error; and zero allocations,\nrequested bytes, retained bytes and peak working bytes for transport/recursive\ninspection. Safe public insertion cannot create a corrupt global store, so that\nactual verifier is exercised at its private owner rather than through a new test\nseam. The complete native columnar package and actual packaged-WASM inspection\nand frozen-byte tests pass. Seven core integrity tests, 31 columnar library cases,\nsix native and six actual packaged-WASM inspection cases, and ten frozen file\ndigests pass. Affected all-target denied-warning Clippy, strict rustdoc, complete\nhelper/domain hygiene, production facade/Python library compilation and prose/CI\nroute checks pass. Production consumer compilation is not host runtime acceptance.\n\nThe conservative core constructor closure pins whole source files containing\nopaque macros/derives. Reporting additions in `content_store.rs` invalidate its\nidentity. The 40 affected proof records refresh only that closure pin after\nchecking unchanged constructor membership, every original sink and all capacity\nauthority identities against main. No capacity exemption or gate rule changes.\n",
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABeWJj6w",
+      "author": {
+        "login": "independent reviewer"
+      },
+      "authorAssociation": "NONE",
+      "body": "\n\n\n\n\n<a href=\"[external link omitted]\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"[external link omitted]\"><source media=\"(prefers-color-scheme: light)\" srcset=\"[external link omitted]\"><img src=\"[external link omitted]\" alt=\"Review in Change Stack \u2192\" height=\"32\"></picture></a>\n\n\n\n\n> [!NOTE]\n> Currently processing new changes in this PR. This may take a few minutes, please wait...\n> \n> <details>\n> <summary><strong>\u2699\ufe0f Run configuration</strong></summary>\n> <dl>\n> <dd>\n> \n> - **Configuration used**: defaults\n> - **Review profile**: CHILL\n> - **Plan**: Team\n> - **Run ID**: `d4eaf994-ae27-47a4-8c65-ccd3920d2692`\n> \n> </dd>\n> </dl>\n> </details>\n> \n> <details>\n> <summary><strong>\ud83d\udce5 Commits</strong></summary>\n> <dl>\n> <dd>\n> \n> Reviewing files that changed from the base of the PR and between 6f1199b1dfb2ca3e800db7fbc45fd9aefe372c6c and 79f7c7975b605068c6bb6ddd108b5e9066310627.\n> \n> </dd>\n> </dl>\n> </details>\n> \n> <details>\n> <summary><strong>\ud83d\udcd2 Files selected for processing: 10</strong></summary>\n> <dl>\n> <dd>\n> \n> * `Makefile`\n> * `crates/columnar/src/error.rs`\n> * `crates/columnar/src/reader.rs`\n> * `crates/columnar/src/writer.rs`\n> * `crates/columnar/tests/structured_errors.rs`\n> * `crates/rdf-core/src/content_store.rs`\n> * `docs/COLUMNAR.md`\n> * `docs/COLUMNAR.zh-Hans.md`\n> * `docs/MIGRATION-4.0.md`\n> * `helpers-ledger.toml`\n> \n> </dd>\n> </dl>\n> </details>\n> \n> ```ascii\n> +-------------------------------------------------------------------------+\n> | \ud83d\udc95 You had me at 'Hello, World!', but I'm staying for the bug fixes. \ud83d\udc95 |\n> +-------------------------------------------------------------------------+\n>   \\\n>    \\   (\\__/)\n>        (\u2022\u3145\u2022)\n>        / \u3000 \u3065\n> ```\n\n\n\n\n\n<details>\n<summary><strong>\u2728 Finishing Touches</strong></summary>\n<dl>\n<dd>\n\n<details open>\n<summary><strong>\ud83d\udcdd Generate docstrings</strong></summary>\n<dl>\n<dd>\n\n- [ ]  Commit to this branch\n- [ ]  Create a new PR\n\n</dd>\n</dl>\n</details>\n<details open>\n<summary><strong>\ud83e\uddea Generate unit tests (beta)</strong></summary>\n<dl>\n<dd>\n\n- [ ]  Commit to this branch\n- [ ]  Create a new PR\n\n</dd>\n</dl>\n</details>\n\n</dd>\n</dl>\n</details>\n\n\n\n\n- [ ]  <strong title=\"Keep fixing independent reviewer findings and required CI, and resolving merge conflicts\">Autofix</strong> \u00b7 Keep fixing independent reviewer findings and required CI, and resolving merge conflicts\n\n\n\n\n\n\n\n\n<sub>Comment `@independent reviewer help` to get the list of available commands.</sub>\n\n",
+      "createdAt": "2026-10-22T02:48:01Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "[external link omitted]",
+      "viewerDidAuthor": false
+    }
+  ],
+  "createdAt": "2026-10-22T02:47:33Z",
+  "headRefName": "paudley/677-preserve-native-content-and",
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 678,
+  "reviews": [],
+  "state": "OPEN",
+  "title": "Preserve original columnar integrity and reconstruction causes",
+  "url": "[external link omitted]"
+}

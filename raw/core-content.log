@@ -1,0 +1,15 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 40.84s
+     Running unittests src/lib.rs (/opt/.cargo/bd/5e670be11771f3/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 7 tests
+test content_store::tests::digest_of_is_stable_and_hex_round_trips ... ok
+test content_store::tests::from_hex_rejects_bad_input ... ok
+test content_store::tests::insert_checked_rejects_mismatched_digest ... ok
+test content_store::tests::insert_checked_accepts_matching_digest ... ok
+test content_store::tests::insert_is_idempotent_and_content_addressed ... ok
+test content_store::tests::integrity_producers_keep_original_digest_records_after_store_drop ... ok
+test content_store::tests::verify_all_passes_for_clean_store ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1382 filtered out; finished in 0.00s
+

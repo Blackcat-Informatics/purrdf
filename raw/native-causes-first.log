@@ -1,0 +1,61 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling twox-hash v2.1.2
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/deflate)
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling structured-zstd v0.0.49
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/stack)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/xsd)
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/testkit)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/cdt)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/columnar)
+error[E0599]: no method named `into_array` found for struct `ColumnarWrite` in the current scope
+   --> crates/columnar/tests/structured_errors.rs:541:116
+    |
+541 |     let mut array = write(&RdfDatasetBuilder::new().freeze().unwrap(), &blobs, Compression::Uncompressed).unwrap().into_array();
+    |                                                                                                                    ^^^^^^^^^^ method not found in `ColumnarWrite`
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+541 |     let mut array = write(&RdfDatasetBuilder::new().freeze().unwrap(), &blobs, Compression::Uncompressed).unwrap().files.into_array();
+    |                                                                                                                    ++++++
+
+error[E0599]: no method named `into_array` found for struct `ColumnarWrite` in the current scope
+   --> crates/columnar/tests/structured_errors.rs:564:113
+    |
+564 |     let mut array = write(&builder.freeze().unwrap(), &ContentStore::new(), Compression::Uncompressed).unwrap().into_array();
+    |                                                                                                                 ^^^^^^^^^^ method not found in `ColumnarWrite`
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+564 |     let mut array = write(&builder.freeze().unwrap(), &ContentStore::new(), Compression::Uncompressed).unwrap().files.into_array();
+    |                                                                                                                 ++++++
+
+error[E0609]: no field `gts_quad` on type `&Box<RdfLocation>`
+   --> crates/columnar/tests/structured_errors.rs:602:49
+    |
+602 |     assert_eq!(cause.location.as_ref().unwrap().gts_quad, Some(u64::MAX));
+    |                                                 ^^^^^^^^ unknown field
+    |
+    = note: available fields are: `path`, `line`, `column`, `logical`, `subject` ... and 5 others
+
+Some errors have detailed explanations: E0599, E0609.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `purrdf-columnar` (test "structured_errors") due to 3 previous errors

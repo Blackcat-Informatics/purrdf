@@ -1,0 +1,54 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-core)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/columnar)
+    Finished `test` profile [optimized] target(s) in 31.81s
+     Running unittests src/lib.rs (/opt/.cargo/bd/5e670be11771f3/debug/build/purrdf-columnar/48fd8961603450ea/out/purrdf_columnar-48fd8961603450ea)
+
+running 31 tests
+test column::tests::full_presence_is_the_all_true_bitmap ... ok
+test compact::tests::compact_rejects_truncation_and_oversized_collection ... ok
+test compact::tests::compact_round_trips_scalars_lists_and_nested_structs ... ok
+test compact::tests::unknown_nested_field_is_skipped_without_desynchronizing ... ok
+test files::tests::array_and_table_views_share_canonical_order ... ok
+test parquet::tests::decoded_table_budget_rejects_adversarial_row_counts ... ok
+test parquet::tests::definition_rle_rejects_bitpacked_and_trailing_data ... ok
+test parquet::tests::empty_table_has_all_schema_but_no_pages ... ok
+test parquet::tests::both_compression_modes_round_trip_and_are_deterministic ... ok
+test parquet::tests::int64_plain_accepts_the_exact_length_neighbour ... ok
+test column::tests::presence_answers_as_the_bool_vector_it_was_built_from ... ok
+test parquet::tests::oversized_zstd_output_is_rejected_before_allocation ... ok
+test parquet::tests::required_null_and_mismatched_lengths_are_rejected ... ok
+test parquet::tests::wrong_table_and_corruption_fail_closed ... ok
+test column::tests::int64_column_rows_round_trip_through_the_split_layout ... ok
+test reader::term_walk_tests::a_language_tag_with_an_ascii_uppercase_letter_is_refused_as_non_canonical ... ok
+test reader::term_walk_tests::an_identity_folded_language_tag_resolves ... ok
+test reader::term_walk_tests::resolution_agrees_with_its_recursive_reference_on_generated_tables ... ok
+test reader::tests::full_conversion_round_trips_and_rewrites_identically ... ok
+test reader::tests::semantic_reader_rehashes_blob_payloads ... FAILED
+test reader::tests::semantic_reader_rejects_non_dense_term_ids ... ok
+test schema::tests::five_table_names_and_files_are_unique ... ok
+test schema::tests::schema_uses_only_the_closed_physical_type_set ... ok
+test writer::term_walk_tests::resolution_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test writer::tests::empty_input_still_writes_five_valid_zero_row_files ... ok
+test writer::tests::pack_view_and_native_dataset_emit_identical_files ... ok
+test writer::tests::term_and_quad_ingest_order_do_not_change_bytes ... ok
+test writer::tests::writer_projects_all_rdf_layers_and_is_deterministic ... ok
+test parquet::tests::int64_plain_refuses_bad_bodies_as_the_one_value_decode_did ... ok
+test parquet::tests::int64_plain_matches_the_one_value_codec ... ok
+test reader::term_walk_tests::a_deep_record_chain_resolves_on_a_128_kib_thread ... ok
+
+failures:
+
+---- reader::tests::semantic_reader_rehashes_blob_payloads stdout ----
+
+thread 'reader::tests::semantic_reader_rehashes_blob_payloads' (2539274) panicked at crates/columnar/src/reader.rs:826:9:
+assertion failed: matches!(read(&ParquetFiles::from_array(array)),
+    Err(ColumnarError::Malformed { .. }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reader::tests::semantic_reader_rehashes_blob_payloads
+
+test result: FAILED. 30 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+error: test failed, to rerun pass `-p purrdf-columnar --lib`

@@ -1,0 +1,57 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/hash)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling rustversion v1.0.22
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling bumpalo v3.20.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-core)
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/rdf-events)
+   Compiling regex-automata v0.4.14
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/deflate)
+   Compiling syn v2.0.118
+   Compiling hashbrown v0.17.1
+   Compiling twox-hash v2.1.2
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling once_cell v1.21.4
+   Compiling structured-zstd v0.0.49
+   Compiling digest v0.11.3
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/alloc-probe)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/xsd)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/iri)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/cdt)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/677-preserve-native-content-and/crates/columnar)
+    Finished `test` profile [optimized] target(s) in 37.34s
+     Running tests/golden_bytes.rs (/opt/.cargo/bd/5e670be11771f3/wasm32-unknown-unknown/debug/build/purrdf-columnar/f3aa6c700c2c6873/out/golden_bytes-f3aa6c700c2c6873.wasm)
+
+running 1 test
+test seeded_files_are_the_pinned_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/structured_errors.rs (/opt/.cargo/bd/5e670be11771f3/wasm32-unknown-unknown/debug/build/purrdf-columnar/8cd050d4ec603783/out/structured_errors-8cd050d4ec603783.wasm)
+
+running 6 tests
+test original_parquet_bounds_survive_file_disposal_without_narrowing ... ok
+test public_projection_and_write_preserve_source_owners_and_fields ... ok
+test human_presentation_preserves_codec_and_source_messages ... ok
+test public_blob_read_preserves_original_integrity_cause ... ok
+test public_reconstruction_preserves_original_diagnostic ... ok
+test native_cause_transport_preserves_storage_and_full_width_rows ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
