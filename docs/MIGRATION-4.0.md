@@ -16,6 +16,17 @@ as `ColumnarWriteError::Codec(ColumnarError)`. Human message prefixes are
 preserved, and inspection borrows the original cause. Reading prepared Parquet
 files and encoding an existing projection still use `ColumnarError`.
 
+Match native content integrity failures through `ColumnarError::ContentStore`
+and `BlobContent { row, cause }`, and RDF reconstruction failures through
+`Reconstruction(RdfDiagnostic)`. These replace formatted `Malformed` details;
+the complete original cause, digest bytes and zero-based row remain inspectable.
+Storage-bearing reconstruction diagnostics retain their enclosing fields and
+attachments. Existing `Clone`/`Eq` implementations and human prefixes remain.
+
+Freeze failures previously returned as `ColumnarError::Storage` now also return
+`Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
+handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
+
 ## Regime term arena controls
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to

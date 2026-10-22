@@ -34,6 +34,12 @@ pub type Bytes = Vec<u8>;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentDigest(Digest32);
 
+impl purrdf_hash::error::StructuredError for ContentDigest {
+    purrdf_hash::error_visit! {
+        @tuple self (digest) => "content-digest-sha256" { "digest" => Record(digest) }
+    }
+}
+
 impl ContentDigest {
     /// Compute the digest of `bytes` directly (SHA-256).
     pub fn of(bytes: &[u8]) -> Self {
@@ -93,6 +99,14 @@ pub enum ContentStoreError {
         /// The id the bytes actually hash to.
         actual: ContentDigest,
     },
+}
+
+impl purrdf_hash::error::StructuredError for ContentStoreError {
+    purrdf_hash::error_visit! {
+        DigestMismatch { stored, actual } => "content-digest-mismatch" {
+            "stored" => Record(stored), "actual" => Record(actual),
+        },
+    }
 }
 
 impl fmt::Display for ContentStoreError {
@@ -206,6 +220,50 @@ impl ContentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_hash::error::{ErrorValue, StructuredError};
+    use purrdf_testkit::error_capture::Capture;
+
+    /// Inspect the native digest owner through the existing byte-value home.
+    fn assert_digest(value: &dyn StructuredError, expected: &ContentDigest) {
+        let fields = Capture::read(value);
+        assert_eq!(fields.code, "content-digest-sha256");
+        let ErrorValue::Record(digest) = fields.field("digest") else {
+            panic!("the original Digest32 is a record");
+        };
+        let fields = Capture::read(digest);
+        assert_eq!(fields.code, "digest32");
+        assert!(
+            matches!(fields.field("bytes"), ErrorValue::Bytes(bytes) if bytes == expected.as_bytes())
+        );
+    }
+
+    /// Both native integrity producers retain their complete original ids.
+    #[test]
+    fn integrity_producers_keep_original_digest_records_after_store_drop() {
+        let stored = ContentDigest::from_raw([0xff; 32]);
+        let actual = ContentDigest::of(b"original integrity payload");
+        let mut store = ContentStore::new();
+        let inserted = store
+            .insert_checked(stored, b"original integrity payload".to_vec())
+            .unwrap_err();
+        assert!(store.is_empty());
+        // Corruption belongs at this private owner: public insertion refuses it.
+        store
+            .blobs
+            .insert(stored, b"original integrity payload".to_vec());
+        let verified = store.verify_all().unwrap_err();
+        drop(store);
+        for error in [inserted, verified] {
+            let fields = Capture::read(&error);
+            assert_eq!(fields.code, "content-digest-mismatch");
+            for (name, expected) in [("stored", stored), ("actual", actual)] {
+                let ErrorValue::Record(digest) = fields.field(name) else {
+                    panic!("integrity ids remain native records");
+                };
+                assert_digest(digest, &expected);
+            }
+        }
+    }
 
     #[test]
     fn digest_of_is_stable_and_hex_round_trips() {

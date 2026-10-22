@@ -18,6 +18,15 @@ null and 1 for present.
 
 ## Projection failures
 
+Native integrity refusals retain their original `ContentStoreError` in
+`ColumnarError::ContentStore` or `BlobContent { row, cause }`. The latter row is
+zero-based. Both SHA-256 identities are borrowed as original digest bytes through
+the structured-error protocol. `Reconstruction` retains the complete original
+`RdfDiagnostic`, including its storage and native-cause attachments. Standard
+error sources borrow these causes directly; transport does not format, clone or
+allocate a replacement cause. Existing human message prefixes and frozen bytes
+are unchanged.
+
 `project` and `write` return `ColumnarWriteError<D::ReadError>`. Its `SourceRead`
 variant owns the original `DatasetView` failure; its `Codec` variant owns the
 existing `ColumnarError`. Source transport neither formats nor clones the error.

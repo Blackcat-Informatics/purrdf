@@ -73,14 +73,12 @@ pub fn project<D: DatasetView>(
         .map_err(ColumnarWriteError::SourceRead)?
 }
 
-/// Build the fixed-schema tables inside the source's completed-read boundary.
+/// Build fixed-schema tables inside the completed-read boundary, retaining native causes.
 fn project_read<D: DatasetView>(
     view: &D,
     blobs: &ContentStore,
 ) -> Result<crate::projection::ColumnarProjection, ColumnarWriteError<D::ReadError>> {
-    blobs
-        .verify_all()
-        .map_err(|error| ColumnarError::malformed("content store", error.to_string()))?;
+    blobs.verify_all().map_err(ColumnarError::ContentStore)?;
 
     let source = SourceRows::collect(view);
     let mut resolver = Resolver::new(view);
