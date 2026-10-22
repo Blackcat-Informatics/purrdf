@@ -6,6 +6,16 @@
 The breaking Rust API changes below belong to the 4.0 major release. Upgrade
 the PurRDF crates together when adopting them.
 
+## Columnar projection errors
+
+`purrdf::columnar::project` and `write` return
+`ColumnarWriteError<D::ReadError>`. Update explicit return types and source-error
+matches: `ColumnarWriteError::SourceRead` carries the original read error rather
+than a formatted `ColumnarError::SourceRead` detail. Codec refusals are retained
+as `ColumnarWriteError::Codec(ColumnarError)`. Human message prefixes are
+preserved, and inspection borrows the original cause. Reading prepared Parquet
+files and encoding an existing projection still use `ColumnarError`.
+
 ## Regime term arena controls
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to

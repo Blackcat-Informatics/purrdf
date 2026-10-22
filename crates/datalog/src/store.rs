@@ -641,11 +641,11 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
 ///
 /// A streaming two-way merge over the `(subject_id, object_id)` key: O(1) scratch
 /// beyond the output, never a whole-relation re-sort, so there is no transient
-/// allocation spike. On a key COLLISION — only reachable for a signed weight monoid,
-/// since set-semantics inserts keep batches key-disjoint — the weights
-/// [`combine`](Weight::combine) and the surviving row keeps the LOWER [`RowId`]
-/// (deterministic, independent of which run it came from); an annihilated weight drops
-/// the row. For `W = ()` the collision arm is dead and this is a plain interleave.
+/// allocation spike. A live key collision combines the weights through
+/// [`Weight::combine`] and keeps the lower [`RowId`]; an annihilated weight drops
+/// the row. Set-semantics insertion keeps live keys disjoint, but reinsertion
+/// can collide with a retired cell. Vacant cells carry no weight into the merge
+/// and cannot replace the fresh reinsertion handle.
 fn merge_batches<W: Weight, I: TermIdentity>(
     left: &Batch<W, I>,
     right: &Batch<W, I>,
@@ -682,8 +682,8 @@ fn merge_batches<W: Weight, I: TermIdentity>(
                 j += 1;
             }
             Ordering::Equal => {
-                // Key collision (signed-weight only): combine, keep the lower RowId,
-                // drop the row if annihilated. Never reached under `W = ()`.
+                // Combine live weights; a retired copy cannot compete with a
+                // fresh reinsertion or retain its old handle.
                 match (left.row_id[i], right.row_id[j]) {
                     (Some(left_row), Some(right_row)) => {
                         let w = left.weight[i].combine(right.weight[j])?;
@@ -797,18 +797,24 @@ impl<I: TermIdentity> Tail<I> {
     /// Whether some row has the key `(subject, object)`.
     ///
     /// Every row is tested and the answers are counted, with no exit on the
-    /// first hit: a loop that can leave early is not vectorized, and the tail is
-    /// bounded by [`TAIL_SEAL_THRESHOLD`], so on a target with vector compares
-    /// the whole scan is a handful of packed compares.
+    /// first hit. The occupied-tail specialization can use packed key compares
+    /// on targets with vector compares; vacant tails also test live handles.
+    /// Both scans are bounded by [`TAIL_SEAL_THRESHOLD`].
+    /// Handle checks may be disabled only when existing live counts prove that
+    /// every physical tail cell is occupied.
     #[allow(
         clippy::needless_bitwise_bool,
         reason = "the non-short-circuit `&` is the point: a lazy `&&` puts a branch in the \
                   lane loop, and the compares of both key columns must be evaluated every row"
     )]
-    fn contains(&self, subject: I, object: I) -> bool {
+    fn contains<const CHECK_HANDLES: bool>(&self, subject: I, object: I) -> bool {
         let subjects = self.data.column(0);
         let objects = self.data.column(1);
-        let len = subjects.len().min(objects.len());
+        let handles = self.data.handles();
+        let mut len = subjects.len().min(objects.len());
+        if CHECK_HANDLES {
+            len = len.min(handles.len());
+        }
         // The tail seals at 64 rows, so its match count fits in one u32 even
         // when each key's identity is wider than a machine word.
         let mut matches = 0u32;
@@ -816,7 +822,7 @@ impl<I: TermIdentity> Tail<I> {
             matches += u32::from(
                 (subjects[position] == subject)
                     & (objects[position] == object)
-                    & self.data.handles()[position].is_some(),
+                    & (!CHECK_HANDLES || handles[position].is_some()),
             );
         }
         matches != 0
@@ -895,9 +901,31 @@ impl<I: TermIdentity> Relation<I> {
     /// Whether a tuple with these interned terms is present — a galloping probe of each
     /// sorted batch plus a linear scan of the tail (no hashing).
     fn contains(&self, subject: I, object: I) -> bool {
-        self.len != 0
-            && (self.batches.iter().any(|b| b.contains(subject, object))
-                || self.tail.contains(subject, object))
+        if self.len == 0 {
+            return false;
+        }
+        // The batch probes already visit these headers. Reuse their live counts
+        // to prove tail liveness, without another per-partition flag or a scan.
+        let mut sealed_live = 0usize;
+        for batch in &self.batches {
+            if batch.contains(subject, object) {
+                return true;
+            }
+            sealed_live = sealed_live
+                .checked_add(batch.live)
+                .expect("sealed live rows fit relation membership");
+        }
+        let tail_live = self
+            .len
+            .checked_sub(sealed_live)
+            .expect("sealed live rows are included in relation membership");
+        if tail_live == self.tail.len() {
+            // Removing the third comparison under this exact proof preserves the
+            // original SSE2 key-count kernel; only vacant tails check handles.
+            self.tail.contains::<false>(subject, object)
+        } else {
+            self.tail.contains::<true>(subject, object)
+        }
     }
 
     /// Remove one live row through existing key indexes, retaining other handles.
@@ -4220,16 +4248,96 @@ mod tests {
                 }
                 for (s, o) in probes {
                     assert_eq!(
-                        tail.contains(s, o),
+                        tail.contains::<true>(s, o),
                         reference_tail_contains(&rows, s, o),
                         "len {len}, probe ({s:?}, {o:?})"
                     );
+                    assert_eq!(
+                        tail.contains::<false>(s, o),
+                        reference_tail_contains(&rows, s, o)
+                    );
                 }
                 for (position, &(s, o, _)) in rows.iter().enumerate() {
-                    assert!(tail.contains(s, o), "len {len}: row {position} is found");
+                    assert!(
+                        tail.contains::<true>(s, o),
+                        "len {len}: row {position} is found"
+                    );
                 }
-                assert!(!tail.contains(outside, outside), "len {len}: absent key");
+                assert!(
+                    !tail.contains::<true>(outside, outside),
+                    "len {len}: absent key"
+                );
             }
+        }
+    }
+
+    #[test]
+    fn relation_tail_dispatch_reuses_live_counts_after_native_removal() {
+        let mut relation = Relation::default();
+        let rows = (0..TAIL_SEAL_THRESHOLD + 9)
+            .map(|index| {
+                (
+                    TermId::from_index(index as u64).unwrap(),
+                    TermId::from_index((index + 100) as u64).unwrap(),
+                    RowId::from_address(index).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for &(subject, object, row) in &rows {
+            relation.tail.reserve_row().unwrap();
+            relation.insert(subject, object, row);
+        }
+        assert_eq!(relation.batches.len(), 1);
+        let mut live = vec![true; rows.len()];
+        for index in [0, 17, 63] {
+            assert_eq!(
+                relation.remove(rows[index].0, rows[index].1),
+                Some(rows[index].2)
+            );
+            live[index] = false;
+        }
+        assert_eq!(
+            relation.len
+                - relation
+                    .batches
+                    .iter()
+                    .map(|batch| batch.live)
+                    .sum::<usize>(),
+            relation.tail.len()
+        );
+        for &(subject, object, _) in &rows[TAIL_SEAL_THRESHOLD..] {
+            assert!(relation.contains(subject, object));
+        }
+        for index in [TAIL_SEAL_THRESHOLD, TAIL_SEAL_THRESHOLD + 5] {
+            assert_eq!(
+                relation.remove(rows[index].0, rows[index].1),
+                Some(rows[index].2)
+            );
+            live[index] = false;
+        }
+        assert!(
+            relation.len
+                - relation
+                    .batches
+                    .iter()
+                    .map(|batch| batch.live)
+                    .sum::<usize>()
+                < relation.tail.len()
+        );
+        for (index, &(subject, object, _)) in rows.iter().enumerate() {
+            assert_eq!(relation.contains(subject, object), live[index]);
+        }
+        let restored = TAIL_SEAL_THRESHOLD;
+        relation.tail.reserve_row().unwrap();
+        relation.insert(
+            rows[restored].0,
+            rows[restored].1,
+            RowId::from_index(1000).unwrap(),
+        );
+        live[restored] = true;
+        relation.seal();
+        for (index, &(subject, object, _)) in rows.iter().enumerate() {
+            assert_eq!(relation.contains(subject, object), live[index]);
         }
     }
 
@@ -4258,14 +4366,17 @@ mod tests {
                     tail.push(row.0, row.1, RowId::from_address(i).unwrap());
                     rows.push((row.0, row.1, RowId::from_address(i).unwrap()));
                 }
-                assert!(tail.contains(subject, object), "len {len}, hit {hit}");
+                assert!(
+                    tail.contains::<true>(subject, object),
+                    "len {len}, hit {hit}"
+                );
                 assert!(reference_tail_contains(&rows, subject, object));
                 assert!(
-                    !tail.contains(object, subject),
+                    !tail.contains::<true>(object, subject),
                     "len {len}, hit {hit}: the swapped key is absent"
                 );
                 assert!(!reference_tail_contains(&rows, object, subject));
-                assert!(!tail.contains(subject_low, object_low));
+                assert!(!tail.contains::<true>(subject_low, object_low));
                 assert!(!reference_tail_contains(&rows, subject_low, object_low));
             }
             // The same near misses with no hit at all.
@@ -4279,7 +4390,7 @@ mod tests {
                 tail.reserve_row().unwrap();
                 tail.push(s, o, RowId::from_address(i).unwrap());
             }
-            assert!(!tail.contains(subject, object), "len {len}: no hit");
+            assert!(!tail.contains::<true>(subject, object), "len {len}: no hit");
         }
     }
 

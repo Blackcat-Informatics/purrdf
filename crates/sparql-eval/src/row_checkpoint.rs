@@ -754,12 +754,12 @@ fn commit_items<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
     point: Option<ChargePoint>,
     committing: Committing,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     withheld: Option<u64>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<(Vec<S>, Option<ItemTrip>), EvalError> {
-    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let mut rows = rows.into_iter();
+    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let Some(state) = ctx.governor_state().cloned() else {
         for row in rows {
             out.push(admit_row(ctx, row)?);
@@ -972,10 +972,11 @@ fn count_worker_mints_to<D: DatasetView + Sync>(
 #[inline(always)]
 fn admit_rows<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     out: Vec<S>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<Vec<S>, EvalError> {
+    let rows = rows.into_iter();
     let mut out = crate::parallel::reserve_concatenated_rows(out, [rows.len()])?;
     for row in rows {
         out.push(admit_row(ctx, row)?);
@@ -1427,7 +1428,7 @@ impl ItemLedger {
     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         _chunks: impl IntoIterator<Item = Self>,
         out: Vec<S>,
         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
@@ -1449,7 +1450,7 @@ impl ItemLedger {
     pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         chunks: impl IntoIterator<Item = Self>,
         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
     ) -> Result<(Vec<S>, Option<usize>), EvalError> {

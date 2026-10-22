@@ -14,8 +14,8 @@
 //! 2. **Join.** [`par_chunk_try_map_init`]/[`par_retain`] run
 //!    the workers via rayon's *indexed* `par_chunks`/`par_iter` (never
 //!    `par_sort`/`par_bridge`, which are not order-stable) and then reduce
-//!    strictly in source-index order: successes concatenate in chunk (hence
-//!    source) order and the first `Err` **by chunk index** wins, regardless of
+//!    strictly in source-index order: successes retain chunk (hence source)
+//!    order and the first `Err` **by chunk index** wins, regardless of
 //!    which worker finished first.
 //!
 //! A read-only FILTER predicate discards its child's scratch mints entirely (the
@@ -1203,17 +1203,113 @@ where
     par_chunk_try_map_init_fallible(sequential, items, || Ok(init()), push, harvest)
 }
 
-/// Join successful outputs in source order. A known operational error takes precedence
-/// over allocating the joined bag; only an all-successful run reserves its checked size.
-fn concatenate_chunks<R, H>(
+/// Worker-owned row buffers in source order, without a second full output bag.
+#[derive(Debug)]
+pub(crate) struct OrderedRows<R> {
+    chunks: purrdf_core::SmallVec<[Vec<R>; 1]>,
+    len: usize,
+}
+
+impl<R> OrderedRows<R> {
+    /// Keep a sequential worker's allocation in the inline chunk slot.
+    fn single(rows: Vec<R>) -> Self {
+        Self {
+            len: rows.len(),
+            chunks: purrdf_core::smallvec![rows],
+        }
+    }
+
+    /// The checked number of rows across all original worker buffers.
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// Consumes original worker buffers while retaining their checked total length.
+pub(crate) struct OrderedRowIter<R> {
+    rows: core::iter::Flatten<<purrdf_core::SmallVec<[Vec<R>; 1]> as IntoIterator>::IntoIter>,
+    remaining: usize,
+}
+
+impl<R> Iterator for OrderedRowIter<R> {
+    type Item = R;
+
+    /// Yield the next source row and reduce the exact remaining count.
+    fn next(&mut self) -> Option<R> {
+        let row = self.rows.next()?;
+        self.remaining -= 1;
+        Some(row)
+    }
+
+    /// Report the same checked remaining count as both bounds.
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<R> ExactSizeIterator for OrderedRowIter<R> {}
+
+impl<R> IntoIterator for OrderedRows<R> {
+    type Item = R;
+    type IntoIter = OrderedRowIter<R>;
+
+    /// Consume original buffers in worker order without joining their storage.
+    fn into_iter(self) -> Self::IntoIter {
+        OrderedRowIter {
+            rows: self.chunks.into_iter().flatten(),
+            remaining: self.len,
+        }
+    }
+}
+
+/// Select the first operational error before checked sizing or output admission.
+fn ordered_chunks<R, H>(
     mut chunks: Vec<Result<(Vec<R>, H), EvalError>>,
-) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+) -> Result<(OrderedRows<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+    check_chunk_errors(&mut chunks)?;
+    let len = checked_row_count(chunks.iter().map(|chunk| {
+        chunk
+            .as_ref()
+            .expect("worker errors already selected")
+            .0
+            .len()
+    }))?;
+    let mut rows = OrderedRows {
+        chunks: purrdf_core::SmallVec::new(),
+        len,
+    };
+    rows.chunks
+        .try_reserve_exact(chunks.len())
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })?;
+    let mut harvests = purrdf_core::SmallVec::with_capacity(chunks.len());
+    for chunk_result in chunks {
+        let (chunk, harvested) = chunk_result?;
+        rows.chunks.push(chunk);
+        harvests.push(harvested);
+    }
+    Ok((rows, harvests))
+}
+
+/// Return the first worker error before sizing or admitting output storage.
+fn check_chunk_errors<R, H>(
+    chunks: &mut Vec<Result<(Vec<R>, H), EvalError>>,
+) -> Result<(), EvalError> {
     if let Some(index) = chunks.iter().position(Result::is_err) {
         let Err(error) = chunks.swap_remove(index) else {
             unreachable!("the first error was just selected");
         };
         return Err(error);
     }
+    Ok(())
+}
+
+/// Flat callers retain their original fallible concatenation and allocation shape.
+fn concatenate_chunks<R, H>(
+    mut chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+    check_chunk_errors(&mut chunks)?;
     let mut out = reserve_concatenated_rows(
         Vec::new(),
         chunks.iter().map(|chunk| {
@@ -1232,6 +1328,45 @@ fn concatenate_chunks<R, H>(
     Ok((out, harvests))
 }
 
+/// A scheduler's output ownership, chosen before running the shared workers.
+pub(crate) trait WorkerRows<R>: Sized {
+    /// Retain a sequential worker's rows in this adapter's ownership form.
+    fn single(rows: Vec<R>) -> Self;
+
+    /// Select worker errors, then retain successful outputs in source order.
+    fn from_chunks<H>(
+        chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+    ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError>;
+}
+
+impl<R> WorkerRows<R> for Vec<R> {
+    /// Keep the worker's already-flat allocation.
+    fn single(rows: Self) -> Self {
+        rows
+    }
+
+    /// Use the existing fallible concatenation for flat-output callers.
+    fn from_chunks<H>(
+        chunks: Vec<Result<(Self, H), EvalError>>,
+    ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+        concatenate_chunks(chunks)
+    }
+}
+
+impl<R> WorkerRows<R> for OrderedRows<R> {
+    /// Place the original worker allocation in the inline descriptor slot.
+    fn single(rows: Vec<R>) -> Self {
+        Self::single(rows)
+    }
+
+    /// Retain successful original buffers and their checked total length.
+    fn from_chunks<H>(
+        chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+    ) -> Result<(Self, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+        ordered_chunks(chunks)
+    }
+}
+
 /// Reserve the joined output using actual chunk lengths, reusing a typed buffer
 /// when it already has enough capacity. Its old contents are cleared only after
 /// checked sizing and successful reservation. Overflow, an unrepresentable layout
@@ -1240,11 +1375,7 @@ pub(crate) fn reserve_concatenated_rows<R>(
     mut out: Vec<R>,
     lengths: impl IntoIterator<Item = usize>,
 ) -> Result<Vec<R>, EvalError> {
-    let total = lengths.into_iter().try_fold(0_usize, |total, len| {
-        total.checked_add(len).ok_or(EvalError::AllocationFailed {
-            construct: "parallel solutions",
-        })
-    })?;
+    let total = checked_row_count(lengths)?;
     out.try_reserve_exact(total.saturating_sub(out.len()))
         .map_err(|_| EvalError::AllocationFailed {
             construct: "parallel solutions",
@@ -1253,7 +1384,16 @@ pub(crate) fn reserve_concatenated_rows<R>(
     Ok(out)
 }
 
-/// [`par_blocks_try_map_init_fallible`] under a caller's fuel or scratch ceiling,
+/// Sum worker cardinalities, returning typed overflow before any reservation.
+fn checked_row_count(lengths: impl IntoIterator<Item = usize>) -> Result<usize, EvalError> {
+    lengths.into_iter().try_fold(0_usize, |total, len| {
+        total.checked_add(len).ok_or(EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })
+    })
+}
+
+/// [`par_blocks_try_map_owned`] under a caller's fuel or scratch ceiling,
 /// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
 /// chunked fork; their checkpoints and ordered ledgers still observe each item.
 #[cfg(test)]
@@ -1273,10 +1413,10 @@ where
     par_loop_try_map_init_fallible(bounded, sequential, items, || Ok(init()), push, harvest)
 }
 
-/// One block's outcome in [`par_blocks_try_map_init_fallible`], once a worker has run it.
+/// One block's outcome in [`par_blocks_try_map_owned`], once a worker has run it.
 type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
 
-/// Blocks per worker [`par_blocks_try_map_init_fallible`] cuts its items into.
+/// Blocks per worker [`par_blocks_try_map_owned`] cuts its items into.
 const ORDERED_BLOCKS_PER_THREAD: usize = 64;
 
 /// Enough items to amortize a block's context, program links and harvest. Workers still
@@ -2235,6 +2375,48 @@ mod tests {
     }
 
     // ---- par_chunk_try_map_init ---------------------------------------------
+
+    #[test]
+    fn ordered_rows_preserve_worker_storage_order_and_exact_remaining_count() {
+        let first = vec![11_u64, 12];
+        let second = vec![21_u64, 22, 23];
+        let original = [first.as_ptr(), second.as_ptr()];
+        let (rows, harvests) =
+            ordered_chunks(vec![Ok((first, 1)), Ok((Vec::new(), 2)), Ok((second, 3))]).unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.chunks[0].as_ptr(), original[0]);
+        assert_eq!(rows.chunks[2].as_ptr(), original[1]);
+        assert_eq!(&*harvests, &[1, 2, 3]);
+        let mut rows = rows.into_iter();
+        for (index, expected) in [11, 12, 21, 22, 23].into_iter().enumerate() {
+            assert_eq!(rows.len(), 5 - index);
+            assert_eq!(rows.next(), Some(expected));
+        }
+        assert_eq!(rows.len(), 0);
+        assert_eq!(rows.next(), None);
+        assert_eq!(rows.next(), None);
+        assert_eq!(OrderedRows::<u64>::single(Vec::new()).into_iter().len(), 0);
+    }
+
+    #[test]
+    fn ordered_rows_select_source_errors_before_checked_capacity() {
+        assert_eq!(
+            ordered_chunks(vec![
+                Ok((vec![(); usize::MAX], ())),
+                Ok((vec![()], ())),
+                Err(EvalError::internal("first worker error")),
+                Err(EvalError::internal("later worker error")),
+            ])
+            .unwrap_err(),
+            EvalError::internal("first worker error")
+        );
+        assert_eq!(
+            ordered_chunks(vec![Ok((vec![(); usize::MAX], ())), Ok((vec![()], ()))]).unwrap_err(),
+            EvalError::AllocationFailed {
+                construct: "parallel solutions",
+            }
+        );
+    }
 
     #[test]
     fn parallel_concatenation_capacity_overflow_is_typed_without_allocating() {
@@ -3211,13 +3393,13 @@ pub(crate) fn is_parallel_safe_pattern_with_admitted(
 }
 
 /// Original ordered worker law with a fallible initial owner.
-pub(crate) fn par_chunk_try_map_init_fallible<T, S, R, H>(
+fn par_chunk_try_map_owned<T, S, R, H, O: WorkerRows<R>>(
     sequential: bool,
     items: &[T],
     init: impl Fn() -> Result<S, EvalError> + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
     harvest: impl Fn(&mut S) -> H + Sync,
-) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+) -> Result<(O, purrdf_core::SmallVec<[H; 1]>), EvalError>
 where
     T: Sync,
     R: Send,
@@ -3230,7 +3412,7 @@ where
             push(&mut state, &mut out, item)?;
         }
         let harvested = harvest(&mut state);
-        Ok((out, purrdf_core::smallvec![harvested]))
+        Ok((O::single(out), purrdf_core::smallvec![harvested]))
     };
     if !should_parallelize(sequential, items.len()) {
         return run_sequentially();
@@ -3252,7 +3434,23 @@ where
         })
         .collect();
 
-    concatenate_chunks(per_chunk)
+    O::from_chunks(per_chunk)
+}
+
+/// Flat output adapter over the original ordered chunk workers.
+pub(crate) fn par_chunk_try_map_init_fallible<T, S, R, H>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    par_chunk_try_map_owned(sequential, items, init, push, harvest)
 }
 
 /// Original ordered worker law with a fallible initial owner.
@@ -3269,28 +3467,45 @@ where
     R: Send,
     H: Send,
 {
-    if bounded {
-        par_blocks_try_map_init_fallible(sequential, items, init, push, harvest)
-    } else {
-        par_chunk_try_map_init_fallible(sequential, items, init, push, harvest)
-    }
+    par_loop_try_map_owned(bounded, sequential, items, init, push, harvest)
 }
 
-/// Original ordered worker law with a fallible initial owner.
-pub(crate) fn par_blocks_try_map_init_fallible<T, S, R, H>(
+/// Shared scheduler for flat output or original buffers awaiting ordered conversion.
+pub(crate) fn par_loop_try_map_owned<T, S, R, H, O: WorkerRows<R>>(
+    bounded: bool,
     sequential: bool,
     items: &[T],
     init: impl Fn() -> Result<S, EvalError> + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
     harvest: impl Fn(&mut S) -> H + Sync,
-) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+) -> Result<(O, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    if bounded {
+        par_blocks_try_map_owned(sequential, items, init, push, harvest)
+    } else {
+        par_chunk_try_map_owned(sequential, items, init, push, harvest)
+    }
+}
+
+/// Original ordered worker law with a fallible initial owner.
+fn par_blocks_try_map_owned<T, S, R, H, O: WorkerRows<R>>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(O, purrdf_core::SmallVec<[H; 1]>), EvalError>
 where
     T: Sync,
     R: Send,
     H: Send,
 {
     if !should_parallelize(sequential, items.len()) {
-        return par_chunk_try_map_init_fallible(true, items, init, push, harvest);
+        return par_chunk_try_map_owned(true, items, init, push, harvest);
     }
     use rayon::prelude::*;
     let threads = rayon::current_num_threads().max(1);
@@ -3334,5 +3549,5 @@ where
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         })
         .collect();
-    concatenate_chunks(outcomes)
+    O::from_chunks(outcomes)
 }

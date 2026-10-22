@@ -11,11 +11,6 @@ use std::fmt;
 pub enum ColumnarError {
     /// Logical capacity or physical storage refused RDF reconstruction.
     Storage(purrdf_lex::allocation::StorageError),
-    /// The source read session failed; this is not malformed RDF or an absent row.
-    SourceRead {
-        /// The operational source failure's diagnostic detail.
-        detail: String,
-    },
     /// Input ended before a required byte range was available.
     Truncated {
         /// Structure being decoded.
@@ -53,7 +48,6 @@ pub enum ColumnarError {
 impl purrdf_hash::error::StructuredError for ColumnarError {
     purrdf_hash::error_visit! {
         Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
-        SourceRead { detail } => "columnar-source-read" { "detail" => Text(detail) },
         Truncated { context, needed, available } => "columnar-truncated" {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
@@ -94,7 +88,6 @@ impl fmt::Display for ColumnarError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => write!(f, "columnar storage: {error}"),
-            Self::SourceRead { detail } => write!(f, "columnar source read failed: {detail}"),
             Self::Truncated {
                 context,
                 needed,
@@ -124,3 +117,47 @@ impl fmt::Display for ColumnarError {
 purrdf_lex::error_source!(ColumnarError { Storage });
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });
+
+/// An RDF projection or encoding refusal, retaining its original source cause.
+///
+/// The source error remains owned and typed until the caller selects its human
+/// presentation. Inspection borrows it without rendering or cloning it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColumnarWriteError<E> {
+    /// The native fixed-schema codec refused the input or output.
+    Codec(ColumnarError),
+    /// The original operational read session refused projection or term access.
+    SourceRead(E),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for ColumnarWriteError<E>
+{
+    purrdf_hash::error_visit! {
+        Codec(cause) => "columnar-write-codec" { "cause" => Cause(cause) },
+        SourceRead(cause) => "columnar-source-read" { "cause" => Cause(cause) },
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for ColumnarWriteError<E> {
+    /// Render the original cause only when the caller requests human text.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Codec(cause) => cause.fmt(f),
+            Self::SourceRead(cause) => write!(f, "columnar source read failed: {cause}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for ColumnarWriteError<E> {
+    /// Borrow the original cause directly, preserving standard downcasts.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Codec(cause) => Some(cause),
+            Self::SourceRead(cause) => Some(cause),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(impl<E> ColumnarWriteError<E> { Codec(ColumnarError) });
