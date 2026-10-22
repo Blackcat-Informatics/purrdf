@@ -12,8 +12,8 @@ use purrdf_columnar::{
     ColumnarError, ColumnarWriteError, Compression, ParquetFiles, project, read, write,
 };
 use purrdf_core::{
-    ContentStore, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder,
-    RdfStoreCapabilities, TermGuard, TermId, TermRef, TermValue,
+    ContentDigest, ContentStore, ContentStoreError, DatasetView, GraphMatch, QuadIds, RdfDataset,
+    RdfDatasetBuilder, RdfStoreCapabilities, TermGuard, TermId, TermRef, TermValue,
 };
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 use purrdf_testkit::error_capture::Capture;
@@ -471,8 +471,277 @@ fn human_presentation_preserves_codec_and_source_messages() {
     );
 }
 
+/// Replace one uncompressed data value while retaining every physical boundary.
+fn replace_unique(bytes: &mut [u8], original: &[u8], replacement: &[u8]) {
+    assert_eq!(original.len(), replacement.len());
+    let positions: Vec<_> = bytes
+        .windows(original.len())
+        .enumerate()
+        .filter_map(|(index, value)| (value == original).then_some(index))
+        .collect();
+    assert_eq!(positions.len(), 1, "fixture must identify one data value");
+    let start = positions[0];
+    bytes[start..start + original.len()].copy_from_slice(replacement);
+}
+
+#[derive(Default)]
+struct NativeInspection {
+    fields: usize,
+    records: usize,
+    bytes: usize,
+}
+
+impl<'error> ErrorVisitor<'error> for NativeInspection {
+    /// Count original identities throughout the complete borrowed tree.
+    fn variant(&mut self, _: &'static str) {
+        self.records += 1;
+    }
+    /// Follow native causes and digest records without rendering or allocation.
+    fn value(&mut self, _: Option<&'static str>, value: ErrorValue<'error>) {
+        self.fields += 1;
+        match value {
+            ErrorValue::Cause(value) | ErrorValue::Record(value) | ErrorValue::Term(value) => {
+                value.visit(self);
+            }
+            ErrorValue::Bytes(bytes) => self.bytes += bytes.len(),
+            _ => {}
+        }
+    }
+    /// Lists retain their original entries in the same borrowed traversal.
+    fn begin_list(&mut self, _: Option<&'static str>, _: usize) {}
+    /// End the current borrowed list.
+    fn end_list(&mut self) {}
+    /// Count compound views supplied directly by the native producer.
+    fn begin_record(&mut self, _: Option<&'static str>, _: &'static str) {
+        self.records += 1;
+    }
+    /// End the current native compound view.
+    fn end_record(&mut self) {}
+}
+
+/// Inspect every nested native field with all four allocation quantities zero.
+fn inspect_without_allocation(error: &ColumnarError) -> NativeInspection {
+    let mut visitor = NativeInspection::default();
+    let window = CurrentThreadWindow::open();
+    error.visit(&mut visitor);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(measured.retained_bytes, 0);
+    assert_eq!(measured.peak_working_bytes, 0);
+    assert!(visitor.fields > 0);
+    visitor
+}
+
+/// Read an original SHA-256 identity through the root digest's byte record.
+fn assert_content_digest(record: &Capture<'_>, expected: ContentDigest) {
+    assert_eq!(record.code, "content-digest-sha256");
+    let digest = record.child("digest");
+    assert_eq!(digest.code, "digest32");
+    assert!(
+        matches!(digest.field("bytes"), ErrorValue::Bytes(bytes) if bytes == expected.as_bytes())
+    );
+}
+
+/// Actual blob verification keeps both identities and the nonzero row after disposal.
+fn public_blob_read_preserves_original_integrity_cause() {
+    let first = b"original first payload";
+    let second = b"original other payload";
+    let mut blobs = ContentStore::new();
+    let a = blobs.insert(first.to_vec());
+    let b = blobs.insert(second.to_vec());
+    let (stored, payload) = if a > b { (a, first) } else { (b, second) };
+    let mut changed = payload.to_vec();
+    changed[0] ^= 1;
+    let mut array = write(
+        &RdfDatasetBuilder::new().freeze().unwrap(),
+        &blobs,
+        Compression::Uncompressed,
+    )
+    .unwrap()
+    .files
+    .into_array();
+    replace_unique(&mut array[4], payload, &changed);
+    let files = ParquetFiles::from_array(array);
+    let error = read(&files).unwrap_err();
+    drop(files);
+    drop(blobs);
+    let ColumnarError::BlobContent { row, cause } = &error else {
+        panic!("expected original blob cause: {error}");
+    };
+    assert_eq!(*row, 1);
+    assert_eq!(
+        error.to_string(),
+        format!("columnar blobs.bytes is malformed: row 1: {cause}")
+    );
+    assert!(std::ptr::eq(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<ContentStoreError>()
+            .unwrap(),
+        cause
+    ));
+    assert_eq!(inspect_without_allocation(&error).bytes, 64);
+    let captured = Capture::read(&error);
+    assert!(matches!(captured.field("row"), ErrorValue::Unsigned(1)));
+    let cause = captured.child("cause");
+    assert_eq!(cause.code, "content-digest-mismatch");
+    assert_content_digest(&cause.child("stored"), stored);
+    assert_content_digest(&cause.child("actual"), ContentDigest::of(&changed));
+}
+
+/// Actual kernel validation survives the public reader with its complete diagnostic.
+fn public_reconstruction_preserves_original_diagnostic() {
+    let mut builder = RdfDatasetBuilder::new();
+    let id = builder.intern_iri("urn:original").unwrap();
+    builder.push_quad(id, id, id, None).unwrap();
+    let mut array = write(
+        &builder.freeze().unwrap(),
+        &ContentStore::new(),
+        Compression::Uncompressed,
+    )
+    .unwrap()
+    .files
+    .into_array();
+    replace_unique(&mut array[0], b"urn:original", b"0rn:original");
+    let files = ParquetFiles::from_array(array);
+    let error = read(&files).unwrap_err();
+    drop(files);
+    let ColumnarError::Reconstruction(cause) = &error else {
+        panic!("expected original reconstruction diagnostic: {error}");
+    };
+    assert!(std::ptr::eq(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<purrdf_core::RdfDiagnostic>()
+            .unwrap(),
+        cause
+    ));
+    inspect_without_allocation(&error);
+    let mut native = RdfDatasetBuilder::new();
+    let id = native.intern_iri("0rn:original").unwrap();
+    native.push_quad(id, id, id, None).unwrap();
+    let expected = native.freeze().unwrap_err();
+    assert_eq!(cause, &expected);
+    let captured = Capture::read(&error).child("cause");
+    assert_eq!(captured.code, Capture::read(&expected).code);
+    assert_eq!(
+        error.to_string(),
+        format!("columnar RDF reconstruction is malformed: {expected}")
+    );
+}
+
+/// Native wrappers move causes without allocating and keep diagnostic attachments.
+fn native_cause_transport_preserves_storage_and_full_width_rows() {
+    let mut store = ContentStore::new();
+    let cause = store
+        .insert_checked(ContentDigest::from_raw([0xff; 32]), b"original".to_vec())
+        .unwrap_err();
+    let global_cause = cause.clone();
+    let counts = Arc::new(Counts::default());
+    let owner = Arc::new(Owner {
+        identity: u128::MAX - 91,
+        counts: Arc::clone(&counts),
+    });
+    let weak = Arc::downgrade(&owner);
+    let refusal = Refusal::Read {
+        phase: "original-attachment",
+        observed: u128::MAX - 17,
+        owner,
+    };
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    let native: Box<dyn purrdf_hash::error::NativeError> = memory.boxed(refusal).unwrap();
+    let native = purrdf_lex::allocation::SharedOwned::try_from_admitted(
+        native,
+        purrdf_lex::allocation::Resident,
+    )
+    .unwrap();
+    let diagnostic =
+        purrdf_core::RdfDiagnostic::from(purrdf_lex::allocation::StorageError::AdmissionFailed)
+            .with_detail("original diagnostic detail")
+            .with_location(
+                purrdf_core::RdfLocation::logical("original location").with_gts_quad(u64::MAX),
+            )
+            .with_native_cause(native, &mut memory)
+            .unwrap();
+    let window = CurrentThreadWindow::open();
+    let global = ColumnarError::ContentStore(global_cause);
+    let row = ColumnarError::BlobContent {
+        row: usize::MAX,
+        cause,
+    };
+    let reconstruction = ColumnarError::Reconstruction(diagnostic);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    assert_eq!(measured.retained_bytes, 0);
+    assert_eq!(measured.peak_working_bytes, 0);
+    for error in [&global, &row, &reconstruction] {
+        inspect_without_allocation(error);
+    }
+    let ColumnarError::ContentStore(cause) = &global else {
+        unreachable!()
+    };
+    assert!(std::ptr::eq(
+        std::error::Error::source(&global)
+            .unwrap()
+            .downcast_ref::<ContentStoreError>()
+            .unwrap(),
+        cause
+    ));
+    assert_eq!(
+        global.to_string(),
+        format!("columnar content store is malformed: {cause}")
+    );
+    assert!(
+        matches!(Capture::read(&row).field("row"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+    );
+    let ColumnarError::Reconstruction(cause) = &reconstruction else {
+        unreachable!()
+    };
+    assert_eq!(cause.detail.as_deref(), Some("original diagnostic detail"));
+    assert_eq!(
+        cause.location.as_ref().unwrap().gts_quad_index,
+        Some(u64::MAX)
+    );
+    assert_eq!(
+        cause.storage_error(),
+        Some(purrdf_lex::allocation::StorageError::AdmissionFailed)
+    );
+    let captured = Capture::read(&reconstruction)
+        .child("cause")
+        .child("attachments")
+        .child("native_cause");
+    assert!(
+        matches!(captured.field("observed"), ErrorValue::ByteCount(value) if value == u128::MAX - 17)
+    );
+    assert!(
+        matches!(captured.field("identity"), ErrorValue::Unsigned(value) if value == u128::MAX - 91)
+    );
+    assert_eq!(weak.strong_count(), 1);
+    assert_eq!(counts.clones.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        reconstruction.to_string(),
+        "columnar storage: native workspace admission refused"
+    );
+    assert!(std::ptr::eq(
+        std::error::Error::source(&reconstruction)
+            .unwrap()
+            .downcast_ref::<purrdf_core::RdfDiagnostic>()
+            .unwrap(),
+        cause
+    ));
+    drop(reconstruction);
+    assert_eq!(weak.strong_count(), 0);
+    assert_eq!(counts.drops.load(Ordering::Relaxed), 1);
+}
+
 purrdf_testkit::harness_main!(
     original_parquet_bounds_survive_file_disposal_without_narrowing,
     public_projection_and_write_preserve_source_owners_and_fields,
     human_presentation_preserves_codec_and_source_messages,
+    public_blob_read_preserves_original_integrity_cause,
+    public_reconstruction_preserves_original_diagnostic,
+    native_cause_transport_preserves_storage_and_full_width_rows,
 );

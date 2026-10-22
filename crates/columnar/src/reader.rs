@@ -521,9 +521,9 @@ fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
             ));
         }
         let payload = required_bytes(payloads, row, "blobs.bytes")?.to_vec();
-        store.insert_checked(digest, payload).map_err(|error| {
-            ColumnarError::malformed("blobs.bytes", format!("row {row}: {error}"))
-        })?;
+        store
+            .insert_checked(digest, payload)
+            .map_err(|cause| ColumnarError::BlobContent { row, cause })?;
         previous = Some(digest);
     }
     Ok(store)
@@ -571,12 +571,7 @@ fn reconstruct_dataset(
             graph.map(|id| ids[id]),
         )?;
     }
-    builder.freeze().map_err(|error| {
-        error.storage_error().map_or_else(
-            || ColumnarError::malformed("RDF reconstruction", error.to_string()),
-            ColumnarError::Storage,
-        )
-    })
+    builder.freeze().map_err(ColumnarError::Reconstruction)
 }
 
 fn int_column(data: &TableData, index: usize) -> Result<&Int64Column, ColumnarError> {
@@ -830,7 +825,7 @@ mod tests {
         array[4] = write_table(&blob_table, Compression::Uncompressed).unwrap();
         assert!(matches!(
             read(&ParquetFiles::from_array(array)),
-            Err(ColumnarError::Malformed { .. })
+            Err(ColumnarError::BlobContent { row: 0, .. })
         ));
     }
 }
