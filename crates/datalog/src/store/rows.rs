@@ -122,6 +122,21 @@ impl<I: TermIdentity> RowLog<I> {
         reserve_ordered_in(live, memory, retired_bytes)
     }
 
+    pub(super) fn flush_retired_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if let Self::Sparse {
+            supplemental: true,
+            retired_bytes,
+            ..
+        } = self
+        {
+            flush_retired_bytes(retired_bytes, memory)?;
+        }
+        Ok(())
+    }
+
     /// Build new metadata under the supplied owner; existing buffers keep theirs.
     pub(super) fn copy_sparse_in<A: Admission + ?Sized>(
         &self,
@@ -336,11 +351,11 @@ mod tests {
             panic!("native row arena")
         };
         let row_bytes = rows.storage_bytes().unwrap();
-        assert!(held > row_bytes && input.lookup_supplemental);
+        assert!(held > row_bytes && input.metadata_supplemental);
         memory.admission_mut().maximum = held;
         let mut independent = input.clone();
         assert!(!independent.row_log.is_supplemental());
-        assert!(!independent.lookup_supplemental);
+        assert!(!independent.metadata_supplemental);
         independent.insert_row(["independent", "in", "o"]).unwrap();
         assert_eq!(
             live.get(),
@@ -390,13 +405,14 @@ mod tests {
         assert_eq!(input.row_count(), 4);
         assert_eq!(input.term_id("fresh"), None);
         memory.admission_mut().refuse_shrink = false;
+        input.flush_metadata_retirement_in(&mut memory).unwrap();
+        assert_eq!(live.get(), protected - row_bytes);
         input
             .insert_terms_in(
                 ["fresh", "in", "o"].map(DictionaryTerm::Surface),
                 &mut memory,
             )
             .unwrap();
-        assert_eq!(live.get(), protected - row_bytes);
         assert_eq!(memory.admitted_bytes(), live.get());
         assert_eq!(input.rows_from(0).take(3).collect::<Vec<_>>(), original);
         assert_eq!(input.rows_from(0).last().unwrap().0.index(), 4);
@@ -424,7 +440,7 @@ mod tests {
             ),
             Err(DictionaryError::Storage(StorageError::AdmissionFailed))
         ));
-        assert_eq!(input.lookup_retired_bytes, lookup_bytes);
+        assert_eq!(input.metadata_retired_bytes, lookup_bytes);
         let protected = live.get();
         assert!(matches!(
             input.insert_terms_in(
@@ -437,14 +453,15 @@ mod tests {
         assert_eq!(input.row_count(), 5);
         assert_eq!(input.term_id("other"), None);
         memory.admission_mut().refuse_shrink = false;
+        input.flush_metadata_retirement_in(&mut memory).unwrap();
+        assert_eq!(live.get(), protected - lookup_bytes);
         input
             .insert_terms_in(
                 ["fresh", "other", "o"].map(DictionaryTerm::Surface),
                 &mut memory,
             )
             .unwrap();
-        assert_eq!(live.get(), protected - lookup_bytes);
-        assert_eq!(input.lookup_retired_bytes, 0);
+        assert_eq!(input.metadata_retired_bytes, 0);
         assert_eq!(input.rows_from(0).last().unwrap().0.index(), 5);
         input.prepare_maintenance_indexes_in(&mut memory).unwrap();
         assert!(input.order.is_supplemental());

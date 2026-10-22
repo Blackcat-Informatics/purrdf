@@ -533,12 +533,16 @@ mod tests {
         let fresh = model
             .admit_terms(["x", "in", "o"].map(DictionaryTerm::Surface))
             .unwrap();
+        let separate = model
+            .admit_terms(["x", "unrelated", "o"].map(DictionaryTerm::Surface))
+            .unwrap();
         model
-            .apply(ChangeBatch::new(7, [(fresh, 1)], Resident).unwrap())
+            .apply(ChangeBatch::new(7, [(fresh, 1), (separate, 1)], Resident).unwrap())
             .unwrap();
         model.storage.admission.maximum_grows = model.storage.admission.grows;
         let mut saw_retained_native_frame = false;
         let mut saw_pending_publication = false;
+        let mut saw_new_partition_refusal = false;
         let mut refusals = 0;
         loop {
             match model.resume(options, None).unwrap() {
@@ -548,6 +552,10 @@ mod tests {
                     let pending = model.pending.as_ref().unwrap();
                     saw_retained_native_frame |= pending.active.is_some();
                     saw_pending_publication |= pending.publication.is_some();
+                    saw_new_partition_refusal |= pending
+                        .changes
+                        .get(pending.input)
+                        .is_some_and(|(terms, _)| *terms == separate);
                     let state = model.session.state.as_ref().unwrap();
                     assert_eq!(
                         state.rel.rows_for_predicate(out).count(),
@@ -572,12 +580,17 @@ mod tests {
                 }
             }
         }
-        assert!(refusals > 0 && saw_retained_native_frame && saw_pending_publication);
+        assert!(
+            refusals > 0
+                && saw_retained_native_frame
+                && saw_pending_publication
+                && saw_new_partition_refusal
+        );
         assert_eq!(model.applied_watermark(), Some(&7));
-        assert_eq!(model.facts().unwrap().row_count(), 4);
+        assert_eq!(model.facts().unwrap().row_count(), 5);
         assert_eq!(model.witnesses().unwrap().len(), 2);
         let delta = model.model_delta().unwrap().unwrap();
-        assert_eq!(delta.changes().len(), 2);
+        assert_eq!(delta.changes().len(), 3);
         assert!(delta.changes().iter().all(|(_, weight)| *weight == 1));
         assert_eq!(model.storage.live(), live.get());
         drop(model);

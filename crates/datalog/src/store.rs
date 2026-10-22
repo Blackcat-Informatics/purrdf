@@ -751,15 +751,26 @@ fn merge_batches<W: Weight, I: TermIdentity>(
 /// identities apart and the loop stays scalar, over the columns they pack.
 /// Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
 /// always have the same length.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Tail<I: TermIdentity = TermId> {
     data: RowColumns<I, 2, Option<RowId>>,
+    supplemental: bool,
+}
+
+impl<I: TermIdentity> Clone for Tail<I> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            supplemental: false,
+        }
+    }
 }
 
 impl<I: TermIdentity> Default for Tail<I> {
     fn default() -> Self {
         Self {
             data: RowColumns::default(),
+            supplemental: false,
         }
     }
 }
@@ -767,7 +778,33 @@ impl<I: TermIdentity> Default for Tail<I> {
 impl<I: TermIdentity> Tail<I> {
     /// Reserve all three columns before publishing any part of a row.
     fn reserve_row(&mut self) -> Result<(), StorageError> {
+        assert!(
+            !self.supplemental,
+            "supplemental columns lend their original memory"
+        );
         self.data.reserve_rows(1)
+    }
+
+    fn reserve_row_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        if self.supplemental {
+            self.data.reserve_rows_in(1, memory, retired)
+        } else {
+            self.reserve_row()
+        }
+    }
+
+    fn copy_in<A: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            data: self.data.copy_in(memory)?,
+            supplemental: true,
+        })
     }
 
     /// Publish row `(subject, object, row)` after [`Self::reserve_row`] succeeds.
@@ -903,6 +940,28 @@ impl<I: TermIdentity> Default for Relation<I> {
 }
 
 impl<I: TermIdentity> Relation<I> {
+    fn supplemental() -> Self {
+        Self {
+            tail: Tail {
+                supplemental: true,
+                ..Tail::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    fn retire(self) -> usize {
+        let bytes = if self.tail.supplemental {
+            self.tail
+                .data
+                .storage_bytes()
+                .expect("original tail column layouts")
+        } else {
+            0
+        };
+        drop(self);
+        bytes
+    }
     /// Publish an already-admitted, absent `(subject_id, object_id)` row with
     /// its original store-assigned `row_id`.
     ///
@@ -1476,8 +1535,8 @@ where
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
     by_key: OrderedTable<StoreKey<D::Id, N>, usize>,
-    lookup_supplemental: bool,
-    lookup_retired_bytes: usize,
+    metadata_supplemental: bool,
+    metadata_retired_bytes: usize,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
     order: Directory<D::Id, StoreKey<D::Id, N>>,
@@ -1499,6 +1558,8 @@ where
     /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
     /// the per-row scan. Never inserted into.
     empty: Relation<D::Id>,
+    /// Empty next-partition storage retains accepted column growth across refusal.
+    spare_relation: Relation<D::Id>,
     /// Reduced-width owner model, absent from shipping partition storage.
     #[cfg(test)]
     partition_limit: Option<u64>,
@@ -1520,8 +1581,8 @@ where
                 .expect("cloning original partition lookup storage"),
             order: self.order.clone(),
             directory_preparation: None,
-            lookup_supplemental: false,
-            lookup_retired_bytes: 0,
+            metadata_supplemental: false,
+            metadata_retired_bytes: 0,
             free_partitions: self.free_partitions.clone(),
             next_partition: self.next_partition,
             row_count: self.row_count,
@@ -1529,6 +1590,7 @@ where
             row_log: self.row_log.clone(),
             maintenance_indexes: self.maintenance_indexes,
             empty: self.empty.clone(),
+            spare_relation: Relation::default(),
             #[cfg(test)]
             partition_limit: self.partition_limit,
         }
@@ -1536,10 +1598,9 @@ where
 }
 
 /// Storage reservations held before publishing one new row.
-struct RowAdmission<I: TermIdentity> {
+struct RowAdmission {
     row_id: RowId,
     partition_id: PartitionId,
-    new_relation: Relation<I>,
     /// An admitted directory bucket if this is the predicate's first partition.
     predicate_bucket: Option<Vec<usize>>,
 }
@@ -1634,8 +1695,8 @@ where
             relations: Vec::new(),
             keys: Vec::new(),
             by_key: OrderedTable::default(),
-            lookup_supplemental: false,
-            lookup_retired_bytes: 0,
+            metadata_supplemental: false,
+            metadata_retired_bytes: 0,
             order: Directory::default(),
             directory_preparation: None,
             free_partitions: Vec::new(),
@@ -1645,6 +1706,7 @@ where
             row_log: RowLog::default(),
             maintenance_indexes: false,
             empty: Relation::default(),
+            spare_relation: Relation::default(),
             #[cfg(test)]
             partition_limit: None,
         }
@@ -1680,23 +1742,48 @@ where
         memory: &mut Memory<'_, A>,
     ) -> Result<(), DictionaryError<D::Error>> {
         assert!(
-            !self.row_log.is_supplemental() && !self.lookup_supplemental,
+            !self.row_log.is_supplemental() && !self.metadata_supplemental,
             "the original native metadata transfers once"
         );
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
-        let (rows, lookup) = memory.try_scope(|memory| {
+        let (rows, lookup, keys, free, mut relations) = memory.try_scope(|memory| {
             let rows = self.row_log.copy_sparse_in(memory)?;
             let lookup = self.by_key.try_clone(memory)?;
+            let mut keys = Vec::new();
+            memory.reserve(&mut keys, self.keys.len())?;
+            keys.extend_from_slice(&self.keys);
+            let mut free = Vec::new();
+            memory.reserve(&mut free, self.free_partitions.len())?;
+            free.extend_from_slice(&self.free_partitions);
+            let mut relations = Vec::new();
+            memory.reserve(&mut relations, self.relations.len())?;
+            for original in &self.relations {
+                relations.push(Relation {
+                    tail: original.tail.copy_in(memory)?,
+                    len: original.len,
+                    maintain_objects: original.maintain_objects,
+                    ..Relation::supplemental()
+                });
+            }
             self.interner
                 .check_read()
                 .map_err(DictionaryError::Source)?;
-            Ok::<_, DictionaryError<D::Error>>((rows, lookup))
+            Ok::<_, DictionaryError<D::Error>>((rows, lookup, keys, free, relations))
         })?;
+        // Existing sealed arrangements retain their original inner owners;
+        // mutable tail columns were constructed under the new admission.
+        for (replacement, original) in relations.iter_mut().zip(&mut self.relations) {
+            replacement.batches = std::mem::take(&mut original.batches);
+        }
+        self.relations = relations;
+        self.keys = keys;
+        self.free_partitions = free;
         self.row_log = rows;
         self.by_key = lookup;
-        self.lookup_supplemental = true;
+        self.metadata_supplemental = true;
+        self.spare_relation = Relation::supplemental();
         Ok(())
     }
 
@@ -1717,9 +1804,10 @@ where
         &mut self,
         memory: &mut Memory<'_, A>,
     ) -> Result<(), StorageError> {
-        if self.lookup_supplemental {
-            crate::allocation::flush_retired_bytes(&mut self.lookup_retired_bytes, memory)?;
+        if self.metadata_supplemental {
+            crate::allocation::flush_retired_bytes(&mut self.metadata_retired_bytes, memory)?;
         }
+        self.row_log.flush_retired_in(memory)?;
         self.order.flush_retired_in(memory)
     }
 
@@ -1735,12 +1823,10 @@ where
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
-        self.free_partitions
-            .try_reserve(self.relations.len())
-            .map_err(|_| StorageError::AllocationFailed)?;
+        self.reserve_partition_slots_in(self.relations.len(), memory)?;
         let (directory, sparse_rows) = if supplemental {
             assert!(
-                self.row_log.is_supplemental() && self.lookup_supplemental,
+                self.row_log.is_supplemental() && self.metadata_supplemental,
                 "maintained metadata keeps its original supplied owner"
             );
             let frame = self
@@ -1788,7 +1874,7 @@ where
             if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
                 let (_, key) = self.keys[slot].take().expect("dense keys are occupied");
                 self.by_key.remove(&key);
-                self.relations[slot] = Relation::default();
+                self.retire_relation_slot(slot);
                 self.free_partitions.push(slot);
             }
         }
@@ -1822,9 +1908,10 @@ where
         if self.relations[slot].row_count() != 0 {
             return Ok(());
         }
-        self.free_partitions
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
+        assert!(
+            self.free_partitions.len() < self.free_partitions.capacity(),
+            "every possible retired partition slot is admitted before publication"
+        );
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -1832,7 +1919,7 @@ where
         let (id, key) = self.keys[slot].take().expect("retiring a live empty key");
         assert_eq!(self.order.remove(id, Arity::<N>::key_term(key, 0)), slot);
         assert_eq!(self.by_key.remove(&key), Some(slot));
-        self.relations[slot] = Relation::default();
+        self.retire_relation_slot(slot);
         self.free_partitions.push(slot);
         Ok(())
     }
@@ -1892,6 +1979,7 @@ where
         original: &WithdrawnRow<D::Id>,
         memory: &mut Memory<'_, A>,
     ) -> Result<(), DictionaryError<D::Error>> {
+        self.flush_metadata_retirement_in(memory)?;
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -1904,7 +1992,9 @@ where
         ));
         self.row_log.reserve_in(memory)?;
         assert!(!self.relations[slot].contains(original.subject, original.object));
-        self.relations[slot].tail.reserve_row()?;
+        self.relations[slot]
+            .tail
+            .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -2018,15 +2108,43 @@ where
         ))
     }
 
+    fn retire_relation_slot(&mut self, slot: usize) {
+        let retired = std::mem::take(&mut self.relations[slot]);
+        self.metadata_retired_bytes = self
+            .metadata_retired_bytes
+            .checked_add(retired.retire())
+            .expect("retired native columns fit their original grant");
+    }
+
+    fn reserve_partition_slots_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if required <= self.free_partitions.capacity() {
+            return Ok(());
+        }
+        if self.metadata_supplemental {
+            crate::allocation::reserve_array_growth(
+                &mut self.free_partitions,
+                required,
+                memory,
+                &mut self.metadata_retired_bytes,
+            )
+        } else {
+            self.free_partitions
+                .try_reserve(required - self.free_partitions.len())
+                .map_err(|_| StorageError::AllocationFailed)
+        }
+    }
+
     fn admit_row<A: Admission + ?Sized>(
         &mut self,
         existing: Option<usize>,
         predicate: Option<D::Id>,
         memory: &mut Memory<'_, A>,
-    ) -> Result<RowAdmission<D::Id>, StorageError> {
-        if self.lookup_supplemental {
-            crate::allocation::flush_retired_bytes(&mut self.lookup_retired_bytes, memory)?;
-        }
+    ) -> Result<RowAdmission, StorageError> {
+        self.flush_metadata_retirement_in(memory)?;
         // Admit both live cardinality and the never-reused append identity before
         // reserving dependent storage or interning a new lexical surface.
         RowId::from_address(self.row_count)?;
@@ -2044,19 +2162,17 @@ where
             }
         };
         self.row_log.reserve_in(memory)?;
-        let mut new_relation = Relation {
-            maintain_objects: self.maintenance_indexes,
-            ..Relation::default()
-        };
         let mut predicate_bucket = None;
         if let Some(slot) = existing {
-            self.relations[slot].tail.reserve_row()?;
+            self.relations[slot]
+                .tail
+                .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
         } else {
-            if self.lookup_supplemental {
+            if self.metadata_supplemental {
                 crate::allocation::reserve_ordered_in(
                     &mut self.by_key,
                     memory,
-                    &mut self.lookup_retired_bytes,
+                    &mut self.metadata_retired_bytes,
                 )?;
             } else {
                 let old = self.by_key.storage_bytes()?;
@@ -2064,28 +2180,43 @@ where
                     .reserve_insert(&mut Memory::resume(&mut Resident, old))?;
             }
             if self.free_partitions.is_empty() {
-                self.relations
-                    .try_reserve(1)
-                    .map_err(|_| StorageError::AllocationFailed)?;
-                self.keys
-                    .try_reserve(1)
-                    .map_err(|_| StorageError::AllocationFailed)?;
+                if self.metadata_supplemental {
+                    crate::allocation::reserve_array_in(
+                        &mut self.relations,
+                        memory,
+                        &mut self.metadata_retired_bytes,
+                        |values, memory| memory.reserve_for_push(values),
+                    )?;
+                    crate::allocation::reserve_array_in(
+                        &mut self.keys,
+                        memory,
+                        &mut self.metadata_retired_bytes,
+                        |values, memory| memory.reserve_for_push(values),
+                    )?;
+                } else {
+                    self.relations
+                        .try_reserve(1)
+                        .map_err(|_| StorageError::AllocationFailed)?;
+                    self.keys
+                        .try_reserve(1)
+                        .map_err(|_| StorageError::AllocationFailed)?;
+                }
                 let capacity = self
                     .relations
                     .len()
                     .checked_add(1)
                     .ok_or(StorageError::SizeOverflow)?;
-                self.free_partitions
-                    .try_reserve(capacity - self.free_partitions.len())
-                    .map_err(|_| StorageError::AllocationFailed)?;
+                self.reserve_partition_slots_in(capacity, memory)?;
             }
-            new_relation.tail.reserve_row()?;
+            self.spare_relation.maintain_objects = self.maintenance_indexes;
+            self.spare_relation
+                .tail
+                .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
             predicate_bucket = self.order.admit_in(predicate, memory)?;
         }
         Ok(RowAdmission {
             row_id,
             partition_id,
-            new_relation,
             predicate_bucket,
         })
     }
@@ -2095,7 +2226,7 @@ where
         ids: [D::Id; N],
         existing: Option<usize>,
         position: Option<Position>,
-        admission: RowAdmission<D::Id>,
+        admission: RowAdmission,
         memory: &mut Memory<'_, A>,
     ) -> (D::Id, D::Id, RowId) {
         let (subject_id, object_id) = (ids[0], ids[2]);
@@ -2103,12 +2234,19 @@ where
         let RowAdmission {
             row_id,
             partition_id,
-            new_relation,
             predicate_bucket,
         } = admission;
         let slot = if let Some(slot) = existing {
             slot
         } else {
+            let new_relation = std::mem::replace(
+                &mut self.spare_relation,
+                if self.metadata_supplemental {
+                    Relation::supplemental()
+                } else {
+                    Relation::default()
+                },
+            );
             let predicate = Arity::<N>::key_term(key, 0);
             let slot = if let Some(slot) = self.free_partitions.pop() {
                 assert!(
@@ -2128,7 +2266,7 @@ where
                 .by_key
                 .storage_bytes()
                 .expect("original admitted lookup layout");
-            let inserted = if self.lookup_supplemental {
+            let inserted = if self.metadata_supplemental {
                 self.by_key.insert(key, slot, memory)
             } else {
                 self.by_key
@@ -2596,8 +2734,8 @@ where
             relations: self.relations,
             keys: self.keys,
             by_key: self.by_key,
-            lookup_supplemental: self.lookup_supplemental,
-            lookup_retired_bytes: self.lookup_retired_bytes,
+            metadata_supplemental: self.metadata_supplemental,
+            metadata_retired_bytes: self.metadata_retired_bytes,
             order: self.order,
             directory_preparation: self.directory_preparation,
             free_partitions: self.free_partitions,
@@ -2607,6 +2745,7 @@ where
             row_log: self.row_log,
             maintenance_indexes: self.maintenance_indexes,
             empty: self.empty,
+            spare_relation: self.spare_relation,
             #[cfg(test)]
             partition_limit: self.partition_limit,
         })

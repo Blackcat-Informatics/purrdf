@@ -94,6 +94,18 @@ pub(crate) fn reserve_array_in<T, A: Admission + ?Sized>(
     result
 }
 
+pub(crate) fn reserve_array_growth<T, A: Admission + ?Sized>(
+    values: &mut Vec<T>,
+    required: usize,
+    memory: &mut Memory<'_, A>,
+    retired: &mut usize,
+) -> Result<(), StorageError> {
+    reserve_array_in(values, memory, retired, |values, memory| {
+        let capacity = purrdf_lex::allocation::growth_capacity::<T>(values.capacity(), required)?;
+        memory.reserve(values, capacity)
+    })
+}
+
 pub(crate) fn flush_retired_bytes<A: Admission + ?Sized>(
     bytes: &mut usize,
     memory: &mut Memory<'_, A>,
