@@ -44,6 +44,7 @@ where
     generates_terms: bool,
     generating_rules: BTreeSet<usize>,
     complete: bool,
+    winner_work_admitted: bool,
     preparation: Vec<Preparation<'r, I, N>>,
 }
 
@@ -81,6 +82,7 @@ where
             generates_terms: round.generates_terms,
             generating_rules: round.generating_rules,
             complete: false,
+            winner_work_admitted: false,
             preparation: Vec::new(),
         })
     }
@@ -127,6 +129,7 @@ where
             generates_terms: round.generates_terms,
             generating_rules: round.generating_rules,
             complete: false,
+            winner_work_admitted: false,
             preparation: slot.0,
         }
     }
@@ -153,9 +156,6 @@ where
                 frame.sort = Some(purrdf_lex::walk::HeapSortFrame::new(frame.winners.len()));
                 break;
             };
-            if !allow(1) {
-                return Ok(false);
-            }
             crate::allocation::reserve_array_in(
                 &mut frame.winners,
                 memory,
@@ -163,6 +163,9 @@ where
                 |values, memory| memory.reserve_for_push(values),
             )
             .map_err(EvalError::Storage)?;
+            if !allow(1) {
+                return Ok(false);
+            }
             // Preserve the original candidate until every fallible projection succeeds.
             let fact = Self::project_fact(key, state).map_err(EvalError::Source)?;
             let (key, candidate) = frame.pending.take().expect("prepared original winner");
@@ -265,8 +268,11 @@ where
                 self.complete = true;
                 break;
             };
-            if !allow(candidate.sources.len().saturating_add(1)) {
-                return Ok(false);
+            if !self.winner_work_admitted {
+                if !allow(candidate.sources.len().saturating_add(1)) {
+                    return Ok(false);
+                }
+                self.winner_work_admitted = true;
             }
             let existing = if state.native.is_some() {
                 super::present_row(key, &state.rel).map_err(EvalError::Source)?
@@ -286,6 +292,7 @@ where
                 };
                 if !improves {
                     self.pending = None;
+                    self.winner_work_admitted = false;
                     self.sources = None;
                     if let Some(proof) = self.native_proof.take() {
                         let native = state
@@ -401,6 +408,7 @@ where
                 .pending
                 .take()
                 .expect("the original winner was inserted");
+            self.winner_work_admitted = false;
             if !native_depth {
                 if row.resident_index() == state.depth.len() {
                     state.depth.push(candidate.proof_height);

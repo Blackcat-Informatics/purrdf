@@ -71,12 +71,12 @@ impl<I: TermIdentity> Frame<I> {
                         self.phase = Phase::Gather;
                         continue;
                     };
-                    if !allow(N + 1) {
-                        return Ok(false);
-                    }
                     self.pinned
                         .reserve_in(N, memory, &mut self.retired_bytes)
                         .map_err(EvalError::Storage)?;
+                    if !allow(N + 1) {
+                        return Ok(false);
+                    }
                     for term in terms {
                         self.pinned.insert(term);
                     }
@@ -88,9 +88,6 @@ impl<I: TermIdentity> Frame<I> {
                         .scan_work()
                         .checked_add(1)
                         .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
-                    if !allow(cost) {
-                        return Ok(false);
-                    }
                     reserve_array_in(
                         &mut self.candidates,
                         memory,
@@ -98,6 +95,9 @@ impl<I: TermIdentity> Frame<I> {
                         |values, memory| memory.reserve(values, uses.zero.len()),
                     )
                     .map_err(EvalError::Storage)?;
+                    if !allow(cost) {
+                        return Ok(false);
+                    }
                     self.candidates.extend(
                         (&uses.zero)
                             .into_iter()

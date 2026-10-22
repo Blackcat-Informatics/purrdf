@@ -73,6 +73,7 @@ where
     after_fanout: Phase,
     current: Option<(RowId, [I; N])>,
     sort: Option<HeapSortFrame>,
+    unit_admitted: bool,
 }
 
 impl<M, S: Admission, I: TermIdentity, const N: usize> Frame<M, S, I, N>
@@ -101,12 +102,26 @@ where
             after_fanout: Phase::Seeds,
             current: None,
             sort: None,
+            unit_admitted: false,
         }
     }
 
     /// The original committed position remains owned throughout preparation.
     pub(super) fn watermark(&self) -> &M {
         self.batch.watermark()
+    }
+
+    /// One phase iteration may retain multiple successful factories before the
+    /// next factory refuses. Its logical operation credit is consumed only once.
+    fn allow_unit(&mut self, cost: usize, allow: &mut impl FnMut(usize) -> bool) -> bool {
+        if self.unit_admitted {
+            return allow(0); // A fresh stop signal still applies to a retained unit.
+        }
+        if !allow(cost) {
+            return false;
+        }
+        self.unit_admitted = true;
+        true
     }
 
     pub(super) fn reject(self) -> usize {
@@ -142,7 +157,7 @@ where
         loop {
             match self.phase {
                 Phase::Reserve => {
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -160,7 +175,7 @@ where
                         self.phase = Phase::SortChanges;
                         continue;
                     };
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     let weight = i128::from(inputs.weights.get(&terms).copied().unwrap_or(0))
@@ -198,7 +213,7 @@ where
                     self.phase = Phase::ReserveIndexes;
                 }
                 Phase::ReserveIndexes => {
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     reserve_index_in(
@@ -219,7 +234,7 @@ where
                         self.phase = Phase::ReachReserve;
                         continue;
                     };
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     let old = inputs.weights.get(&terms).copied().unwrap_or(0);
@@ -251,7 +266,7 @@ where
                     let capacity = rows.map_or(0, RowSet::scan_work).checked_add(1).ok_or(
                         MaintenanceError::Failed(EvalError::Storage(StorageError::SizeOverflow)),
                     )?;
-                    if !allow(capacity) {
+                    if !self.allow_unit(capacity, &mut allow) {
                         return Ok(false);
                     }
                     let count = rows.map_or(0, RowSet::len);
@@ -284,7 +299,7 @@ where
                     let cost = count.checked_add(1).ok_or(MaintenanceError::Failed(
                         EvalError::Storage(StorageError::SizeOverflow),
                     ))?;
-                    if !allow(cost) {
+                    if !self.allow_unit(cost, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -316,7 +331,7 @@ where
                         self.phase = Phase::ReachEdges;
                         continue;
                     };
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     self.reached[self.cursor] = predicate == crate::plan::ANY_PREDICATE
@@ -336,7 +351,7 @@ where
                         }
                         continue;
                     };
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     if self.reached[edge.body] {
@@ -355,7 +370,7 @@ where
                         self.phase = Phase::ClosurePop;
                         continue;
                     }
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     let rule = self.cursor;
@@ -375,7 +390,7 @@ where
                     self.cursor += 1;
                 }
                 Phase::ClosurePop => {
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     self.current = self.roots.pop();
@@ -386,7 +401,7 @@ where
                     };
                 }
                 Phase::ClosureVisit => {
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     let (row, terms) = self
@@ -429,7 +444,7 @@ where
                     .ok_or(MaintenanceError::Failed(EvalError::Storage(
                         StorageError::SizeOverflow,
                     )))?;
-                    if !allow(cost) {
+                    if !self.allow_unit(cost, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -475,11 +490,12 @@ where
                 }
                 Phase::Heads => {
                     if self.cursor == self.delete.len() || inputs.exe.rule_count() == 0 {
-                        if !allow(1) {
+                        if !self.allow_unit(1, &mut allow) {
                             return Ok(false);
                         }
                         dictionary.check_read().map_err(source_error)?;
                         self.phase = Phase::Complete;
+                        self.unit_admitted = false;
                         continue;
                     }
                     if self.rule == inputs.exe.rule_count() {
@@ -487,13 +503,14 @@ where
                         self.cursor += 1;
                         continue;
                     }
-                    if !allow(1) {
+                    if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
                     let runtime = &inputs.exe.runtimes()[self.rule];
                     if self.head == runtime.head.len() {
                         self.head = 0;
                         self.rule += 1;
+                        self.unit_admitted = false;
                         continue;
                     }
                     push_task(
@@ -512,6 +529,7 @@ where
                 }
                 Phase::Complete => return Ok(true),
             }
+            self.unit_admitted = false;
         }
     }
 
@@ -545,6 +563,7 @@ where
             active: None,
             task: None,
             publication: None,
+            output_work_admitted: false,
             retired_bytes: self.retired_bytes,
             retirement: 0,
             delta_gathered: false,

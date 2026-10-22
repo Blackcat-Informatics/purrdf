@@ -97,9 +97,6 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                     };
                     let positions = atom.shape().positions();
                     if self.position == N || !self.matches {
-                        if !allow(1) {
-                            return Ok(false);
-                        }
                         if self.matches {
                             reserve_array_in(
                                 &mut self.prepared,
@@ -108,6 +105,11 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                                 |values, memory| memory.reserve_for_push(values),
                             )
                             .map_err(EvalError::Storage)?;
+                        }
+                        if !allow(1) {
+                            return Ok(false);
+                        }
+                        if self.matches {
                             self.prepared.push((
                                 levels[self.rule],
                                 Task::Body {
@@ -169,9 +171,6 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                     self.scan += 1;
                 }
                 Phase::Reserve => {
-                    if !allow(1) {
-                        return Ok(false);
-                    }
                     let work = task_bucket_in(tasks, self.prepared[self.cursor].0, memory, retired)
                         .map_err(EvalError::Storage)?;
                     let required = work
@@ -182,6 +181,9 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                         work.try_reserve_heap_admitted(required.saturating_sub(8), memory)
                     })
                     .map_err(EvalError::Storage)?;
+                    if !allow(1) {
+                        return Ok(false);
+                    }
                     self.cursor += 1;
                     self.scan = 0;
                     self.phase = Phase::Prior;

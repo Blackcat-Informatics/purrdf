@@ -28,7 +28,7 @@ use purrdf_lex::{
     allocation::{Admission, Memory, OrderedTable, Resident, StorageError},
     walk::WorkList,
 };
-use std::fmt;
+use std::{cell::Cell, fmt};
 
 #[derive(Debug)]
 pub(super) struct Node<I: TermIdentity, const N: usize>
@@ -504,11 +504,18 @@ enum Task<I, const N: usize> {
 
 type Impacts = crate::plan::DependencyGraph;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputPhase {
+    Reserve,
+    Event,
+    Publication,
+    Publish,
+}
+
 struct InputState {
     existing: Option<RowId>,
     changes_proof: bool,
-    reserved: bool,
-    event_done: bool,
+    phase: InputPhase,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -537,6 +544,7 @@ where
     active: Option<probe::Frame<'r, D, N>>,
     task: Option<Task<D::Id, N>>,
     publication: Option<commit::Frame<'r, D::Id, N>>,
+    output_work_admitted: bool,
     retired_bytes: usize,
     retirement: usize,
     delta_gathered: bool,
@@ -1189,7 +1197,7 @@ where
         self.preparation_work
     }
 
-    /// Admitted preparation, metadata and native-join work of the latest transaction.
+    /// Admitted preparation, metadata, native joins and replacement layout bytes.
     pub fn transaction_work(&self) -> u128 {
         self.preparation_work
             .checked_add(self.mutation_work)
@@ -1199,7 +1207,9 @@ where
     /// Prepare a queued batch through a cumulative metadata-work allowance.
     /// Rows, graph edges, native comparisons and task publication take one unit;
     /// table scans reserve their retained layout-byte bound and initialization
-    /// reserves its element count. These are declared metadata-work units.
+    /// reserves its element count. Native replacement allocations add their
+    /// requested layout bytes before invoking the original storage grant.
+    /// These are declared metadata-work units.
     /// Ready permits model execution; it does not acknowledge the transaction.
     ///
     /// # Errors
@@ -1219,9 +1229,8 @@ where
         let Some(frame) = self.preparing.as_mut() else {
             return Ok(PreparationProgress::Ready);
         };
-        let mut paused = PreparationPause::Stopped;
-        let mut overflow = false;
-        let work = &mut self.preparation_work;
+        let used = Cell::new(self.preparation_work);
+        let meter = work::Meter::new(&used, 0, limit, stop);
         let mut inputs = prepare::Inputs {
             exe: self.session.exe,
             impacts: &self.impacts,
@@ -1236,38 +1245,25 @@ where
         };
         let before = self.storage.live();
         let result = self.storage.with_memory(|memory| {
-            flush_retired_bytes(&mut self.retired_bytes, memory)
-                .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
-            frame.resume(&mut inputs, memory, |cost| {
-                if is_stopped(stop) {
-                    paused = PreparationPause::Stopped;
-                    return false;
-                }
-                let Some(next) = work.checked_add(cost as u128) else {
-                    overflow = true;
-                    return false;
-                };
-                if next > limit {
-                    paused = PreparationPause::WorkLimit {
-                        limit,
-                        needed: next,
-                    };
-                    return false;
-                }
-                *work = next;
-                true
+            meter.with_memory(memory, |memory| {
+                flush_retired_bytes(&mut self.retired_bytes, memory)
+                    .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
+                frame.resume(&mut inputs, memory, |cost| meter.allow(cost))
             })
         });
+        self.preparation_work = used.get();
         self.session
             .state
             .as_mut()
             .expect("preparation retains its original model")
             .account_native_memory(before, self.storage.live());
-        if overflow {
-            return Err(MaintenanceError::Failed(EvalError::Storage(
-                StorageError::SizeOverflow,
-            )));
-        }
+        let result =
+            match result {
+                Err(MaintenanceError::Failed(EvalError::Storage(
+                    StorageError::AdmissionFailed,
+                ))) if meter.refused() => Ok(false),
+                result => result,
+            };
         match result {
             Ok(true) => {
                 let mut pending = self
@@ -1282,7 +1278,9 @@ where
             }
             Ok(false) => Ok(PreparationProgress::Paused {
                 consumed: self.preparation_work,
-                reason: paused,
+                reason: meter
+                    .preparation_pause()
+                    .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?,
             }),
             Err(error) => {
                 match &error {
@@ -1363,6 +1361,9 @@ where
     }
 
     /// Resume a queued transaction under a cumulative native-work allowance.
+    /// Native replacement layout bytes are admitted before the original storage
+    /// callback. Refusal by that callback consumes no factory work credit;
+    /// refunds require none. An accepted allocation attempt retains its charge.
     /// Use `begin` to include preparation in the grant. Initialize through
     /// `resume` under the original evaluator governors before this method.
     ///
@@ -1514,24 +1515,33 @@ where
         state.limits = Limits::of(&options, state.input_terms);
         state.stated = super::BudgetReport::stated_limits(&options);
         state.execution = options.round_execution();
-        let mut meter =
-            work::Meter::new(&mut self.mutation_work, self.preparation_work, limit, stop);
+        let used = Cell::new(self.mutation_work);
+        let meter = work::Meter::new(&used, self.preparation_work, limit, stop);
         let before = self.storage.live();
         let result = self.storage.with_memory(|memory| {
-            advance(
-                &Run {
-                    exe: self.session.exe,
-                    guards: self.session.guards,
-                    levels: &self.levels,
-                },
-                &mut self.weights,
-                self.pending.as_mut().expect("checked pending transaction"),
-                state,
-                &mut meter,
-                memory,
-            )
+            meter.with_memory(memory, |memory| {
+                advance(
+                    &Run {
+                        exe: self.session.exe,
+                        guards: self.session.guards,
+                        levels: &self.levels,
+                    },
+                    &mut self.weights,
+                    self.pending.as_mut().expect("checked pending transaction"),
+                    state,
+                    &meter,
+                    memory,
+                )
+            })
         });
+        self.mutation_work = used.get();
         state.account_native_memory(before, self.storage.live());
+        let result = match result {
+            Err(EvalError::Storage(StorageError::AdmissionFailed)) if meter.refused() => {
+                meter.paused(state.report())
+            }
+            result => result,
+        };
         match result {
             Ok(false) => Err(meter.refusal()),
             Ok(true) => {
@@ -1651,7 +1661,7 @@ fn advance<'r, M, S: Admission, D: TermDictionary, const N: usize, A: Admission 
     weights: &mut FastMap<[D::Id; N], i64>,
     pending: &mut Pending<'r, M, S, D, N>,
     state: &mut FixpointState<D, N>,
-    meter: &mut work::Meter<'_, '_>,
+    meter: &work::Meter<'_, '_>,
     memory: &mut Memory<'_, A>,
 ) -> Result<bool, EvalError<D::Error>>
 where
@@ -1710,9 +1720,6 @@ where
         let cost = sources
             .checked_add(N + 1)
             .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
-        if !meter.allow(cost) {
-            return meter.paused(state.report());
-        }
         let native = state.native.as_mut().expect("native proof owner");
         native.reserve_terms(memory).map_err(EvalError::Storage)?;
         reserve_index_in(
@@ -1731,6 +1738,9 @@ where
             &mut native.retired_bytes,
         )
         .map_err(EvalError::Storage)?;
+        if !meter.allow(cost) {
+            return meter.paused(state.report());
+        }
         let removed = state
             .rel
             .withdraw_ids(terms)
@@ -1770,8 +1780,7 @@ where
             pending.input_state = Some(InputState {
                 existing,
                 changes_proof: existing.is_none() || old_depth != Some(0),
-                reserved: false,
-                event_done: false,
+                phase: InputPhase::Reserve,
             });
         }
         let input = pending
@@ -1779,10 +1788,7 @@ where
             .as_mut()
             .expect("retained original input lookup");
         if input.changes_proof {
-            if !input.reserved {
-                if !meter.allow(N + 1) {
-                    return meter.paused(state.report());
-                }
+            if input.phase == InputPhase::Reserve {
                 let native = state.native.as_mut().expect("native proof owner");
                 native.reserve_terms(memory).map_err(EvalError::Storage)?;
                 reserve_index_in(
@@ -1793,9 +1799,12 @@ where
                     &mut native.retired_bytes,
                 )
                 .map_err(EvalError::Storage)?;
-                input.reserved = true;
+                if !meter.allow(N + 1) {
+                    return meter.paused(state.report());
+                }
+                input.phase = InputPhase::Event;
             }
-            if !input.event_done {
+            if input.phase == InputPhase::Event {
                 let event = pending
                     .event
                     .get_or_insert_with(|| event::Frame::new(terms));
@@ -1812,7 +1821,7 @@ where
                 )? {
                     return meter.paused(state.report());
                 }
-                input.event_done = true;
+                input.phase = InputPhase::Publication;
                 let completed = pending.event.take().expect("completed original event");
                 pending.retired_bytes = pending
                     .retired_bytes
@@ -1835,8 +1844,11 @@ where
             let cost = sources
                 .checked_add(N + 1)
                 .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
-            if !meter.allow(cost) {
-                return meter.paused(state.report());
+            if input.phase == InputPhase::Publication {
+                if !meter.allow(cost) {
+                    return meter.paused(state.report());
+                }
+                input.phase = InputPhase::Publish;
             }
             let row = if let Some(row) = input.existing {
                 row
@@ -1984,8 +1996,11 @@ where
             }
             // Admission precedes consuming the completed native output; refusal
             // leaves that exact original frame available for the next call.
-            if !meter.allow(1) {
-                return meter.paused(state.report());
+            if !pending.output_work_admitted {
+                if !meter.allow(1) {
+                    return meter.paused(state.report());
+                }
+                pending.output_work_admitted = true;
             }
             let slot = commit::Frame::reserve_deferred(memory, &mut pending.retired_bytes)
                 .map_err(EvalError::Storage)?;
@@ -1995,6 +2010,7 @@ where
                 .expect("completed native task")
                 .into_output();
             pending.publication = Some(commit::Frame::deferred(output, slot));
+            pending.output_work_admitted = false;
             continue;
         }
         if pending.task.is_none() {
@@ -2075,9 +2091,6 @@ where
             .membership_bytes
             .checked_add(1)
             .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
-        if !meter.allow(cost) {
-            return meter.paused(state.report());
-        }
         reserve_array_in(
             &mut pending.delta,
             memory,
@@ -2085,6 +2098,9 @@ where
             |values, memory| memory.reserve(values, native.membership.len()),
         )
         .map_err(EvalError::Storage)?;
+        if !meter.allow(cost) {
+            return meter.paused(state.report());
+        }
         pending.delta.extend(
             native
                 .membership
