@@ -352,8 +352,9 @@ fn bench_karatsuba(c: &mut Bench) {
     group.finish();
 }
 
-/// Exact decimal pairs of `scale` fractional digits each, coefficients of up to
-/// twelve digits.
+/// Exact decimal pairs whose canonical product has twice `scale` fractional
+/// digits, with twelve-digit input coefficients. Validate the actual product:
+/// nonzero operand suffixes can still multiply to a trailing zero.
 fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
     let mut state = 0xF1E5_CA1E_u64 ^ scale as u64;
     let one = |state: &mut u64| {
@@ -363,9 +364,22 @@ fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
         let text = format!("{}.{fraction}", if whole.is_empty() { "0" } else { whole });
         XsdValue::from_exact_decimal(parse_decimal(&text).expect("an exact decimal"))
     };
-    (0..SMALL_OPS)
-        .map(|_| (one(&mut state), one(&mut state)))
-        .collect()
+    let target_scale = u32::try_from(scale)
+        .expect("fixture scale fits u32")
+        .checked_mul(2)
+        .expect("fixture product scale fits u32");
+    let mut pairs = Vec::with_capacity(SMALL_OPS);
+    while pairs.len() < SMALL_OPS {
+        let x = one(&mut state);
+        let y = one(&mut state);
+        let XsdValue::Decimal(product) = numeric_mul(&x, &y).expect("exact fixture product") else {
+            panic!("decimal fixture operands must produce a decimal");
+        };
+        if product.scale() == target_scale {
+            pairs.push((x, y));
+        }
+    }
+    pairs
 }
 
 /// 1024 `numeric_mul` products at each of two fractional scales. The twelve-digit
