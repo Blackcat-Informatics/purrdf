@@ -4,10 +4,10 @@
 //! Retained transaction validation, dependency discovery and re-grounding preparation.
 
 use super::{
-    Admission, Arity, BTreeMap, BTreeSet, ChangeBatch, DictionaryTerm, EvalError, Executable,
-    FastMap, FastSet, FixpointState, Impacts, MaintenanceError, Pending, RowId, RowSet,
-    StorageError, StoreShape, Task, TermDictionary, TermIdentity, WorkList, push_task, reclaim,
-    row_for, storage_failure,
+    Admission, Arity, ChangeBatch, DictionaryTerm, EvalError, Executable, FastMap, FixpointState,
+    Impacts, MaintenanceError, Memory, Pending, RowId, RowSet, StorageError, StoreShape, Task,
+    Tasks, TermDictionary, TermIdentity, WorkList, flush_retired_bytes, push_task, reclaim,
+    reserve_array_in, reserve_index_in, reserve_work_in, row_for,
 };
 use purrdf_lex::walk::HeapSortFrame;
 
@@ -45,6 +45,7 @@ where
     pub(super) impacts: &'a Impacts,
     pub(super) levels: &'a [usize],
     pub(super) weights: &'a mut FastMap<[D::Id; N], i64>,
+    pub(super) weights_bytes: &'a mut usize,
     pub(super) state: &'a FixpointState<D, N>,
 }
 
@@ -56,11 +57,13 @@ where
     changes: Vec<([I; N], i64)>,
     delete: Vec<(RowId, [I; N])>,
     deleted: FastMap<RowId, [I; N]>,
+    deleted_bytes: usize,
     roots: WorkList<(RowId, [I; N]), 8>,
-    altered: FastSet<I>,
+    altered: RowSet<I>,
     reached: Vec<bool>,
-    absence: BTreeSet<usize>,
-    tasks: BTreeMap<usize, WorkList<Task<I, N>, 8>>,
+    absence: Vec<bool>,
+    pub(super) tasks: Tasks<I, N>,
+    retired_bytes: usize,
     phase: Phase,
     cursor: usize,
     rule: usize,
@@ -82,11 +85,13 @@ where
             changes: Vec::new(),
             delete: Vec::new(),
             deleted: FastMap::default(),
+            deleted_bytes: 0,
             roots: WorkList::new(),
-            altered: FastSet::default(),
+            altered: RowSet::default(),
             reached: Vec::new(),
-            absence: BTreeSet::new(),
-            tasks: BTreeMap::new(),
+            absence: Vec::new(),
+            tasks: Tasks::default(),
+            retired_bytes: 0,
             phase: Phase::Reserve,
             cursor: 0,
             rule: 0,
@@ -104,14 +109,28 @@ where
         self.batch.watermark()
     }
 
+    pub(super) fn reject(self) -> usize {
+        assert_eq!(self.phase, Phase::Validate);
+        let bytes = self.changes.capacity() * size_of::<([I; N], i64)>();
+        let retired = self
+            .retired_bytes
+            .checked_add(bytes)
+            .expect("rejected change storage fits its original grant");
+        drop(self);
+        retired
+    }
+
     /// Each admitted unit completes once before the next state transition.
     /// A hash-bucket fan-out admits its retained capacity before scanning it;
     /// its complete output is reserved before publishing any work-list member.
-    pub(super) fn resume<D: TermDictionary<Id = I>>(
+    pub(super) fn resume<D: TermDictionary<Id = I>, A: Admission + ?Sized>(
         &mut self,
         inputs: &mut Inputs<'_, D, N>,
+        memory: &mut Memory<'_, A>,
         mut allow: impl FnMut(usize) -> bool,
     ) -> Result<bool, MaintenanceError<D::Error>> {
+        flush_retired_bytes(&mut self.retired_bytes, memory)
+            .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
         let rel = &inputs.state.rel;
         let dictionary = rel.interner();
         dictionary.check_read().map_err(source_error)?;
@@ -126,9 +145,13 @@ where
                     if !allow(1) {
                         return Ok(false);
                     }
-                    self.changes
-                        .try_reserve_exact(self.batch.changes().len())
-                        .map_err(storage_failure)?;
+                    reserve_array_in(
+                        &mut self.changes,
+                        memory,
+                        &mut self.retired_bytes,
+                        |values, memory| memory.reserve(values, self.batch.changes().len()),
+                    )
+                    .map_err(storage_error)?;
                     self.phase = Phase::Validate;
                 }
                 Phase::Validate => {
@@ -178,13 +201,17 @@ where
                     if !allow(1) {
                         return Ok(false);
                     }
-                    inputs
-                        .weights
-                        .try_reserve(self.changes.len())
-                        .map_err(storage_failure)?;
+                    reserve_index_in(
+                        inputs.weights,
+                        inputs.weights_bytes,
+                        self.changes.len(),
+                        memory,
+                        &mut self.retired_bytes,
+                    )
+                    .map_err(storage_error)?;
                     self.altered
-                        .try_reserve(self.changes.len())
-                        .map_err(storage_failure)?;
+                        .reserve_in(self.changes.len(), memory, &mut self.retired_bytes)
+                        .map_err(storage_error)?;
                     self.phase = Phase::Seeds;
                 }
                 Phase::Seeds => {
@@ -200,7 +227,13 @@ where
                         self.altered.insert(terms[1]);
                         if let Some(row) = row_for(rel, terms).map_err(source_error)? {
                             if weight == 0 {
-                                self.roots.try_push((row, terms)).map_err(storage_failure)?;
+                                reserve_work_in(
+                                    &mut self.roots,
+                                    memory,
+                                    &mut self.retired_bytes,
+                                    |roots, memory| roots.try_push_admitted((row, terms), memory),
+                                )
+                                .map_err(storage_error)?;
                             } else {
                                 self.bucket = Some(Bucket::Premise(row));
                                 self.after_fanout = Phase::Seeds;
@@ -229,9 +262,15 @@ where
                             .ok_or(MaintenanceError::Failed(EvalError::Storage(
                                 StorageError::SizeOverflow,
                             )))?;
-                    self.roots
-                        .try_reserve_heap_exact(required.saturating_sub(8))
-                        .map_err(storage_failure)?;
+                    reserve_work_in(
+                        &mut self.roots,
+                        memory,
+                        &mut self.retired_bytes,
+                        |roots, memory| {
+                            roots.try_reserve_heap_admitted(required.saturating_sub(8), memory)
+                        },
+                    )
+                    .map_err(storage_error)?;
                     if let Some(rows) = rows {
                         for row in rows {
                             self.roots.push((*row, native.nodes[row].terms));
@@ -248,10 +287,22 @@ where
                     if !allow(cost) {
                         return Ok(false);
                     }
-                    self.reached
-                        .try_reserve_exact(count)
-                        .map_err(storage_failure)?;
+                    reserve_array_in(
+                        &mut self.reached,
+                        memory,
+                        &mut self.retired_bytes,
+                        |values, memory| memory.reserve(values, count),
+                    )
+                    .map_err(storage_error)?;
+                    reserve_array_in(
+                        &mut self.absence,
+                        memory,
+                        &mut self.retired_bytes,
+                        |values, memory| memory.reserve(values, inputs.exe.rule_count()),
+                    )
+                    .map_err(storage_error)?;
                     self.reached.resize(count, false);
+                    self.absence.resize(inputs.exe.rule_count(), false);
                     self.cursor = 0;
                     self.phase = if self.altered.is_empty() {
                         Phase::Absence
@@ -294,7 +345,7 @@ where
                         if edge.negative
                             && let Some(rule) = edge.rule
                         {
-                            self.absence.insert(rule);
+                            self.absence[rule] = true;
                         }
                     }
                     self.cursor += 1;
@@ -308,9 +359,15 @@ where
                         return Ok(false);
                     }
                     let rule = self.cursor;
-                    if self.absence.contains(&rule) {
-                        push_task(&mut self.tasks, inputs.levels[rule], Task::Absence { rule })
-                            .map_err(MaintenanceError::Failed)?;
+                    if self.absence[rule] {
+                        push_task(
+                            &mut self.tasks,
+                            inputs.levels[rule],
+                            Task::Absence { rule },
+                            memory,
+                            &mut self.retired_bytes,
+                        )
+                        .map_err(MaintenanceError::Failed)?;
                         self.bucket = Some(Bucket::Producer(rule));
                         self.after_fanout = Phase::Absence;
                         self.phase = Phase::Fanout;
@@ -347,7 +404,14 @@ where
                             .expect("every original batch multiplicity was validated")
                         });
                     if weight == 0 && !self.deleted.contains_key(&row) {
-                        self.deleted.try_reserve(1).map_err(storage_failure)?;
+                        reserve_index_in(
+                            &mut self.deleted,
+                            &mut self.deleted_bytes,
+                            1,
+                            memory,
+                            &mut self.retired_bytes,
+                        )
+                        .map_err(storage_error)?;
                         self.deleted.insert(row, terms);
                         self.bucket = Some(Bucket::Premise(row));
                         self.after_fanout = Phase::ClosurePop;
@@ -368,13 +432,23 @@ where
                     if !allow(cost) {
                         return Ok(false);
                     }
-                    self.delete
-                        .try_reserve_exact(self.deleted.len())
-                        .map_err(storage_failure)?;
+                    reserve_array_in(
+                        &mut self.delete,
+                        memory,
+                        &mut self.retired_bytes,
+                        |values, memory| memory.reserve(values, self.deleted.len()),
+                    )
+                    .map_err(storage_error)?;
                     self.delete.extend(self.deleted.drain());
                     self.deleted = FastMap::default();
+                    self.retired_bytes = self
+                        .retired_bytes
+                        .checked_add(self.deleted_bytes)
+                        .expect("retired closure table fits its original grant");
+                    self.deleted_bytes = 0;
                     self.sort = Some(HeapSortFrame::new(self.delete.len()));
                     self.phase = Phase::SortDelete;
+                    flush_retired_bytes(&mut self.retired_bytes, memory).map_err(storage_error)?;
                 }
                 Phase::SortDelete => {
                     if !self
@@ -430,6 +504,8 @@ where
                             head: self.head,
                             terms: self.delete[self.cursor].1,
                         },
+                        memory,
+                        &mut self.retired_bytes,
                     )
                     .map_err(MaintenanceError::Failed)?;
                     self.head += 1;
@@ -439,12 +515,21 @@ where
         }
     }
 
-    pub(super) fn finish<'r, D: TermDictionary<Id = I>>(self) -> Pending<'r, M, S, D, N> {
+    pub(super) fn finish<'r, D: TermDictionary<Id = I>>(mut self) -> Pending<'r, M, S, D, N> {
         assert_eq!(
             self.phase,
             Phase::Complete,
             "only complete preparation publishes native tasks"
         );
+        let roots_bytes = self.roots.heap_capacity() * size_of::<(RowId, [I; N])>();
+        let absence_bytes = self.absence.capacity() * size_of::<bool>();
+        drop(self.roots);
+        drop(self.absence);
+        self.retired_bytes = self
+            .retired_bytes
+            .checked_add(roots_bytes)
+            .and_then(|bytes| bytes.checked_add(absence_bytes))
+            .expect("retired preparation layouts fit their original grant");
         Pending {
             batch: self.batch,
             changes: self.changes,
@@ -454,12 +539,13 @@ where
             input_state: None,
             event: None,
             installed_weights: 0,
-            settling: false,
+            phase: super::MutationPhase::Tasks,
             withdrawals_cleared: false,
             tasks: self.tasks,
             active: None,
             task: None,
             publication: None,
+            retired_bytes: self.retired_bytes,
             retirement: 0,
             delta_gathered: false,
             delta_sort: None,
@@ -473,4 +559,8 @@ where
 
 fn source_error<E>(error: E) -> MaintenanceError<E> {
     MaintenanceError::Failed(EvalError::Source(error))
+}
+
+fn storage_error<E>(error: StorageError) -> MaintenanceError<E> {
+    MaintenanceError::Failed(EvalError::Storage(error))
 }

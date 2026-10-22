@@ -4,9 +4,19 @@
 //! Retained authored-atom event fan-out and all-before-publication reservation.
 
 use super::{
-    Arity, BTreeMap, EvalError, Executable, RelationStore, StorageError, StoreShape, Task,
-    TermDictionary, TermIdentity, WorkList,
+    Admission, Arity, EvalError, Executable, Memory, RelationStore, StorageError, StoreShape, Task,
+    Tasks, TermDictionary, TermIdentity, reserve_array_in, reserve_work_in, task_bucket_in,
 };
+
+pub(super) struct Inputs<'a, D: TermDictionary, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    pub(super) exe: &'a Executable<N>,
+    pub(super) levels: &'a [usize],
+    pub(super) tasks: &'a mut Tasks<D::Id, N>,
+    pub(super) rel: &'a RelationStore<D, N>,
+}
 
 enum Phase {
     Scan,
@@ -47,17 +57,27 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
         }
     }
 
-    pub(super) fn resume<D: TermDictionary<Id = I>>(
+    pub(super) fn retire(self) -> usize {
+        assert!(matches!(self.phase, Phase::Complete));
+        let bytes = self.prepared.capacity() * size_of::<(usize, Task<I, N>)>();
+        drop(self);
+        bytes
+    }
+
+    pub(super) fn resume<D: TermDictionary<Id = I>, A: Admission + ?Sized>(
         &mut self,
-        exe: &Executable<N>,
-        levels: &[usize],
-        tasks: &mut BTreeMap<usize, WorkList<Task<I, N>, 8>>,
-        rel: &RelationStore<D, N>,
+        inputs: &mut Inputs<'_, D, N>,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
         mut allow: impl FnMut(usize) -> bool,
     ) -> Result<bool, EvalError<D::Error>>
     where
         Arity<N>: StoreShape<N>,
     {
+        let exe = inputs.exe;
+        let levels = inputs.levels;
+        let rel = inputs.rel;
+        let tasks = &mut *inputs.tasks;
         rel.interner().check_read().map_err(EvalError::Source)?;
         loop {
             match self.phase {
@@ -81,9 +101,13 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                             return Ok(false);
                         }
                         if self.matches {
-                            self.prepared
-                                .try_reserve(1)
-                                .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+                            reserve_array_in(
+                                &mut self.prepared,
+                                memory,
+                                retired,
+                                |values, memory| memory.reserve_for_push(values),
+                            )
+                            .map_err(EvalError::Storage)?;
                             self.prepared.push((
                                 levels[self.rule],
                                 Task::Body {
@@ -148,13 +172,16 @@ impl<I: TermIdentity, const N: usize> Frame<I, N> {
                     if !allow(1) {
                         return Ok(false);
                     }
-                    let work = tasks.entry(self.prepared[self.cursor].0).or_default();
+                    let work = task_bucket_in(tasks, self.prepared[self.cursor].0, memory, retired)
+                        .map_err(EvalError::Storage)?;
                     let required = work
                         .len()
                         .checked_add(self.count)
                         .ok_or(EvalError::Storage(StorageError::SizeOverflow))?;
-                    work.try_reserve_heap_exact(required.saturating_sub(8))
-                        .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+                    reserve_work_in(work, memory, retired, |work, memory| {
+                        work.try_reserve_heap_admitted(required.saturating_sub(8), memory)
+                    })
+                    .map_err(EvalError::Storage)?;
                     self.cursor += 1;
                     self.scan = 0;
                     self.phase = Phase::Prior;

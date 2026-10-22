@@ -35,6 +35,9 @@ where
     Arity<N>: StoreShape<N>,
 {
     winners: std::vec::IntoIter<Winner<'r, I, N>>,
+    /// Deferred array storage belongs to the supplemental owner; ordinary
+    /// producer arrays retain their existing resident owner.
+    winners_bytes: usize,
     pending: Option<Winner<'r, I, N>>,
     sources: Option<Vec<ShapeFact<N>>>,
     native_proof: Option<Candidate<I, N>>,
@@ -71,6 +74,7 @@ where
         .map_err(EvalError::Source)?;
         Ok(Self {
             winners: winners.into_iter(),
+            winners_bytes: 0,
             pending: None,
             sources: None,
             native_proof: None,
@@ -93,10 +97,14 @@ where
     }
 
     /// Own the original winners before any publication preparation can suspend.
-    pub(super) fn reserve_deferred() -> Result<PreparationSlot<'r, I, N>, StorageError> {
+    pub(super) fn reserve_deferred<A: Admission + ?Sized>(
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<PreparationSlot<'r, I, N>, StorageError> {
         let mut slot = Vec::new();
-        slot.try_reserve_exact(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
+        super::maintained::reserve_array_in(&mut slot, memory, retired, |slot, memory| {
+            memory.reserve(slot, 1)
+        })?;
         Ok(PreparationSlot(slot))
     }
 
@@ -112,6 +120,7 @@ where
         });
         Self {
             winners: Vec::new().into_iter(),
+            winners_bytes: 0,
             pending: None,
             sources: None,
             native_proof: None,
@@ -123,9 +132,11 @@ where
     }
 
     /// Retain each original winner and comparison across caller admission cuts.
-    pub(super) fn prepare<D: TermDictionary<Id = I>>(
+    pub(super) fn prepare<D: TermDictionary<Id = I>, A: Admission + ?Sized>(
         &mut self,
         state: &FixpointState<D, N>,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
         mut allow: impl FnMut(usize) -> bool,
     ) -> Result<bool, EvalError<D::Error>> {
         let Some(frame) = self.preparation.first_mut() else {
@@ -145,10 +156,13 @@ where
             if !allow(1) {
                 return Ok(false);
             }
-            frame
-                .winners
-                .try_reserve(1)
-                .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+            super::maintained::reserve_array_in(
+                &mut frame.winners,
+                memory,
+                retired,
+                |values, memory| memory.reserve_for_push(values),
+            )
+            .map_err(EvalError::Storage)?;
             // Preserve the original candidate until every fallible projection succeeds.
             let fact = Self::project_fact(key, state).map_err(EvalError::Source)?;
             let (key, candidate) = frame.pending.take().expect("prepared original winner");
@@ -172,6 +186,11 @@ where
         {
             return Ok(false);
         }
+        self.winners_bytes = frame
+            .winners
+            .capacity()
+            .checked_mul(size_of::<Winner<'r, I, N>>())
+            .expect("the original admitted winner array has a valid layout");
         self.winners = std::mem::take(&mut frame.winners).into_iter();
         self.preparation.clear();
         Ok(true)
@@ -179,6 +198,23 @@ where
 
     pub(super) fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// Destroy completed deferred payloads before returning their original charge.
+    /// A caller retains this amount if its original admission refuses the shrink.
+    pub(super) fn retire(self) -> usize {
+        assert!(
+            self.complete && self.native_proof.is_none() && self.preparation.is_empty(),
+            "only completed publication retires its original arrays"
+        );
+        let bytes = self
+            .preparation
+            .capacity()
+            .checked_mul(size_of::<Preparation<'r, I, N>>())
+            .and_then(|bytes| bytes.checked_add(self.winners_bytes))
+            .expect("the original publication arrays fit their admitted grant");
+        drop(self);
+        bytes
     }
 
     /// A refused fact stays pending; already published rows are never visited again.

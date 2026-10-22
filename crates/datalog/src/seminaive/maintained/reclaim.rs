@@ -4,8 +4,8 @@
 //! Retained result pins and native term-retirement progress.
 
 use super::{
-    Arity, EvalError, FastSet, FixpointState, StorageError, StoreShape, TermDictionary,
-    TermIdentity, native_error,
+    Admission, Arity, EvalError, FixpointState, Memory, RowSet, StorageError, StoreShape,
+    TermDictionary, TermIdentity, flush_retired_bytes, native_error, reserve_array_in,
 };
 use purrdf_lex::walk::HeapSortFrame;
 
@@ -20,8 +20,9 @@ enum Phase {
 }
 
 pub(super) struct Frame<I> {
-    pinned: FastSet<I>,
+    pinned: RowSet<I>,
     candidates: Vec<I>,
+    retired_bytes: usize,
     phase: Phase,
     cursor: usize,
     sort: Option<HeapSortFrame>,
@@ -30,8 +31,9 @@ pub(super) struct Frame<I> {
 impl<I> Default for Frame<I> {
     fn default() -> Self {
         Self {
-            pinned: FastSet::default(),
+            pinned: RowSet::default(),
             candidates: Vec::new(),
+            retired_bytes: 0,
             phase: Phase::Pins,
             cursor: 0,
             sort: None,
@@ -40,15 +42,17 @@ impl<I> Default for Frame<I> {
 }
 
 impl<I: TermIdentity> Frame<I> {
-    pub(super) fn resume<D: TermDictionary<Id = I>, const N: usize>(
+    pub(super) fn resume<D: TermDictionary<Id = I>, const N: usize, A: Admission + ?Sized>(
         &mut self,
         state: &mut FixpointState<D, N>,
         delta: &[([I; N], i64)],
+        memory: &mut Memory<'_, A>,
         mut allow: impl FnMut(usize) -> bool,
     ) -> Result<bool, EvalError<D::Error>>
     where
         Arity<N>: StoreShape<N>,
     {
+        flush_retired_bytes(&mut self.retired_bytes, memory).map_err(EvalError::Storage)?;
         let Some(release) = state.release_term else {
             return Ok(true);
         };
@@ -71,9 +75,11 @@ impl<I: TermIdentity> Frame<I> {
                         return Ok(false);
                     }
                     self.pinned
-                        .try_reserve(N)
-                        .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
-                    self.pinned.extend(terms);
+                        .reserve_in(N, memory, &mut self.retired_bytes)
+                        .map_err(EvalError::Storage)?;
+                    for term in terms {
+                        self.pinned.insert(term);
+                    }
                     self.cursor += 1;
                 }
                 Phase::Gather => {
@@ -85,9 +91,13 @@ impl<I: TermIdentity> Frame<I> {
                     if !allow(cost) {
                         return Ok(false);
                     }
-                    self.candidates
-                        .try_reserve_exact(uses.zero.len())
-                        .map_err(|_| EvalError::Storage(StorageError::AllocationFailed))?;
+                    reserve_array_in(
+                        &mut self.candidates,
+                        memory,
+                        &mut self.retired_bytes,
+                        |values, memory| memory.reserve(values, uses.zero.len()),
+                    )
+                    .map_err(EvalError::Storage)?;
                     self.candidates.extend(
                         (&uses.zero)
                             .into_iter()
@@ -125,7 +135,21 @@ impl<I: TermIdentity> Frame<I> {
                     assert!(uses.zero.remove(&id));
                     self.cursor += 1;
                 }
-                Phase::Complete => return Ok(true),
+                Phase::Complete => {
+                    let pinned = std::mem::take(&mut self.pinned);
+                    let candidates = std::mem::take(&mut self.candidates);
+                    let bytes = candidates.capacity() * size_of::<I>();
+                    self.retired_bytes = self
+                        .retired_bytes
+                        .checked_add(pinned.retained)
+                        .and_then(|held| held.checked_add(bytes))
+                        .expect("retired term pins fit their original grant");
+                    drop(pinned);
+                    drop(candidates);
+                    flush_retired_bytes(&mut self.retired_bytes, memory)
+                        .map_err(EvalError::Storage)?;
+                    return Ok(true);
+                }
             }
         }
     }
