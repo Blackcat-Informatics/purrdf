@@ -316,6 +316,10 @@ prepared length to reserve the complete output once; its public allocation
 control includes tiny values, the minimum signed coefficient and long zero
 padding. This changes output reservation, with the same prepared digit writer
 and vector dispatch.
+The binary64 coefficient/scale and range gates stay together in the inline
+method; ratio conversion owns its separate cold frame. Its rounding kernels and
+backend selection are unchanged. Invalid binary32 width or refusal of generated
+valid scientific float text fails explicitly instead of substituting a number.
 
 The release manifest requests optimization level 3, fat LTO and one codegen unit.
 The assertion-enabled development/test profile has a separate purpose and retains

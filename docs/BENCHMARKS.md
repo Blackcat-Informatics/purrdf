@@ -187,6 +187,9 @@ complete prepared length. The public allocation control
 `crates/xsd/tests/exact_governance.rs` checks one exact-sized output allocation,
 including zero, normalized fractions, the minimum signed coefficient and long
 fractional padding, on native and WebAssembly targets.
+The binary64 conversion row includes the inline coefficient/scale and range
+gates; ratio conversion has a separate cold frame. Both routes retain
+the original correctly rounded kernels and exact bit-pattern oracles.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without

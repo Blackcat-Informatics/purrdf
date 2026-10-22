@@ -656,6 +656,7 @@ impl Decimal {
     /// `xs:double` cast, rounded once at any scale. A negative value that rounds
     /// to zero is `-0.0`.
     #[must_use]
+    #[inline]
     pub fn to_f64(&self) -> f64 {
         if let Some(value) = self.unscaled.as_i128()
             && self.scale <= MAX_I128_POW10
@@ -670,6 +671,12 @@ impl Decimal {
             Some(_) => return self.signed(0.0),
             None => {}
         }
+        self.ratio_to_f64()
+    }
+
+    /// Keep ratio conversion's register frame after the inline and range gates.
+    #[cold]
+    fn ratio_to_f64(&self) -> f64 {
         let bits = self.ratio_bits(&BINARY64);
         f64::from_bits(bits)
     }
