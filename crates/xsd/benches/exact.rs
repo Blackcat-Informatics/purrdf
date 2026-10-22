@@ -51,6 +51,7 @@ const SMALL_OPS: usize = 1024;
 const GROWTH_DIGITS: [usize; 4] = [40, 400, 4_000, 40_000];
 
 /// A seeded digit string of exactly `len` digits (no leading zero).
+/// Draw a deterministic decimal coefficient of the requested width.
 fn digit_string(state: &mut u64, len: usize) -> String {
     let mut text = String::with_capacity(len);
     while text.len() < len {
@@ -64,6 +65,7 @@ fn digit_string(state: &mut u64, len: usize) -> String {
 }
 
 /// Small signed integer pairs (inside `i64`, so every product fits `i128`).
+/// Prepare the shared inline integer operands outside measured loops.
 fn small_integers() -> Vec<(i128, i128)> {
     let mut state = 0x5EED_E8AC_u64;
     (0..SMALL_OPS)
@@ -76,6 +78,7 @@ fn small_integers() -> Vec<(i128, i128)> {
 }
 
 /// Small decimal lexical pairs: up to twelve digits, scales 0 to 6.
+/// Prepare decimal spellings for matching exact and public-value operations.
 fn small_decimals() -> Vec<(String, String)> {
     let mut state = 0xDEC1_3A15_u64;
     let one = |state: &mut u64| {
@@ -95,6 +98,7 @@ fn small_decimals() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Compare inline exact operations with public dispatch over the same tower.
 fn bench_small(c: &mut Bench) {
     let integers = small_integers();
     let exact_integers: Vec<(Integer, Integer)> = integers
