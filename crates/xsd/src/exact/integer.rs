@@ -23,7 +23,7 @@ use crate::bigint::BigInt;
 /// canonical — a value has exactly one representation — so the derived
 /// equality and hash are value equality and value hash, and the small-value path
 /// costs one checked machine operation and no allocation (the `exact` bench
-/// measures it against the bounded `i128` path).
+/// measures it beside the public value dispatch over the same tower).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Integer(Repr);
 

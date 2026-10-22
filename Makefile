@@ -998,6 +998,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_governance -- --exact \
 				admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs \
 				admitted_datetime_refusal_precedes_any_copy_allocation \
+				canonical_decimal_reserves_one_exact_output_destination \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_coordinates -- --exact \
 				supplied_inputs_repeat_complete_results_without_host_reads \
