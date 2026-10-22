@@ -1,0 +1,24 @@
+# Group output: final qualification
+
+Published head c4d1c8a8bdc29dbf3eff9fde23f7dbcdf6e20e47 follows substantive 13dd0b009d8fd5584862e826f877ab0f0980970d. The follow-up changes only function/benchmark documentation. Both signed commits and pushes passed normal hooks. No waiver, compiler/profile change or source-cache workaround is used. Stage is ignored and requires the selected ghprsq archive.
+
+| Criterion | Actual result and scope |
+|---|---|
+| Worker ownership/order/error precedence | PASS: dispatcher-worker-controls.log, 38 cases. Original buffer identity, empty chunks, exact remaining length, checked overflow and first operational error included |
+| Public numeric/ownership/governor/row paths | PASS: dispatcher-numeric-controls.log, 22 cases: governed_parallel_allocation 1, numeric_aggregate_ownership 8, numeric_parallel_determinism 10, solution_row_alloc 3 |
+| SHACL production allocation controls | PASS: shacl-allocation-controls.log, all eight original expectations |
+| Actual portable numeric execution | PASS: numeric-wasm-runtime.log, four shipped Node/WASM cases; digest 0e9eaf3ad6fc61db, corpus length 2832 |
+| Strict source and shared homes | PASS: dispatcher-strict-clippy.log; shared-census-corrected.log, 85 jobs/117 distinct rows; hash-domains.log |
+| Documentation follow-up | PASS: formatting session 93800 and explicit Clippy/rustdoc exit 0 in documentation-terminal-status.json. The original tool session terminal was unavailable, so the warm rerun supplies actual terminal evidence |
+| Production counters | PASS: clean frozen rebuilt source 13dd0b009, record verified-chunks-13dd against settled-main-5db; build session 13742 and collection 87774 exit 0. All 21 lanes at 1/4/32 workers, ten samples per allocator mode, 37 artifact-bound worker proofs and allocation coverage. Shared comparer exits 0 with 105 quantity rows and all 21 complete typed-answer/GovernorEvidence comparisons. raw/verified-count-comparisons.tsv, verified-count-comparison-run.log, verified-count-build.json and counts/ |
+| Independent review | Complete automated source review selects all three Rust files at 13dd0b009 with no code finding. The 60% documentation warning is fixed in c4d1c8a8b; current summary reports 96.67% against 80%. Unchanged Rust is skipped as similar in the later review. No human approval, formal submission or independent runtime execution is claimed. See pr-comments.md |
+| Current hosted qualification | PASS: raw/final-hosted-checks.json, 53 successes and four configured skips, no pending/failure. Run 39691308036 and companion checks |
+| Actual combination | CI workspace checkout is ebcaadd302c9bf3db9ab515b469ada5071d3a24e, merging c4d1c8a8b into actual main 68d554993. Its tree 36943d1dc27fb8c2054409b88efc85a25ac7ffe7 equals the clean merge-tree candidate. See integration.md and raw/ci-checkout-projection.log |
+
+All counter comparison inputs use the same compiler 21b707e3f and workload/configuration. Every sample verifies all 5000 exact grouped results or complete BIND answers; all full receipts agree. Numeric requested traffic decreases 396904–399904 bytes/query with identical retained bytes. All four BIND allocation quantities are identical. Explicit tradeoffs: numeric median peaks range -329780 to +259096 bytes, largest relative increase 1.69%; numeric instruction changes range approximately -0.016% to +0.082%, BIND -0.084% to +0.365%. All individual quantities/raw samples/shared intervals are retained in production-counts.md and the raw reports. No timing, lower-peak or instruction-improvement claim.
+
+The first original-chunks-13dd artifact is inconsistent with the rebuilt artifact and remains historical negative evidence, not current acceptance. Its executable identity differs from the verified artifact. Actual-path probes proved ordinary resident safe GROUP with 5000 groups, then were removed; the clean uninstrumented rebuild and complete recollection prove the current saving. No unverified cache/compiler cause is asserted; original records are not rewritten. The initial canonical-main target guard refusal and direct-link metadata-stub failure are also preserved. Required gates were not bypassed.
+
+Final supported pagination is exhausted: no formal review submissions, no inline comments and no review threads (hasNextPage false). All material summary feedback and its scopes are in pr-comments.md. The only finding, missing function documentation, is resolved. The API's baseRefOid remains the PR creation snapshot 5db00aaae9; actual fetched main and the CI checkout identify 68d554993 and are the integration authority.
+
+Source runtime/count coverage is reused for unchanged executable bodies after documentation-only follow-up. No uncovered base delta remains: the actual combined tree is in configured CI. Final ghprsq inputs/result, evidence archive readback, intended issue closure and supported cleanup remain owned actions before delivery is declared complete.

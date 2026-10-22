@@ -1,0 +1,48 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 57s
+     Running tests/governed_parallel_allocation.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-sparql-eval/06ed661acb4673d8/out/governed_parallel_allocation-06ed661acb4673d8)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+
+     Running tests/numeric_aggregate_ownership.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-sparql-eval/4c9758df73712066/out/numeric_aggregate_ownership-4c9758df73712066)
+
+running 8 tests
+test exact_mean_refusal_stays_an_aggregate_code_in_an_admitted_receipt ... ok
+test exact_sum_and_avg_keep_output_admitted_through_clone_and_extraction ... ok
+test native_ieee_and_raw_duration_fold_laws_survive_owned_state ... ok
+test all_ten_native_statistics_keep_original_owners_through_every_query_door ... ok
+test statistical_big_integer_states_and_outputs_are_physically_admitted ... ok
+test statistical_duration_interpolation_and_exact_variance_codes_use_native_kernels ... ok
+test statistical_large_state_refusal_never_publishes_poison_or_partial_success ... ok
+test capacity_refusal_never_becomes_a_poisoned_or_partial_aggregate ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/numeric_parallel_determinism.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-sparql-eval/5e0495ee330f90f8/out/numeric_parallel_determinism-5e0495ee330f90f8)
+
+running 10 tests
+test a_scratch_ceiling_trips_at_one_row ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+test per_group_counts_trip_at_one_group ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+
+     Running tests/solution_row_alloc.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-sparql-eval/fa4d0df1bf43c153/out/solution_row_alloc-fa4d0df1bf43c153)
+
+running 3 tests
+test clone_then_push_allocation_count_is_explicit ... ok
+test clone_has_inline_zero_and_spilled_one_allocation ... ok
+test copy_from_slice_has_exact_allocation_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

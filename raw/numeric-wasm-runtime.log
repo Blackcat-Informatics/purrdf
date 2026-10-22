@@ -1,0 +1,56 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/hash)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustversion v1.0.22
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-core)
+   Compiling bumpalo v3.20.3
+   Compiling crossbeam-epoch v0.9.18
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/deflate)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/xsd)
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling once_cell v1.21.4
+   Compiling either v1.16.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/alloc-probe)
+   Compiling syn v2.0.118
+   Compiling rayon v1.12.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-algebra)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-results)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/geo-kernel)
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/testkit)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 41s
+     Running tests/numeric_wasm_determinism.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/acafcee03111f691/out/numeric_wasm_determinism-acafcee03111f691.wasm)
+
+running 4 tests
+test borrowed_value_equality_matches_the_query_operator_on_this_target ... ok
+test any_uri_casts_keep_their_primitive_domain_on_this_target ... ok
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=0e9eaf3ad6fc61db corpus_len=2832
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+

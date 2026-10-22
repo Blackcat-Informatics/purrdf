@@ -1,0 +1,17 @@
+Source: https://github.com/Blackcat-Informatics/purrdf/actions/runs/39691308036/job/119538332506
+Scope: checkout commands/commit only; unrelated build output omitted.
+2026-10-21T23:15:50.2892493Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-21T23:15:50.2925262Z ##[group]Checking out the ref
+2026-10-21T23:15:50.2929168Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/672/merge
+2026-10-21T23:15:51.3493603Z Updating files:  60% (11468/18921)
+2026-10-21T23:15:51.4496361Z Updating files:  61% (11542/18921)
+2026-10-21T23:15:51.4557628Z Updating files:  62% (11732/18921)
+2026-10-21T23:15:51.4991099Z Updating files:  63% (11921/18921)
+2026-10-21T23:15:51.7931636Z 
+2026-10-21T23:15:51.7932005Z HEAD is now at ebcaadd30 Merge c4d1c8a8bdc29dbf3eff9fde23f7dbcdf6e20e47 into 68d5549936e83608eda517fde81b2640f318b69c
+2026-10-21T23:15:51.8014925Z ##[endgroup]
+2026-10-21T23:15:51.8066278Z [command]/usr/bin/git log -1 --format=%H
+2026-10-21T23:15:51.8097003Z ebcaadd302c9bf3db9ab515b469ada5071d3a24e
+2026-10-21T23:15:51.8113504Z ##[group]Removing auth
+2026-10-21T23:15:51.8122298Z Removing SSH command configuration
+2026-10-21T23:15:51.8122789Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand

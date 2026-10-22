@@ -1,0 +1,26 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/hash)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-core)
+   Compiling libc v0.2.186
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/alloc-probe)
+   Compiling getrandom v0.3.4
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 3m 08s
+     Running unittests src/lib.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-sparql-eval/4092c1abdaae10b1/out/purrdf_sparql_eval-4092c1abdaae10b1)
+
+running 2 tests
+test parallel::tests::ordered_rows_select_source_errors_before_checked_capacity ... ok
+test parallel::tests::ordered_rows_preserve_worker_storage_order_and_exact_remaining_count ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1658 filtered out; finished in 0.00s
+

@@ -1,0 +1,57 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking cpufeatures v0.3.0
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-core)
+    Checking hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+    Checking crossbeam-epoch v0.9.18
+    Checking either v1.16.0
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/alloc-probe)
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/lex)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf-events)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/deflate)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/stack)
+    Checking rayon v1.12.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-algebra)
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex-automata v0.4.14
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/testkit)
+    Checking regex v1.12.4
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/sparql-eval)
+error: unnecessary structure name repetition
+    --> crates/sparql-eval/src/parallel.rs:1335:21
+     |
+1335 |     fn single(rows: Vec<R>) -> Self {
+     |                     ^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+     = note: `-D clippy::use-self` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: unnecessary structure name repetition
+    --> crates/sparql-eval/src/parallel.rs:1340:29
+     |
+1340 |         chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+     |                             ^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 2 previous errors

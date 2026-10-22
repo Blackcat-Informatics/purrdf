@@ -1,0 +1,8 @@
+error: only metadata stub found for `rlib` dependency `purrdf_testkit` please provide path to the corresponding .rmeta file with full metadata
+ --> /home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/.stage/reduce-grouped-output-buffer-traffic/count-comparison/src/main.rs:8:5
+  |
+8 | use purrdf_testkit::bench::counter::{CountUnit, read_report};
+  |     ^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

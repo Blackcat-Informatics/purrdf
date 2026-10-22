@@ -1,0 +1,10 @@
+GROUP_PROBE contextual=false bounded=false
+GROUP_PROBE safe=true groups=5000
+GROUP_PROBE contextual=false bounded=false
+GROUP_PROBE safe=true groups=5000
+GROUP_PROBE contextual=false bounded=false
+GROUP_PROBE safe=true groups=5000
+GROUP_PROBE contextual=false bounded=false
+GROUP_PROBE safe=true groups=5000
+ALLOC 486189 75155462 1659732 7071139 28c4c6ba4832931b9be88404971abbc859b59b582f487c177c3b221940c8b488
+GUARD 28c4c6ba4832931b9be88404971abbc859b59b582f487c177c3b221940c8b488 fixture=2556d1944dd299238d855ea0e41432c9a42803748438cb73c6025cb86f3c79b6 receipt=None

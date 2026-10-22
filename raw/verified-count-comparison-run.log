@@ -1,0 +1,23 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/target/debug/grouped-count-comparison settled-main-5db verified-chunks-13dd`
+GUARDS numeric/ungoverned/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/ungoverned/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/ungoverned/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/32: twenty complete receipts per artifact agree; production guards check every typed answer

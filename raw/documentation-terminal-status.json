@@ -1,0 +1,29 @@
+[
+  {
+    "gate": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "purrdf-sparql-eval",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "gate": "rustdoc",
+    "command": [
+      "cargo",
+      "doc",
+      "--locked",
+      "-p",
+      "purrdf-sparql-eval",
+      "--no-deps"
+    ],
+    "exit_code": 0
+  }
+]

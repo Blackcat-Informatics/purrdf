@@ -1,0 +1,9 @@
+# Final integration assessment
+
+Actual fetched origin/main is 68d5549936e83608eda517fde81b2640f318b69c. Published head is c4d1c8a8bdc29dbf3eff9fde23f7dbcdf6e20e47. The API baseRefOid is the creation snapshot 5db00aaae9, not the current branch tip. The actual base delta is the indexed Datalog removal delivery: store/cursors, retained-slot accounting, scheduled withdrawal, Shapes SRL boundaries and hosted SIMD catalogue values. It does not change the GROUP worker output/admission interfaces, common row types, profiles, manifests or allocation collectors.
+
+Clean git merge-tree --write-tree --no-messages origin/main HEAD exits 0 with tree 36943d1dc27fb8c2054409b88efc85a25ac7ffe7. No conflict resolution or branch synchronization is needed.
+
+Configured CI supplies combined-tree evidence rather than relying only on separate green inputs. Workspace job https://github.com/Blackcat-Informatics/purrdf/actions/runs/39691308036/job/119538332506 explicitly checks out refs/remotes/pull/672/merge and reports ebcaadd302c9bf3db9ab515b469ada5071d3a24e, merging c4d1c8a8b into 68d554993. GitHub's commit object confirms those exact parents and candidate tree 36943d1dc27fb8c2054409b88efc85a25ac7ffe7. The material checkout projection is in raw/ci-checkout-projection.log. All current configured checks settle at 53 successes/four configured skips, no failure or pending check.
+
+Full source/consumer/portable and allocation coverage retains its explicit tested scope in validation.md. Current feedback is exhausted and its documentation finding resolved. The clean candidate equals the CI merge tree, so no duplicate local combined suite or automatic base-to-head merge is justified. Refresh actual refs/checks at landing; this preview is not an input lock. Verify actual ghprsq inputs/tree and durable selected-stage archive before cleanup.

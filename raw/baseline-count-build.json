@@ -1,0 +1,32 @@
+{
+  "source": "5db00aaae9f3abb521e98b8f79dbc1bebe5e3e43",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/481-counter-baseline",
+  "command": [
+    "cargo",
+    "bench",
+    "--locked",
+    "-p",
+    "purrdf-sparql-eval",
+    "--bench",
+    "governor_instructions",
+    "--bench",
+    "governor_allocations",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "compiler": "rustc 1.101.0-nightly (21b707e3f 2026-09-30)\nbinary: rustc\ncommit-hash: 21b707e3f97e0b522ebd2f277a862339625ad83f\ncommit-date: 2026-09-30\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.1\n",
+  "binaries": {
+    "governor_instructions": "/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/release/build/purrdf-sparql-eval/f90d2cf00f61bc59/out/governor_instructions-f90d2cf00f61bc59",
+    "governor_allocations": "/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/release/build/purrdf-sparql-eval/534f7aae12d8d930/out/governor_allocations-534f7aae12d8d930"
+  },
+  "configuration": {
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "CARGO_BUILD_JOBS": "8",
+    "RUST_TEST_THREADS": "4",
+    "RAYON_NUM_THREADS": "4",
+    "CARGO_TARGET_DIR": "/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/target",
+    "CARGO_BUILD_BUILD_DIR": "/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build",
+    "TMPDIR": "/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/tmp"
+  }
+}

@@ -1,0 +1,39 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/datalog)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/conformance-kit)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/jsonschema)
+   Compiling ctutils v0.4.2
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling structured-zstd v0.0.49
+   Compiling universal-hash v0.6.1
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 3m 23s
+     Running tests/sparql_path_alloc.rs (/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/build/debug/build/purrdf-shapes/32b33a1110fb8759/out/sparql_path_alloc-32b33a1110fb8759)
+
+running 8 tests
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.47s
+

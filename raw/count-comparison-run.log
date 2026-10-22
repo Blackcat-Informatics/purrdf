@@ -1,0 +1,26 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/crates/testkit)
+   Compiling grouped-count-comparison v0.0.0 (/home/paudley/Active/purrdf/.worktrees/481-reduce-grouped-output-buffer-traffic/.stage/reduce-grouped-output-buffer-traffic/count-comparison)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 9.14s
+     Running `/home/paudley/Active/purrdf/.worktrees/.build-cache/ordered-observer/target/debug/grouped-count-comparison settled-main-5db original-chunks-13dd`
+GUARDS numeric/ungoverned/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/ungoverned/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/ungoverned/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/fuel/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/scratch/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS numeric/metered/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/ungoverned/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/stop_signal/32: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/1: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/4: twenty complete receipts per artifact agree; production guards check every typed answer
+GUARDS bind/fuel_and_stop_signal/32: twenty complete receipts per artifact agree; production guards check every typed answer
