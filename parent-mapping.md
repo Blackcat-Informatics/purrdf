@@ -1,0 +1,3 @@
+A public frozen-warrant regression discovered during the signed-maintenance work is now isolated as #679. Current main accepts an empty replacement premise because closure containment is vacuous. The repair retains the original asserted premise and compares term values independently of dataset-local IDs, with original/empty/weakened/reordered-premise public tests.
+
+This is a complete small correctness delivery. It does not complete #493 or #501, remove any acceptance requirement, or qualify the newer maintenance implementation. The existing maintenance worktree and its unfinished physical-work and supplied-memory admission requirements remain preserved and active. Both parent issues remain open.

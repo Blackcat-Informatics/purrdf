@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Frozen implication warrants currently verify against an empty or weakened replacement premise. The verifier only checks containment in the carried derived closure; an empty supplied premise satisfies that check vacuously.\n\nBind each frozen warrant to the original asserted default-graph premise and reject verification with a different premise. Reuse the already collected premise rather than cloning another copy or introducing another verifier.\n\nAcceptance:\n\n- A public property-chain implication produces a frozen warrant that verifies against its original premise.\n- The same warrant rejects an empty premise and a strict weakened subset.\n- Run the affected native and actual WebAssembly tests, normal repository hooks, and required CI/review.\n\nDiscovered while implementing #493; related to #501's snapshot-bound proof requirements. This independently useful correctness repair does not complete either parent's maintenance, proof-session, resource, or lifetime requirements. Both parents remain open with their full contracts.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-22T07:45:20Z",
+  "labels": [],
+  "milestone": null,
+  "number": 679,
+  "state": "OPEN",
+  "title": "Entailment: bind frozen implication warrants to their original premise",
+  "updatedAt": "2026-10-22T07:45:20Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/679"
+}

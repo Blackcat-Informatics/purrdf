@@ -1,0 +1,17 @@
+# Frozen premise binding acceptance
+
+Scope: preserve the original asserted default-graph premise in FreezeWarrant, using the existing collected vector, and require equality during public verification. Parent maintenance and reusable-session contracts remain open.
+
+| Criterion | Current evidence |
+|---|---|
+| Public original premise accepted; empty/weakened replacements rejected | Original production code reproduces empty-premise acceptance: original-premise-regression.log, exit101,1actual failed test. Production binding sorts term values to preserve equivalent content built with different IDs. The corrected native15-case and actual WASM15-case runs pass. |
+| Native affected entailment callers | bound-premise-native-corrected.log exit0:15actual public cases; entails-library-native.log exit0:173actual affected library cases, including frozen/vacuous/composite/residual verifier behavior. Existing dirty maintenance-worktree receipts diagnose the bug but do not qualify this baseline. |
+| Actual packaged WebAssembly execution | bound-premise-wasm.log exit0:15actual cases through the repository wasm-bindgen/Node runner, including all four premise controls. |
+| Formatting, strict lint, normal hooks | entail-strict.log exit0:all-target entailment Clippy with warnings denied. git diff --check passes. commit.log exit0:normal signed commit85d7e9c37 and staged snapshot hooks pass; push.log exit0. No bypass or CI waiver. |
+| Independent review, hosted CI, integration | PR680 open on85d7e9c37. Independent conversation-based review covers both files and reports no actionable code finding; generic documentation metric adjudicated in reviews/independent-review.md. Full paginated review/inline/conversation capture and complete GraphQL thread scan show0threads. All51hosted checks pass/fourconfiguredskip. Final feedback refresh is unchanged; final merge-tree remains f96949e725f54203f477f495af0b43b28db68d72, matching the actual CI merge tree. Actual landing/archive verification remains required. Stagectl pr-create reported an unparseable successful response; supported branch lookup resolved the created PR, avoiding duplicate publication. |
+
+No emitted carrier bytes, dependencies, or public constructors change. The private warrant retains the already collected premise vector; derived closure remains separate. Scope is frozen warrants, not all warrant families or independent validation of carried closure derivations.
+
+Development failure: bound-premise-native.log is a test compilation failure because the reordered fixture omitted the TermFactory trait import. The import is corrected; bound-premise-native-corrected.log is the new actual execution, not a relabeling of that failed receipt.
+
+Commands use the prescribed compiler/profiles and CARGO_BUILD_JOBS=8, RUST_TEST_THREADS=4, RAYON_NUM_THREADS=4. Native public command: `cargo test --locked -p purrdf-entail --test current_clash_support`; original reproduction adds the exact new case filter before the production change. Library command: `cargo test --locked -p purrdf-entail --lib entails::`. Portable command adds `--target wasm32-unknown-unknown` and sets CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER to this checkout's scripts/wasm-test-runner.sh. Strict command: `cargo clippy --locked -p purrdf-entail --all-targets -- -D warnings`. Every command writes its own raw log and returns the original exit status; incidental harness elapsed output is not a timing acceptance requirement.

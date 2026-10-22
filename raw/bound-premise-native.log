@@ -1,0 +1,73 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/entail)
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+    --> crates/entail/tests/current_clash_support.rs:1138:14
+     |
+1136 |         let subject = reordered
+1137 |             .builder
+1138 |             .intern_value(&premise.term_value(quad.s))
+     |              ^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/backend.rs:31:8
+     |
+  31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+     |        ------------ the method is available for `RdfDatasetBuilder` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1138 |             .intern_iri_value(&premise.term_value(quad.s))
+     |                     ++++
+
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+    --> crates/entail/tests/current_clash_support.rs:1142:14
+     |
+1140 |         let predicate = reordered
+1141 |             .builder
+1142 |             .intern_value(&premise.term_value(quad.p))
+     |              ^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/backend.rs:31:8
+     |
+  31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+     |        ------------ the method is available for `RdfDatasetBuilder` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1142 |             .intern_iri_value(&premise.term_value(quad.p))
+     |                     ++++
+
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+    --> crates/entail/tests/current_clash_support.rs:1146:14
+     |
+1144 |         let object = reordered
+1145 |             .builder
+1146 |             .intern_value(&premise.term_value(quad.o))
+     |              ^^^^^^^^^^^^
+     |
+    ::: crates/rdf-core/src/backend.rs:31:8
+     |
+  31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+     |        ------------ the method is available for `RdfDatasetBuilder` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use purrdf_core::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1146 |             .intern_iri_value(&premise.term_value(quad.o))
+     |                     ++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-entail` (test "current_clash_support") due to 3 previous errors

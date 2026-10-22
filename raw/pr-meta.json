@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "d5eefe402c1278c5694b6dc69b20d73572d38559",
+  "headRefName": "paudley/679-entailment-bind-frozen-implication",
+  "headRefOid": "85d7e9c37466ba18be01de71468d02908e1c1540",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 680,
+  "state": "OPEN",
+  "title": "Bind frozen implication warrants to their asserted premise",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/680"
+}

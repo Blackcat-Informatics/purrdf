@@ -1,0 +1,64 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling unicode-ident v1.0.24
+   Compiling crossbeam-utils v0.8.21
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling rustversion v1.0.22
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/lex)
+   Compiling const-oid v0.10.2
+   Compiling hybrid-array v0.4.15
+   Compiling rayon-core v1.13.0
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/rdf-events)
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/rdf-core)
+   Compiling digest v0.11.3
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/deflate)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/xsd)
+   Compiling either v1.16.0
+   Compiling hashbrown v0.17.1
+   Compiling once_cell v1.21.4
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/alloc-probe)
+   Compiling regex v1.12.4
+   Compiling syn v2.0.118
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/cdt)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/testkit)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/entail)
+    Finished `test` profile [optimized] target(s) in 1m 26s
+     Running tests/current_clash_support.rs (/opt/.cargo/b3/c4efbe7646aa97/wasm32-unknown-unknown/debug/build/purrdf-entail/33b3683205400ade/out/current_clash_support-33b3683205400ade.wasm)
+
+running 15 tests
+test frozen_warrants_reject_empty_and_weakened_premises ... ok
+test public_dataset_views_preserve_source_identity_and_causal_verification ... ok
+test current_clash_preserves_named_and_scoped_blank_source_identity ... ok
+test current_clash_preserves_public_service_certificate_and_verification ... ok
+test current_clash_replays_generated_existential_witnesses ... ok
+test current_clash_checks_fresh_refutation_assumptions_without_a_source_name ... ok
+test current_clash_replays_equality_before_observing_role_premises ... ok
+test current_clash_borrows_the_independent_prepared_consumer ... ok
+test public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs ... ok
+test public_causal_service_binds_the_requested_question_and_query_assumptions ... ok
+test public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip ... ok
+test public_causal_service_checks_reserved_birth_and_generative_trigger ... ok
+test public_causal_service_checks_nested_reserved_origin ... ok
+test public_causal_service_preserves_literal_metadata_in_key_support ... ok
+test public_causal_service_checks_inverse_transitive_path_licenses ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

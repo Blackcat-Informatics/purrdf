@@ -1,0 +1,34 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+   Compiling rayon-core v1.13.0
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking crossbeam-epoch v0.9.18
+    Checking either v1.16.0
+   Compiling libc v0.2.186
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/alloc-probe)
+    Checking crossbeam-deque v0.8.6
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking rayon v1.12.0
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/lex)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/rdf-events)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/testkit)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/iri)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/stack)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/cdt)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/datalog)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/679-entailment-bind-frozen-implication/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 34.90s
