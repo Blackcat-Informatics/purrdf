@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 41.01s
+     Running tests/real_producers.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-retrieval/5e271466e7086641/out/real_producers-5e271466e7086641)
+
+running 2 tests
+test fallible_scoped_composition_refuses_deferred_exclusions_and_final_descriptor_drift ... ok
+test fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.01s
+

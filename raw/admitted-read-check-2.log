@@ -1,0 +1,43 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:5461:10
+     |
+5461 |     Fut: core::future::Future<Output = R>,
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+5461 -     Fut: core::future::Future<Output = R>,
+5461 +     Fut: Future<Output = R>,
+     |
+
+error[E0599]: the method `capability` exists for struct `QueryWorkspace<E>`, but its trait bounds were not satisfied
+    --> crates/sparql-eval/src/engine.rs:5426:24
+     |
+5426 |         self.workspace.capability()
+     |                        ^^^^^^^^^^ private field, not a method
+     |
+    ::: crates/sparql-eval/src/workspace.rs:2068:1
+     |
+2068 | pub(crate) struct QueryWorkspace<E> {
+     | ----------------------------------- method `capability` not found for this struct
+     |
+note: the following trait bounds were not satisfied:
+      `E: Clone`
+      `E: Send`
+      `E: Sync`
+      `E: std::error::Error`
+    --> crates/sparql-eval/src/workspace.rs:2263:9
+     |
+2263 | impl<E: Clone + std::error::Error + Send + Sync + 'static> QueryWorkspace<E> {
+     |         ^^^^^   ^^^^^^^^^^^^^^^^^   ^^^^   ^^^^            -----------------
+     |         |       |                   |      |
+     |         |       |                   |      unsatisfied trait bound introduced here
+     |         |       |                   unsatisfied trait bound introduced here
+     |         |       unsatisfied trait bound introduced here
+     |         unsatisfied trait bound introduced here
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors

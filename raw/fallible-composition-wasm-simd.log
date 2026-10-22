@@ -1,0 +1,98 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/rdf-core)
+   Compiling unicode-ident v1.0.24
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling wasm-bindgen v0.2.125
+   Compiling once_cell v1.21.4
+   Compiling either v1.16.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/alloc-probe)
+   Compiling crossbeam-deque v0.8.6
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/rdf-events)
+   Compiling digest v0.11.3
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/deflate)
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/stack)
+   Compiling sha2 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/testkit)
+   Compiling regex v1.12.4
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/geo-kernel)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 4m 59s
+     Running tests/real_producers.rs (/opt/.cargo/ba/97d911d918b176/wasm32-unknown-unknown/debug/build/purrdf-retrieval/2d7b04dd7ae2b031/out/real_producers-2d7b04dd7ae2b031.wasm)
+
+running 23 tests
+test fallible_scoped_composition_refuses_deferred_exclusions_and_final_descriptor_drift ... ok
+test fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal ... ok
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/evidence_ingress.rs (/opt/.cargo/ba/97d911d918b176/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/c6d9fd592730990d/out/evidence_ingress-c6d9fd592730990d.wasm)
+
+running 22 tests
+test fallible_evidence_doors_keep_original_rows_and_all_query_form_status ... ok
+test fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.04s
+

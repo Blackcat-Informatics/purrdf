@@ -1,0 +1,63 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:4308:17
+     |
+4301 |             let evaluated = self.execute_ungoverned_admitted(
+     |                                  --------------------------- arguments to this method are incorrect
+...
+4308 |                 workspace,
+     |                 ^^^^^^^^^ expected `&QueryWorkspace<_>`, found `ExecutionWorkspace<_, _>`
+...
+5753 |         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + '_,
+     |         ----------------------------------------------------------------- the found opaque type
+     |
+     = note: expected reference `&workspace::QueryWorkspace<<D as purrdf_core::FallibleDatasetView>::Error>`
+                   found struct `engine...Error>`
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:4507:8
+     |
+4507 |     fn execute_ungoverned_admitted<'d, D: DatasetView + Sync, R>(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4515 |         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     |         ----------------------------------------------------------
+     = note: the full name for the type has been written to '/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-sparql-eval/62c4c8f8db912108/out/purrdf_sparql_eval-62c4c8f8db912108.long-type-15285547934950619524.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider borrowing here
+     |
+4308 |                 &workspace,
+     |                 +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:4308:17
+     |
+4301 |             let evaluated = self.execute_ungoverned_admitted(
+     |                                  --------------------------- arguments to this method are incorrect
+...
+4308 |                 workspace,
+     |                 ^^^^^^^^^ expected `&QueryWorkspace<_>`, found `ExecutionWorkspace<_, _>`
+...
+5753 |         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + '_,
+     |         ----------------------------------------------------------------- the found opaque type
+     |
+     = note: expected reference `&workspace::QueryWorkspace<<D as purrdf_core::FallibleDatasetView>::Error>`
+                   found struct `engine...Error>`
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:4507:8
+     |
+4507 |     fn execute_ungoverned_admitted<'d, D: DatasetView + Sync, R>(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+4515 |         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     |         ----------------------------------------------------------
+     = note: the full name for the type has been written to '/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-sparql-eval/b463d22d4d152792/out/purrdf_sparql_eval-b463d22d4d152792.long-type-10089845466229243124.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+help: consider borrowing here
+     |
+4308 |                 &workspace,
+     |                 +
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

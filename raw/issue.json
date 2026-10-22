@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nPer-row evidence (#515) is reachable only through the infallible entry points\n`query_interned_evidence_view`, `query_evidence_status_view`, `query_evidence_answer_view`,\n`execute_witnessed_evidence`, and retrieval's `search_scoped`. Each is bounded on\n`D: DatasetView<ReadError = Infallible>`.\n\nA host whose reads can fail is shut out. Katamari evaluates over `SegmentedStackQuery`\n(`ReadError = SegmentedError`): sealed layers on disk plus a resident head. Its fallible doors\ntake no `EvidenceSource`: `query_fallible_view`, `query_prepared_fallible_view`,\n`execute_fallible` and the governed variants. Materialising an infallible dataset per query would\ncopy the graph on every query, which is exactly the cost the segmented layers exist to avoid.\n\n## Ask\n\nFallible counterparts that thread the source the way `execute_fallible` threads the rest:\n\n- `query_evidence_answer_fallible_view(dataset: &D, request, options, source, answer, visit)`\n  with `D: FallibleDatasetView + Sync`. A read error is returned as the read error and is never\n  turned into evidence: a transport or read failure is not a scope declaration. This matches the\n  rule `service_scope` already keeps.\n- The same for `query_interned_evidence_view` and `query_evidence_status_view`, and for\n  `search_scoped` where retrieval's producers read through a fallible view.\n\nThe plumbing underneath already takes `Option<&dyn EvidenceSource>`\n(`execute_ungoverned_admitted`), so this asks for public doors, not new evaluation.\n\n## Done when\n\nThe evidence suite (`tests/evidence_ingress.rs`) passes over a fallible view, and a read error\nraised mid-query surfaces as the error rather than as an undetermined row.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-22T20:23:05Z",
+  "labels": [],
+  "milestone": null,
+  "number": 682,
+  "state": "OPEN",
+  "title": "sparql-eval: evidence entry points over a fallible `DatasetView`",
+  "updatedAt": "2026-10-22T20:23:05Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/682"
+}

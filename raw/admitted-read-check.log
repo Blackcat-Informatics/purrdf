@@ -1,0 +1,23 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+error[E0599]: the method `take_failure` exists for reference `&QueryWorkspace<E>`, but its trait bounds were not satisfied
+    --> crates/sparql-eval/src/engine.rs:5438:25
+     |
+5438 |         match workspace.take_failure() {
+     |                         ^^^^^^^^^^^^ method cannot be called on `&QueryWorkspace<E>` due to unsatisfied trait bounds
+     |
+note: trait bound `E: Clone` was not satisfied
+    --> crates/sparql-eval/src/workspace.rs:2170:9
+     |
+2170 | impl<E: Clone> QueryWorkspace<E> {
+     |         ^^^^^  -----------------
+     |         |
+     |         unsatisfied trait bound introduced here
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `FailureOwner` defines an item `take_failure`, perhaps you need to implement it
+    --> crates/sparql-eval/src/xpath_regex.rs:43:1
+     |
+  43 | trait FailureOwner {
+     | ^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

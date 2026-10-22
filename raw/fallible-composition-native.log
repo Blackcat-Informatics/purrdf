@@ -1,0 +1,43 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 3m 57s
+     Running tests/real_producers.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-retrieval/5e271466e7086641/out/real_producers-5e271466e7086641)
+
+running 22 tests
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal ... FAILED
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+failures:
+
+---- fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal stdout ----
+thread 'fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal' panicked at crates/retrieval/tests/real_producers.rs:396:81:
+called `Result::unwrap()` on an `Err` value: ConstructionLimit
+
+
+failures:
+    fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal
+
+test result: FAILED. 21 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p purrdf-retrieval --test real_producers`

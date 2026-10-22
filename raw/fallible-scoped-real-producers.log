@@ -1,0 +1,37 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+error[E0053]: method `scope` has an incompatible type for trait
+   --> crates/retrieval/tests/real_producers.rs:322:12
+    |
+312 | impl<I: purrdf_core::ViewTermId> purrdf_sparql_eval::EvidenceSource<I> for OriginalOpenScope<'_> {
+    |      - expected this type parameter
+...
+322 |         _: purrdf_core::GraphMatch,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^ expected type parameter `I`, found `TermId`
+    |
+    = note: expected signature `fn(&OriginalOpenScope<'_>, GraphMatch<I>) -> Result<_, _>`
+               found signature `fn(&OriginalOpenScope<'_>, GraphMatch<TermId>) -> Result<_, _>`
+help: change the parameter type to match the trait
+    |
+322 |         _: purrdf_core::GraphMatch<I>,
+    |                                   +++
+
+error[E0053]: method `scope` has an incompatible type for trait
+   --> crates/retrieval/tests/real_producers.rs:349:12
+    |
+339 | impl<I: purrdf_core::ViewTermId> purrdf_sparql_eval::EvidenceSource<I> for OriginalClosedScope {
+    |      - expected this type parameter
+...
+349 |         _: purrdf_core::GraphMatch,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^ expected type parameter `I`, found `TermId`
+    |
+    = note: expected signature `fn(&OriginalClosedScope, GraphMatch<I>) -> Result<_, _>`
+               found signature `fn(&OriginalClosedScope, GraphMatch<TermId>) -> Result<_, _>`
+help: change the parameter type to match the trait
+    |
+349 |         _: purrdf_core::GraphMatch<I>,
+    |                                   +++
+
+For more information about this error, try `rustc --explain E0053`.
+error: could not compile `purrdf-retrieval` (test "real_producers") due to 2 previous errors

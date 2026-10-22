@@ -1,0 +1,55 @@
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+error[E0373]: async block may outlive the current function, but it borrows `operation`, which is owned by the current function
+   --> crates/retrieval/tests/real_producers.rs:592:88
+    |
+592 |     let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async {
+    |                                                                                        ^^^^^ may outlive borrowed value `operation`
+...
+595 |             &OriginalClosedScope, &operation,
+    |                                    --------- `operation` is borrowed here
+    |
+note: async block is returned here
+   --> crates/retrieval/tests/real_producers.rs:592:88
+    |
+592 |       let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async {
+    |  ________________________________________________________________________________________^
+593 | |         let scoped = purrdf_retrieval::execute_scoped_in_read(
+594 | |             &compiled, &registry, &source, ReadSchedule::Materialised, &bindings,
+595 | |             &OriginalClosedScope, &operation,
+...   |
+610 | |         71_u64
+611 | |     })).unwrap_err();
+    | |_____^
+help: to force the async block to take ownership of `operation` (and any other referenced variables), use the `move` keyword
+    |
+592 |     let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async move {
+    |                                                                                              ++++
+
+error[E0373]: async block may outlive the current function, but it borrows `operation`, which is owned by the current function
+   --> crates/retrieval/tests/real_producers.rs:621:88
+    |
+621 |     let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async {
+    |                                                                                        ^^^^^ may outlive borrowed value `operation`
+...
+624 |             &OriginalClosedScope, &operation,
+    |                                    --------- `operation` is borrowed here
+    |
+note: async block is returned here
+   --> crates/retrieval/tests/real_producers.rs:621:88
+    |
+621 |       let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async {
+    |  ________________________________________________________________________________________^
+622 | |         let scoped = purrdf_retrieval::execute_scoped_in_read(
+623 | |             &compiled, &registry, &source, ReadSchedule::Materialised, &bindings,
+624 | |             &OriginalClosedScope, &operation,
+...   |
+634 | |         72_u64
+635 | |     })).unwrap_err();
+    | |_____^
+help: to force the async block to take ownership of `operation` (and any other referenced variables), use the `move` keyword
+    |
+621 |     let failure = block_on(purrdf_sparql_eval::with_fallible_read(&source, |operation| async move {
+    |                                                                                              ++++
+
+For more information about this error, try `rustc --explain E0373`.
+error: could not compile `purrdf-retrieval` (test "real_producers") due to 2 previous errors

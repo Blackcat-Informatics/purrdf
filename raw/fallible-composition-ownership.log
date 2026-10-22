@@ -1,0 +1,73 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 24s
+     Running unittests src/lib.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-sparql-eval/4092c1abdaae10b1/out/purrdf_sparql_eval-4092c1abdaae10b1)
+
+running 65 tests
+test workspace::owned_row_regressions::borrowed_value_equality_keeps_the_original_allocation_refusal ... ok
+test workspace::owned_row_regressions::bounded_service_and_http_refuse_unpriced_opaque_hosts_before_dispatch ... ok
+test workspace::owned_row_regressions::borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple ... ok
+test workspace::owned_row_regressions::certainty_lateral_context_and_filter_requirements_use_original_admitted_home ... ok
+test workspace::owned_row_regressions::certainty_refusal_releases_all_native_worklists_and_preserves_first_typed_cause ... ok
+test workspace::owned_row_regressions::certainty_schema_keeps_original_grant_after_workspace_and_shallow_clone ... ok
+test workspace::owned_row_regressions::compiled_expression_refuses_constant_copy_before_birth_and_releases_scratch ... ok
+test workspace::owned_row_regressions::constructed_metadata_refusal_publishes_no_cell_and_preserves_original_cause ... ok
+test workspace::owned_row_regressions::consuming_resident_iterator_moves_spilled_cells ... ok
+test workspace::owned_row_regressions::consuming_iterator_drop_keeps_extracted_spilled_row_admitted ... ok
+test workspace::owned_row_regressions::compiled_expression_retains_original_constant_buffers_after_authored_tree_drop ... ok
+test workspace::owned_row_regressions::constructed_cells_keep_original_payloads_after_context_and_account ... ok
+test workspace::owned_row_regressions::first_owned_refusal_moves_without_clone_and_account_stays_failed ... ok
+test workspace::owned_row_regressions::declared_domains_retain_native_iris_membership_and_control_after_scope_drop ... ok
+test workspace::owned_row_regressions::ground_owner_keeps_original_boxes_and_lexical_leaves_after_workspace ... ok
+test workspace::owned_row_regressions::ground_and_paired_clone_join_enclosing_original_memory_without_owner_array ... ok
+test workspace::owned_row_regressions::grounding_first_predicate_refusal_precedes_unvisited_bad_object ... ok
+test workspace::owned_row_regressions::grounding_refusal_destroys_partial_children_and_moves_first_cause_once ... ok
+test workspace::owned_row_regressions::materialization_keeps_original_datatype_read_failure_without_a_view_maximum ... ok
+test workspace::owned_row_regressions::materialization_preserves_allocator_refusal_and_refunds_partial_cell ... ok
+test workspace::owned_row_regressions::mutable_native_trait_box_retains_concrete_allocation_and_first_refusal ... ok
+test workspace::owned_row_regressions::native_assignment_identity_overflow_is_typed_before_name_construction ... ok
+test workspace::owned_row_regressions::native_blank_reservations_share_fork_snapshot_and_keep_scope_collision_law ... ok
+test workspace::owned_row_regressions::native_correlated_preparation_refusal_moves_first_cause_and_releases_partial_tree ... ok
+test workspace::owned_row_regressions::native_correlated_rows_and_maps_keep_original_grants_until_last_owner ... ok
+test workspace::owned_row_regressions::native_cap_plan_and_spilled_edges_keep_original_grants_until_payload_drop ... ok
+test workspace::owned_row_regressions::native_cursor_control_refusal_preserves_original_typed_cause ... ok
+test workspace::owned_row_regressions::native_cursor_retains_control_until_drop_and_refuses_raw_extraction ... ok
+test workspace::owned_row_regressions::native_failure_spelling_clone_retains_grant_without_factory_reentry ... ok
+test workspace::owned_row_regressions::governed_native_materialization_survives_execution_and_account_scope ... ok
+test workspace::owned_row_regressions::native_prebinding_first_buffer_refusal_keeps_exact_original_cause ... ok
+test workspace::owned_row_regressions::native_preparation_refusal_keeps_the_original_typed_identity ... ok
+test workspace::owned_row_regressions::native_response_first_growth_refusal_releases_every_working_buffer ... ok
+test workspace::owned_row_regressions::native_scope_preflight_failure_leaves_flags_maps_and_placeholders_unmodified ... ok
+test workspace::owned_row_regressions::native_in_process_service_and_http_decode_preserve_bags_under_original_grants ... ok
+test workspace::owned_row_regressions::native_service_index_clones_keep_original_metadata_until_the_last_owner ... ok
+test workspace::owned_row_regressions::native_service_metadata_refusal_keeps_first_cause_and_destroys_partial_owners ... ok
+test workspace::owned_row_regressions::native_service_unsupported_retains_original_code_text_and_grant ... ok
+test workspace::owned_row_regressions::native_prebinding_all_four_forms_keep_original_ast_admission_until_drop ... ok
+test workspace::owned_row_regressions::native_service_literal_render_refusal_is_physical_and_silent_cannot_absorb_it ... ok
+test workspace::owned_row_regressions::native_template_initial_refusal_retains_original_typed_cause_without_minting ... ok
+test workspace::owned_row_regressions::native_soundness_analysis_keeps_original_immutable_owners_after_context_drop ... ok
+test workspace::owned_row_regressions::native_soundness_refusal_is_typed_and_shallow_edges_need_no_heap ... ok
+test workspace::owned_row_regressions::native_term_publication_moves_admission_without_a_second_payload_charge ... ok
+test workspace::owned_row_regressions::native_term_debug_matches_original_bytes_and_retains_diagnostic_on_clone ... ok
+test workspace::owned_row_regressions::native_term_debug_refuses_actual_worklist_growth_before_diagnostic_copy ... ok
+test workspace::owned_row_regressions::native_text_control_refusal_keeps_original_string_before_extraction ... ok
+test workspace::owned_row_regressions::native_text_publication_shares_original_buffer_and_survives_enclosing_frame ... ok
+test workspace::owned_row_regressions::native_witness_refusal_preserves_original_provider_failure_before_copying_iri ... ok
+test workspace::owned_row_regressions::ordered_membership_refuses_first_arena_before_publication ... ok
+test workspace::owned_row_regressions::prepared_native_probe_reuse_keeps_spelling_and_clears_refused_cells ... ok
+test workspace::owned_row_regressions::nested_native_service_denial_keeps_inner_type_and_original_error_owner ... ok
+test workspace::owned_row_regressions::published_ordered_membership_keeps_original_arena_until_final_owner_drop ... ok
+test workspace::owned_row_regressions::native_term_materialization_refusal_destroys_partial_strings_boxes_and_work_before_refund ... ok
+test workspace::owned_row_regressions::resident_composed_read_retains_first_direct_cause_across_clones ... ok
+test workspace::owned_row_regressions::prepared_native_query_and_slots_retain_the_original_account ... ok
+test workspace::owned_row_regressions::resident_cursor_uses_the_same_control_body_and_moves_without_copying ... ok
+test workspace::owned_row_regressions::resident_prepared_probe_lexical_refusal_preserves_original_buffer_reuse ... ok
+test workspace::owned_row_regressions::resident_reordering_moves_each_original_spill ... ok
+test workspace::owned_row_regressions::resident_view_native_copy_needs_no_dictionary_certificate_and_keeps_original_payload_grant ... ok
+test workspace::owned_row_regressions::service_error_clone_keeps_original_text_and_control_without_allocation ... ok
+test workspace::owned_row_regressions::service_metadata_retains_original_grant_through_shallow_attestation_clone ... ok
+test workspace::owned_row_regressions::service_response_retains_original_buffers_and_refuses_detached_extraction ... ok
+test workspace::owned_row_regressions::witness_clone_retains_original_arrays_and_shared_mutation_preserves_receipt ... ok
+test workspace::owned_row_regressions::template_ordinal_and_native_term_keep_original_account_until_last_payload ... ok
+
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 1596 filtered out; finished in 0.00s
+

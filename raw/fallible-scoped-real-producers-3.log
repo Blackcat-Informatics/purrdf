@@ -1,0 +1,9 @@
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/682-sparql-eval-evidence-entry-points-over/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 47.11s
+     Running tests/real_producers.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-retrieval/5e271466e7086641/out/real_producers-5e271466e7086641)
+
+running 1 test
+test fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.01s
+

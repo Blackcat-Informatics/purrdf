@@ -1,0 +1,80 @@
+    Finished `test` profile [optimized] target(s) in 0.22s
+     Running tests/real_producers.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-retrieval/5e271466e7086641/out/real_producers-5e271466e7086641)
+
+running 22 tests
+test scoped_native_owner_refusal_precedes_original_producer_open ... ok
+test scoped_native_admission_refusal_invalidates_before_any_ranked_row ... ok
+test native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows ... ok
+test fallible_scoped_search_keeps_segmented_rows_and_original_mid_query_refusal ... ok
+test scoped_fused_acceptance_retains_original_two_stratum_scores_and_order ... ok
+test field_membership_precedes_each_real_stratum_depth_in_both_schedules ... ok
+test two_real_producers_fuse_into_one_ranking_over_real_data ... ok
+test each_real_producer_is_compiled_with_the_facet_it_declared ... ok
+test the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it ... ok
+test independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion ... ok
+test scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion ... ok
+test search_equals_the_hand_composed_pipeline_over_the_real_producers ... ok
+test the_text_producer_declares_unique_only_where_one_subject_can_appear_once ... ok
+test both_real_producers_attest_the_generation_of_the_index_that_answered ... ok
+test the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness ... ok
+test the_knn_producer_names_each_target_once_when_two_rows_share_one_vector ... ok
+test the_sole_text_producer_over_one_document_still_returns_that_document ... ok
+test the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat ... ok
+test two_runs_over_the_same_index_state_carry_one_evidence_id ... ok
+test a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness ... ok
+test a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores ... ok
+test fusion_trailer_names_reassociated_kernel ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/evidence_ingress.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-sparql-eval/121d3fce1034c88d/out/evidence_ingress-121d3fce1034c88d)
+
+running 22 tests
+test actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims ... ok
+test fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers ... ok
+test empty_service_keeps_search_reason_without_inventing_an_answer_row ... ok
+test service_rows_keep_signed_and_undecided_declarations_through_original_operators ... ok
+test distinct_coalesces_both_polarities_without_changing_binding_identity ... ok
+test source_refusal_never_publishes_partial_or_undetermined_rows ... ok
+test unmatched_optional_preserves_information_and_declared_missing_scope ... ok
+test fallible_evidence_doors_keep_original_rows_and_all_query_form_status ... ok
+test nested_projection_retains_only_visible_aggregate_aliases ... ok
+test group_bounds_follow_whole_scope_and_declared_sum_domain ... ok
+test sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence ... ok
+test declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness ... ok
+test verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities ... ok
+test all_query_forms_publish_original_unknown_status_at_requested_count_tiers ... ok
+test minus_absence_requires_closure_but_disjoint_domains_are_decidable ... ok
+test registered_lossy_search_keeps_original_candidates_and_caller_reason ... ok
+test minus_negates_all_original_witnesses_under_declared_closure ... ok
+test acceptance_merges_original_order_without_replaying_cells_or_losing_scores ... ok
+test native_paths_keep_derivation_polarity_and_complete_found_witnesses ... ok
+test exists_transports_original_witnesses_through_vm_memos_and_deferred_sites ... ok
+test native_property_rows_retain_original_declarations_through_normal_ingestion ... ok
+test actual_unknown_answer_exposes_queryable_original_rdf_ledger ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.64s
+
+     Running tests/fallible_query.rs (/opt/.cargo/ba/97d911d918b176/debug/build/purrdf-sparql-eval/2d55af749bb25a79/out/fallible_query-2d55af749bb25a79)
+
+running 17 tests
+test cold_and_warm_bgp_planning_have_identical_demand_paging_evidence ... ok
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test a_failed_paged_view_outranks_an_explain_stop_signal ... ok
+test every_required_query_form_and_operator_propagates_page_failure ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test operational_failure_taxonomy_is_not_an_empty_answer ... ok
+test parse_failure_remains_an_ordinary_query_error_with_evidence ... ok
+test identical_executions_have_identical_results_status_and_evidence ... ok
+test operational_root_cause_wins_over_a_derived_evaluator_error ... ok
+test prepared_entry_uses_the_same_completeness_boundary ... ok
+test query_fallible_view_dispatches_a_registered_relation_with_options ... ok
+test query_time_failure_cannot_masquerade_as_an_empty_result ... ok
+test query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers ... ok
+test production_query_budget_boundaries_are_exact_and_distinct ... ok
+test healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entries ... ok
+test successful_and_empty_results_are_explicitly_complete ... ok
+test resident_and_pack_views_keep_the_ordinary_byte_identical_result_path ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
