@@ -438,7 +438,10 @@ where
     // The layer's assumptions become rows like any other, flagged so a rule that derives
     // one again is recorded as having done so.
     let assumptions = hooks.assume(layer_index, &state.rel).map_err(hook_error)?;
-    let mut assumed = vec![false; state.rel.row_slots()];
+    let mut assumed = purrdf_core::FastSet::default();
+    assumed
+        .try_reserve(assumptions.len())
+        .map_err(|_| EvalError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed))?;
     for fact in &assumptions {
         if !state.rel.contains_row(Arity::<N>::fact_terms(fact)) {
             state
@@ -450,13 +453,8 @@ where
                 })?;
         }
         if let Some((_, _, row)) = state.rel.insert_row(Arity::<N>::fact_terms(fact))? {
-            state.depth.push(0);
-            assumed.push(true);
-            debug_assert_eq!(
-                row.resident_index() + 1,
-                assumed.len(),
-                "assumed tracks store rows"
-            );
+            state.seed_height(row);
+            assumed.insert(row);
         }
     }
     check_budget(state)?;
@@ -481,7 +479,7 @@ where
     // Iterating groups: pass after pass until a whole pass commits nothing. `seen[r]` is
     // the row count rule `r` last ran against, so its next run's delta is exactly what
     // was committed since — the per-rule semi-naive delta.
-    let mut seen: Vec<Option<usize>> = vec![None; program.rules.len()];
+    let mut seen: Vec<Option<u64>> = vec![None; program.rules.len()];
     loop {
         let mut progressed = false;
         for group in &layer.iterating {
@@ -508,10 +506,7 @@ where
     let rows = state.rel.facts_in_row_order();
     let withdrawn: Vec<ShapeFact<N>> = rows
         .iter()
-        .filter(|(row, fact)| {
-            assumed.get(row.resident_index()).copied().unwrap_or(false)
-                && !confirmed.contains_key(fact)
-        })
+        .filter(|(row, fact)| assumed.contains(row) && !confirmed.contains_key(fact))
         .map(|(_, fact)| fact.clone())
         .collect();
     if state.derivation_mode == crate::seminaive::DerivationMode::Record {
@@ -539,12 +534,12 @@ where
     /// The caller's stop signal.
     stop: Option<&'g dyn StopSignal>,
     /// Per-row assumed flags.
-    assumed: &'a mut Vec<bool>,
+    assumed: &'a mut purrdf_core::FastSet<crate::id::RowId>,
     /// The canonical derivation of each assumed fact a rule derived again.
     confirmed: &'a mut BTreeMap<ShapeFact<N>, crate::seminaive::Confirmation<N>>,
     /// For an iterating group, the row count each rule last ran against; `None` for a
     /// run-once group, whose rules run once against everything.
-    seen: Option<&'a mut Vec<Option<usize>>>,
+    seen: Option<&'a mut Vec<Option<u64>>>,
 }
 
 /// Evaluate one group as one round and commit it. Returns whether it committed anything.
@@ -604,8 +599,9 @@ where
     let round = evaluate_round(
         &entries,
         RoundSnapshot {
+            probe: None,
             rel: &state.rel,
-            depth: &state.depth,
+            depth: state.depths(),
             assumed: run.assumed,
             delta_indexes: None,
         },
@@ -624,7 +620,6 @@ where
     }
     let committed = !round.is_empty();
     state.absorb(round)?;
-    run.assumed.resize(state.rel.row_slots(), false);
     Ok(committed)
 }
 

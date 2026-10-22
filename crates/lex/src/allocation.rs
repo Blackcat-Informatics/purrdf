@@ -19,7 +19,7 @@ pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, Shared
 mod text;
 pub use text::OwnedText;
 mod ordered;
-pub use ordered::{OrderedIter, OrderedRange, OrderedTable};
+pub use ordered::{OrderedEntry, OrderedIter, OrderedRange, OrderedSlot, OrderedTable};
 
 use core::alloc::Layout;
 use core::fmt;

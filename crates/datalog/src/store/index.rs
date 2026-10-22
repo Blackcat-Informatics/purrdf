@@ -84,13 +84,20 @@ pub(super) fn sort_row_positions<I: TermIdentity>(
     columns: &[&[I]],
     order: &[usize],
 ) {
-    positions.sort_unstable_by(|&left, &right| {
-        order
-            .iter()
-            .map(|&column| columns[column][left].cmp(&columns[column][right]))
-            .find(|ordering| *ordering != Ordering::Equal)
-            .unwrap_or_else(|| left.cmp(&right))
-    });
+    positions.sort_unstable_by(|&left, &right| compare_row_positions(left, right, columns, order));
+}
+
+pub(super) fn compare_row_positions<I: TermIdentity>(
+    left: usize,
+    right: usize,
+    columns: &[&[I]],
+    order: &[usize],
+) -> Ordering {
+    order
+        .iter()
+        .map(|&column| columns[column][left].cmp(&columns[column][right]))
+        .find(|ordering| *ordering != Ordering::Equal)
+        .unwrap_or_else(|| left.cmp(&right))
 }
 
 /// A sorted permutation over caller-selected columns of the original integer rows.

@@ -55,6 +55,7 @@
 //! program and, when supplied explicitly, immutable snapshot statistics. The same
 //! rules and statistical inputs compile to the same plan on every target.
 
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -131,23 +132,37 @@ pub fn predicate_symbol<const N: usize>(atom: &ClauseAtom<N>) -> String {
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
 pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String, usize>> {
-    let (preds, edges) = dependency_edges(rules);
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    stratify_dependencies(&graph)
+}
 
-    let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
+fn stratify_dependencies(graph: &DependencyGraph) -> Option<BTreeMap<String, usize>> {
+    let mut stratum: BTreeMap<String, usize> = graph
+        .predicates
+        .iter()
+        .map(|p| (p.clone(), 0usize))
+        .collect();
 
     // Still relaxing after n + 1 passes ⇒ a negative edge sits in a cycle.
     let settled = relax_strata(
         &mut stratum,
         || {
-            edges
-                .iter()
-                .map(|(head, body, negative)| (head.clone(), body.clone(), *negative))
+            graph.edges.iter().map(|edge| {
+                (
+                    graph.predicates[edge.head].as_str(),
+                    graph.predicates[edge.body].as_str(),
+                    edge.negative,
+                )
+            })
         },
-        |levels, predicate| levels[predicate],
+        |levels, predicate| levels[*predicate],
         |levels, predicate, level| {
-            levels.insert(predicate.clone(), level);
+            *levels
+                .get_mut(*predicate)
+                .expect("an original dependency predicate") = level;
         },
-        Some(preds.len()),
+        Some(graph.predicates.len()),
     );
     settled.then_some(stratum)
 }
@@ -172,75 +187,175 @@ pub(crate) fn dependency_edges_with<T, const N: usize>(
     rules: &[DlClause<N>],
     mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
 ) -> (BTreeSet<String>, Vec<T>) {
-    // Every predicate symbol, heads and body atoms alike.
-    let mut preds: BTreeSet<String> = BTreeSet::new();
-    let mut wildcard_head = false;
-    let mut wildcard_body = false;
-    for rule in rules {
-        for head in rule.head_atoms() {
-            let symbol = predicate_symbol(head);
-            wildcard_head |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-        for atom in rule.body() {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // A negated conjunction's atoms are read NEGATIVELY: the group is decided only
-    // once every relation it matches is complete, exactly as a negated atom is.
-    for rule in rules {
-        for atom in rule.negations().iter().flat_map(Negation::atoms) {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // Edges: (head predicate, body predicate, negative?).
-    let mut edges = Vec::new();
-    for (rule_index, rule) in rules.iter().enumerate() {
-        for head in rule.head_atoms() {
-            let head_symbol = predicate_symbol(head);
-            for atom in rule.body() {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    atom.is_negated(),
-                ));
-            }
-            for atom in rule.negations().iter().flat_map(Negation::atoms) {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    true,
-                ));
-            }
-        }
-    }
-
-    // Couple the wildcard to the concrete symbols, in whichever direction the program
-    // actually uses it. Both directions together intentionally fuse the whole program
-    // into one stratum — see the doc comment.
-    let concrete: Vec<String> = preds
-        .iter()
-        .filter(|symbol| symbol.as_str() != ANY_PREDICATE)
-        .cloned()
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    let edges = graph
+        .edges
+        .into_iter()
+        .map(|dependency| {
+            edge(
+                dependency.rule,
+                graph.predicates[dependency.head].clone(),
+                graph.predicates[dependency.body].clone(),
+                dependency.negative,
+            )
+        })
         .collect();
-    for symbol in &concrete {
-        if wildcard_body {
-            edges.push(edge(None, ANY_PREDICATE.to_owned(), symbol.clone(), false));
-        }
-        if wildcard_head {
-            edges.push(edge(None, symbol.clone(), ANY_PREDICATE.to_owned(), false));
-        }
-    }
+    (graph.predicates.into_iter().collect(), edges)
+}
 
-    (preds, edges)
+/// Original authored dependency coordinates, including explicit wildcard coupling.
+#[derive(Debug)]
+pub(crate) struct DependencyEdge {
+    pub(crate) rule: Option<usize>,
+    pub(crate) head: usize,
+    pub(crate) body: usize,
+    pub(crate) negative: bool,
+}
+
+/// One dependency walk shared by stratification, diagnostics and maintenance.
+#[derive(Debug)]
+pub(crate) struct DependencyGraph {
+    pub(crate) predicates: Vec<String>,
+    pub(crate) edges: Vec<DependencyEdge>,
+}
+
+fn predicate_surface_in<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    memory: &mut Memory<'_, A>,
+) -> Result<String, StorageError> {
+    if let Some(surface) = atom.predicate().surface_in(memory)? {
+        return Ok(surface);
+    }
+    memory.scope(|memory| {
+        let mut surface = String::new();
+        memory.push_str(&mut surface, ANY_PREDICATE)?;
+        Ok(surface)
+    })
+}
+
+fn retain_predicate<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    predicates: &mut OrderedTable<String, ()>,
+    memory: &mut Memory<'_, A>,
+) -> Result<bool, StorageError> {
+    let symbol = predicate_surface_in(atom, memory)?;
+    let wildcard = symbol == ANY_PREDICATE;
+    if predicates.get(&symbol).is_some() {
+        memory.release_string(symbol)?;
+    } else {
+        predicates.insert(symbol, (), memory)?;
+    }
+    Ok(wildcard)
+}
+
+fn predicate_index<A: Admission + ?Sized, const N: usize>(
+    atom: &ClauseAtom<N>,
+    predicates: &[String],
+    memory: &mut Memory<'_, A>,
+) -> Result<usize, StorageError> {
+    let symbol = predicate_surface_in(atom, memory)?;
+    let index = predicates
+        .binary_search(&symbol)
+        .expect("an authored predicate was gathered");
+    memory.release_string(symbol)?;
+    Ok(index)
+}
+
+impl DependencyGraph {
+    pub(crate) fn new_in<A: Admission + ?Sized, const N: usize>(
+        rules: &[DlClause<N>],
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(|memory| {
+            let mut names = OrderedTable::default();
+            let mut wildcard_head = false;
+            let mut wildcard_body = false;
+            for rule in rules {
+                for atom in rule.head_atoms() {
+                    wildcard_head |= retain_predicate(atom, &mut names, memory)?;
+                }
+                for atom in rule
+                    .body()
+                    .iter()
+                    .chain(rule.negations().iter().flat_map(Negation::atoms))
+                {
+                    wildcard_body |= retain_predicate(atom, &mut names, memory)?;
+                }
+            }
+            let mut predicates = Vec::new();
+            memory.reserve(&mut predicates, names.len())?;
+            while let Some((symbol, ())) = names.pop_first() {
+                predicates.push(symbol);
+            }
+            names.release(memory)?;
+            let mut edges = Vec::new();
+            for (rule_index, rule) in rules.iter().enumerate() {
+                for atom in rule.head_atoms() {
+                    let head = predicate_index(atom, &predicates, memory)?;
+                    for body in rule.body() {
+                        let body_index = predicate_index(body, &predicates, memory)?;
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: Some(rule_index),
+                                head,
+                                body: body_index,
+                                negative: body.is_negated(),
+                            },
+                        )?;
+                    }
+                    // A negated conjunction reads every member negatively.
+                    for body in rule.negations().iter().flat_map(Negation::atoms) {
+                        let body = predicate_index(body, &predicates, memory)?;
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: Some(rule_index),
+                                head,
+                                body,
+                                negative: true,
+                            },
+                        )?;
+                    }
+                }
+            }
+            if wildcard_body || wildcard_head {
+                let wildcard = predicates
+                    .iter()
+                    .position(|symbol| symbol == ANY_PREDICATE)
+                    .expect("an authored wildcard was gathered");
+                for symbol in 0..predicates.len() {
+                    if symbol == wildcard {
+                        continue;
+                    }
+                    if wildcard_body {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: wildcard,
+                                body: symbol,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                    if wildcard_head {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: symbol,
+                                body: wildcard,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                }
+            }
+            Ok(Self { predicates, edges })
+        })
+    }
 }
 
 // ── Index selection ─────────────────────────────────────────────────────────────
@@ -1458,7 +1573,11 @@ impl<const N: usize> Parsed<N> {
     /// A rule runs at its lowest head-predicate stratum; within a stratum the
     /// authored program order is preserved, so rules fire in a stable order.
     pub fn stratify(self) -> Option<Stratified<N>> {
-        let stratum_of = stratify(&self.rules)?;
+        let dependencies = Arc::new(
+            DependencyGraph::new_in(&self.rules, &mut Memory::new(&mut Resident))
+                .expect("resident dependency construction requires physical storage"),
+        );
+        let stratum_of = stratify_dependencies(&dependencies)?;
 
         let max_stratum = self
             .rules
@@ -1491,6 +1610,7 @@ impl<const N: usize> Parsed<N> {
             settled_predicates[stratum_of[&predicate]].push(predicate);
         }
         Some(Stratified {
+            dependencies,
             settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1502,6 +1622,7 @@ impl<const N: usize> Parsed<N> {
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified<const N: usize = 4> {
+    dependencies: Arc<DependencyGraph>,
     /// Predicates complete after each stratum, independent of early head emission.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
@@ -1541,6 +1662,7 @@ impl<const N: usize> Stratified<N> {
             .map(|rule| RulePlan::for_rule_with_estimates(rule, estimate))
             .collect();
         Planned {
+            dependencies: self.dependencies,
             settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1553,6 +1675,7 @@ impl<const N: usize> Stratified<N> {
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
 pub struct Planned<const N: usize = 4> {
+    dependencies: Arc<DependencyGraph>,
     /// Predicates complete after each stratum.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
@@ -1583,7 +1706,19 @@ impl<const N: usize> Planned<N> {
             .zip(&self.plans)
             .map(|(rule, plan)| RuleRuntime::new(rule, plan))
             .collect::<Arc<[_]>>();
+        let mut rule_levels = vec![0; self.rules.len()];
+        for (level, rules) in self.strata.iter().enumerate() {
+            for &rule in rules {
+                rule_levels[rule] = level;
+            }
+        }
+        let program_hash = crate::cache::canonical_rule_hash(&self.rules);
+        let base_read_rule = self.rules.iter().position(DlClause::reads_base);
         Executable {
+            dependencies: self.dependencies,
+            rule_levels: Arc::from(rule_levels),
+            program_hash,
+            base_read_rule,
             settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
@@ -1605,6 +1740,12 @@ pub struct Executable<const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Immutable analysis and identity belong to the compiled program, never a
+    /// per-model copy or a supplemental grant adopting existing allocation.
+    pub(crate) dependencies: Arc<DependencyGraph>,
+    pub(crate) rule_levels: Arc<[usize]>,
+    pub(crate) program_hash: [u8; 32],
+    pub(crate) base_read_rule: Option<usize>,
     /// Predicates complete after each stratum.
     settled_predicates: Vec<Vec<String>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,

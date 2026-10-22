@@ -185,6 +185,22 @@ where
         /// The satisfied atom's index in the clause's AUTHORED body.
         body_position: usize,
     },
+    /// A negated conjunction has a complete matching extension in the model.
+    NegatedGroupSatisfied {
+        /// The cited clause index.
+        rule: usize,
+        /// The group's authored ordinal.
+        group: usize,
+    },
+    /// A grouped base read has no explicit immutable base context.
+    MissingGroupBase {
+        /// The cited clause index.
+        rule: usize,
+        /// The group's authored ordinal.
+        group: usize,
+        /// The atom's ordinal inside the group.
+        atom: usize,
+    },
     /// The clause head carries a variable the checked premises never bound, so no
     /// conclusion can be instantiated. A program that came through
     /// [`compile`](crate::seminaive::compile) is range-restricted and cannot produce this;
@@ -215,7 +231,7 @@ where
         /// Original checked input terms, in declared order.
         inputs: Box<[String]>,
     },
-    /// A rule application names a clause carrying callbacks or negated conjunctions
+    /// A rule application names a clause carrying callbacks
     /// ([`crate::guard`]). The checker has no interpretation for these, so
     /// it cannot re-derive the step — and it refuses rather than accept a step it did not
     /// check.
@@ -316,6 +332,14 @@ where
                 f,
                 "clause {rule} native guard {guard} rejects the checked input terms"
             ),
+            Self::NegatedGroupSatisfied { rule, group } => write!(
+                f,
+                "clause {rule} negated group {group} has a matching extension"
+            ),
+            Self::MissingGroupBase { rule, group, atom } => write!(
+                f,
+                "clause {rule} negated group {group} atom {atom} requires an explicit immutable base context"
+            ),
             Self::GuardedRule { rule } => write!(
                 f,
                 "clause {rule} carries guard literals, whose truth this checker cannot re-derive"
@@ -363,6 +387,8 @@ where
         PremiseCountMismatch { rule, body, premises } => "datalog-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
         PremiseMismatch { rule, body_position, proven } => "datalog-proof-premise-mismatch" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128), "proven" => Record(proven.as_ref()) },
         NegatedPremiseSatisfied { rule, body_position } => "datalog-proof-negated-premise-satisfied" { "rule" => Unsigned(*rule as u128), "body_position" => Unsigned(*body_position as u128) },
+        NegatedGroupSatisfied { rule, group } => "datalog-proof-negated-group-satisfied" { "rule" => Unsigned(*rule as u128), "group" => Unsigned(*group as u128) },
+        MissingGroupBase { rule, group, atom } => "datalog-proof-missing-group-base" { "rule" => Unsigned(*rule as u128), "group" => Unsigned(*group as u128), "atom" => Unsigned(*atom as u128) },
         UnboundHeadVariable { rule, variable } => "datalog-proof-unbound-head-variable" { "rule" => Unsigned(*rule as u128), "variable" => Text(variable) },
         UnboundGuardVariable { rule, guard, variable } => "datalog-proof-unbound-guard-variable" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "variable" => Text(variable) },
         GuardRejected { rule, guard, operation, inputs } => "datalog-proof-guard-rejected" { "rule" => Unsigned(*rule as u128), "guard" => Unsigned(*guard as u128), "operation" => Record(operation), "inputs" => List(inputs.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value.as_str()))) },
@@ -890,11 +916,16 @@ where
             head,
             heads: heads.len(),
         })?;
-        if !clause.negations().is_empty()
-            || clause
-                .guards()
-                .iter()
-                .any(|guard| guard.operation() == GuardOperation::Callback)
+        if clause
+            .guards()
+            .iter()
+            .chain(
+                clause
+                    .negations()
+                    .iter()
+                    .flat_map(crate::guard::Negation::guards),
+            )
+            .any(|guard| guard.operation() == GuardOperation::Callback)
         {
             return Err(ProofError::GuardedRule { rule });
         }
@@ -996,6 +1027,12 @@ where
                     rule,
                     body_position,
                 });
+            }
+        }
+
+        for (group, negation) in clause.negations().iter().enumerate() {
+            if negated_group_is_satisfied(negation, &subst, ctx, rule, group)? {
+                return Err(ProofError::NegatedGroupSatisfied { rule, group });
             }
         }
 
@@ -1344,7 +1381,14 @@ fn match_atom<'r, 'f, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let surfaces = Arity::<N>::fact_terms(fact);
+    match_atom_surfaces(atom, Arity::<N>::fact_terms(fact), subst)
+}
+
+fn match_atom_surfaces<'r, 'f, const N: usize>(
+    atom: &'r ClauseAtom<N>,
+    surfaces: [&'f str; N],
+    subst: &mut BTreeMap<&'r str, &'f str>,
+) -> bool {
     for (term, surface) in atom.terms().into_iter().zip(surfaces) {
         match term {
             ClauseTerm::Var(name) => match subst.entry(name.as_str()) {
@@ -1368,6 +1412,79 @@ where
         }
     }
     true
+}
+
+/// Independently search the authored conjunction using lexical substitutions.
+/// One continuation per depth retains its original row cursor; no evaluator
+/// frame, reported witness or join plan decides this closed-world obligation.
+fn negated_group_is_satisfied<const N: usize>(
+    group: &crate::guard::Negation<N>,
+    substitution: &BTreeMap<&str, &str>,
+    context: &ProofContext<'_, N>,
+    rule: usize,
+    ordinal: usize,
+) -> Result<bool, ProofError<N>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut work = purrdf_lex::walk::WorkList::<_, 8>::new();
+    work.push((0, 0, substitution.clone()));
+    while let Some((depth, cursor, subst)) = work.pop() {
+        let Some(atom) = group.atoms().get(depth) else {
+            let mut accepted = true;
+            for (position, guard) in group.guards().iter().enumerate() {
+                let inputs = guard
+                    .inputs()
+                    .iter()
+                    .map(|variable| {
+                        subst.get(variable.as_str()).copied().ok_or_else(|| {
+                            ProofError::UnboundGuardVariable {
+                                rule,
+                                guard: position,
+                                variable: variable.clone(),
+                            }
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                accepted &= guard
+                    .operation()
+                    .filter(&inputs)
+                    .expect("caller callbacks were refused before checking premises");
+            }
+            if accepted {
+                return Ok(true);
+            }
+            continue;
+        };
+        let model = match atom.read_source() {
+            crate::clause::ReadSource::Evaluation => context.model,
+            crate::clause::ReadSource::Base if context.edb.has_base() => {
+                context.edb.read_source(crate::clause::ReadSource::Base)
+            }
+            crate::clause::ReadSource::Base => {
+                return Err(ProofError::MissingGroupBase {
+                    rule,
+                    group: ordinal,
+                    atom: depth,
+                });
+            }
+        };
+        for (row, terms) in model.rows_from(cursor) {
+            let mut extended = subst.clone();
+            if match_atom_surfaces(
+                atom,
+                terms.map(|id| model.interner().resolve(id)),
+                &mut extended,
+            ) {
+                work.try_push((depth, row.index() + 1, subst))
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                work.try_push((depth + 1, 0, extended))
+                    .map_err(|_| StorageError::AllocationFailed)?;
+                break;
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// The lexical surface a clause term denotes under `subst`, or `None` for a free variable.
@@ -1562,6 +1679,54 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grouped_negative_proofs_redecide_complete_native_extensions() {
+        let atom = |s, p, o| {
+            ClauseAtom::triple(
+                ClauseTerm::var(s),
+                ClauseTerm::literal(p),
+                ClauseTerm::var(o),
+            )
+        };
+        let rule = DlClause::datalog(atom("x", "out", "y"), vec![atom("x", "edge", "y")])
+            .with_negations(vec![crate::guard::Negation::new(
+                vec![atom("x", "blocked", "z"), atom("z", "marker", "y")],
+                vec![crate::guard::Guard::not_equal("z", "y")],
+            )]);
+        let rules = [rule];
+        let mut edb = RelationStore::<TermInterner, 3>::with_dictionary(TermInterner::default());
+        for row in [
+            ["a", "edge", "b"],
+            ["a", "blocked", "b"],
+            ["b", "marker", "b"],
+            ["a", "blocked", "c"],
+        ] {
+            edb.insert_row(row).unwrap();
+        }
+        let mut model = edb.clone();
+        let given = Arity::<3>::fact(["a", "edge", "b"].map(str::to_owned));
+        let goal = Arity::<3>::fact(["a", "out", "b"].map(str::to_owned));
+        let mut arena = ProofArena::<3>::default();
+        let premise = arena.axiom(given).unwrap();
+        let root = arena.by_rule(goal.clone(), 0, &[premise]).unwrap();
+        // The b extension fails the native guard; the c extension lacks its
+        // second atom. Neither individual match refutes this conjunction.
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Ok(goal.clone())
+        );
+        model.insert_row(["c", "marker", "b"]).unwrap();
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Err(ProofError::NegatedGroupSatisfied { rule: 0, group: 0 })
+        );
+        model.remove_row(["c", "marker", "b"]).unwrap();
+        assert_eq!(
+            arena.check(root, &ProofContext::new(&rules, &edb, &model)),
+            Ok(goal)
+        );
+    }
+
     #[test]
     fn proof_capacity_preserves_axiom_and_rule_hits_before_admission() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace};

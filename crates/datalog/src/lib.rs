@@ -291,6 +291,7 @@
 // caller.
 pub use purrdf_core::binding_pattern;
 pub mod admission;
+mod allocation;
 pub mod cache;
 pub mod chase;
 pub mod clause;
@@ -299,6 +300,7 @@ pub mod dictionary;
 pub mod evidence;
 pub mod guard;
 pub mod id;
+pub mod maintenance;
 pub(crate) mod paths;
 pub mod plan;
 pub mod proof;

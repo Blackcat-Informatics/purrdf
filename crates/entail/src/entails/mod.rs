@@ -557,6 +557,7 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::Decision(_)
         | EntailError::KeyMembership(_)
         | EntailError::Evaluate(_)
+        | EntailError::Maintenance(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
         | EntailError::RoleHierarchy(_)

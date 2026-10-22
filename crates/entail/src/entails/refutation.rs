@@ -440,12 +440,14 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         )));
     }
 
-    let mut refuter = Refuter::new(regime).under(*q.options);
+    let refuter = Refuter::new(regime)
+        .map_err(EntailError::with_read_error)?
+        .under(*q.options);
     let mut seeded = refuter.seed(premise)?;
     let mut clashes = Vec::with_capacity(facts.len());
     for fact in &facts {
         budget -= 1;
-        let Some(clash) = refuter.refute(&mut seeded, &fact.negation())? else {
+        let Some(clash) = seeded.refute(&fact.negation())? else {
             return Ok(Attempt::NotEstablished);
         };
         clashes.push(clash);
@@ -472,7 +474,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
             let Ok(mut seeded) = refuter.seed(subset) else {
                 return Ok(false);
             };
-            match refuter.refute(&mut seeded, &negation)? {
+            match seeded.refute(&negation)? {
                 Some(clash) => {
                     best = clash;
                     Ok(true)

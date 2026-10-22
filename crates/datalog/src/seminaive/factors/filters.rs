@@ -151,7 +151,11 @@ impl<I: TermIdentity, const N: usize> Ground<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    pub(super) fn new(entry: RuleEntry<'_, N>, evidenced: bool) -> Self {
+    pub(super) fn new(
+        entry: RuleEntry<'_, N>,
+        evidenced: bool,
+        seed: Option<&SlotSolution<I, N>>,
+    ) -> Self {
         Self {
             atoms: (0..entry.runtime.negated.len())
                 .filter(|index| {
@@ -171,7 +175,9 @@ where
                         .any(|factor| factor.negations.contains(index))
                 })
                 .collect(),
-            solution: SlotSolution::empty(entry.plan.variables().len()),
+            solution: seed
+                .cloned()
+                .unwrap_or_else(|| SlotSolution::empty(entry.plan.variables().len())),
             filters: Frame::new(evidenced),
         }
     }

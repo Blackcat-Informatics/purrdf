@@ -26,6 +26,7 @@ pub(crate) struct HostDictionary {
     pub(crate) lookups: std::sync::atomic::AtomicUsize,
     pub(crate) lose_after_lookup: std::sync::atomic::AtomicBool,
     pub(crate) pins: std::sync::atomic::AtomicUsize,
+    pub(crate) refuse_after_interned: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) struct HostPin<'a> {
@@ -95,7 +96,15 @@ impl TermDictionary for HostDictionary {
                 panic!("direct-ID operations must not mint substitutes")
             }
         });
-        validate(self, ids)
+        let result = validate(self, ids)?;
+        if self
+            .refuse_after_interned
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            Err(DictionaryError::Source(SourceLost(71)))
+        } else {
+            Ok(result)
+        }
     }
     fn check_read(&self) -> Result<(), SourceLost> {
         if self.lost.load(std::sync::atomic::Ordering::Relaxed) {

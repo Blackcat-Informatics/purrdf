@@ -1084,6 +1084,52 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     assert_eq!(licenses, [true; 3]);
 }
 
+fn signed_refutation_scenarios_preserve_public_warrants_and_source_binding() {
+    use purrdf_entail::Regime;
+    use purrdf_entail::entails::{
+        EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify,
+    };
+    let mut premise = Fixture::default();
+    let a = premise.name("A");
+    let b = premise.name("B");
+    let class = premise.builder.intern_iri(owl::CLASS).unwrap();
+    premise.edge(a, rdf::TYPE, class);
+    premise.edge(b, rdf::TYPE, class);
+    premise.edge(a, owl::DISJOINT_WITH, b);
+    for name in ["first", "second", "third"] {
+        let subject = premise.name(name);
+        premise.edge(subject, rdf::TYPE, a);
+    }
+    let premise = premise.freeze();
+    let mut conclusion = Fixture::default();
+    let b = conclusion.name("B");
+    let class = conclusion.builder.intern_iri(owl::CLASS).unwrap();
+    let complement = conclusion
+        .builder
+        .intern_blank("complement", BlankScope::DEFAULT)
+        .unwrap();
+    conclusion.edge(b, rdf::TYPE, class);
+    conclusion.edge(complement, rdf::TYPE, class);
+    conclusion.edge(complement, owl::COMPLEMENT_OF, b);
+    for name in ["first", "second", "third"] {
+        let subject = conclusion.name(name);
+        conclusion.edge(subject, rdf::TYPE, complement);
+    }
+    let conclusion = conclusion.freeze();
+    let (outcome, _) = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
+        .unwrap()
+        .into_parts();
+    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Refutation(_)) = outcome else {
+        panic!("the negative memberships require three native signed scenarios");
+    };
+    let EntailmentWarrant::Refutation(refutations) = &warrant else {
+        unreachable!()
+    };
+    assert_eq!(refutations.refutations().len(), 3);
+    assert!(verify(&warrant, &premise, &conclusion));
+    assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
+}
+
 fn frozen_warrants_reject_empty_and_weakened_premises() {
     use purrdf_core::TermFactory;
     use purrdf_entail::Regime;
@@ -1164,6 +1210,7 @@ fn frozen_warrants_reject_empty_and_weakened_premises() {
 }
 
 purrdf_testkit::harness_main!(
+    signed_refutation_scenarios_preserve_public_warrants_and_source_binding,
     frozen_warrants_reject_empty_and_weakened_premises,
     public_dataset_views_preserve_source_identity_and_causal_verification,
     current_clash_preserves_named_and_scoped_blank_source_identity,

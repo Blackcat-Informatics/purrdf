@@ -245,12 +245,40 @@ impl ClauseTerm {
     /// which is precisely what lets one variable bind a predicate in one atom and a
     /// subject in another.
     pub fn surface(&self) -> Option<String> {
-        match self {
-            Self::Iri(iri) => Some(format!("<{iri}>")),
-            Self::Literal(surface) => Some(surface.clone()),
-            Self::DefaultGraph => Some(String::new()),
-            Self::Var(_) => None,
-        }
+        self.surface_in(&mut purrdf_lex::allocation::Memory::new(
+            &mut purrdf_lex::allocation::Resident,
+        ))
+        .expect("rendering a resident clause constant requires physical storage")
+    }
+
+    /// Render through the original native account without an unadmitted string.
+    pub(crate) fn surface_in<A: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, A>,
+    ) -> Result<Option<String>, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        memory.scope(|memory| {
+            let (text, bracketed) = match self {
+                Self::Iri(text) => (text.as_str(), true),
+                Self::Literal(text) => (text.as_str(), false),
+                Self::DefaultGraph => ("", false),
+                Self::Var(_) => return Ok(None),
+            };
+            let capacity = text
+                .len()
+                .checked_add(usize::from(bracketed) * 2)
+                .ok_or(StorageError::SizeOverflow)?;
+            let mut surface = String::new();
+            memory.reserve_string(&mut surface, capacity)?;
+            if bracketed {
+                surface.push('<');
+            }
+            surface.push_str(text);
+            if bracketed {
+                surface.push('>');
+            }
+            Ok(Some(surface))
+        })
     }
 }
 

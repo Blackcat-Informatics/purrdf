@@ -608,6 +608,10 @@ source on every run.
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-dl-service-proof-v3"` | `PREPARATION_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
+| `b"purrdf-entail-refutation-native-canonical-proof-v1"` | `REFUTATION_EVIDENCE` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-no-guards-v1"` | `REFUTATION_GUARDS` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-scenario-v1"` | `REFUTATION_SCENARIO` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-source-v1"` | `REFUTATION_SOURCE` | `crates/entail/src/engine.rs` |
 | `b"purrdf-geo-kernel/carrier-bindings/v1"` | `PROFILE_BINDING_DOMAIN` | `crates/geo-kernel/src/binding.rs` |
 | `b"purrdf-geo-kernel/continuous-image-law/v1"` | `IMAGE_LAW_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
 | `b"purrdf-geo-kernel/continuous-image-source/v1"` | `IMAGE_SOURCE_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |

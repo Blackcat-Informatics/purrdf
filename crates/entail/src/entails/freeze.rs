@@ -830,7 +830,9 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
     // Dataset IDs reflect interning order; bind the asserted term values instead.
     held.sort_unstable();
     let mut fresh = FreshBlanks::avoiding(&[premise, conclusion]);
-    let mut refuter = Refuter::new(regime).under(*options);
+    let refuter = Refuter::new(regime)
+        .map_err(EntailError::with_read_error)?
+        .under(*options);
     let mut seeded = refuter.seed(premise)?;
     let mut generalizations = Vec::with_capacity(reading.axioms.len());
     for (axiom, typings) in reading.axioms.iter().zip(typings_per_axiom) {
@@ -843,7 +845,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
                 .map(|atom| instantiate(atom, &axiom.triple, &constants))
                 .collect();
             let head = instantiate(&implication.head, &axiom.triple, &constants);
-            let closed = refuter.close(&mut seeded, &body)?;
+            let closed = seeded.close(&body)?;
             let mut triples = held.clone();
             triples.extend(body.iter().cloned());
             triples.extend(closed.derived);

@@ -8,9 +8,10 @@ use super::{
     FixpointState, GuardEvaluator, JoinStrategy, Limits, RelationStore, StopSignal, StratumRun,
     TermDictionary, WorkReport, check_budget, is_stopped, stratum,
 };
-use crate::cache::{canonical_rule_hash, contract_hash_with};
+use crate::cache::contract_hash_with;
 use crate::store::{Arity, StoreShape};
 use purrdf_hash::{Domain, hex::Digest32};
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 use std::fmt;
 
 const PARTIAL_MODEL_DOMAIN: Domain = Domain::new(b"purrdf-datalog-partial-model-v1");
@@ -148,14 +149,14 @@ pub struct EvaluationSession<'r, D: TermDictionary, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
-    exe: &'r Executable<N>,
-    guards: &'r dyn GuardEvaluator<D, N>,
+    pub(super) exe: &'r Executable<N>,
+    pub(super) guards: &'r dyn GuardEvaluator<D, N>,
     binding: ContinuationBinding,
-    options: EvalOptions,
-    state: Option<FixpointState<D, N>>,
+    pub(super) options: EvalOptions,
+    pub(super) state: Option<FixpointState<D, N>>,
     stratum: usize,
     frame: Option<stratum::Frame<'r, D::Id, N>>,
-    complete: bool,
+    pub(super) complete: bool,
     failure: Option<EvalError<D::Error>>,
 }
 
@@ -188,11 +189,18 @@ where
         context: SessionContext,
         options: EvalOptions,
     ) -> Result<Self, EvalError<D::Error>> {
-        if let Some(rule) = exe
-            .rules()
-            .iter()
-            .position(crate::clause::DlClause::reads_base)
-        {
+        Self::new_with_native(exe, edb, guards, context, options, false)
+    }
+
+    pub(super) fn new_with_native(
+        exe: &'r Executable<N>,
+        edb: RelationStore<D, N>,
+        guards: &'r dyn GuardEvaluator<D, N>,
+        context: SessionContext,
+        options: EvalOptions,
+        native: bool,
+    ) -> Result<Self, EvalError<D::Error>> {
+        if let Some(rule) = exe.base_read_rule {
             return Err(EvalError::BaseReadRequiresSchedule { rule });
         }
         edb.interner().check_read().map_err(EvalError::Source)?;
@@ -200,16 +208,25 @@ where
             exe,
             guards,
             binding: ContinuationBinding {
-                program: Digest32::new(canonical_rule_hash(exe.rules())),
+                program: Digest32::new(exe.program_hash),
                 context,
             },
             options,
-            state: Some(FixpointState::seeded(edb, options)),
+            state: Some(FixpointState::seeded_with_native(edb, options, native)),
             stratum: 0,
             frame: None,
             complete: false,
             failure: None,
         })
+    }
+
+    pub(super) fn maintained_complete(&mut self) {
+        assert!(
+            self.frame.is_none(),
+            "maintenance owns its original execution frames"
+        );
+        self.stratum = self.exe.stratum_count();
+        self.complete = true;
     }
 
     /// The exact original binding a subsequent resume must present unchanged.
@@ -229,6 +246,37 @@ where
         binding: ContinuationBinding,
         options: EvalOptions,
         stop: Option<&dyn StopSignal>,
+    ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
+        let before = self.state.as_ref().map_or(0, |state| state.native_bytes);
+        self.resume_in_memory(
+            binding,
+            options,
+            stop,
+            &mut Memory::resume(&mut Resident, before),
+        )
+    }
+
+    pub(super) fn resume_in_memory<A: Admission + ?Sized>(
+        &mut self,
+        binding: ContinuationBinding,
+        options: EvalOptions,
+        stop: Option<&dyn StopSignal>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
+        let before = memory.admitted_bytes();
+        let result = self.resume_native(binding, options, stop, memory);
+        if let Some(state) = self.state.as_mut() {
+            state.account_native_memory(before, memory.admitted_bytes());
+        }
+        result
+    }
+
+    fn resume_native<A: Admission + ?Sized>(
+        &mut self,
+        binding: ContinuationBinding,
+        options: EvalOptions,
+        stop: Option<&dyn StopSignal>,
+        memory: &mut Memory<'_, A>,
     ) -> Result<ResumeProgress<D::Error>, SessionError<D::Error>> {
         for (component, expected, actual) in [
             ("program", self.binding.program, binding.program),
@@ -286,7 +334,7 @@ where
                 let frame = self.frame.get_or_insert_with(|| {
                     stratum::Frame::new(self.exe, self.exe.runtimes(), self.stratum, state)
                 });
-                frame.advance(
+                frame.advance_in_memory(
                     state,
                     StratumRun {
                         stop,
@@ -295,6 +343,7 @@ where
                         strategy: JoinStrategy::Planned,
                     },
                     &mut None,
+                    memory,
                 )?;
                 debug_assert!(frame.is_complete());
                 self.frame = None;
@@ -357,6 +406,29 @@ where
             .take()
             .expect("the checked complete state is retained")
             .finish())
+    }
+
+    /// Probe one authored head against this original completed model.
+    ///
+    /// The borrow prevents model transfer or mutation while the query retains
+    /// native frames. Original pure guards and source identities are reused.
+    ///
+    /// # Errors
+    /// Refuses an incomplete/taken model, invalid coordinates or original failures.
+    pub fn probe_head(
+        &self,
+        rule: usize,
+        head: usize,
+        terms: [D::Id; N],
+    ) -> Result<super::HeadProbe<'_, D, N>, super::ProbeError<D::Error>> {
+        if let Some(error) = &self.failure {
+            return Err(super::ProbeError::Failed(error.clone()));
+        }
+        let state = self.state.as_ref().ok_or(super::ProbeError::ModelTaken)?;
+        if !self.complete {
+            return Err(super::ProbeError::ModelIncomplete);
+        }
+        super::HeadProbe::new(self.exe, state, self.guards, rule, head, terms)
     }
 }
 

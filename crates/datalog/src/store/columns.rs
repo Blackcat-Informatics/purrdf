@@ -5,7 +5,7 @@
 
 use crate::dictionary::TermIdentity;
 use crate::id::RowId;
-use purrdf_lex::allocation::StorageError;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 /// A column buffer of caller-owned identities and row handles.
 ///
@@ -89,17 +89,58 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
     ///
     /// Returns a typed size or allocation refusal.
     pub fn reserve_rows(&mut self, additional: usize) -> Result<(), StorageError> {
-        self.len()
+        self.reserve_rows_in(
+            additional,
+            &mut Memory::resume(&mut Resident, self.storage_bytes()?),
+            &mut 0,
+        )
+    }
+
+    pub(crate) fn storage_bytes(&self) -> Result<usize, StorageError> {
+        let cells = self.columns.iter().try_fold(0_usize, |total, column| {
+            column
+                .capacity()
+                .checked_mul(size_of::<I>())
+                .and_then(|bytes| total.checked_add(bytes))
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        self.rows
+            .capacity()
+            .checked_mul(size_of::<R>())
+            .and_then(|bytes| cells.checked_add(bytes))
+            .ok_or(StorageError::SizeOverflow)
+    }
+
+    pub(crate) fn reserve_rows_in<A: Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        let required = self
+            .len()
             .checked_add(additional)
             .ok_or(StorageError::SizeOverflow)?;
         for column in &mut self.columns {
-            column
-                .try_reserve(additional)
-                .map_err(|_| StorageError::AllocationFailed)?;
+            crate::allocation::reserve_array_growth(column, required, memory, retired)?;
         }
-        self.rows
-            .try_reserve(additional)
-            .map_err(|_| StorageError::AllocationFailed)
+        crate::allocation::reserve_array_growth(&mut self.rows, required, memory, retired)
+    }
+
+    pub(crate) fn reserve_capacity_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        for column in &mut self.columns {
+            crate::allocation::reserve_array_in(column, memory, retired, |values, memory| {
+                memory.reserve(values, required)
+            })?;
+        }
+        crate::allocation::reserve_array_in(&mut self.rows, memory, retired, |values, memory| {
+            memory.reserve(values, required)
+        })
     }
 
     /// Append one complete row after reserving all of its cells and its handle.
@@ -114,6 +155,20 @@ impl<I: TermIdentity, const N: usize, R: Copy> RowColumns<I, N, R> {
     }
 
     /// Publish a row whose complete allocation was already admitted by its owner.
+    pub(crate) fn insert_reserved(&mut self, position: usize, cells: [I; N], handle: R) {
+        assert!(position <= self.len());
+        assert!(self.rows.capacity() > self.len());
+        assert!(
+            self.columns
+                .iter()
+                .all(|column| column.capacity() > self.len())
+        );
+        for (column, cell) in self.columns.iter_mut().zip(cells) {
+            column.insert(position, cell);
+        }
+        self.rows.insert(position, handle);
+    }
+
     pub(crate) fn push_reserved(&mut self, cells: [I; N], handle: R) {
         let position = self.len();
         assert!(

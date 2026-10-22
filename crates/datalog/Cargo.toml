@@ -76,3 +76,7 @@ harness = false
 [[test]]
 name = "structured_errors"
 harness = false
+
+[[test]]
+name = "maintained_scale"
+harness = false

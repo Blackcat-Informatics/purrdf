@@ -273,7 +273,7 @@ where
                 ));
             }
             let (id, rows) = self.active.as_mut().expect("the partition was selected");
-            let original = rel.partition_at(id.resident_index());
+            let original = rel.partition_with_id(*id);
             let partition = run.map_or(original, |run| {
                 run.project(original)
                     .expect("the suspended partition belongs to its original delta")
@@ -446,7 +446,7 @@ mod tests {
         }
         let delta = Delta {
             lo: 67,
-            hi: store.row_count(),
+            hi: store.row_count() as u64,
         };
         let pattern = |subject, object| {
             ClauseAtom::triple(subject, ClauseTerm::iri("https://example.org/p"), object)
@@ -536,7 +536,7 @@ mod tests {
         }
         let delta = Delta {
             lo: 67,
-            hi: store.row_count(),
+            hi: store.row_count() as u64,
         };
         check_modes::<INDEX_ANY, 4>(
             ClauseAtom::quad(

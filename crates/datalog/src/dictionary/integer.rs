@@ -169,6 +169,26 @@ impl<I: TermIdentity + Into<u64>> TermDictionary for IntegerDictionary<'_, I> {
     }
 }
 
+impl<I: TermIdentity + Into<u64>> super::ReclaimDictionary for IntegerDictionary<'_, I> {
+    fn owned_terms(&self) -> impl Iterator<Item = I> + '_ {
+        self.identities.iter().copied()
+    }
+
+    fn owned_term_scan_work(&self) -> Result<usize, StorageError> {
+        purrdf_core::hash::hash_table_allocation_bound::<I>(self.identities.capacity())
+            .ok_or(StorageError::SizeOverflow)?
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)
+    }
+
+    fn release_term(&mut self, id: I) -> Result<(), DictionaryError<Self::Error>> {
+        if !self.symbols.values().any(|&symbol| symbol == id) {
+            self.identities.remove(&id);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

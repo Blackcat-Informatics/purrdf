@@ -432,6 +432,10 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which limit, what the run
     /// had consumed when it stopped, and the knob that raises it.
     Evaluate(purrdf_datalog::seminaive::EvalError),
+    /// Original signed model-maintenance refusal at a refutation boundary.
+    Maintenance(
+        Box<purrdf_datalog::seminaive::MaintenanceError<purrdf_datalog::store::TermExpired>>,
+    ),
     /// The declared calculus states an EXISTENTIAL rule the restricted chase refused.
     ///
     /// `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude about a FRESH blank node, and a
@@ -618,6 +622,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
         ProofsNotRecorded => "entailment-proofs-not-recorded" {},
         Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
+        Maintenance(cause) => "entailment-maintenance" { "cause" => Cause(cause.as_ref()) },
         Chase(cause) => "entailment-chase" { "cause" => Cause(cause) },
         MalformedList(message) => "entailment-malformed-list" { "message" => Message(message) },
         Collection(cause) => "entailment-collection" { "cause" => Cause(cause.as_ref()) },
@@ -676,6 +681,7 @@ impl EntailError {
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
+            Self::Maintenance(cause) => EntailError::Maintenance(cause),
             Self::Chase(cause) => EntailError::Chase(cause),
             Self::MalformedList(reason) => EntailError::MalformedList(reason),
             Self::Collection(cause) => EntailError::Collection(cause),
@@ -698,6 +704,9 @@ impl EntailError {
 
 purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocation::StorageError) });
 purrdf_lex::variant_from!(impl<E> EntailError<E> { OwlSyntax(OwlSyntaxError) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> {
+    Maintenance(purrdf_datalog::seminaive::MaintenanceError<purrdf_datalog::store::TermExpired>) via Box::new
+});
 purrdf_lex::variant_from!(impl<E> EntailError<E> { RifXml(RifXmlError) via Box::new });
 purrdf_lex::variant_from!(impl<E> EntailError<E> { RifVariable(RifVariableError) });
 purrdf_lex::variant_from!(impl<E> EntailError<E> { Decision(DlCertificate) via Box::new });
@@ -751,6 +760,7 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
                  against; build it with Reasoner::with_proofs"
             ),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
+            Self::Maintenance(error) => write!(f, "entailment maintenance error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
             Self::Collection(cause) => cause.fmt(f),
@@ -868,6 +878,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
             Self::Storage(inner) => Some(inner),
             Self::Dataset { cause, .. } => Some(cause),
             Self::Evaluate(inner) => Some(inner),
+            Self::Maintenance(inner) => Some(inner.as_ref()),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),

@@ -90,14 +90,21 @@ mod evidence;
 mod factors;
 mod guards;
 mod join;
+mod maintained;
 mod negation;
 mod negative;
 mod ordered;
+mod probe;
 mod round;
 mod rule;
 mod session;
 mod stratum;
 pub use evidence::NegationScope;
+pub use maintained::{
+    DeltaResult, Maintained, MaintenanceError, ModelDelta, PreparationPause, PreparationProgress,
+    RelationProgress,
+};
+pub use probe::{HeadProbe, HeadWitness, ProbeError};
 pub use session::{
     ContinuationBinding, EvaluationSession, PartialModel, ResumeProgress, SessionContext,
     SessionError, StratumStatus,
@@ -682,8 +689,9 @@ impl BudgetReport {
     }
 
     /// Retained row slots when evaluation stopped, including the captured base.
-    /// Vacant append slots remain charged after removal; live model cardinality
-    /// is available from [`RelationStore::row_count`].
+    /// Ordinary dense logs retain vacant append slots after removal. Maintained
+    /// live-row logs reclaim those entries; logical append extent is separate.
+    /// Live model cardinality is available from [`RelationStore::row_count`].
     pub fn stored_facts(self) -> usize {
         self.stored_facts
     }
@@ -1082,6 +1090,75 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// The hook's message.
         message: crate::guard::CallbackDiagnostic,
     },
+}
+
+impl<E> EvalError<E> {
+    /// Transform only the original source failure, preserving every other refusal.
+    ///
+    /// # Errors
+    /// Returns the converter's original failure without rendering or replacing it.
+    pub fn try_map_source<F, R>(
+        self,
+        convert: impl FnOnce(E) -> Result<F, R>,
+    ) -> Result<EvalError<F>, R> {
+        Ok(match self {
+            Self::Source(error) => EvalError::Source(convert(error)?),
+            Self::BaseReadRequiresSchedule { rule } => EvalError::BaseReadRequiresSchedule { rule },
+            Self::MissingBase { rule } => EvalError::MissingBase { rule },
+            Self::Storage(error) => EvalError::Storage(error),
+            Self::Evidence(error) => EvalError::Evidence(error),
+            Self::NeverDerive(error) => EvalError::NeverDerive(error),
+            Self::NonDatalogHead { rule, form } => EvalError::NonDatalogHead { rule, form },
+            Self::NonStratifiable {
+                head,
+                negated,
+                cycle,
+            } => EvalError::NonStratifiable {
+                head,
+                negated,
+                cycle,
+            },
+            Self::UnboundHeadVariable { rule, variable } => {
+                EvalError::UnboundHeadVariable { rule, variable }
+            }
+            Self::BudgetExhausted { resource, report } => {
+                EvalError::BudgetExhausted { resource, report }
+            }
+            Self::TermLimitExceeded {
+                resource,
+                rules,
+                report,
+            } => EvalError::TermLimitExceeded {
+                resource,
+                rules,
+                report,
+            },
+            Self::Stopped { report } => EvalError::Stopped { report },
+            Self::Guard {
+                rule,
+                site,
+                guard,
+                message,
+            } => EvalError::Guard {
+                rule,
+                site,
+                guard,
+                message,
+            },
+            Self::ModelReadingGuard { rule } => EvalError::ModelReadingGuard { rule },
+            Self::NonStratifiableRules {
+                rule,
+                depends_on,
+                cycle,
+            } => EvalError::NonStratifiableRules {
+                rule,
+                depends_on,
+                cycle,
+            },
+            Self::MalformedSchedule { detail } => EvalError::MalformedSchedule { detail },
+            Self::LayerHook { layer, message } => EvalError::LayerHook { layer, message },
+        })
+    }
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for EvalError<E> {
@@ -1683,14 +1760,14 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Delta {
     /// Inclusive lower row index of the round's committed span.
-    pub(crate) lo: usize,
+    pub(crate) lo: u64,
     /// Exclusive upper row index of the round's committed span.
-    pub(crate) hi: usize,
+    pub(crate) hi: u64,
 }
 
 impl Delta {
     /// The round-1 seed: every accumulated row `[0, row_count)` is new this round.
-    pub(crate) fn all(row_count: usize) -> Self {
+    pub(crate) fn all(row_count: u64) -> Self {
         Self {
             lo: 0,
             hi: row_count,
@@ -1700,7 +1777,7 @@ impl Delta {
     /// Whether `row` falls in the delta's committed span.
     #[inline]
     fn contains(self, row: RowId) -> bool {
-        let index = row.resident_index();
+        let index = row.index();
         self.lo <= index && index < self.hi
     }
 }
@@ -1709,7 +1786,7 @@ impl Delta {
 /// An all-row seed borrows the accumulated arrangements instead of copying them.
 #[derive(Debug)]
 pub(crate) struct DeltaIndexes<I: TermIdentity> {
-    runs: Vec<((usize, usize), DeltaRun<I>)>,
+    runs: Vec<((u64, u64), DeltaRun<I>)>,
 }
 
 impl<I: TermIdentity> DeltaIndexes<I> {
@@ -1745,7 +1822,7 @@ impl<I: TermIdentity> DeltaIndexes<I> {
         Ok(Self { runs })
     }
 
-    fn get(&self, delta: Delta, row_count: usize) -> Option<&DeltaRun<I>> {
+    fn get(&self, delta: Delta, row_count: u64) -> Option<&DeltaRun<I>> {
         if delta == Delta::all(row_count) {
             return None;
         }
@@ -1989,6 +2066,28 @@ impl<I: TermIdentity, const N: usize> SlotSolution<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// A bound head variable constrains a guard output rather than being overwritten.
+    fn unify_guard_value<D: TermDictionary<Id = I>>(
+        &mut self,
+        slot: usize,
+        value: &DictionaryValue<I>,
+        rel: &RelationStore<D, N>,
+    ) -> Result<bool, D::Error> {
+        let Some(previous) = self.value(slot).as_term() else {
+            self.bind_value(slot, value, rel)?;
+            return Ok(true);
+        };
+        let previous = previous.canonicalize(rel.interner())?;
+        let incoming = value.as_term().canonicalize(rel.interner())?;
+        let same = match (previous, incoming) {
+            (DictionaryTerm::Id(left), DictionaryTerm::Id(right)) => left == right,
+            (DictionaryTerm::Surface(left), DictionaryTerm::Surface(right)) => left == right,
+            _ => false,
+        };
+        rel.interner().check_read()?;
+        Ok(same)
+    }
+
     /// Retain an original identity or canonicalize a genuinely computed spelling.
     fn bind_value<D: TermDictionary<Id = I>>(
         &mut self,
@@ -2285,11 +2384,19 @@ fn constant_pattern_count<D: TermDictionary, const N: usize>(
     operator: &AtomOperator<N>,
     rel: &RelationStore<D, N>,
     delta: Option<&DeltaRun<D::Id>>,
+    seed: Option<&SlotSolution<D::Id, N>>,
 ) -> Result<Option<usize>, D::Error>
 where
     Arity<N>: StoreShape<N>,
 {
-    let constants = constant_positions(operator.shape(), rel)?;
+    let mut constants = constant_positions(operator.shape(), rel)?;
+    if let Some(seed) = seed {
+        for (value, position) in constants.iter_mut().zip(operator.shape().positions()) {
+            if let Some(id) = position.slot().and_then(|slot| seed.get(slot)) {
+                *value = Some(PositionValue::Known(id));
+            }
+        }
+    }
     if constants.contains(&Some(PositionValue::Missing)) {
         return Ok(Some(0));
     }
@@ -2348,7 +2455,7 @@ where
     let counts = plan
         .operators()
         .iter()
-        .map(|operator| constant_pattern_count(operator, rel, None))
+        .map(|operator| constant_pattern_count(operator, rel, None, None))
         .collect::<Result<_, _>>()?;
     rel.interner().check_read()?;
     Ok(counts)
@@ -2370,7 +2477,7 @@ where
     let delta = snapshot
         .indexes
         .get(snapshot.delta, snapshot.rel.row_slots());
-    let mut best = constant_pattern_count(&plan.operators()[anchor], snapshot.rel, delta)?
+    let mut best = constant_pattern_count(&plan.operators()[anchor], snapshot.rel, delta, None)?
         .expect("a partial delta has native indexed runs");
     let mut seed = anchor;
     for (position, count) in full_counts.iter().copied().enumerate() {
@@ -2438,6 +2545,8 @@ where
     delta: Delta,
     /// The round's shared arrangements, including this delta when it is partial.
     indexes: &'a DeltaIndexes<D::Id>,
+    /// Original native bindings for a head-directed body probe, if requested.
+    seed: Option<&'a SlotSolution<D::Id, N>>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for JoinSnapshot<'_, D, N> where Arity<N>: StoreShape<N>
@@ -2455,6 +2564,13 @@ impl<D: TermDictionary, const N: usize> JoinSnapshot<'_, D, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Copy the original native substitution only when entering a new anchor.
+    fn initial(self, plan: &RulePlan<N>) -> SlotSolution<D::Id, N> {
+        self.seed
+            .cloned()
+            .unwrap_or_else(|| SlotSolution::empty(plan.variables().len()))
+    }
+
     /// Every position before the last requires an OldOnly suffix. When the
     /// delta covers the entire frozen store, that suffix is provably empty;
     /// visiting its earlier prefixes can produce no solution. Partial deltas
@@ -3319,6 +3435,20 @@ impl<I: TermIdentity, const N: usize> Candidate<I, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Retain native proof cells through their original supplemental admission.
+    fn copy_in<A: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            rule: self.rule,
+            head: self.head,
+            sources: memory.collect(self.sources.iter().copied())?,
+            proof_height: self.proof_height,
+            sum_source_height: self.sum_source_height,
+        })
+    }
+
     /// The candidate's source facts, in authored body order.
     ///
     /// Each source names the quad it actually matched, predicate included: a body atom
@@ -3478,14 +3608,14 @@ where
 /// Raw maximum and saturated sum of a witness's source heights.
 fn source_heights<I: TermIdentity, const N: usize>(
     sources: &[SourceRow<I, N>],
-    depth: &[u32],
+    depth: Depths<'_, I, N>,
 ) -> (u32, u64)
 where
     Arity<N>: StoreShape<N>,
 {
     sources.iter().fold((0, 0u64), |(maximum, sum), source| {
         let height = match source.source {
-            crate::clause::ReadSource::Evaluation => depth[source.row.resident_index()],
+            crate::clause::ReadSource::Evaluation => depth.height(source.row),
             crate::clause::ReadSource::Base => 0,
         };
         (maximum.max(height), sum.saturating_add(u64::from(height)))
@@ -3592,6 +3722,48 @@ where
     }
 }
 
+/// The original target and native substitution of a read-only head probe.
+#[derive(Debug)]
+pub(crate) struct RuleBindings<I: TermIdentity, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    target: Option<(usize, [I; N])>,
+    seed: SlotSolution<I, N>,
+}
+
+/// Cold evaluation keeps dense heights; maintenance reads its one native proof owner.
+/// An absent native derivation is an asserted height-zero row by construction.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Depths<'a, I: TermIdentity, const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    Dense(&'a [u32]),
+    Native(&'a maintained::Supports<I, N>),
+}
+
+impl<I: TermIdentity, const N: usize> Depths<'_, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn height(self, row: RowId) -> u32 {
+        match self {
+            Self::Dense(values) => values[row.resident_index()],
+            Self::Native(native) => native.height(row),
+        }
+    }
+}
+
+impl<'a, I: TermIdentity, const N: usize> From<&'a [u32]> for Depths<'a, I, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn from(values: &'a [u32]) -> Self {
+        Self::Dense(values)
+    }
+}
+
 /// The immutable snapshot every rule task reads during one round.
 ///
 /// No task may mutate any of it; the single sorted commit begins only after every task
@@ -3604,15 +3776,17 @@ where
     /// The accumulated store.
     pub(crate) rel: &'a RelationStore<D, N>,
     /// Per-row proof heights, indexed by [`RowId`].
-    pub(crate) depth: &'a [u32],
+    pub(crate) depth: Depths<'a, D::Id, N>,
     /// Per-row ASSUMED flags, indexed by [`RowId`], or empty when nothing is assumed.
     ///
     /// An assumed row is a fact the caller asserted for the duration of a schedule layer
     /// ([`crate::schedule::LayerHooks`]) and will retract at its end unless a rule derives
     /// it too; a rule that re-derives one is recorded in [`RoundBuffer::confirmed`].
-    pub(crate) assumed: &'a [bool],
+    pub(crate) assumed: &'a purrdf_core::FastSet<RowId>,
     /// Shared physical runs; direct rule probes prepare their own owner.
     pub(crate) delta_indexes: Option<&'a DeltaIndexes<D::Id>>,
+    /// Read-only head demand; ordinary fixpoints publish only absent heads.
+    pub(crate) probe: Option<&'a RuleBindings<D::Id, N>>,
 }
 
 impl<D: TermDictionary, const N: usize> Copy for RoundSnapshot<'_, D, N> where
@@ -3822,6 +3996,7 @@ where
             return factors::evaluate_with_evidence(entry, snapshot, &mut governor, evidence);
         }
         let join_snapshot = JoinSnapshot {
+            seed: None,
             rel,
             delta: entry.delta,
             indexes: snapshot.delta_indexes.expect("delta indexes were prepared"),
@@ -3958,6 +4133,11 @@ where
         positions: head.each_ref().map(|term| head_term(term, solution)),
     };
     let key = intern_key(key, rel).map_err(EvalError::Source)?;
+    if let Some((head, terms)) = snapshot.probe.and_then(|probe| probe.target)
+        && (head != head_evidence.head || key.terms().map(HeadTerm::interned) != terms.map(Some))
+    {
+        return Ok(());
+    }
     if let Some(owner) = evidence.as_mut() {
         let mut witness = match head_evidence.witness {
             Some(witness) => witness,
@@ -3975,13 +4155,10 @@ where
     // A fact a prior round or stratum already derived is not a derivation: earlier
     // wins, exactly as the reference fixpoint decides it. Every one of the four
     // positions must already be interned for the quad to be present.
-    if let Some(row) = present_row(&key, rel).map_err(EvalError::Source)? {
-        if snapshot
-            .assumed
-            .get(row.resident_index())
-            .copied()
-            .unwrap_or(false)
-        {
+    if snapshot.probe.is_none()
+        && let Some(row) = present_row(&key, rel).map_err(EvalError::Source)?
+    {
+        if snapshot.assumed.contains(&row) {
             let confirmation = Confirmation {
                 derivation: Derivation {
                     fact: key.fact(rel).map_err(EvalError::Source)?,
@@ -4265,6 +4442,12 @@ where
     pub(crate) depth: Vec<u32>,
     /// Every committed derivation.
     pub(crate) derivations: Vec<Derivation<N>>,
+    /// Native chosen proofs retained only by a maintained execution.
+    native: Option<maintained::Supports<D::Id, N>>,
+    /// Exact admitted native metadata across this execution's retained frames.
+    native_bytes: usize,
+    /// Explicit original dictionary retirement authority, owned with this model.
+    release_term: Option<maintained::ReleaseTerm<D>>,
     /// Exported evidence requested by the caller.
     pub(crate) derivation_mode: DerivationMode,
     /// Per-call scheduling, also used by ordered execution.
@@ -4295,13 +4478,29 @@ where
 {
     /// A state over the seeded store `edb`, governed by `options`.
     pub(crate) fn seeded(edb: RelationStore<D, N>, options: EvalOptions) -> Self {
-        let depth = vec![0u32; edb.row_slots()];
+        Self::seeded_with_native(edb, options, false)
+    }
+
+    pub(super) fn seeded_with_native(
+        edb: RelationStore<D, N>,
+        options: EvalOptions,
+        native: bool,
+    ) -> Self {
+        let sparse = native || edb.has_sparse_rows();
+        let depth = if sparse {
+            Vec::new()
+        } else {
+            vec![0u32; edb.retained_rows()]
+        };
         let input_terms = edb.interner().term_count();
         let input_facts = edb.retained_live_rows() as u64;
         Self {
             rel: edb,
             depth,
             derivations: Vec::new(),
+            native: sparse.then(maintained::Supports::native_heights),
+            native_bytes: 0,
+            release_term: None,
             derivation_mode: options.derivation_mode(),
             execution: options.round_execution(),
             input_facts,
@@ -4313,6 +4512,35 @@ where
             stated: BudgetReport::stated_limits(&options),
             input_terms,
             generating_rules: BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn account_native_memory(&mut self, before: usize, after: usize) {
+        self.native_bytes = if after >= before {
+            self.native_bytes.checked_add(after - before)
+        } else {
+            self.native_bytes.checked_sub(before - after)
+        }
+        .expect("native metadata retains its original admitted layout counter");
+    }
+
+    /// The budget consumption observed so far.
+    pub(crate) fn depths(&self) -> Depths<'_, D::Id, N> {
+        self.native
+            .as_ref()
+            .filter(|native| native.uses_native_heights())
+            .map_or_else(|| self.depth.as_slice().into(), Depths::Native)
+    }
+
+    /// Record one asserted row without tying its logical ID to a resident address.
+    pub(crate) fn seed_height(&mut self, row: RowId) {
+        if self
+            .native
+            .as_ref()
+            .is_none_or(|native| !native.uses_native_heights())
+        {
+            assert_eq!(row.index(), self.depth.len() as u64);
+            self.depth.push(0);
         }
     }
 
@@ -4531,7 +4759,7 @@ where
     Arity<N>: StoreShape<N>,
 {
     edb.interner().check_read().map_err(EvalError::Source)?;
-    if rows.row_count() != edb.row_slots() {
+    if rows.row_count() as u64 != edb.row_slots() {
         return Err(EvalError::Evidence(
             purrdf_core::evidence::EvidenceWorkspaceError::Column(
                 purrdf_core::evidence::EvidenceColumnError::RowOutOfBounds,
@@ -4549,7 +4777,7 @@ where
             options.round_execution(),
             JoinStrategy::Planned,
         )?;
-        for (row, _) in evaluation.facts.rows_from(rows.row_count()) {
+        for (row, _) in evaluation.facts.rows_from(rows.row_count() as u64) {
             rows.push_derived(row, purrdf_core::evidence::EvidenceId::DEFAULT)
                 .map_err(EvalError::Evidence)?;
         }
@@ -4780,9 +5008,10 @@ where
         let round = evaluate_round_with_evidence(
             &entries,
             RoundSnapshot {
+                probe: None,
                 rel: &state.rel,
-                depth: &state.depth,
-                assumed: &[],
+                depth: state.depths(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             },
             run.execution,
@@ -4970,9 +5199,10 @@ mod tests {
                 delta: Delta { lo: 2, hi: 3 },
             },
             RoundSnapshot {
+                probe: None,
                 rel: &store,
-                depth: &depth,
-                assumed: &[],
+                depth: depth.as_slice().into(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             },
             JoinStrategy::Planned,
@@ -5047,8 +5277,8 @@ mod tests {
                 plan: target_plan,
                 runtime: &target_runtime,
                 delta: Delta {
-                    lo,
-                    hi: store.row_count(),
+                    lo: lo as u64,
+                    hi: store.row_count() as u64,
                 },
             };
             let warmer = RuleEntry {
@@ -5066,9 +5296,10 @@ mod tests {
             let round = evaluate_round(
                 &entries,
                 RoundSnapshot {
+                    probe: None,
                     rel: &store,
-                    depth: &vec![0; store.row_count()],
-                    assumed: &[],
+                    depth: vec![0; store.row_count()].as_slice().into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 },
                 RoundExecution::Sequential,
@@ -5137,8 +5368,8 @@ mod tests {
                 .unwrap()
                 .2;
             let delta = Delta {
-                lo,
-                hi: store.row_count(),
+                lo: lo as u64,
+                hi: store.row_count() as u64,
             };
             let indexes =
                 DeltaIndexes::build(&store, [delta, delta, Delta::all(store.row_slots())]).unwrap();
@@ -5151,6 +5382,7 @@ mod tests {
             let solutions = join_body(
                 plan,
                 JoinSnapshot {
+                    seed: None,
                     rel: &store,
                     delta,
                     indexes: &indexes,
@@ -5215,13 +5447,14 @@ mod tests {
             );
             let mut governor = StepGovernor::new(10);
             let delta = Delta {
-                lo,
-                hi: store.row_count(),
+                lo: lo as u64,
+                hi: store.row_count() as u64,
             };
             let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
             let solutions = join_body(
                 plan,
                 JoinSnapshot {
+                    seed: None,
                     rel: &store,
                     delta,
                     indexes: &indexes,
@@ -5287,6 +5520,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         });
         for subject in [0, FIRST] {
@@ -5307,6 +5541,7 @@ mod tests {
         let solutions = join_body(
             plan,
             JoinSnapshot {
+                seed: None,
                 rel: &store,
                 delta: Delta::all(2),
                 indexes: &DeltaIndexes { runs: Vec::new() },
@@ -5429,9 +5664,10 @@ mod tests {
                 solution,
                 0,
                 RoundSnapshot {
+                    probe: None,
                     rel: &store,
-                    depth: &[0, 0],
-                    assumed: &[],
+                    depth: (&[0, 0][..]).into(),
+                    assumed: &purrdf_core::FastSet::default(),
                     delta_indexes: None,
                 },
                 &mut Some(&mut capture),
@@ -5539,6 +5775,7 @@ mod tests {
                 lost: AtomicBool::new(false),
                 lose_after_lookup: AtomicBool::new(false),
                 pins: AtomicUsize::new(0),
+                refuse_after_interned: AtomicBool::new(false),
                 extra_terms: 0,
             });
             for row in [
@@ -5551,6 +5788,7 @@ mod tests {
             let mut solutions = join_body(
                 plan,
                 JoinSnapshot {
+                    seed: None,
                     rel: &store,
                     delta: Delta::all(3),
                     indexes: &DeltaIndexes { runs: Vec::new() },
@@ -5713,6 +5951,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         });
         let guard = Guard::new(
@@ -5768,6 +6007,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -5891,6 +6131,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -5921,6 +6162,7 @@ mod tests {
         ] {
             let indexes = DeltaIndexes::build(&store, [delta]).unwrap();
             let snapshot = JoinSnapshot {
+                seed: None,
                 rel: &store,
                 delta,
                 indexes: &indexes,
@@ -5968,6 +6210,7 @@ mod tests {
             join_body(
                 plan,
                 JoinSnapshot {
+                    seed: None,
                     rel: &store,
                     delta: Delta::all(0),
                     indexes: &DeltaIndexes { runs: Vec::new() },
@@ -6042,6 +6285,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -7812,9 +8056,10 @@ mod tests {
         let round = evaluate_round(
             &[entry],
             RoundSnapshot {
+                probe: None,
                 rel: &state.rel,
-                depth: &state.depth,
-                assumed: &[],
+                depth: state.depths(),
+                assumed: &purrdf_core::FastSet::default(),
                 delta_indexes: None,
             },
             RoundExecution::Parallel,
@@ -9016,6 +9261,7 @@ mod tests {
         let indexes = DeltaIndexes { runs: Vec::new() };
         let positions = |delta| {
             JoinSnapshot {
+                seed: None,
                 rel: &rel,
                 delta,
                 indexes: &indexes,
@@ -9030,6 +9276,7 @@ mod tests {
         assert_eq!(positions(Delta { lo: 2, hi: 3 }), 0..3);
         assert_eq!(
             JoinSnapshot {
+                seed: None,
                 rel: &rel,
                 delta: Delta::all(3),
                 indexes: &indexes,

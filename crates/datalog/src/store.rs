@@ -76,7 +76,7 @@
 //!   table is **never iterated**: it is keyed by the fixed-key `FixedHasher` and is only ever
 //!   asked "which id, if any, carries this surface". Insertion order lives in the
 //!   parallel `Vec` side arena, which is what every sweep reads.
-//! - The partition table is a `BTreeMap` keyed by `(predicate id, graph id)`. It is
+//! - The partition table is a native ordered arena keyed by `(predicate id, graph id)`. It is
 //!   probed, never iterated: id order is mint order, so every partition SWEEP reads the
 //!   separately maintained lexical order instead.
 //!
@@ -92,13 +92,25 @@ use core::cmp::Ordering;
 use core::convert::Infallible;
 use core::fmt;
 use core::hash::Hasher;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 mod columns;
 mod index;
+mod maintenance_indexes;
+mod metadata;
+mod seal;
 pub use columns::RowColumns;
 pub use index::{RowIndex, RowIndexError};
+pub(crate) use maintenance_indexes::Preparation as MaintenanceIndexPreparation;
+pub(crate) use metadata::Preparation as MetadataPreparation;
+mod rows;
+use rows::RowLog;
+mod terms;
+use terms::TermArena;
+pub use terms::{ReclaimingInterner, TermExpired};
+mod directory;
+use directory::{Directory, Position};
 
 use hashbrown::HashTable;
 
@@ -107,7 +119,7 @@ use crate::dictionary::{
     DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row,
 };
 use crate::id::{PartitionId, RowId, TermId};
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
 
 // ── Interners ───────────────────────────────────────────────────────────────────
 
@@ -136,7 +148,7 @@ pub struct TermInterner {
     /// Surface → id, for O(1) intern/lookup. Never iterated (see the module docs).
     by_surface: HashTable<TermId>,
     /// First-seen surface per id, in insertion order (slot = id index).
-    surfaces: Vec<String>,
+    surfaces: TermArena,
     /// Running total of `surfaces`' bytes, maintained on intern so the dictionary's
     /// footprint is an O(1) read rather than an O(n) sweep. See [`Self::byte_len`].
     bytes: usize,
@@ -151,71 +163,94 @@ impl TermInterner {
     pub fn intern(&mut self, surface: &str) -> Result<TermId, StorageError> {
         let hash = surface_hash(surface);
         let surfaces = &self.surfaces;
-        if let Some(&id) = self
-            .by_surface
-            .find(hash, |&id| surfaces[id.resident_index()] == surface)
-        {
+        if let Some(&id) = self.by_surface.find(hash, |&id| {
+            surfaces
+                .get(id)
+                .expect("the surface index retains its original value")
+                == surface
+        }) {
             return Ok(id);
         }
         let limit = u64::MAX;
         #[cfg(test)]
         let limit = self.term_limit.unwrap_or(limit);
-        let id = TermId::from_address_with_limit(self.surfaces.len(), limit)?;
+        let id = TermId::from_index_with_limit(self.surfaces.next(), limit)?;
         let bytes = self
             .bytes
             .checked_add(surface.len())
             .ok_or(StorageError::SizeOverflow)?;
-        self.surfaces
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
+        self.surfaces.reserve()?;
         let surfaces = &self.surfaces;
         self.by_surface
-            .try_reserve(1, |&id| surface_hash(&surfaces[id.resident_index()]))
+            .try_reserve(1, |&id| {
+                surface_hash(surfaces.get(id).expect("a retained indexed surface"))
+            })
             .map_err(|_| StorageError::AllocationFailed)?;
         let mut resident = Resident;
         let value = Memory::new(&mut resident).string(surface)?;
-        self.surfaces.push(value);
+        self.surfaces.publish(id, value);
         self.bytes = bytes;
         let surfaces = &self.surfaces;
-        self.by_surface
-            .insert_unique(hash, id, |&id| surface_hash(&surfaces[id.resident_index()]));
+        self.by_surface.insert_unique(hash, id, |&id| {
+            surface_hash(surfaces.get(id).expect("a retained indexed surface"))
+        });
         Ok(id)
     }
 
     /// Copy the original insertion order through the checked mint home.
     fn try_clone(&self) -> Result<Self, StorageError> {
-        let mut copy = Self::default();
-        #[cfg(test)]
-        {
-            copy.term_limit = self.term_limit;
+        let surfaces = self.surfaces.try_clone()?;
+        let mut by_surface = HashTable::new();
+        by_surface
+            .try_reserve(surfaces.len(), |_: &TermId| {
+                unreachable!("an empty index has no retained entries")
+            })
+            .map_err(|_| StorageError::AllocationFailed)?;
+        for entry in surfaces.iter() {
+            let (id, value) = entry?;
+            by_surface.insert_unique(surface_hash(value), id, |&id| {
+                surface_hash(surfaces.get(id).expect("a retained indexed surface"))
+            });
         }
-        for surface in &self.surfaces {
-            copy.intern(surface)?;
-        }
-        Ok(copy)
+        Ok(Self {
+            by_surface,
+            surfaces,
+            bytes: self.bytes,
+            #[cfg(test)]
+            term_limit: self.term_limit,
+        })
     }
 
     /// The id of the term with this surface, if already interned; never inserts.
     pub fn lookup(&self, surface: &str) -> Option<TermId> {
         let hash = surface_hash(surface);
         self.by_surface
-            .find(hash, |&id| self.surfaces[id.resident_index()] == surface)
+            .find(hash, |&id| {
+                self.surfaces
+                    .get(id)
+                    .expect("the surface index retains its original value")
+                    == surface
+            })
             .copied()
     }
 
     /// Undo only the new lexical identities of a failed enclosing insertion.
-    fn rollback_to(&mut self, checkpoint: usize) {
-        while self.surfaces.len() > checkpoint {
-            let index = self.surfaces.len() - 1;
-            let value = &self.surfaces[index];
+    fn rollback_to(&mut self, checkpoint: u64) -> Result<(), StorageError> {
+        while self.surfaces.next() > checkpoint {
+            let id = TermId::from_index(self.surfaces.next() - 1)?;
+            let value = self
+                .surfaces
+                .get(id)
+                .expect("rolling back a new retained value");
             let entry = self
                 .by_surface
-                .find_entry(surface_hash(value), |id| id.resident_index() == index)
+                .find_entry(surface_hash(value), |candidate| *candidate == id)
                 .expect("every retained lexical identity has its original index entry");
             entry.remove();
             self.bytes -= value.len();
-            self.surfaces.pop();
+            self.surfaces.pop(id);
         }
+        Ok(())
     }
 
     /// The lexical surface `id` was interned from.
@@ -225,7 +260,7 @@ impl TermInterner {
     /// Panics if `id` was not minted by this dictionary. Ids are per-store handles,
     /// so a foreign id is a programming error, never a data state.
     pub fn resolve(&self, id: TermId) -> &str {
-        self.surfaces.get(id.resident_index()).map_or_else(
+        self.surfaces.get(id).map_or_else(
             || {
                 panic!(
                     "TermId {id:?} was not minted by this interner (len {}): \
@@ -280,21 +315,9 @@ impl TermDictionary for TermInterner {
         terms: [DictionaryTerm<'_, TermId>; N],
         validate: impl FnOnce(&Self, [TermId; N]) -> Result<T, DictionaryError<Infallible>>,
     ) -> Result<T, DictionaryError<Infallible>> {
-        let checkpoint = self.len();
-        let result = (|| {
-            let ids = try_map_row(terms, |term| {
-                Ok::<_, StorageError>(match term {
-                    DictionaryTerm::Id(id) => id,
-                    DictionaryTerm::Surface(surface) => self.intern(surface)?,
-                })
-            })?;
-            validate(self, ids)
-        })();
-        if result.is_err() {
-            self.rollback_to(checkpoint);
-        }
-        result
+        terms::intern_transaction(self, terms, validate)
     }
+
     fn check_read(&self) -> Result<(), Infallible> {
         Ok(())
     }
@@ -490,10 +513,20 @@ fn gallop_lower_bound<I: TermIdentity>(xs: &[I], from: usize, key: I) -> usize {
 /// cleanly. A permutation of resident `usize` positions, never a hash map or per-key
 /// `Vec`: one address per row, materialised only when an object bound is actually
 /// probed.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct ObjectIndex {
     /// Row positions of the batch, sorted by `(object_id, subject_id)`.
-    perm: Box<[usize]>,
+    perm: Vec<usize>,
+    admitted: bool,
+}
+
+impl Clone for ObjectIndex {
+    fn clone(&self) -> Self {
+        Self {
+            perm: self.perm.clone(),
+            admitted: false,
+        }
+    }
 }
 
 /// One sealed sorted batch: a relation's `(subject, object)` rows in canonical
@@ -503,56 +536,112 @@ struct ObjectIndex {
 /// column to the term's contiguous run with NO secondary structure. The
 /// `(object, subject)` access path is the lazily-built [`ObjectIndex`]. Generic over
 /// the weight monoid `W` (the Z-set seam); the production instantiation is `W = ()`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Batch<W: Weight = (), I: TermIdentity = TermId> {
-    /// Subject column, ascending (subject-major within the `(subject, object)` sort).
-    subj: Vec<I>,
-    /// Object column, ascending within each subject run.
-    obj: Vec<I>,
-    /// Store-global dense [`RowId`] per row, parallel to the columns.
-    row_id: Vec<Option<RowId>>,
+    /// Subject/object columns and original handles, in subject-major order.
+    data: RowColumns<I, 2, Option<RowId>>,
     /// Live handles; all-live runs retain their indexed count fast path.
     live: usize,
     /// Multiplicity per row; `Vec<()>` is zero-sized under set semantics.
     weight: Vec<W>,
     /// The lazily-built `(object, subject)` access path (built on first object probe).
     object_index: OnceLock<ObjectIndex>,
+    admitted: bool,
+}
+
+impl<W: Weight, I: TermIdentity> Clone for Batch<W, I> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            live: self.live,
+            weight: self.weight.clone(),
+            object_index: self.object_index.clone(),
+            admitted: false,
+        }
+    }
 }
 
 impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// Build a batch from rows ALREADY sorted ascending by `(subject_id, object_id)`
     /// and free of duplicate keys. Weights default to [`Weight::UNIT`].
+    #[cfg(test)]
     fn from_sorted(rows: &[(I, I, RowId)]) -> Self {
-        let mut subj = Vec::with_capacity(rows.len());
-        let mut obj = Vec::with_capacity(rows.len());
-        let mut row_id = Vec::with_capacity(rows.len());
-        let mut weight = Vec::with_capacity(rows.len());
-        for &(s, o, r) in rows {
-            subj.push(s);
-            obj.push(o);
-            row_id.push(Some(r));
-            weight.push(W::UNIT);
+        let mut batch = Self::empty(false);
+        batch
+            .reserve_in(rows.len(), &mut Memory::new(&mut Resident), &mut 0)
+            .expect("constructing original sorted batch columns");
+        for &(subject, object, row) in rows {
+            batch.push_reserved(subject, object, row, W::UNIT);
         }
+        batch
+    }
+
+    fn empty(admitted: bool) -> Self {
         Self {
-            subj,
-            obj,
-            row_id,
-            live: rows.len(),
-            weight,
+            data: RowColumns::default(),
+            live: 0,
+            weight: Vec::new(),
             object_index: OnceLock::new(),
+            admitted,
         }
+    }
+
+    fn storage_bytes(&self) -> Result<usize, StorageError> {
+        let data = self.data.storage_bytes()?;
+        self.weight
+            .capacity()
+            .checked_mul(size_of::<W>())
+            .and_then(|bytes| data.checked_add(bytes))
+            .ok_or(StorageError::SizeOverflow)
+    }
+
+    fn retire(self) -> usize {
+        let mut bytes = if self.admitted {
+            self.storage_bytes().expect("original batch column layouts")
+        } else {
+            0
+        };
+        if let Some(index) = self.object_index.get().filter(|index| index.admitted) {
+            bytes = bytes
+                .checked_add(index.perm.capacity() * size_of::<usize>())
+                .expect("original batch permutation layout");
+        }
+        drop(self);
+        bytes
+    }
+
+    fn reserve_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        self.data.reserve_capacity_in(required, memory, retired)?;
+        crate::allocation::reserve_array_in(&mut self.weight, memory, retired, |values, memory| {
+            memory.reserve(values, required)
+        })
+    }
+
+    fn push_reserved(&mut self, subject: I, object: I, row: RowId, weight: W) {
+        assert!(
+            self.weight.capacity() > self.len(),
+            "batch weights are admitted before publication"
+        );
+        self.data.push_reserved([subject, object], Some(row));
+        self.weight.push(weight);
+        self.live += 1;
     }
 
     /// The number of rows in the batch.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        self.row_id.len()
+        self.data.len()
     }
 
     /// The `(subject_id, object_id, row_id)` id row at column position `p`.
     #[inline]
     pub(crate) fn row_at(&self, p: usize) -> Option<(I, I, RowId)> {
-        self.row_id[p].map(|row| (self.subj[p], self.obj[p], row))
+        self.data.handles()[p].map(|row| (self.data.column(0)[p], self.data.column(1)[p], row))
     }
 
     pub(crate) fn all_live(&self) -> bool {
@@ -565,21 +654,22 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     }
 
     pub(crate) fn is_live(&self, position: usize) -> bool {
-        self.row_id[position].is_some()
+        self.data.handles()[position].is_some()
     }
 
     /// Physical key ordering remains available after its live handle is removed.
     pub(crate) fn key_at(&self, position: usize) -> (I, I) {
-        (self.subj[position], self.obj[position])
+        (self.data.column(0)[position], self.data.column(1)[position])
     }
 
     /// The `[lo, hi)` column-position run whose subject is `s`, located by galloping
     /// the sorted `subj` column (subject grouping is contiguous in the primary sort).
     pub(crate) fn subject_run(&self, s: I) -> (usize, usize) {
-        let lo = gallop_lower_bound(&self.subj, 0, s);
+        let subjects = self.data.column(0);
+        let lo = gallop_lower_bound(subjects, 0, s);
         // `hi` is the first position past `s`'s contiguous run — a binary search of the
         // sorted suffix, so a `Both` probe stays O(log n) rather than O(run length).
-        let hi = lo + self.subj[lo..].partition_point(|&x| x <= s);
+        let hi = lo + subjects[lo..].partition_point(|&x| x <= s);
         (lo, hi)
     }
 
@@ -587,7 +677,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// subject run, then binary-search its ascending `obj` sub-column for `o`.
     pub(crate) fn both_pos(&self, s: I, o: I) -> Option<usize> {
         let (lo, hi) = self.subject_run(s);
-        let run = &self.obj[lo..hi];
+        let run = &self.data.column(1)[lo..hi];
         run.binary_search(&o).ok().map(|off| lo + off)
     }
 
@@ -600,7 +690,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// Vacate the indexed handle without moving keys or rebuilding a permutation.
     fn remove(&mut self, subject: I, object: I) -> Option<RowId> {
         let position = self.both_pos(subject, object)?;
-        let row = self.row_id[position].take()?;
+        let row = self.data.replace_handle(position, None).flatten()?;
         self.live -= 1;
         Some(row)
     }
@@ -609,8 +699,8 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// its slice into a cursor's retained position.
     pub(crate) fn object_run(&self, o: I) -> (usize, usize) {
         let perm = self.object_order();
-        let lo = perm.partition_point(|&p| self.obj[p] < o);
-        let hi = perm.partition_point(|&p| self.obj[p] <= o);
+        let lo = perm.partition_point(|&p| self.data.column(1)[p] < o);
+        let hi = perm.partition_point(|&p| self.data.column(1)[p] <= o);
         (lo, hi)
     }
 
@@ -622,18 +712,32 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
         &self
             .object_index
             .get_or_init(|| {
-                let mut perm: Vec<usize> = (0..self.len()).collect();
-                // Sort positions by (object_id, subject_id) — the secondary access
-                // order. `(object, subject)` keys are unique within a batch (the
-                // primary sort is key-disjoint), so no equal elements exist whose order
-                // would need preserving: the unstable sort is a pure win (no scratch
-                // allocation, lower constants) and cannot introduce nondeterminism.
-                index::sort_row_positions(&mut perm, &[&self.subj, &self.obj], &[1, 0]);
-                ObjectIndex {
-                    perm: perm.into_boxed_slice(),
-                }
+                self.object_index_in(false, &mut Memory::new(&mut Resident))
+                    .expect("constructing original resident object permutation")
             })
             .perm
+    }
+
+    fn object_index_in<A: Admission + ?Sized>(
+        &self,
+        admitted: bool,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<ObjectIndex, StorageError> {
+        memory.scope(|memory| {
+            let mut perm = Vec::new();
+            memory.reserve(&mut perm, self.len())?;
+            if let Some(previous) = self.object_index.get() {
+                perm.extend_from_slice(&previous.perm);
+            } else {
+                perm.extend(0..self.len());
+                index::sort_row_positions(
+                    &mut perm,
+                    &[self.data.column(0), self.data.column(1)],
+                    &[1, 0],
+                );
+            }
+            Ok(ObjectIndex { perm, admitted })
+        })
     }
 }
 
@@ -646,81 +750,118 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
 /// the row. Set-semantics insertion keeps live keys disjoint, but reinsertion
 /// can collide with a retired cell. Vacant cells carry no weight into the merge
 /// and cannot replace the fresh reinsertion handle.
+#[cfg(test)]
 fn merge_batches<W: Weight, I: TermIdentity>(
     left: &Batch<W, I>,
     right: &Batch<W, I>,
 ) -> Result<Batch<W, I>, W::Error> {
-    let cap = left.len() + right.len();
-    let mut subj = Vec::with_capacity(cap);
-    let mut obj = Vec::with_capacity(cap);
-    let mut row_id = Vec::with_capacity(cap);
-    let mut weight = Vec::with_capacity(cap);
-    let (mut i, mut j) = (0usize, 0usize);
-    let push = |subj: &mut Vec<I>,
-                obj: &mut Vec<I>,
-                row_id: &mut Vec<Option<RowId>>,
-                weight: &mut Vec<W>,
-                b: &Batch<W, I>,
-                p: usize| {
-        if b.row_id[p].is_some() {
-            subj.push(b.subj[p]);
-            obj.push(b.obj[p]);
-            row_id.push(b.row_id[p]);
-            weight.push(b.weight[p]);
+    let cap = left
+        .len()
+        .checked_add(right.len())
+        .expect("original merge layout");
+    let mut merged = Batch::empty(false);
+    merged
+        .reserve_in(cap, &mut Memory::new(&mut Resident), &mut 0)
+        .expect("constructing original merge columns");
+    merge_batches_into(left, right, &mut merged)?;
+    Ok(merged)
+}
+
+#[cfg(test)]
+fn merge_batches_into<W: Weight, I: TermIdentity>(
+    left: &Batch<W, I>,
+    right: &Batch<W, I>,
+    merged: &mut Batch<W, I>,
+) -> Result<(), W::Error> {
+    let complete = MergeFrame::default().resume(left, right, merged, |_| true)?;
+    assert!(complete, "unrestricted native merge completes");
+    Ok(())
+}
+
+/// Positions in the one native merge; inputs remain immutable until publication.
+#[derive(Debug, Default)]
+struct MergeFrame {
+    left: usize,
+    right: usize,
+    started: bool,
+}
+
+impl MergeFrame {
+    fn resume<W: Weight, I: TermIdentity>(
+        &mut self,
+        left: &Batch<W, I>,
+        right: &Batch<W, I>,
+        merged: &mut Batch<W, I>,
+        mut allow: impl FnMut(usize) -> bool,
+    ) -> Result<bool, W::Error> {
+        if !self.started {
+            merged.data.clear();
+            merged.weight.clear();
+            merged.live = 0;
+            self.started = true;
         }
-    };
-    while i < left.len() && j < right.len() {
-        let lk = (left.subj[i], left.obj[i]);
-        let rk = (right.subj[j], right.obj[j]);
-        match lk.cmp(&rk) {
-            Ordering::Less => {
-                push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i);
-                i += 1;
+        assert!(
+            merged.object_index.get().is_none(),
+            "merge output has no published permutation"
+        );
+        let (i, j) = (&mut self.left, &mut self.right);
+        let push = |merged: &mut Batch<W, I>, b: &Batch<W, I>, p: usize| {
+            if let Some((subject, object, row)) = b.row_at(p) {
+                merged.push_reserved(subject, object, row, b.weight[p]);
             }
-            Ordering::Greater => {
-                push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
-                j += 1;
+        };
+        while *i < left.len() && *j < right.len() {
+            if !allow(1) {
+                return Ok(false);
             }
-            Ordering::Equal => {
-                // Combine live weights; a retired copy cannot compete with a
-                // fresh reinsertion or retain its old handle.
-                match (left.row_id[i], right.row_id[j]) {
-                    (Some(left_row), Some(right_row)) => {
-                        let w = left.weight[i].combine(right.weight[j])?;
-                        if !w.is_annihilated() {
-                            subj.push(left.subj[i]);
-                            obj.push(left.obj[i]);
-                            row_id.push(Some(left_row.min(right_row)));
-                            weight.push(w);
-                        }
-                    }
-                    (Some(_), None) => push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i),
-                    (None, Some(_)) => {
-                        push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
-                    }
-                    (None, None) => {}
+            let lk = left.key_at(*i);
+            let rk = right.key_at(*j);
+            match lk.cmp(&rk) {
+                Ordering::Less => {
+                    push(merged, left, *i);
+                    *i += 1;
                 }
-                i += 1;
-                j += 1;
+                Ordering::Greater => {
+                    push(merged, right, *j);
+                    *j += 1;
+                }
+                Ordering::Equal => {
+                    // Combine live weights; a retired copy cannot compete with a
+                    // fresh reinsertion or retain its old handle.
+                    match (left.data.handles()[*i], right.data.handles()[*j]) {
+                        (Some(left_row), Some(right_row)) => {
+                            let w = left.weight[*i].combine(right.weight[*j])?;
+                            if !w.is_annihilated() {
+                                merged.push_reserved(lk.0, lk.1, left_row.min(right_row), w);
+                            }
+                        }
+                        (Some(_), None) => push(merged, left, *i),
+                        (None, Some(_)) => {
+                            push(merged, right, *j);
+                        }
+                        (None, None) => {}
+                    }
+                    *i += 1;
+                    *j += 1;
+                }
             }
         }
+        while *i < left.len() {
+            if !allow(1) {
+                return Ok(false);
+            }
+            push(merged, left, *i);
+            *i += 1;
+        }
+        while *j < right.len() {
+            if !allow(1) {
+                return Ok(false);
+            }
+            push(merged, right, *j);
+            *j += 1;
+        }
+        Ok(true)
     }
-    while i < left.len() {
-        push(&mut subj, &mut obj, &mut row_id, &mut weight, left, i);
-        i += 1;
-    }
-    while j < right.len() {
-        push(&mut subj, &mut obj, &mut row_id, &mut weight, right, j);
-        j += 1;
-    }
-    Ok(Batch {
-        live: row_id.len(),
-        subj,
-        obj,
-        row_id,
-        weight,
-        object_index: OnceLock::new(),
-    })
 }
 
 // ── Relations ───────────────────────────────────────────────────────────────────
@@ -734,15 +875,26 @@ fn merge_batches<W: Weight, I: TermIdentity>(
 /// identities apart and the loop stays scalar, over the columns they pack.
 /// Row `i` is `(subjects[i], objects[i], rows[i])`; the three columns
 /// always have the same length.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Tail<I: TermIdentity = TermId> {
     data: RowColumns<I, 2, Option<RowId>>,
+    supplemental: bool,
+}
+
+impl<I: TermIdentity> Clone for Tail<I> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            supplemental: false,
+        }
+    }
 }
 
 impl<I: TermIdentity> Default for Tail<I> {
     fn default() -> Self {
         Self {
             data: RowColumns::default(),
+            supplemental: false,
         }
     }
 }
@@ -750,7 +902,26 @@ impl<I: TermIdentity> Default for Tail<I> {
 impl<I: TermIdentity> Tail<I> {
     /// Reserve all three columns before publishing any part of a row.
     fn reserve_row(&mut self) -> Result<(), StorageError> {
+        assert!(
+            !self.supplemental,
+            "supplemental columns lend their original memory"
+        );
         self.data.reserve_rows(1)
+    }
+
+    fn reserve_row_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        if self.supplemental {
+            // A maintained tail owns one complete publication chunk. Its
+            // next append must not copy a source-prefix-dependent capacity.
+            self.data
+                .reserve_capacity_in(TAIL_SEAL_THRESHOLD, memory, retired)
+        } else {
+            self.reserve_row()
+        }
     }
 
     /// Publish row `(subject, object, row)` after [`Self::reserve_row`] succeeds.
@@ -836,13 +1007,6 @@ impl<I: TermIdentity> Tail<I> {
         })?;
         self.data.replace_handle(position, None).flatten()
     }
-
-    /// Empty the tail, returning its rows in insertion order.
-    fn take_rows(&mut self) -> Vec<(I, I, RowId)> {
-        let rows = self.iter().collect();
-        self.data.clear();
-        rows
-    }
 }
 
 /// The size a mutable tail may reach before it is sealed into a sorted batch.
@@ -860,7 +1024,7 @@ pub(crate) const TAIL_SEAL_THRESHOLD: usize = 64;
 /// Term interning lives at the [`RelationStore`] level (one dictionary shared by every
 /// relation), so `insert` borrows the store's interner. Production set semantics fix
 /// the weight monoid at `W = ()`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Relation<I: TermIdentity = TermId> {
     /// Sealed sorted batches, newest last. Live keys are disjoint across batches;
     /// a vacant key may recur in a newer batch after reinsertion.
@@ -870,6 +1034,23 @@ pub(crate) struct Relation<I: TermIdentity = TermId> {
     tail: Tail<I>,
     /// Live rows across sealed batches and tail.
     len: usize,
+    /// Maintained snapshots prepare object access during construction/publication.
+    maintain_objects: bool,
+    seal_preparation: Option<Box<seal::Preparation<I>>>,
+    retired_bytes: usize,
+}
+
+impl<I: TermIdentity> Clone for Relation<I> {
+    fn clone(&self) -> Self {
+        Self {
+            batches: self.batches.clone(),
+            tail: self.tail.clone(),
+            len: self.len,
+            maintain_objects: self.maintain_objects,
+            seal_preparation: None,
+            retired_bytes: 0,
+        }
+    }
 }
 
 impl<I: TermIdentity> Default for Relation<I> {
@@ -878,11 +1059,121 @@ impl<I: TermIdentity> Default for Relation<I> {
             batches: Vec::new(),
             tail: Tail::default(),
             len: 0,
+            maintain_objects: false,
+            seal_preparation: None,
+            retired_bytes: 0,
         }
     }
 }
 
 impl<I: TermIdentity> Relation<I> {
+    fn supplemental() -> Self {
+        Self {
+            tail: Tail {
+                supplemental: true,
+                ..Tail::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    fn retire(self) -> usize {
+        let Self {
+            batches,
+            tail,
+            seal_preparation,
+            retired_bytes,
+            ..
+        } = self;
+        let mut bytes = retired_bytes;
+        if tail.supplemental {
+            bytes = bytes
+                .checked_add(
+                    tail.data
+                        .storage_bytes()
+                        .expect("original tail column layouts"),
+                )
+                .and_then(|bytes| bytes.checked_add(batches.capacity() * size_of::<Batch<(), I>>()))
+                .expect("original relation layouts");
+        }
+        for batch in batches {
+            bytes = bytes
+                .checked_add(batch.retire())
+                .expect("original sealed column layouts");
+        }
+        if let Some(frame) = seal_preparation {
+            bytes = bytes
+                .checked_add(frame.retire())
+                .expect("original prepared seal layouts");
+        }
+        drop(tail);
+        bytes
+    }
+
+    fn reserve_row_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        self.tail.reserve_row_in(memory, retired)?;
+        if self
+            .tail
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?
+            >= TAIL_SEAL_THRESHOLD
+        {
+            self.prepare_seal_in(1, memory, retired)?;
+        }
+        Ok(())
+    }
+
+    fn prepare_seal_in<A: Admission + ?Sized>(
+        &mut self,
+        additional: usize,
+        memory: &mut Memory<'_, A>,
+        retired: &mut usize,
+    ) -> Result<(), StorageError> {
+        let shape = seal::Shape::of(self, additional)?;
+        let required = shape.batch_count(self.batches.len());
+        if self.tail.supplemental {
+            crate::allocation::reserve_array_growth(&mut self.batches, required, memory, retired)?;
+            if self.seal_preparation.is_none() {
+                self.seal_preparation = Some(crate::allocation::construct_in(
+                    memory,
+                    retired,
+                    |memory| memory.boxed(seal::Preparation::new(shape, true)),
+                )?);
+            }
+            self.seal_preparation
+                .as_mut()
+                .expect("original seal owner")
+                .reserve(shape, true, memory, retired)
+        } else {
+            let bytes = self.batches.capacity() * size_of::<Batch<(), I>>();
+            crate::allocation::reserve_array_growth(
+                &mut self.batches,
+                required,
+                &mut Memory::resume(&mut Resident, bytes),
+                &mut 0,
+            )?;
+            if self.seal_preparation.is_none() {
+                self.seal_preparation =
+                    Some(Memory::new(&mut Resident).boxed(seal::Preparation::new(shape, false))?);
+            }
+            let frame = self
+                .seal_preparation
+                .as_mut()
+                .expect("original resident seal owner");
+            let bytes = frame.storage_bytes()?;
+            frame.reserve(
+                shape,
+                self.maintain_objects,
+                &mut Memory::resume(&mut Resident, bytes),
+                &mut 0,
+            )
+        }
+    }
     /// Publish an already-admitted, absent `(subject_id, object_id)` row with
     /// its original store-assigned `row_id`.
     ///
@@ -890,12 +1181,28 @@ impl<I: TermIdentity> Relation<I> {
     /// tail — no per-row hashing, no postings maintenance. A new row is appended to the
     /// unsorted tail; when the tail reaches [`TAIL_SEAL_THRESHOLD`] it is sealed into a
     /// sorted batch and the batch log consolidates.
+    #[cfg(test)]
     fn insert(&mut self, s_id: I, o_id: I, row_id: RowId) {
-        self.tail.push(s_id, o_id, row_id);
-        self.len += 1;
-        if self.tail.len() >= TAIL_SEAL_THRESHOLD {
-            self.seal();
+        self.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)
+            .expect("original resident row preparation");
+        assert!(self.prepare_row_work(|_| true).expect("resident seal work"));
+        self.insert_reserved(s_id, o_id, row_id);
+    }
+
+    fn prepare_row_work(&mut self, allow: impl FnMut(usize) -> bool) -> Result<bool, StorageError> {
+        match self.seal_preparation.as_mut() {
+            Some(frame) => frame.resume(&self.tail, &self.batches, allow),
+            None => Ok(true),
         }
+    }
+
+    fn insert_reserved(&mut self, s_id: I, o_id: I, row_id: RowId) {
+        if let Some(frame) = self.seal_preparation.take() {
+            frame.publish(self, Some((s_id, o_id, row_id)));
+        } else {
+            self.tail.push(s_id, o_id, row_id);
+        }
+        self.len += 1;
     }
 
     /// Whether a tuple with these interned terms is present — a galloping probe of each
@@ -939,6 +1246,13 @@ impl<I: TermIdentity> Relation<I> {
             .find_map(|batch| batch.remove(subject, object))
             .or_else(|| self.tail.remove(subject, object))?;
         self.len -= 1;
+        // A refused insertion may retain rows copied before this removal.
+        if let Some(frame) = self.seal_preparation.take() {
+            self.retired_bytes = self
+                .retired_bytes
+                .checked_add(frame.retire())
+                .expect("retired seal preparation fits its original grant");
+        }
         Some(row)
     }
 
@@ -949,36 +1263,18 @@ impl<I: TermIdentity> Relation<I> {
     /// the sort is a plain columnar build with no combine. Consolidation then merges the
     /// batch log geometrically. Row ids are already stamped, so sealing is a pure
     /// storage reorganisation — it never changes the row set, the row ids, or the count.
+    #[cfg(test)]
     fn seal(&mut self) {
         if self.tail.is_empty() {
             return;
         }
-        let mut rows = self.tail.take_rows();
-        rows.sort_unstable_by_key(|&(s, o, _)| (s, o));
-        self.batches.push(Batch::from_sorted(&rows));
-        self.consolidate();
-    }
-
-    /// Geometric (size-tiered) consolidation: while the newest two batches are within a
-    /// factor of two in size, merge them into one sorted batch. This bounds the live
-    /// batch count logarithmically, so a probe gallops O(log n) runs.
-    fn consolidate(&mut self) {
-        while self.batches.len() >= 2 {
-            let n = self.batches.len();
-            let (a, b) = (self.batches[n - 2].len(), self.batches[n - 1].len());
-            if b * 2 < a {
-                break;
-            }
-            let right = self.batches.pop().expect("len >= 2");
-            let left = self.batches.pop().expect("len >= 2");
-            let merged = match merge_batches(&left, &right) {
-                Ok(batch) => batch,
-                // `W = ()` is infallible: its error type is uninhabited, so this arm is
-                // a compile-time proof that set-semantics consolidation cannot fail.
-                Err(never) => match never {},
-            };
-            self.batches.push(merged);
-        }
+        self.prepare_seal_in(0, &mut Memory::new(&mut Resident), &mut 0)
+            .expect("original resident seal preparation");
+        assert!(self.prepare_row_work(|_| true).expect("resident seal work"));
+        self.seal_preparation
+            .take()
+            .expect("prepared original seal")
+            .publish(self, None);
     }
 
     /// The number of rows in this relation (batches + tail).
@@ -1112,6 +1408,9 @@ impl StoreShape<4> for Arity<4> {
 
 /// The exact key type of an admitted static row shape.
 pub type StoreKey<I, const N: usize> = <Arity<N> as StoreShape<N>>::Key<I>;
+
+/// An occupied physical slot retains its original logical partition identity.
+type PartitionKey<I, const N: usize> = Option<(PartitionId, StoreKey<I, N>)>;
 
 /// A lexical fact with exactly the selected shape's owned coordinates.
 pub type ShapeFact<const N: usize> = Fact<<Arity<N> as StoreShape<N>>::Graph>;
@@ -1263,6 +1562,7 @@ where
         positions: [Option<I>; N],
         /// The next index into the store's lexical partition order.
         next: usize,
+        after: Option<PartitionId>,
     },
 }
 
@@ -1340,7 +1640,11 @@ where
         let mode = if Arity::<N>::known_key(&positions).is_some() {
             PartitionMode::Single(store.partition_for(&positions).map(PartitionRef::id))
         } else {
-            PartitionMode::Sweep { positions, next: 0 }
+            PartitionMode::Sweep {
+                positions,
+                next: 0,
+                after: None,
+            }
         };
         Self {
             mode,
@@ -1357,42 +1661,58 @@ where
     ) -> Option<PartitionRef<'a, I, N>> {
         match &mut self.mode {
             PartitionMode::Single(found) => {
-                let partition = store.partition_at(found.take()?.resident_index());
+                let partition = store.partition_with_id(found.take()?);
                 let partition = delta.map_or(Some(partition), |run| run.project(partition))?;
                 (partition.row_count() != 0).then_some(partition)
             }
-            PartitionMode::Sweep { positions, next } => {
-                let order = delta.map_or(store.order.as_slice(), |run| run.order.as_slice());
-                let predicates = delta.map_or(&store.by_predicate, |run| &run.by_predicate);
-                let order = positions[1].map_or(order, |predicate| {
-                    predicates.get(&predicate).map_or(&[], Vec::as_slice)
-                });
-                while let Some(&slot) = order.get(*next) {
+            PartitionMode::Sweep {
+                positions,
+                next,
+                after,
+            } => loop {
+                let slot = if let Some(run) = delta {
+                    let order = positions[1].map_or(run.order.as_slice(), |predicate| {
+                        run.by_predicate.get(&predicate).map_or(&[], Vec::as_slice)
+                    });
+                    let slot = *order.get(*next)?;
                     *next += 1;
-                    #[cfg(test)]
-                    {
-                        self.visited += 1;
-                    }
-                    let (_, key) = store.keys[slot];
-                    if Arity::<N>::KEY_POSITIONS.iter().enumerate().all(
-                        |(coordinate, &position)| {
-                            positions[position].is_none_or(|wanted| {
-                                wanted == Arity::<N>::key_term(key, coordinate)
-                            })
-                        },
-                    ) {
-                        let partition = store.partition_at(slot);
-                        let partition = delta.map_or(partition, |run| {
-                            run.project(partition)
-                                .expect("delta order names an admitted arrangement")
-                        });
-                        if partition.row_count() != 0 {
-                            return Some(partition);
-                        }
+                    slot
+                } else if store.order.is_sparse() {
+                    let slot = store.order.after(positions[1], *after)?;
+                    *after = Some(store.keys[slot].expect("live traversal key").0);
+                    slot
+                } else {
+                    let order = positions[1].map_or_else(
+                        || store.order.dense_order(),
+                        |predicate| store.order.dense_predicate(predicate),
+                    );
+                    let slot = *order.get(*next)?;
+                    *next += 1;
+                    slot
+                };
+                #[cfg(test)]
+                {
+                    self.visited += 1;
+                }
+                let (_, key) = store.keys[slot].expect("occupied traversal key");
+                if Arity::<N>::KEY_POSITIONS
+                    .iter()
+                    .enumerate()
+                    .all(|(coordinate, &position)| {
+                        positions[position]
+                            .is_none_or(|wanted| wanted == Arity::<N>::key_term(key, coordinate))
+                    })
+                {
+                    let partition = store.partition_at(slot);
+                    let partition = delta.map_or(partition, |run| {
+                        run.project(partition)
+                            .expect("delta order names an admitted arrangement")
+                    });
+                    if partition.row_count() != 0 {
+                        return Some(partition);
                     }
                 }
-                None
-            }
+            },
         }
     }
 }
@@ -1409,7 +1729,7 @@ type LoggedRow<I> = (Option<RowId>, PartitionId, I, I);
 /// them through [`Self::term_id`]. See the module docs for how the partitioning keeps a
 /// constant-predicate atom exactly as fast as it was when predicates were relation
 /// symbols.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RelationStore<D: TermDictionary = TermInterner, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
@@ -1420,42 +1740,79 @@ where
     interner: D,
     /// Explicit immutable native base; capture strips any older base, so depth is one.
     base: Option<Box<Self>>,
-    /// The partitions, indexed by dense [`PartitionId`] slot.
+    /// Physical partition slots; maintained logical IDs resolve through `order`.
     relations: Vec<Relation<D::Id>>,
     /// `keys[slot]` retains the original partition id and `(predicate, graph)` key.
-    keys: Vec<(PartitionId, StoreKey<D::Id, N>)>,
+    keys: Vec<PartitionKey<D::Id, N>>,
     /// Key → slot. Probed, NEVER iterated: its order is term mint order, which carries no
     /// lexical meaning. Every sweep reads `order` instead.
-    by_key: BTreeMap<StoreKey<D::Id, N>, usize>,
+    by_key: OrderedTable<StoreKey<D::Id, N>, usize>,
+    metadata_supplemental: bool,
+    metadata_retired_bytes: usize,
     /// The partition slots in LEXICAL `(predicate surface, graph surface)` order — the
     /// single sweep order, maintained on partition creation so no sweep has to sort.
-    order: Vec<usize>,
-    /// Predicate identity to its graph partitions, in the same lexical order.
-    /// Never enumerate the hash table; only probe it by an original identity.
-    by_predicate: purrdf_core::FastMap<D::Id, Vec<usize>>,
-    /// Live rows across all partitions. Removed append slots remain retained in the log;
-    /// its length, rather than live cardinality, determines the next original handle.
+    order: Directory<D::Id, StoreKey<D::Id, N>>,
+    directory_preparation: Option<directory::Preparation<D::Id, StoreKey<D::Id, N>>>,
+    /// Retired physical slots can be reused without reusing a logical identity.
+    free_partitions: Vec<usize>,
+    next_partition: u64,
+    /// Live rows across all partitions, independent of logical append extent.
     row_count: usize,
-    /// Nonempty partitions; physical slots remain allocated to preserve their IDs.
+    /// Nonempty partitions. Maintained empty slots can be retired and reused.
     live_partitions: usize,
     /// Every row's original `(row id, partition id, subject, object)` — the row
     /// ORDER the arrangements do not keep, so [`Self::rows_from`] reads the rows a round
     /// added without scanning a partition.
-    row_log: Vec<LoggedRow<D::Id>>,
+    row_log: RowLog<D::Id>,
+    /// Physical preparation policy; query semantics and row identities are unchanged.
+    maintenance_indexes: bool,
     /// A permanently-empty partition handed to [`select`](Self::select) on a partition
     /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
     /// the per-row scan. Never inserted into.
     empty: Relation<D::Id>,
+    /// Empty next-partition storage retains accepted column growth across refusal.
+    spare_relation: Relation<D::Id>,
     /// Reduced-width owner model, absent from shipping partition storage.
     #[cfg(test)]
     partition_limit: Option<u64>,
 }
 
+impl<D: TermDictionary + Clone, const N: usize> Clone for RelationStore<D, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            interner: self.interner.clone(),
+            base: self.base.clone(),
+            relations: self.relations.clone(),
+            keys: self.keys.clone(),
+            by_key: self
+                .by_key
+                .try_clone(&mut Memory::new(&mut Resident))
+                .expect("cloning original partition lookup storage"),
+            order: self.order.clone(),
+            directory_preparation: None,
+            metadata_supplemental: false,
+            metadata_retired_bytes: 0,
+            free_partitions: self.free_partitions.clone(),
+            next_partition: self.next_partition,
+            row_count: self.row_count,
+            live_partitions: self.live_partitions,
+            row_log: self.row_log.clone(),
+            maintenance_indexes: self.maintenance_indexes,
+            empty: self.empty.clone(),
+            spare_relation: Relation::default(),
+            #[cfg(test)]
+            partition_limit: self.partition_limit,
+        }
+    }
+}
+
 /// Storage reservations held before publishing one new row.
-struct RowAdmission<I: TermIdentity> {
+struct RowAdmission {
     row_id: RowId,
     partition_id: PartitionId,
-    new_relation: Relation<I>,
     /// An admitted directory bucket if this is the predicate's first partition.
     predicate_bucket: Option<Vec<usize>>,
 }
@@ -1489,6 +1846,27 @@ impl<I: TermIdentity> DeltaRun<I> {
 /// Original subject/object identities and the newly published row, if not a duplicate.
 pub type InsertedRow<I> = Option<(I, I, RowId)>;
 
+type InsertProgress<I, E> = Result<core::ops::ControlFlow<(), InsertedRow<I>>, DictionaryError<E>>;
+
+/// Original withdrawn coordinates, moved between one store and its maintenance owner.
+/// Only the store constructs this token; restoration consumes it once.
+#[derive(Debug)]
+pub(crate) struct WithdrawnRow<I: TermIdentity> {
+    row: RowId,
+    partition: PartitionId,
+    subject: I,
+    object: I,
+}
+
+impl<I: TermIdentity> WithdrawnRow<I> {
+    pub(crate) const fn id(&self) -> RowId {
+        self.row
+    }
+    fn into_parts(self) -> (RowId, PartitionId, I, I) {
+        (self.row, self.partition, self.subject, self.object)
+    }
+}
+
 impl<D: TermDictionary, const N: usize> RelationStore<D, N>
 where
     Arity<N>: StoreShape<N>,
@@ -1511,8 +1889,9 @@ where
 
     /// All retained rows, including the immutable base's separate arrangements.
     pub(crate) fn retained_rows(&self) -> usize {
-        self.row_slots()
-            .saturating_add(self.base.as_ref().map_or(0, |base| base.row_slots()))
+        self.row_log
+            .retained()
+            .saturating_add(self.base.as_ref().map_or(0, |base| base.row_log.retained()))
     }
 
     /// Live facts in the evaluation and explicitly captured base authorities.
@@ -1529,13 +1908,19 @@ where
             base: None,
             relations: Vec::new(),
             keys: Vec::new(),
-            by_key: BTreeMap::new(),
-            order: Vec::new(),
-            by_predicate: purrdf_core::FastMap::default(),
+            by_key: OrderedTable::default(),
+            metadata_supplemental: false,
+            metadata_retired_bytes: 0,
+            order: Directory::default(),
+            directory_preparation: None,
+            free_partitions: Vec::new(),
+            next_partition: 0,
             row_count: 0,
             live_partitions: 0,
-            row_log: Vec::new(),
+            row_log: RowLog::default(),
+            maintenance_indexes: false,
             empty: Relation::default(),
+            spare_relation: Relation::default(),
             #[cfg(test)]
             partition_limit: None,
         }
@@ -1557,15 +1942,138 @@ where
         self.insert_terms(ids.map(DictionaryTerm::Id))
     }
 
+    /// Admit host input terms in the original dictionary without publishing a row.
+    pub(crate) fn intern_terms(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+    ) -> Result<[D::Id; N], DictionaryError<D::Error>> {
+        self.interner.with_interned(terms, |_, ids| Ok(ids))
+    }
+
+    /// Construct new native metadata before transferring it to supplemental ownership.
+    #[cfg(test)]
+    pub(crate) fn admit_native_metadata_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), DictionaryError<D::Error>> {
+        assert!(
+            !self.row_log.is_supplemental() && !self.metadata_supplemental,
+            "the original native metadata transfers once"
+        );
+        memory.try_scope(|memory| {
+            let mut preparation = MetadataPreparation::default();
+            assert!(preparation.resume(self, memory, |_| true)?);
+            Ok(())
+        })
+    }
+
+    /// Drive the same native preparation without a work ceiling for store tests.
+    #[cfg(test)]
+    pub(crate) fn prepare_maintenance_indexes(&mut self) -> Result<(), DictionaryError<D::Error>> {
+        // These resident store tests continue through public insertion, which
+        // deliberately refuses metadata owned by a supplemental admission.
+        let entries = self.keys.iter().enumerate().filter_map(|(slot, key)| {
+            key.filter(|_| self.relations[slot].row_count() != 0)
+                .map(|(id, key)| (slot, id, key))
+        });
+        let directory = Directory::resident_from_live::<D, N>(&self.interner, entries)?;
+        let rows = self.row_log.resident_sparse_copy()?;
+        self.reserve_partition_slots_in(self.relations.len(), &mut Memory::new(&mut Resident))?;
+        for slot in 0..self.keys.len() {
+            if self.relations[slot].row_count() == 0 && self.keys[slot].is_some() {
+                let (_, key) = self.keys[slot].take().expect("occupied empty key");
+                self.by_key.remove(&key);
+                self.retire_relation_slot(slot);
+                self.free_partitions.push(slot);
+            }
+            self.relations[slot].maintain_objects = true;
+            for batch in &self.relations[slot].batches {
+                batch.object_order();
+            }
+        }
+        self.order = directory;
+        self.row_log = rows;
+        self.maintenance_indexes = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_maintenance_indexes_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), DictionaryError<D::Error>> {
+        if !self.metadata_supplemental {
+            self.admit_native_metadata_in(memory)?;
+        }
+        let mut preparation = MaintenanceIndexPreparation::default();
+        assert!(preparation.resume(self, memory, |_| true)?);
+        Ok(())
+    }
+
+    pub(crate) fn flush_metadata_retirement_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if self.metadata_supplemental {
+            crate::allocation::flush_retired_bytes(&mut self.metadata_retired_bytes, memory)?;
+        }
+        self.row_log.flush_retired_in(memory)?;
+        self.order.flush_retired_in(memory)
+    }
+
+    /// Retire one emptied key after every native frame has finished using it.
+    /// The caller retains its transaction cursor across refusal or suspension.
+    pub(crate) fn retire_empty_partition(
+        &mut self,
+        terms: [D::Id; N],
+    ) -> Result<(), DictionaryError<D::Error>> {
+        assert!(
+            self.order.is_sparse(),
+            "retirement requires maintained ownership"
+        );
+        let Some(&slot) = self.by_key.get(&Arity::<N>::key(&terms)) else {
+            return Ok(());
+        };
+        if self.relations[slot].row_count() != 0 {
+            return Ok(());
+        }
+        assert!(
+            self.free_partitions.len() < self.free_partitions.capacity(),
+            "every possible retired partition slot is admitted before publication"
+        );
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        // All fallible work precedes physical retirement of this original key.
+        let (id, key) = self.keys[slot].take().expect("retiring a live empty key");
+        assert_eq!(self.order.remove(id, Arity::<N>::key_term(key, 0)), slot);
+        assert_eq!(self.by_key.remove(&key), Some(slot));
+        self.retire_relation_slot(slot);
+        self.free_partitions.push(slot);
+        Ok(())
+    }
+
     /// Remove an original-ID row without allocating or copying survivors.
     ///
     /// Returns its former handle, or `None` if absent. Unrelated handles and
     /// physical key positions are preserved. Reinsertion receives a new handle.
-    /// Removal retains append slots and interned terms; it does not reclaim them.
+    /// Dense logs retain vacant append slots. Maintained logs retire the removed
+    /// mapping; key arrays and interned terms have separate lifetimes.
     ///
     /// # Errors
     /// Returns the original dictionary failure before changing membership.
     pub fn remove_ids(&mut self, ids: [D::Id; N]) -> Result<Option<RowId>, D::Error> {
+        Ok(self.remove_native(ids)?.map(|original| original.id()))
+    }
+
+    pub(crate) fn withdraw_ids(
+        &mut self,
+        ids: [D::Id; N],
+    ) -> Result<Option<WithdrawnRow<D::Id>>, D::Error> {
+        self.remove_native(ids)
+    }
+
+    fn remove_native(&mut self, ids: [D::Id; N]) -> Result<Option<WithdrawnRow<D::Id>>, D::Error> {
         self.interner.check_read()?;
         let slot = self.by_key.get(&Arity::<N>::key(&ids)).copied();
         self.interner.check_read()?;
@@ -1575,17 +2083,72 @@ where
         let Some(row) = self.relations[slot].remove(ids[0], ids[2]) else {
             return Ok(None);
         };
-        let logged = self.row_log[row.resident_index()].0.take();
+        self.record_relation_retirement(slot);
+        let (row, partition, subject, object) = self.row_log.remove(row);
         assert_eq!(
-            logged,
-            Some(row),
-            "the live arrangement owns its append handle"
+            (partition, subject, object),
+            (self.keys[slot].expect("live key").0, ids[0], ids[2])
         );
         self.row_count -= 1;
         if self.relations[slot].row_count() == 0 {
             self.live_partitions -= 1;
         }
-        Ok(Some(row))
+        Ok(Some(WithdrawnRow {
+            row,
+            partition,
+            subject,
+            object,
+        }))
+    }
+
+    /// Restore a quarantined row to its original handle after native re-grounding.
+    /// Only the exclusive maintenance owner can request this; public reinsertion
+    /// continues to mint a new handle. Original append coordinates are immutable.
+    pub(crate) fn admit_restore_in<A: Admission + ?Sized>(
+        &mut self,
+        original: &WithdrawnRow<D::Id>,
+        memory: &mut Memory<'_, A>,
+        allow: impl FnMut(usize) -> bool,
+    ) -> Result<bool, DictionaryError<D::Error>> {
+        self.flush_metadata_retirement_in(memory)?;
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        let slot = self.order.slot(original.partition);
+        self.row_log.check_restore((
+            original.row,
+            original.partition,
+            original.subject,
+            original.object,
+        ));
+        self.row_log.reserve_in(memory)?;
+        assert!(!self.relations[slot].contains(original.subject, original.object));
+        self.relations[slot].reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
+        if !self.relations[slot].prepare_row_work(allow)? {
+            return Ok(false);
+        }
+        self.interner
+            .check_read()
+            .map_err(DictionaryError::Source)?;
+        Ok(true)
+    }
+
+    /// Publish the admitted original token, with no intervening source callback.
+    pub(crate) fn restore_row_in<A: Admission + ?Sized>(
+        &mut self,
+        original: WithdrawnRow<D::Id>,
+        memory: &mut Memory<'_, A>,
+    ) {
+        let (row, partition, subject, object) = original.into_parts();
+        let slot = self.order.slot(partition);
+        if self.relations[slot].row_count() == 0 {
+            self.live_partitions += 1;
+        }
+        self.relations[slot].insert_reserved(subject, object, row);
+        self.record_relation_retirement(slot);
+        self.row_log
+            .restore_in((row, partition, subject, object), memory);
+        self.row_count += 1;
     }
 
     /// Insert a mixed original-ID/fresh-surface quad through one admitted publication.
@@ -1597,6 +2160,30 @@ where
         &mut self,
         terms: [DictionaryTerm<'_, D::Id>; N],
     ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        assert!(
+            !self.row_log.is_supplemental(),
+            "supplemental insertion lends its original memory"
+        );
+        self.insert_terms_in(terms, &mut Memory::new(&mut Resident))
+    }
+
+    pub(crate) fn insert_terms_in<A: Admission + ?Sized>(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+        memory: &mut Memory<'_, A>,
+    ) -> Result<InsertedRow<D::Id>, DictionaryError<D::Error>> {
+        match self.insert_terms_until_in(terms, memory, |_| true)? {
+            core::ops::ControlFlow::Continue(inserted) => Ok(inserted),
+            core::ops::ControlFlow::Break(()) => unreachable!("unrestricted seal work completes"),
+        }
+    }
+
+    pub(crate) fn insert_terms_until_in<A: Admission + ?Sized>(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+        memory: &mut Memory<'_, A>,
+        allow: impl FnMut(usize) -> bool,
+    ) -> InsertProgress<D::Id, D::Error> {
         self.interner
             .check_read()
             .map_err(DictionaryError::Source)?;
@@ -1618,13 +2205,24 @@ where
         if let (Some(slot), Some(subject), Some(object)) = (existing, subject, object)
             && self.relations[slot].contains(subject, object)
         {
-            return Ok(None);
+            return Ok(core::ops::ControlFlow::Continue(None));
         }
-        let admission = self.admit_row(existing, known[1])?;
+        let admission = self.admit_row(existing, known[1], memory)?;
+        let relation = existing.map_or(&mut self.spare_relation, |slot| &mut self.relations[slot]);
+        if !relation.prepare_row_work(allow)? {
+            return Ok(core::ops::ControlFlow::Break(()));
+        }
         let ordered = Arity::<N>::MINT_ORDER
             .map(|position| known[position].map_or(terms[position], DictionaryTerm::Id));
         let keys = &self.keys;
-        let order = &self.order;
+        let order = &mut self.order;
+        let partition_id = admission.partition_id;
+        let partition_slot = existing.unwrap_or_else(|| {
+            self.free_partitions
+                .last()
+                .copied()
+                .unwrap_or(self.relations.len())
+        });
         let (ids, position) = self.interner.with_interned(ordered, |dictionary, minted| {
             let mut ids = minted;
             for (index, position) in Arity::<N>::MINT_ORDER.into_iter().enumerate() {
@@ -1632,132 +2230,227 @@ where
             }
             dictionary.check_read().map_err(DictionaryError::Source)?;
             let position = if existing.is_some() {
-                0
+                None
+            } else if order.is_sparse() {
+                Some(order.prepare_sparse_in::<D, N, A>(
+                    dictionary,
+                    Arity::<N>::key(&ids),
+                    memory,
+                )?)
             } else {
-                partition_position::<D, N>(dictionary, keys, order, Arity::<N>::key(&ids))
-                    .map_err(DictionaryError::Source)?
+                Some(directory::Prepared::Dense(
+                    partition_position::<D, N>(
+                        dictionary,
+                        keys,
+                        order.dense_order(),
+                        Arity::<N>::key(&ids),
+                    )
+                    .map_err(DictionaryError::Source)?,
+                ))
             };
             dictionary.check_read().map_err(DictionaryError::Source)?;
             Ok((ids, position))
         })?;
-        Ok(Some(self.publish_row(ids, existing, position, admission)))
+        let position = position.map(|prepared| prepared.publish(partition_id, partition_slot));
+        Ok(core::ops::ControlFlow::Continue(Some(
+            self.publish_row(ids, existing, position, admission, memory),
+        )))
     }
 
-    fn admit_row(
+    fn retire_relation_slot(&mut self, slot: usize) {
+        let retired = std::mem::take(&mut self.relations[slot]);
+        self.metadata_retired_bytes = self
+            .metadata_retired_bytes
+            .checked_add(retired.retire())
+            .expect("retired native columns fit their original grant");
+    }
+
+    fn record_relation_retirement(&mut self, slot: usize) {
+        let bytes = std::mem::take(&mut self.relations[slot].retired_bytes);
+        self.metadata_retired_bytes = self
+            .metadata_retired_bytes
+            .checked_add(bytes)
+            .expect("retired native sealing layouts fit their original grant");
+    }
+
+    fn reserve_partition_slots_in<A: Admission + ?Sized>(
+        &mut self,
+        required: usize,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        if required <= self.free_partitions.capacity() {
+            return Ok(());
+        }
+        if self.metadata_supplemental {
+            crate::allocation::reserve_array_growth(
+                &mut self.free_partitions,
+                required,
+                memory,
+                &mut self.metadata_retired_bytes,
+            )
+        } else {
+            self.free_partitions
+                .try_reserve(required - self.free_partitions.len())
+                .map_err(|_| StorageError::AllocationFailed)
+        }
+    }
+
+    fn admit_row<A: Admission + ?Sized>(
         &mut self,
         existing: Option<usize>,
         predicate: Option<D::Id>,
-    ) -> Result<RowAdmission<D::Id>, StorageError> {
+        memory: &mut Memory<'_, A>,
+    ) -> Result<RowAdmission, StorageError> {
+        self.flush_metadata_retirement_in(memory)?;
         // Admit both live cardinality and the never-reused append identity before
         // reserving dependent storage or interning a new lexical surface.
         RowId::from_address(self.row_count)?;
         self.row_count
             .checked_add(1)
             .ok_or(StorageError::SizeOverflow)?;
-        let row_id = RowId::from_address(self.row_slots())?;
+        let row_id = RowId::from_index(self.row_slots())?;
         let partition_id = match existing {
-            Some(slot) => self.keys[slot].0,
+            Some(slot) => self.keys[slot].expect("live key").0,
             None => {
                 let limit = u64::MAX;
                 #[cfg(test)]
                 let limit = self.partition_limit.unwrap_or(limit);
-                PartitionId::from_address_with_limit(self.relations.len(), limit)?
+                PartitionId::from_index_with_limit(self.next_partition, limit)?
             }
         };
-        self.row_log
-            .try_reserve(1)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        let mut new_relation = Relation::default();
+        self.row_log.reserve_in(memory)?;
         let mut predicate_bucket = None;
         if let Some(slot) = existing {
-            self.relations[slot].tail.reserve_row()?;
+            self.relations[slot].reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
         } else {
-            self.relations
-                .try_reserve(1)
-                .map_err(|_| StorageError::AllocationFailed)?;
-            self.keys
-                .try_reserve(1)
-                .map_err(|_| StorageError::AllocationFailed)?;
-            self.order
-                .try_reserve(1)
-                .map_err(|_| StorageError::AllocationFailed)?;
-            new_relation.tail.reserve_row()?;
-            if let Some(slots) = predicate.and_then(|id| self.by_predicate.get_mut(&id)) {
-                slots
-                    .try_reserve(1)
-                    .map_err(|_| StorageError::AllocationFailed)?;
+            if self.metadata_supplemental {
+                crate::allocation::reserve_ordered_in(
+                    &mut self.by_key,
+                    memory,
+                    &mut self.metadata_retired_bytes,
+                )?;
             } else {
-                self.by_predicate
-                    .try_reserve(1)
-                    .map_err(|_| StorageError::AllocationFailed)?;
-                let mut slots = Vec::new();
-                slots
-                    .try_reserve(1)
-                    .map_err(|_| StorageError::AllocationFailed)?;
-                predicate_bucket = Some(slots);
+                let old = self.by_key.storage_bytes()?;
+                self.by_key
+                    .reserve_insert(&mut Memory::resume(&mut Resident, old))?;
             }
+            if self.free_partitions.is_empty() {
+                if self.metadata_supplemental {
+                    crate::allocation::reserve_array_in(
+                        &mut self.relations,
+                        memory,
+                        &mut self.metadata_retired_bytes,
+                        |values, memory| memory.reserve_for_push(values),
+                    )?;
+                    crate::allocation::reserve_array_in(
+                        &mut self.keys,
+                        memory,
+                        &mut self.metadata_retired_bytes,
+                        |values, memory| memory.reserve_for_push(values),
+                    )?;
+                } else {
+                    self.relations
+                        .try_reserve(1)
+                        .map_err(|_| StorageError::AllocationFailed)?;
+                    self.keys
+                        .try_reserve(1)
+                        .map_err(|_| StorageError::AllocationFailed)?;
+                }
+                let capacity = self
+                    .relations
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                self.reserve_partition_slots_in(capacity, memory)?;
+            }
+            self.spare_relation.maintain_objects = self.maintenance_indexes;
+            self.spare_relation
+                .reserve_row_in(memory, &mut self.metadata_retired_bytes)?;
+            predicate_bucket = self.order.admit_in(predicate, memory)?;
         }
         Ok(RowAdmission {
             row_id,
             partition_id,
-            new_relation,
             predicate_bucket,
         })
     }
 
-    fn publish_row(
+    fn publish_row<A: Admission + ?Sized>(
         &mut self,
         ids: [D::Id; N],
         existing: Option<usize>,
-        position: usize,
-        admission: RowAdmission<D::Id>,
+        position: Option<Position>,
+        admission: RowAdmission,
+        memory: &mut Memory<'_, A>,
     ) -> (D::Id, D::Id, RowId) {
         let (subject_id, object_id) = (ids[0], ids[2]);
         let key = Arity::<N>::key(&ids);
         let RowAdmission {
             row_id,
             partition_id,
-            new_relation,
             predicate_bucket,
         } = admission;
         let slot = if let Some(slot) = existing {
             slot
         } else {
-            let predicate = Arity::<N>::key_term(key, 0);
-            let previous = position
-                .checked_sub(1)
-                .and_then(|index| self.order.get(index))
-                .copied()
-                .filter(|&slot| Arity::<N>::key_term(self.keys[slot].1, 0) == predicate);
-            let slot = self.relations.len();
-            self.relations.push(new_relation);
-            self.keys.push((partition_id, key));
-            self.by_key.insert(key, slot);
-            self.order.insert(position, slot);
-            let slots = self.by_predicate.entry(predicate).or_insert_with(|| {
-                predicate_bucket.expect("a new predicate's directory bucket was admitted")
-            });
-            let position = previous.map_or(0, |previous| {
-                if slots.last() == Some(&previous) {
-                    slots.len()
+            let new_relation = std::mem::replace(
+                &mut self.spare_relation,
+                if self.metadata_supplemental {
+                    Relation::supplemental()
                 } else {
-                    slots
-                        .iter()
-                        .position(|&slot| slot == previous)
-                        .expect("the preceding partition belongs to this predicate")
-                        + 1
-                }
-            });
-            slots.insert(position, slot);
+                    Relation::default()
+                },
+            );
+            let predicate = Arity::<N>::key_term(key, 0);
+            let slot = if let Some(slot) = self.free_partitions.pop() {
+                assert!(
+                    self.keys[slot].is_none(),
+                    "retired storage never aliases a live partition"
+                );
+                self.relations[slot] = new_relation;
+                self.keys[slot] = Some((partition_id, key));
+                slot
+            } else {
+                let slot = self.relations.len();
+                self.relations.push(new_relation);
+                self.keys.push(Some((partition_id, key)));
+                slot
+            };
+            let lookup_bytes = self
+                .by_key
+                .storage_bytes()
+                .expect("original admitted lookup layout");
+            let inserted = if self.metadata_supplemental {
+                self.by_key.insert(key, slot, memory)
+            } else {
+                self.by_key
+                    .insert(key, slot, &mut Memory::resume(&mut Resident, lookup_bytes))
+            };
+            assert!(
+                inserted
+                    .expect("lookup capacity was reserved before the dictionary transaction")
+                    .is_none()
+            );
+            let keys = &self.keys;
+            self.order.publish(
+                slot,
+                partition_id,
+                predicate,
+                position.expect("new partition placement was retained"),
+                predicate_bucket,
+                |slot| Arity::<N>::key_term(keys[slot].expect("preceding occupied key").1, 0),
+            );
+            self.next_partition += 1;
             slot
         };
         if self.relations[slot].row_count() == 0 {
             self.live_partitions += 1;
         }
-        self.relations[slot].insert(subject_id, object_id, row_id);
+        self.relations[slot].insert_reserved(subject_id, object_id, row_id);
+        self.record_relation_retirement(slot);
         self.row_count += 1;
         self.row_log
-            .push((Some(row_id), partition_id, subject_id, object_id));
+            .append_in((row_id, partition_id, subject_id, object_id), memory);
         (subject_id, object_id, row_id)
     }
 }
@@ -1765,7 +2458,7 @@ where
 /// Lexical position of an absent partition in the original dictionary order.
 fn partition_position<D: TermDictionary, const N: usize>(
     dictionary: &D,
-    keys: &[(PartitionId, StoreKey<D::Id, N>)],
+    keys: &[PartitionKey<D::Id, N>],
     order: &[usize],
     key: StoreKey<D::Id, N>,
 ) -> Result<usize, D::Error>
@@ -1775,7 +2468,7 @@ where
     let (mut lo, mut hi) = (0, order.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let (_, existing) = keys[order[mid]];
+        let (_, existing) = keys[order[mid]].expect("dense order contains original occupied keys");
         let mut ordering = Ordering::Equal;
         for coordinate in 0..Arity::<N>::KEY_POSITIONS.len() {
             ordering = dictionary.compare_terms(
@@ -1882,15 +2575,16 @@ where
     /// Live rows at append offsets `since..`, in original insertion order.
     ///
     /// Capture [`Self::row_slots`] for the next append boundary. Removed handles
-    /// are skipped, and reinsertion is visible at its new append offset. Work is
-    /// proportional to the selected retained log span, including vacant cells.
-    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
-        let since = since.min(self.row_log.len());
-        self.row_log[since..]
-            .iter()
-            .filter_map(|&(row, partition, subject, object)| {
-                let (_, key) = self.keys[partition.resident_index()];
-                row.map(|row| (row, Arity::<N>::row(subject, key, object)))
+    /// are skipped, and reinsertion is visible at its new logical offset. Dense
+    /// logs visit the selected retained span; reclaimed logs seek to the offset
+    /// and visit only live entries. Neither path remaps original identities.
+    pub fn rows_from(&self, since: u64) -> impl Iterator<Item = (RowId, [D::Id; N])> + '_ {
+        self.row_log
+            .from(since)
+            .map(|(row, partition, subject, object)| {
+                let (_, key) = self.keys[self.order.slot(partition)]
+                    .expect("a live row retains its partition");
+                (row, Arity::<N>::row(subject, key, object))
             })
     }
 
@@ -1899,19 +2593,24 @@ where
         self.row_count
     }
 
-    /// Retained append slots, including removed rows; the next insertion's offset.
+    /// Next logical append coordinate, independent of the target's pointer width.
     ///
-    /// Row-indexed depth/assumption buffers and delta boundaries use this extent.
-    /// Live cardinality is [`Self::row_count`]. Removal never shrinks this extent
-    /// or permits an old handle to denote a different row.
-    pub fn row_slots(&self) -> usize {
-        self.row_log.len()
+    /// Delta boundaries use this monotone extent. Live cardinality is
+    /// [`Self::row_count`]; maintained metadata may reclaim removed coordinates.
+    /// An old handle can never denote a different row.
+    pub fn row_slots(&self) -> u64 {
+        self.row_log.next()
+    }
+
+    /// Whether row metadata is reclaimed independently of logical append coordinates.
+    pub(crate) const fn has_sparse_rows(&self) -> bool {
+        self.row_log.is_sparse()
     }
 
     /// The number of live `(predicate, graph)` partitions.
     ///
-    /// Empty physical slots retain their original IDs. A free-key sweep may visit
-    /// those slots, but never yields them as live partitions.
+    /// Ordinary stores retain empty slots. Maintained stores retire empty keys
+    /// after their transaction settles, without changing any survivor's identity.
     pub fn partition_count(&self) -> usize {
         self.live_partitions
     }
@@ -1920,6 +2619,11 @@ where
     /// the point a caller renders.
     pub fn interner(&self) -> &D {
         &self.interner
+    }
+
+    /// Exclusive term-lifetime edits are confined to the model's verified owner.
+    pub(crate) fn interner_mut(&mut self) -> &mut D {
+        &mut self.interner
     }
 
     /// The bytes of interned term surfaces held by this store's dictionary — the
@@ -1944,7 +2648,7 @@ impl RelationStore {
         self.by_key
             .get(&(predicate, graph))
             .copied()
-            .map(|slot| self.keys[slot].0)
+            .map(|slot| self.keys[slot].expect("live key").0)
     }
 }
 
@@ -2005,7 +2709,7 @@ where
     /// Build one arrangement from the append-log slice, never from old rows.
     pub(crate) fn delta_run(
         &self,
-        range: core::ops::Range<usize>,
+        range: core::ops::Range<u64>,
     ) -> Result<DeltaRun<D::Id>, DictionaryError<D::Error>> {
         self.interner
             .check_read()
@@ -2015,10 +2719,11 @@ where
             order: Vec::new(),
             by_predicate: purrdf_core::FastMap::default(),
         };
-        for &(row, partition, subject, object) in &self.row_log[range] {
-            let Some(row) = row else {
-                continue;
-            };
+        for (row, partition, subject, object) in self
+            .row_log
+            .from(range.start)
+            .take_while(|row| row.0.index() < range.end)
+        {
             if !run.relations.contains_key(&partition) {
                 run.relations
                     .try_reserve(1)
@@ -2026,7 +2731,7 @@ where
                 run.order
                     .try_reserve(1)
                     .map_err(|_| StorageError::AllocationFailed)?;
-                let slot = partition.resident_index();
+                let slot = self.order.slot(partition);
                 run.order.push(slot);
                 run.relations.insert(partition, Relation::default());
             }
@@ -2034,15 +2739,17 @@ where
                 .relations
                 .get_mut(&partition)
                 .expect("the delta arrangement was admitted");
-            relation.tail.reserve_row()?;
-            relation.insert(subject, object, row);
+            relation.reserve_row_in(&mut Memory::new(&mut Resident), &mut 0)?;
+            assert!(relation.prepare_row_work(|_| true)?);
+            relation.insert_reserved(subject, object, row);
         }
         // This private physical run uses original partition ordinals. It never
         // resolves a term; public store traversal and sorted commits retain
         // their lexical ordering.
-        run.order.sort_unstable();
+        run.order
+            .sort_unstable_by_key(|&slot| self.keys[slot].expect("delta partition").0);
         for &slot in &run.order {
-            let predicate = Arity::<N>::key_term(self.keys[slot].1, 0);
+            let predicate = Arity::<N>::key_term(self.keys[slot].expect("delta key").1, 0);
             run.by_predicate
                 .try_reserve(1)
                 .map_err(|_| StorageError::AllocationFailed)?;
@@ -2076,8 +2783,13 @@ where
     }
 
     /// The partition at a dense slot.
+    pub(crate) fn partition_with_id(&self, id: PartitionId) -> PartitionRef<'_, D::Id, N> {
+        self.partition_at(self.order.slot(id))
+    }
+
+    /// The partition at its current physical slot.
     pub(crate) fn partition_at(&self, slot: usize) -> PartitionRef<'_, D::Id, N> {
-        let (id, key) = self.keys[slot];
+        let (id, key) = self.keys[slot].expect("partition slots are occupied while read");
         PartitionRef {
             id,
             key,
@@ -2133,7 +2845,7 @@ impl RelationStore {
             .iter()
             .zip(&self.relations)
             .filter(|(_, relation)| relation.row_count() != 0)
-            .map(|(&(_, (predicate, _)), _)| self.interner.resolve(predicate))
+            .map(|(key, _)| self.interner.resolve(key.expect("live predicate key").1.0))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
@@ -2147,7 +2859,7 @@ impl RelationStore {
             .iter()
             .zip(&self.relations)
             .filter(|(_, relation)| relation.row_count() != 0)
-            .map(|(&(_, (_, graph)), _)| self.interner.resolve(graph))
+            .map(|(key, _)| self.interner.resolve(key.expect("live graph key").1.1))
             .collect::<BTreeSet<_>>()
             .into_iter()
     }
@@ -2157,6 +2869,44 @@ impl<const N: usize> RelationStore<TermInterner, N>
 where
     Arity<N>: StoreShape<N>,
 {
+    /// Transfer this original store to explicit reclaiming lexical ownership.
+    /// Arrangements, term IDs, row IDs and partition IDs move unchanged.
+    ///
+    /// # Errors
+    /// Returns physical allocation refusal while preparing removable term metadata.
+    pub fn into_reclaiming(self) -> Result<RelationStore<ReclaimingInterner, N>, StorageError> {
+        let base = self
+            .base
+            .map(|base| (*base).into_reclaiming())
+            .transpose()?;
+        let base = if let Some(base) = base {
+            Some(Memory::new(&mut Resident).boxed(base)?)
+        } else {
+            None
+        };
+        Ok(RelationStore {
+            interner: ReclaimingInterner::from_permanent(self.interner)?,
+            base,
+            relations: self.relations,
+            keys: self.keys,
+            by_key: self.by_key,
+            metadata_supplemental: self.metadata_supplemental,
+            metadata_retired_bytes: self.metadata_retired_bytes,
+            order: self.order,
+            directory_preparation: self.directory_preparation,
+            free_partitions: self.free_partitions,
+            next_partition: self.next_partition,
+            row_count: self.row_count,
+            live_partitions: self.live_partitions,
+            row_log: self.row_log,
+            maintenance_indexes: self.maintenance_indexes,
+            empty: self.empty,
+            spare_relation: self.spare_relation,
+            #[cfg(test)]
+            partition_limit: self.partition_limit,
+        })
+    }
+
     /// Exercise the actual dependent-mint refusal from enclosing execution controls.
     #[cfg(test)]
     pub(crate) fn limit_terms_for_test(&mut self, maximum: Option<u64>) {
@@ -2214,27 +2964,28 @@ where
 
     /// Project native rows through the original lexical owner, pinning each key once.
     fn projected_rows(&self) -> impl Iterator<Item = (RowId, ShapeFact<N>)> + '_ {
-        self.order.iter().flat_map(move |&slot| {
-            let (_, key) = self.keys[slot];
-            let key_terms = match resolve_key::<TermInterner, N>(&self.interner, key) {
-                Ok(terms) => terms,
-                Err(never) => match never {},
-            };
-            let mut cursor = self.relations[slot].select(Bound::Any);
-            core::iter::from_fn(move || {
-                let (subject, object, row) = LendingIterator::next(&mut cursor)?;
-                let mut terms = core::array::from_fn(|_| String::new());
-                self.interner.resolve(subject).clone_into(&mut terms[0]);
-                self.interner.resolve(object).clone_into(&mut terms[2]);
-                for (&position, surface) in Arity::<N>::KEY_POSITIONS
-                    .iter()
-                    .zip(key_terms.iter().flatten())
-                {
-                    (*surface).clone_into(&mut terms[position]);
-                }
-                Some((row, Arity::<N>::fact(terms)))
+        self.partitions_for(core::array::from_fn(|_| None))
+            .flat_map(move |partition| {
+                let key = partition.key;
+                let key_terms = match resolve_key::<TermInterner, N>(&self.interner, key) {
+                    Ok(terms) => terms,
+                    Err(never) => match never {},
+                };
+                let mut cursor = partition.relation.select(Bound::Any);
+                core::iter::from_fn(move || {
+                    let (subject, object, row) = LendingIterator::next(&mut cursor)?;
+                    let mut terms = core::array::from_fn(|_| String::new());
+                    self.interner.resolve(subject).clone_into(&mut terms[0]);
+                    self.interner.resolve(object).clone_into(&mut terms[2]);
+                    for (&position, surface) in Arity::<N>::KEY_POSITIONS
+                        .iter()
+                        .zip(key_terms.iter().flatten())
+                    {
+                        (*surface).clone_into(&mut terms[position]);
+                    }
+                    Some((row, Arity::<N>::fact(terms)))
+                })
             })
-        })
     }
 
     /// Live lexical facts in original row order for ordered-rule boundary hooks.
@@ -2257,6 +3008,157 @@ where
 #[cfg(test)]
 mod tests {
     use crate::test_support::{HostDictionary, SourceLost};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn removal_retires_supplemental_seal_frames_at_each_preparation_phase() {
+        use core::ops::ControlFlow;
+        for cut in [0, 17, usize::MAX] {
+            let mut dictionary = HostDictionary::default();
+            dictionary
+                .surfaces
+                .extend((0..132).map(|id| (id, format!("term-{id}"))));
+            let mut store = RelationStore::<_, 3>::with_dictionary(dictionary);
+            for subject in 0..127 {
+                store.insert_ids([subject, 130, 131]).unwrap();
+            }
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            store.admit_native_metadata_in(&mut memory).unwrap();
+            store
+                .interner
+                .refuse_after_interned
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let mut used = 0;
+            let result = store.insert_terms_until_in(
+                [127, 130, 131].map(DictionaryTerm::Id),
+                &mut memory,
+                |cost| {
+                    if cost > cut - used {
+                        false
+                    } else {
+                        used += cost;
+                        true
+                    }
+                },
+            );
+            if cut == usize::MAX {
+                assert_eq!(result, Err(DictionaryError::Source(SourceLost(71))));
+            } else {
+                assert_eq!(result, Ok(ControlFlow::Break(())));
+            }
+            let frame = store.relations[0].seal_preparation.as_ref().unwrap();
+            assert!(store.relations[0].tail.supplemental);
+            let frame_bytes = frame.storage_bytes().unwrap();
+            let previous_retirement = store.metadata_retired_bytes;
+            assert_eq!(store.remove_ids([129, 130, 131]), Ok(None));
+            assert!(store.relations[0].seal_preparation.is_some());
+            // A sealed-batch removal also invalidates copied tail/merge work.
+            assert!(store.withdraw_ids([0, 130, 131]).unwrap().is_some());
+            assert!(store.relations[0].seal_preparation.is_none());
+            assert_eq!(store.relations[0].retired_bytes, 0);
+            assert_eq!(
+                store.metadata_retired_bytes,
+                previous_retirement + frame_bytes
+            );
+            let admitted = memory.admitted_bytes();
+            store.flush_metadata_retirement_in(&mut memory).unwrap();
+            assert_eq!(store.metadata_retired_bytes, 0);
+            assert!(memory.admitted_bytes() <= admitted - previous_retirement - frame_bytes);
+            store
+                .interner
+                .refuse_after_interned
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            store
+                .insert_terms_in([127, 130, 131].map(DictionaryTerm::Id), &mut memory)
+                .unwrap();
+            assert_eq!(store.row_count(), 127);
+            assert!(store.rows_from(0).all(|(_, ids)| ids != [0, 130, 131]));
+        }
+    }
+
+    #[test]
+    fn sparse_directory_waits_for_the_original_dictionary_transaction() {
+        let mut dictionary = HostDictionary::default();
+        dictionary.surfaces.extend([
+            (41, "s".into()),
+            (7, "z".into()),
+            (99, "a".into()),
+            (3, "o".into()),
+            (81, "g".into()),
+            (15, "h".into()),
+        ]);
+        let mut store = RelationStore::<_, 4>::with_dictionary(dictionary);
+        store.insert_ids([41, 7, 3, 81]).unwrap();
+        store.prepare_maintenance_indexes().unwrap();
+        let original = store.partitions_for([None; 4]).next().unwrap().id();
+        store
+            .interner
+            .refuse_after_interned
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        // Both ordered placements have been prepared when the source refuses.
+        // Neither a new predicate nor another graph may become visible.
+        for row in [[41, 99, 3, 81], [41, 7, 3, 15]] {
+            assert_eq!(
+                store.insert_terms(row.map(DictionaryTerm::Id)),
+                Err(DictionaryError::Source(SourceLost(71)))
+            );
+            assert_eq!(store.row_count(), 1);
+            assert_eq!(store.partition_count(), 1);
+            assert_eq!(
+                store
+                    .partitions_for([None; 4])
+                    .map(PartitionRef::id)
+                    .collect::<Vec<_>>(),
+                [original]
+            );
+        }
+        store
+            .interner
+            .refuse_after_interned
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        store.insert_ids([41, 99, 3, 81]).unwrap();
+        store.insert_ids([41, 7, 3, 15]).unwrap();
+        let ordered = || {
+            store
+                .partitions_for([None; 4])
+                .map(PartitionRef::id)
+                .collect::<Vec<_>>()
+        };
+        let before = ordered();
+        assert_eq!(before.len(), 3);
+        assert_ne!(
+            before[0], original,
+            "canonical order differs from original integer order"
+        );
+        assert_eq!(before[1], original);
+        store.remove_ids([41, 99, 3, 81]).unwrap();
+        store.retire_empty_partition([41, 99, 3, 81]).unwrap();
+        assert_eq!(
+            store
+                .partitions_for([None; 4])
+                .map(PartitionRef::id)
+                .collect::<Vec<_>>(),
+            before[1..]
+        );
+        store.insert_ids([41, 99, 3, 81]).unwrap();
+        let after = store
+            .partitions_for([None; 4])
+            .map(PartitionRef::id)
+            .collect::<Vec<_>>();
+        assert_eq!(after[1..], before[1..]);
+        assert_ne!(
+            after[0], before[0],
+            "a reused physical arena cannot reuse logical identity"
+        );
+        assert_eq!(
+            store
+                .interner
+                .pins
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
 
     #[test]
     fn cardinality_advice_never_builds_a_cold_historical_object_index() {
@@ -2390,7 +3292,7 @@ mod tests {
         ] {
             store.insert("<s>", predicate, "<o>", graph).unwrap();
         }
-        let delta = store.delta_run(1..store.row_count()).unwrap();
+        let delta = store.delta_run(1..store.row_count() as u64).unwrap();
         let z = store.term_id("<z>").unwrap();
         let m = store.term_id("<m>").unwrap();
         let g1 = store.term_id("<g1>").unwrap();
@@ -2452,7 +3354,7 @@ mod tests {
         for predicate in ["<z>", "<a>", "<m>"] {
             store.insert_row(["<s>", predicate, "<o>"]).unwrap();
         }
-        let delta = store.delta_run(1..store.row_count()).unwrap();
+        let delta = store.delta_run(1..store.row_count() as u64).unwrap();
         for predicate in [None, Some("<z>"), Some("<a>"), Some("<s>")] {
             let predicate = predicate.map(|surface| store.term_id(surface).unwrap());
             for run in [None, Some(&delta)] {
@@ -2481,6 +3383,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -2867,7 +3770,7 @@ mod tests {
                     purrdf_testkit::prop_assert_eq!(store.remove_row(terms), expected.remove(&key));
                 }
                 purrdf_testkit::prop_assert_eq!(store.row_count(), expected.len());
-                purrdf_testkit::prop_assert_eq!(store.row_slots(), next_row);
+                purrdf_testkit::prop_assert_eq!(store.row_slots(), next_row as u64);
                 purrdf_testkit::prop_assert_eq!(store.contains_row(terms), expected.contains_key(&key));
                 let partitions: BTreeSet<_> = expected.keys().map(|key| [key[1], key[3]]).collect();
                 purrdf_testkit::prop_assert_eq!(store.partition_count(), partitions.len());
@@ -3042,7 +3945,7 @@ mod tests {
             .collect();
         assert_eq!(store.rows_from(0).collect::<Vec<_>>(), live);
         assert_eq!(store.row_count(), live.len());
-        assert_eq!(store.row_slots(), original.len());
+        assert_eq!(store.row_slots(), original.len() as u64);
         assert_eq!(store.interner.len(), term_count);
         assert_eq!(store.remove_row(["unknown", "p", "o0", ""]), None);
         assert_eq!(store.interner.len(), term_count);
@@ -3050,10 +3953,10 @@ mod tests {
         for position in [0, 100, 192, 255, 256, 264] {
             let (_, ids) = original[position];
             let (_, _, row) = store.insert_ids(ids).unwrap().unwrap();
-            assert!(row.resident_index() >= boundary);
+            assert!(row.index() >= boundary);
         }
         assert_eq!(store.row_count(), original.len());
-        assert_eq!(store.row_slots(), original.len() + 6);
+        assert_eq!(store.row_slots(), (original.len() + 6) as u64);
         assert_eq!(store.rows_from(boundary).count(), 6);
         let delta = store.delta_run(boundary..store.row_slots()).unwrap();
         let partition = store.partition(predicate, graph).unwrap();
@@ -3096,12 +3999,13 @@ mod tests {
                 assert_eq!(batch.object_order().len(), batch.len());
                 for position in 0..batch.len() {
                     let vacant = match vacancy {
-                        0 => position % 3 == 0 || batch.obj[position] == 0,
+                        0 => position % 3 == 0 || batch.data.column(1)[position] == 0,
                         1 => leg == 0,
                         _ => true,
                     };
                     if vacant {
-                        removed.insert(batch.row_id[position].take().unwrap());
+                        removed
+                            .insert(batch.data.replace_handle(position, None).flatten().unwrap());
                         batch.live -= 1;
                     }
                 }
@@ -3757,7 +4661,7 @@ mod tests {
         );
         s.insert("<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH)
             .unwrap();
-        let surfaces = |since: usize| -> Vec<(u64, [&str; 4])> {
+        let surfaces = |since: u64| -> Vec<(u64, [&str; 4])> {
             s.rows_from(since)
                 .map(|(row, ids)| (row.index(), ids.map(|id| s.interner().resolve(id))))
                 .collect()
@@ -4081,14 +4985,9 @@ mod tests {
     /// signed delta rides. Set-semantics `insert` never mints a non-unit weight, so the
     /// seam is exercised here by constructing weighted batches directly.
     fn weighted_row(s: TermId, o: TermId, r: RowId, w: i64) -> Batch<i64> {
-        Batch {
-            subj: vec![s],
-            obj: vec![o],
-            row_id: vec![Some(r)],
-            live: 1,
-            weight: vec![w],
-            object_index: OnceLock::new(),
-        }
+        let mut batch = Batch::from_sorted(&[(s, o, r)]);
+        batch.weight[0] = w;
+        batch
     }
 
     /// The consolidation merge is generic over the [`Weight`] monoid and compiles for
@@ -4113,7 +5012,7 @@ mod tests {
         assert_eq!(summed.len(), 1, "a non-annihilating combine keeps one row");
         assert_eq!(summed.weight[0], 3, "weights sum: 1 + 2 = 3");
         assert_eq!(
-            summed.row_id[0],
+            summed.data.handles()[0],
             Some(RowId::from_index(2).unwrap()),
             "the lower row id deterministically survives a key collision"
         );
@@ -4138,7 +5037,11 @@ mod tests {
         let forward = merge_batches(&left, &right).expect("combines");
         let backward = merge_batches(&right, &left).expect("combines");
         assert_eq!(forward.weight, backward.weight, "combine commutes");
-        assert_eq!(forward.row_id, backward.row_id, "the lower row id wins");
+        assert_eq!(
+            forward.data.handles(),
+            backward.data.handles(),
+            "the lower row id wins"
+        );
         assert_eq!(forward.weight[0], 3);
     }
 
@@ -4395,8 +5298,7 @@ mod tests {
     }
 
     /// The columns read back as the tuples they were pushed as, in insertion
-    /// order, by position and by iteration, and draining the tail returns them
-    /// in that order and leaves it empty.
+    /// order, by position and by iteration; clearing the columns leaves it empty.
     #[test]
     fn tail_columns_round_trip_rows_in_insertion_order() {
         let mut rng = purrdf_testkit::rng::SplitMix64::new(0xC011);
@@ -4405,7 +5307,7 @@ mod tests {
             let by_position: Vec<_> = (0..tail.len()).map(|i| tail.row(i)).collect();
             assert_eq!(by_position, rows);
             assert_eq!(tail.iter().collect::<Vec<_>>(), rows);
-            assert_eq!(tail.take_rows(), rows);
+            tail.data.clear();
             assert!(tail.is_empty());
             assert_eq!(tail.len(), 0);
             assert_eq!(tail.iter().count(), 0);

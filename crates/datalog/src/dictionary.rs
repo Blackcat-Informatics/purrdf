@@ -197,6 +197,29 @@ impl<E: std::error::Error + 'static> std::error::Error for DictionaryError<E> {
     }
 }
 
+/// Explicit retirement authority for a dictionary whose unused terms can expire.
+/// The model calls this only after releasing its last row, proof and result use.
+/// Providers retain their own declared symbols and external authority separately.
+pub trait ReclaimDictionary: TermDictionary {
+    /// Original identities whose retained metadata this dictionary owns.
+    /// Used once when the maintenance owner adopts the initial dictionary.
+    fn owned_terms(&self) -> impl Iterator<Item = Self::Id> + '_;
+
+    /// Metadata-work bound for one complete owned-identity scan, including
+    /// vacant hash buckets or ordered-index storage the iterator must visit.
+    /// The owner admits this atomic scan before invoking `owned_terms`.
+    ///
+    /// # Errors
+    /// Returns a typed overflow when the original layout cannot be represented.
+    fn owned_term_scan_work(&self) -> Result<usize, StorageError>;
+
+    /// Release one original identity after its last semantic use.
+    ///
+    /// # Errors
+    /// Preserves the original source or storage failure; no replacement ID is minted.
+    fn release_term(&mut self, id: Self::Id) -> Result<(), DictionaryError<Self::Error>>;
+}
+
 /// The caller's identity space and dictionary, resident or provider-backed.
 ///
 /// IDs enter the store unchanged. Constant lookup and lexical proof/publication
