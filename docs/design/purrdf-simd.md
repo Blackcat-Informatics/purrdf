@@ -303,6 +303,20 @@ collisions.
 
 ### 2.6 Measuring the complete optimization
 
+Numeric comparisons record the precision law as part of the fixture identity.
+Historical bounded decimal division truncates toward zero, while the current
+public default returns an exact terminating quotient or rounds half-even at
+eighteen fractional places. Compare matching laws explicitly; a change in
+the final fractional digit is not instruction-count noise. The current small
+numeric benchmark's `exact` and `value` rows both use the exact tower, so a
+bounded baseline requires historical arithmetic source. Retain every returned
+answer for validation outside the acknowledged counter window and state whether
+output destruction is included. Canonical decimal text uses its existing
+prepared length to reserve the complete output once; its public allocation
+control includes tiny values, the minimum signed coefficient and long zero
+padding. This changes output reservation, with the same prepared digit writer
+and vector dispatch.
+
 The release manifest requests optimization level 3, fat LTO and one codegen unit.
 The assertion-enabled development/test profile has a separate purpose and retains
 overflow checks and debug assertions. Inspect the effective compiler invocation;

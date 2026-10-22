@@ -559,7 +559,12 @@ impl Decimal {
     /// other keeps exactly its significant fractional digits (`"2.5"`, `"-0.025"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
-        self.to_string()
+        let prepared = self.prepare_text().expect("native decimal text storage");
+        let mut text = String::with_capacity(prepared.len());
+        prepared
+            .write_to(&mut text)
+            .expect("the exact decimal destination fits the prepared text");
+        text
     }
 
     /// The exact value of a finite `f64`: every binary floating-point value is a

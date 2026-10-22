@@ -181,6 +181,13 @@ simply not narrated here:
   setup-subtracted estimate that still includes differences in harness work.
   Use acknowledged in-workload counter windows for acceptance comparisons.
 
+The small decimal parse/render rows include canonical text's reservation of its
+complete prepared length. The public allocation control
+`canonical_decimal_reserves_one_exact_output_destination` in
+`crates/xsd/tests/exact_governance.rs` checks one exact-sized output allocation,
+including zero, normalized fractions, the minimum signed coefficient and long
+fractional padding, on native and WebAssembly targets.
+
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
 running the query.
@@ -393,7 +400,7 @@ here.
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
-| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and current `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); original schoolbook/Karatsuba rows whose width parameters count nine-digit groups, plus appended 160,000/320,000/640,000-digit transform-range products and standalone cached-power renders (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and current `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); original schoolbook/Karatsuba rows whose width parameters count nine-digit groups, plus appended 160,000/320,000/640,000-digit transform-range products and standalone cached-power renders (`xsd_exact_karatsuba`); 1,024 exact products with inline coefficients whose scales sum to eighteen and to twenty (`scale18` and `scale20`) (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 
