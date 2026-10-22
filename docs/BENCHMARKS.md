@@ -170,13 +170,16 @@ simply not narrated here:
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
 - `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
-  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  inline small-value path beside the public `XsdValue` operators, which now
+  use the same exact tower. These rows do not compare with historical bounded
+  arithmetic; that comparison requires a separate baseline checkout. It covers
   its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
-  crossover, and a decimal product past eighteen fractional digits beside one
-  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  crossover, and decimal products at eighteen and twenty fractional digits,
+  both with inline coefficients. Each routine
   runs its body once under `--test`, so `perf stat -e instructions:u` of
-  `--test --exact <id>`, less the same run selecting nothing, is a
-  load-independent instruction count.
+  `--test --exact <id>`, less the same run selecting nothing, gives a
+  setup-subtracted estimate that still includes differences in harness work.
+  Use acknowledged in-workload counter windows for acceptance comparisons.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
