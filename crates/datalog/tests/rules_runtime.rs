@@ -572,7 +572,7 @@ fn public_host_guarded_evidence_fixpoint_retains_ids_and_first_source_error() {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         });
         store.insert_ids([TRIPLE, 7, u64::MAX, 1]).unwrap().unwrap();
@@ -1288,7 +1288,7 @@ fn triple_store_has_predicate_only_keys_and_transactional_original_ids() {
         lost: AtomicBool::default(),
         lose_after_lookup: AtomicBool::default(),
         pins: AtomicUsize::default(),
-        refuse_after_interned: false,
+        refuse_after_interned: AtomicBool::new(false),
     };
     let mut host = RelationStore::<_, 3>::with_dictionary(dictionary);
     host.insert_ids([S, P, 0]).unwrap().unwrap();
@@ -5188,6 +5188,43 @@ fn maintained_quad_callbacks_preserve_original_failures_and_poison_the_owner() {
     }
 }
 
+fn removal_invalidates_seal_rows_prepared_before_source_refusal() {
+    use dictionary::{DictionaryError, DictionaryTerm};
+    use host_dictionary::{HostDictionary, SourceLost};
+    use std::sync::atomic::Ordering;
+
+    let mut dictionary = HostDictionary::default();
+    dictionary
+        .surfaces
+        .extend((0..70).map(|id| (id, format!("term-{id}"))));
+    let mut input = RelationStore::<_, 3>::with_dictionary(dictionary);
+    for subject in 0..63 {
+        input.insert_ids([subject, 68, 69]).unwrap().unwrap();
+    }
+    input
+        .interner()
+        .refuse_after_interned
+        .store(true, Ordering::Relaxed);
+    assert_eq!(
+        input.insert_terms([63, 68, 69].map(DictionaryTerm::Id)),
+        Err(DictionaryError::Source(SourceLost(71)))
+    );
+    let removed = input.remove_ids([0, 68, 69]).unwrap().unwrap();
+    input
+        .interner()
+        .refuse_after_interned
+        .store(false, Ordering::Relaxed);
+    let inserted = input.insert_ids([63, 68, 69]).unwrap().unwrap();
+    assert_ne!(inserted.2, removed);
+    assert_eq!(input.row_count(), 63);
+    let rows: Vec<_> = input.rows_from(0).map(|(_, ids)| ids).collect();
+    assert_eq!(rows.len(), 63);
+    assert!(!rows.contains(&[0, 68, 69]));
+    for subject in 1..64 {
+        assert!(rows.contains(&[subject, 68, 69]));
+    }
+}
+
 fn maintained_bootstrap_resumes_vacant_rows_and_retired_partitions() {
     use purrdf_datalog::{
         seminaive::{Maintained, MaintenanceError, ResumeProgress, SessionContext},
@@ -5265,6 +5302,7 @@ fn maintained_bootstrap_resumes_vacant_rows_and_retired_partitions() {
 }
 
 purrdf_testkit::harness_main!(
+    removal_invalidates_seal_rows_prepared_before_source_refusal,
     maintained_bootstrap_resumes_vacant_rows_and_retired_partitions,
     maintained_quad_callbacks_preserve_original_failures_and_poison_the_owner,
     maintained_grouped_negation_and_guards_resume_original_triples_and_quads,

@@ -5520,7 +5520,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         });
         for subject in [0, FIRST] {
@@ -5775,7 +5775,7 @@ mod tests {
                 lost: AtomicBool::new(false),
                 lose_after_lookup: AtomicBool::new(false),
                 pins: AtomicUsize::new(0),
-                refuse_after_interned: false,
+                refuse_after_interned: AtomicBool::new(false),
                 extra_terms: 0,
             });
             for row in [
@@ -5951,7 +5951,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         });
         let guard = Guard::new(
@@ -6007,7 +6007,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -6131,7 +6131,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
@@ -6285,7 +6285,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);

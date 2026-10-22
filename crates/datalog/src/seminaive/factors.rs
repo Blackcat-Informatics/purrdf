@@ -1181,7 +1181,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 1u64 << 40,
         });
         for subject in [0, FIRST] {

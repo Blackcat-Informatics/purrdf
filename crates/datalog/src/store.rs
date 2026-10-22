@@ -1246,6 +1246,13 @@ impl<I: TermIdentity> Relation<I> {
             .find_map(|batch| batch.remove(subject, object))
             .or_else(|| self.tail.remove(subject, object))?;
         self.len -= 1;
+        // A refused insertion may retain rows copied before this removal.
+        if let Some(frame) = self.seal_preparation.take() {
+            self.retired_bytes = self
+                .retired_bytes
+                .checked_add(frame.retire())
+                .expect("retired seal preparation fits its original grant");
+        }
         Some(row)
     }
 
@@ -2076,6 +2083,7 @@ where
         let Some(row) = self.relations[slot].remove(ids[0], ids[2]) else {
             return Ok(None);
         };
+        self.record_relation_retirement(slot);
         let (row, partition, subject, object) = self.row_log.remove(row);
         assert_eq!(
             (partition, subject, object),
@@ -3003,6 +3011,73 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn removal_retires_supplemental_seal_frames_at_each_preparation_phase() {
+        use core::ops::ControlFlow;
+        for cut in [0, 17, usize::MAX] {
+            let mut dictionary = HostDictionary::default();
+            dictionary
+                .surfaces
+                .extend((0..132).map(|id| (id, format!("term-{id}"))));
+            let mut store = RelationStore::<_, 3>::with_dictionary(dictionary);
+            for subject in 0..127 {
+                store.insert_ids([subject, 130, 131]).unwrap();
+            }
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            store.admit_native_metadata_in(&mut memory).unwrap();
+            store
+                .interner
+                .refuse_after_interned
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let mut used = 0;
+            let result = store.insert_terms_until_in(
+                [127, 130, 131].map(DictionaryTerm::Id),
+                &mut memory,
+                |cost| {
+                    if cost > cut - used {
+                        false
+                    } else {
+                        used += cost;
+                        true
+                    }
+                },
+            );
+            if cut == usize::MAX {
+                assert_eq!(result, Err(DictionaryError::Source(SourceLost(71))));
+            } else {
+                assert_eq!(result, Ok(ControlFlow::Break(())));
+            }
+            let frame = store.relations[0].seal_preparation.as_ref().unwrap();
+            assert!(store.relations[0].tail.supplemental);
+            let frame_bytes = frame.storage_bytes().unwrap();
+            let previous_retirement = store.metadata_retired_bytes;
+            assert_eq!(store.remove_ids([129, 130, 131]), Ok(None));
+            assert!(store.relations[0].seal_preparation.is_some());
+            // A sealed-batch removal also invalidates copied tail/merge work.
+            assert!(store.withdraw_ids([0, 130, 131]).unwrap().is_some());
+            assert!(store.relations[0].seal_preparation.is_none());
+            assert_eq!(store.relations[0].retired_bytes, 0);
+            assert_eq!(
+                store.metadata_retired_bytes,
+                previous_retirement + frame_bytes
+            );
+            let admitted = memory.admitted_bytes();
+            store.flush_metadata_retirement_in(&mut memory).unwrap();
+            assert_eq!(store.metadata_retired_bytes, 0);
+            assert!(memory.admitted_bytes() <= admitted - previous_retirement - frame_bytes);
+            store
+                .interner
+                .refuse_after_interned
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            store
+                .insert_terms_in([127, 130, 131].map(DictionaryTerm::Id), &mut memory)
+                .unwrap();
+            assert_eq!(store.row_count(), 127);
+            assert!(store.rows_from(0).all(|(_, ids)| ids != [0, 130, 131]));
+        }
+    }
+
+    #[test]
     fn sparse_directory_waits_for_the_original_dictionary_transaction() {
         let mut dictionary = HostDictionary::default();
         dictionary.surfaces.extend([
@@ -3017,7 +3092,10 @@ mod tests {
         store.insert_ids([41, 7, 3, 81]).unwrap();
         store.prepare_maintenance_indexes().unwrap();
         let original = store.partitions_for([None; 4]).next().unwrap().id();
-        store.interner.refuse_after_interned = true;
+        store
+            .interner
+            .refuse_after_interned
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         // Both ordered placements have been prepared when the source refuses.
         // Neither a new predicate nor another graph may become visible.
         for row in [[41, 99, 3, 81], [41, 7, 3, 15]] {
@@ -3035,7 +3113,10 @@ mod tests {
                 [original]
             );
         }
-        store.interner.refuse_after_interned = false;
+        store
+            .interner
+            .refuse_after_interned
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         store.insert_ids([41, 99, 3, 81]).unwrap();
         store.insert_ids([41, 7, 3, 15]).unwrap();
         let ordered = || {
@@ -3302,7 +3383,7 @@ mod tests {
             lost: AtomicBool::new(false),
             lose_after_lookup: AtomicBool::new(false),
             pins: AtomicUsize::new(0),
-            refuse_after_interned: false,
+            refuse_after_interned: AtomicBool::new(false),
             extra_terms: 0,
         };
         let mut store = RelationStore::with_dictionary(dictionary);
