@@ -127,6 +127,7 @@ use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
+use crate::parallel::{OrderedRows, par_loop_try_map_owned};
 use crate::parsed_value::ParsedValue;
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
@@ -2303,7 +2304,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         // the per-group worker's attestation must reach the parent's receipt.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         let snapshot = ctx.loop_snapshot(groups.len());
-        let (minted, harvests) = crate::parallel::par_loop_try_map_init_fallible(
+        let (minted, harvests): (OrderedRows<_>, _) = par_loop_try_map_owned(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &groups,
