@@ -86,7 +86,9 @@ pub(crate) struct LocalStatistics<I = TermId> {
     // Native addresses are exposed only by LocalStatistics<TermId>. A merged
     // global statistics table has no single physical row address space.
     directory: SourceDirectory,
-    effective_directory: SourceDirectory,
+    // Without annotations, normalized keys are exactly the physical keys.
+    // Reuse their original directory instead of retaining a second copy.
+    effective_directory: Option<SourceDirectory>,
     source_union: purrdf_hash::multiset::Multiset256,
     statement_count: u128,
 }
@@ -99,6 +101,7 @@ pub(super) struct StatisticsBuilder<I = TermId> {
     kinds: Vec<KindCount<I>>,
     records: Vec<SourceRecord>,
     union: Vec<SourceRecord>,
+    normalize_annotations: bool,
 }
 
 // Deriving Default would unnecessarily require an empty identity value.
@@ -111,6 +114,7 @@ impl<I> Default for StatisticsBuilder<I> {
             kinds: Vec::new(),
             records: Vec::new(),
             union: Vec::new(),
+            normalize_annotations: false,
         }
     }
 }
@@ -271,13 +275,15 @@ impl StatisticsBuilder {
                                 stream,
                             };
                             memory.push(&mut self.records, record)?;
-                            memory.push(
-                                &mut self.union,
-                                SourceRecord {
-                                    digest: union,
-                                    ..record
-                                },
-                            )?;
+                            if self.normalize_annotations {
+                                memory.push(
+                                    &mut self.union,
+                                    SourceRecord {
+                                        digest: union,
+                                        ..record
+                                    },
+                                )?;
+                            }
                         }
                     }
                 }
@@ -438,7 +444,12 @@ impl<I: StatisticsId> StatisticsBuilder<I> {
             .sort_unstable_by_key(|record| (record.digest, record.stream as u8, record.ordinal));
         self.union.dedup_by_key(|record| record.digest);
         let mut source_union = purrdf_hash::multiset::Multiset256::default();
-        for record in &self.union {
+        let effective = if self.normalize_annotations {
+            &self.union
+        } else {
+            &self.records
+        };
+        for record in effective {
             source_union
                 .insert(record.digest)
                 .map_err(|_| StorageError::SizeOverflow)?;
@@ -456,7 +467,11 @@ impl<I: StatisticsId> StatisticsBuilder<I> {
             kinds: memory.boxed_slice(self.kinds)?,
             fingerprint,
             directory: SourceDirectory::freeze(self.records, memory)?,
-            effective_directory: SourceDirectory::freeze(self.union, memory)?,
+            effective_directory: if self.normalize_annotations {
+                Some(SourceDirectory::freeze(self.union, memory)?)
+            } else {
+                None
+            },
             source_union,
             statement_count,
         })
@@ -470,8 +485,8 @@ impl LocalStatistics {
     pub(crate) const fn source_directory(&self) -> &SourceDirectory {
         &self.directory
     }
-    pub(crate) const fn effective_source_directory(&self) -> &SourceDirectory {
-        &self.effective_directory
+    pub(crate) fn effective_source_directory(&self) -> &SourceDirectory {
+        self.effective_directory.as_ref().unwrap_or(&self.directory)
     }
     pub(super) fn build<S: Admission + ?Sized>(
         dictionary: &FrozenTerms,
@@ -481,7 +496,19 @@ impl LocalStatistics {
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
         memory.try_scope(|memory| {
-            let mut builder = StatisticsBuilder::default();
+            let count = asserted
+                .0
+                .checked_add(reifiers.0)
+                .and_then(|count| count.checked_add(annotations.0))
+                .ok_or(StorageError::SizeOverflow)?;
+            let mut builder = StatisticsBuilder {
+                normalize_annotations: annotations.0 != 0,
+                ..StatisticsBuilder::default()
+            };
+            memory.reserve(&mut builder.records, count)?;
+            if builder.normalize_annotations {
+                memory.reserve(&mut builder.union, count)?;
+            }
             builder.add(
                 Relation::Asserted,
                 asserted.0,
@@ -726,7 +753,11 @@ impl<I: StatisticsId> LocalStatistics<I> {
                 kinds: memory.boxed_slice(kinds)?,
                 fingerprint: self.fingerprint,
                 directory: self.directory.clone_admitted(memory)?,
-                effective_directory: self.effective_directory.clone_admitted(memory)?,
+                effective_directory: self
+                    .effective_directory
+                    .as_ref()
+                    .map(|directory| directory.clone_admitted(memory))
+                    .transpose()?,
                 source_union: self.source_union,
                 statement_count: self.statement_count,
             })
@@ -867,7 +898,11 @@ impl<I: StatisticsId> LocalStatistics<I> {
             .checked_add(size_of_val(self.frequencies.as_ref()))?
             .checked_add(size_of_val(self.kinds.as_ref()))?
             .checked_add(self.directory.retained_bytes()?)?
-            .checked_add(self.effective_directory.retained_bytes()?)
+            .checked_add(
+                self.effective_directory
+                    .as_ref()
+                    .map_or(Some(0), SourceDirectory::retained_bytes)?,
+            )
     }
 }
 
@@ -976,6 +1011,35 @@ mod tests {
 
     fn fixture(named: bool) -> (Arc<RdfDataset>, Vec<TermId>, Vec<GraphMatch>) {
         fixture_partition(named, 0, 0)
+    }
+
+    #[test]
+    fn sources_without_annotations_share_their_physical_directory() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("urn:source:subject").unwrap();
+        let predicate = builder.intern_iri("urn:source:predicate").unwrap();
+        let object = builder.intern_literal(RdfLiteral::simple("value")).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let reifier = builder.intern_iri("urn:source:reifier").unwrap();
+        let triple = builder.intern_triple(subject, predicate, object).unwrap();
+        builder.push_reifier(reifier, triple).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let statistics = dataset.predicate_statistics();
+        assert!(statistics.effective_directory.is_none());
+        assert!(std::ptr::eq(
+            statistics.source_directory(),
+            statistics.effective_source_directory(),
+        ));
+        assert_eq!(statistics.source_directory().len(), 2);
+        assert_eq!(statistics.source_union().population(), 2);
+
+        let (annotated, _, _) = fixture(false);
+        assert!(
+            annotated
+                .predicate_statistics()
+                .effective_directory
+                .is_some()
+        );
     }
 
     fn fixture_partition(

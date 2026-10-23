@@ -132,6 +132,16 @@ directories; only differing records fetch their physical rows. The original
 read operation owns every directory and row read. Replacing a sealed descriptor
 therefore does not itself require enumerating either complete layer.
 
+Native construction reserves source-record storage from the exact physical row
+count. Sources without annotations reuse their physical directory for normalized
+keys; they retain no duplicate record or checkpoint buffers. Annotated sources
+retain a separate normalized directory because statement copies must collapse.
+Resident checkpoints store only complete 32-record prefixes, with the zero prefix
+implicit and the final partial block read directly. Checkpoint storage is sized
+once to that exact count. Scalar term hashing streams the initial value directly;
+only nested triple terms require admitted traversal scratch. These storage choices
+preserve the persisted directory bytes and source identities.
+
 An observation retains an effective directory of canonical keys. Its immutable Patricia tree uses leaves of at most
 32 keys and copies only changed leaves and paths. Each node and leaf buffer
 retains its original read-account grant; keys carry no dataset, provider or row

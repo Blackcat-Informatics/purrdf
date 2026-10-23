@@ -3,6 +3,7 @@
 
 //! Source-local content order, independently of dictionary and row ordinals.
 //! Sparse prefix sums let two immutable heads skip unchanged digest ranges.
+//! The zero prefix is implicit; only complete nonempty blocks retain a checkpoint.
 
 use std::ops::Range;
 
@@ -110,9 +111,10 @@ impl SourceDirectory {
     ) -> Result<Self, StorageError> {
         records.sort_unstable_by_key(|record| record.digest);
         let mut checkpoints = Vec::new();
-        if !records.is_empty() {
+        let checkpoint_count = records.len() / CHECKPOINT_ROWS;
+        if checkpoint_count != 0 {
+            memory.reserve(&mut checkpoints, checkpoint_count)?;
             let mut state = Multiset256::default();
-            memory.push(&mut checkpoints, state)?;
             for (index, record) in records.iter().enumerate() {
                 state
                     .insert(record.digest)
@@ -145,7 +147,11 @@ impl SourceDirectory {
             return Multiset256::default();
         }
         let block = end / CHECKPOINT_ROWS;
-        let mut sum = self.checkpoints[block];
+        let mut sum = if block == 0 {
+            Multiset256::default()
+        } else {
+            self.checkpoints[block - 1]
+        };
         for record in &self.records[block * CHECKPOINT_ROWS..end] {
             sum.insert(record.digest)
                 .expect("a directory population fits u128");
@@ -444,4 +450,40 @@ fn partition<D: DirectoryRead>(
         }
     }
     Ok(low)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_lex::allocation::Resident;
+
+    #[test]
+    fn exact_checkpoints_preserve_every_prefix_across_block_boundaries() {
+        for count in [0_usize, 1, 31, 32, 33, 63, 64, 65] {
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let records = memory
+                .collect((0..count).map(|index| {
+                    let mut digest = [0; 32];
+                    digest[..8].copy_from_slice(&(index as u64).to_be_bytes());
+                    SourceRecord {
+                        digest,
+                        ordinal: u32::try_from(index).unwrap(),
+                        stream: StatisticsStream::Asserted,
+                    }
+                }))
+                .unwrap();
+            let directory = SourceDirectory::freeze(records, &mut memory).unwrap();
+            assert_eq!(directory.checkpoints.len(), count / CHECKPOINT_ROWS);
+            let mut expected = Multiset256::default();
+            for end in 0..=count {
+                if end != 0 {
+                    expected.insert(directory.records[end - 1].digest).unwrap();
+                }
+                let mut work = SourceDifferenceWork::default();
+                assert_eq!(directory.prefix(end, &mut work), expected);
+                assert_eq!(work.members, (end % CHECKPOINT_ROWS) as u64);
+            }
+        }
+    }
 }

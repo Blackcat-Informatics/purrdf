@@ -47,8 +47,8 @@ impl FrozenTerms {
     ) -> Result<(), purrdf_lex::allocation::StorageError> {
         use super::term::CanonicalNode;
         pending.clear();
-        memory.push(pending, id)?;
-        while let Some(id) = pending.pop() {
+        let mut current = Some(id);
+        while let Some(id) = current {
             let node = match self.resolve(id) {
                 TermRef::Iri(iri) => CanonicalNode::Iri(iri),
                 TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
@@ -76,6 +76,7 @@ impl FrozenTerms {
                 }
             };
             node.visit_bytes(&mut output);
+            current = pending.pop();
         }
         Ok(())
     }
