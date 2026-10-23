@@ -595,6 +595,9 @@ pub(crate) type BoundParse = Option<purrdf_xsd::XsdValue>;
 /// constraint it is evaluating.
 #[derive(Debug)]
 pub(crate) enum LoweredConstraint {
+    Reference {
+        catalog: u32,
+    },
     /// `sh:class` — where the dataset identities of the value's classes are
     /// resolved: one term slot for a single class, one set slot for a list of them.
     ///
@@ -1497,6 +1500,8 @@ impl PlannedClasses<'_> {
 /// FROM.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PlannedConstraint<'a> {
+    /// An identity reference into an already lowered shared definition table.
+    Reference(ShapePlan<'a>),
     /// `sh:class` — the dataset identities of the value's classes, resolved at
     /// bind; a value node conforms when it is an instance of ANY of them.
     ///
@@ -1706,6 +1711,23 @@ impl<'a> ShapePlan<'a> {
         lowered: &'a LoweredConstraint,
     ) -> Result<PlannedConstraint<'a>, crate::error::ShapesError> {
         Ok(match (constraint, lowered) {
+            (Constraint::Reference(target), LoweredConstraint::Reference { catalog }) => {
+                let index = self
+                    .graph
+                    .indexes
+                    .get(*catalog as usize)
+                    .ok_or_else(|| slot_defect("shape-index", *catalog))?;
+                let definitions = index
+                    .cell
+                    .get()
+                    .ok_or("shape reference catalog is uninitialized")?;
+                PlannedConstraint::Reference(
+                    self.indexed(*catalog, target, definitions)?
+                        .ok_or_else(|| {
+                            format!("shape reference {target} is absent from its catalog")
+                        })?,
+                )
+            }
             (Constraint::Class(_), LoweredConstraint::Class(LoweredClasses::One(slot))) => {
                 PlannedConstraint::Class(PlannedClasses::One(self.binding.term(*slot)?))
             }
@@ -1970,6 +1992,7 @@ fn shape_list<'a>(
 /// to the shapes graph rather than to the walk.
 fn constraint_kind(constraint: &Constraint) -> &'static str {
     match constraint {
+        Constraint::Reference(_) => "a shape identity reference",
         Constraint::Class(_) => "sh:class",
         Constraint::Datatype(_) => "sh:datatype",
         Constraint::NodeKind(_) => "sh:nodeKind",
@@ -2271,6 +2294,8 @@ pub(crate) struct PreparedTargets {
 /// stack was exhausted — an ABORT, not an error any caller could handle.
 #[derive(Default)]
 struct ShapeWalk {
+    /// The catalog whose bare definitions are currently being lowered.
+    current_catalog: Option<u32>,
     /// Every class IRI the walk has reached.
     classes: FastSet<NamedNode>,
     /// Every term whose dataset identity a lowered node will need, in slot order.
@@ -2443,6 +2468,7 @@ impl ShapeWalk {
     fn index_position(
         &mut self,
         index: &Arc<OnceLock<FastMap<Term, Shape>>>,
+        definitions: bool,
     ) -> LoweringResult<u32> {
         // Whichever shape of the index a value node resolves to is chosen at
         // evaluation, so no shape lowered inline here describes it.
@@ -2467,6 +2493,10 @@ impl ShapeWalk {
         // evaluation rather than silently conforming, so there is no shape here
         // whose classes could go unplanned.
         if let Some(shapes) = index.get() {
+            let previous_catalog = self.current_catalog;
+            if definitions {
+                self.current_catalog = Some(position);
+            }
             // The index is entered once, from wherever the walk first reached it,
             // but the shapes inside are resolved PER VALUE NODE against data — so
             // the node their reads start from is not the node this walk happens to
@@ -2480,6 +2510,7 @@ impl ShapeWalk {
                 .collect::<LoweringResult<_>>()?;
             self.footprint.leave(saved);
             self.indexes[position as usize].shapes = lowered;
+            self.current_catalog = previous_catalog;
         }
         Ok(position)
     }
@@ -2634,6 +2665,7 @@ impl StandalonePath {
 /// [`StandaloneLowering::root`].
 fn standalone_root() -> Shape {
     Shape {
+        catalog: None,
         id: Term::BlankNode("standalone-node-expression".to_owned()),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -2654,6 +2686,10 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
     admit_lowering()?;
     let deactivations = walk.deactivations;
     let opaque_references = walk.opaque_references;
+    let previous_catalog = walk.current_catalog;
+    if let Some(catalog) = &shape.catalog {
+        walk.current_catalog = Some(walk.index_position(&catalog.index, true)?);
+    }
     let scope = walk.footprint.enter_shape();
     for target in &shape.targets {
         walk.footprint.record_target(target);
@@ -2696,6 +2732,7 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
     };
     walk.footprint.leave(scope);
     // Rules have their own shape/condition plan and stay outside this walk.
+    walk.current_catalog = previous_catalog;
     Ok(lowered)
 }
 
@@ -2882,6 +2919,21 @@ fn lower_constraint(
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
     Ok(match constraint {
+        Constraint::Reference(target) => {
+            let catalog = walk
+                .current_catalog
+                .ok_or(PreparationRefusal::UnboundReference)?;
+            let definitions = walk.indexes[catalog as usize]
+                .cell
+                .get()
+                .ok_or(PreparationRefusal::UnboundReference)?;
+            if !definitions.contains_key(target) {
+                return Err(PreparationRefusal::UnknownReference(Arc::new(
+                    target.clone(),
+                )));
+            }
+            LoweredConstraint::Reference { catalog }
+        }
         Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
         Constraint::NodeKind(_) => LoweredConstraint::NodeKind,
@@ -2996,7 +3048,7 @@ fn lower_constraint(
             let expr = Box::new(lower_expression(expr, walk)?);
             LoweredConstraint::NodeByExpression {
                 expr,
-                index: walk.index_position(shapes)?,
+                index: walk.index_position(shapes, false)?,
             }
         }
         Constraint::MinListLength(_) => LoweredConstraint::MinListLength,
@@ -3189,7 +3241,7 @@ fn lower_expression(expr: &NodeExpr, walk: &mut ShapeWalk) -> LoweringResult<Low
                 ShapeArg::Computed { expr, shapes } => {
                     let expr = lower_expression(expr, walk)?;
                     LoweredExpr {
-                        index: Some(walk.index_position(shapes)?),
+                        index: Some(walk.index_position(shapes, false)?),
                         operands: Box::new([node, expr]),
                         ..LoweredExpr::default()
                     }
@@ -3631,6 +3683,9 @@ ex:FlagShape a sh:NodeShape ;
                     collect_shape_class_slots(lowered, sibling, out);
                 }
             }
+            // Reference catalogs are visited once by collect_class_slots, rather
+            // than recursively following backedges from this constraint.
+            LoweredConstraint::Reference { .. } => {}
             // Kinds that name neither a class nor a shape.
             LoweredConstraint::Datatype
             | LoweredConstraint::NodeKind
@@ -3975,6 +4030,7 @@ ex:Inner a sh:NodeShape ;
     }
 
     planned_constraint_kind_names! {
+        PlannedConstraint::Reference(_) => "reference",
         PlannedConstraint::Class(_) => "class",
         PlannedConstraint::Datatype(_) => "datatype",
         PlannedConstraint::NodeKind(_) => "node_kind",

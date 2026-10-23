@@ -73,6 +73,7 @@ fn iri(s: &str) -> NamedNode {
 #[test]
 fn shape_is_still_a_bare_literal() {
     let shape = Shape {
+        catalog: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: vec![Target::Class(iri("https://example.org/Person"))],
         constraints: vec![Constraint::MinCount(1)],
@@ -137,6 +138,7 @@ fn property_shape_is_still_a_bare_literal() {
 #[test]
 fn shapes_still_builds_via_default_then_field_assignment() {
     let shape = Shape {
+        catalog: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -170,6 +172,7 @@ fn shapes_still_builds_via_default_then_field_assignment() {
 /// top-level wildcard; a new variant still has no arm to match here.
 fn constraint_name(constraint: &Constraint) -> &'static str {
     match constraint {
+        Constraint::Reference(_) => "reference",
         Constraint::Class(_) => "class",
         Constraint::Datatype(_) => "datatype",
         Constraint::NodeKind(_) => "node-kind",

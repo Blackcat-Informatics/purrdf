@@ -28,6 +28,7 @@
 //! calls and are not listed; the functions inside them are.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
 use crate::model::{sh, shnex};
@@ -112,6 +113,7 @@ impl Shapes {
             shapes: self,
             out: FunctionResolution::default(),
             seen_shapes: BTreeSet::new(),
+            seen_catalogs: BTreeSet::new(),
             fns_in_flight: BTreeSet::new(),
         };
         for shape in &self.node_shapes {
@@ -130,7 +132,8 @@ impl Shapes {
 struct Walk<'a> {
     shapes: &'a Shapes,
     out: FunctionResolution,
-    seen_shapes: BTreeSet<String>,
+    seen_shapes: BTreeSet<(usize, String)>,
+    seen_catalogs: BTreeSet<usize>,
     fns_in_flight: BTreeSet<String>,
 }
 
@@ -162,8 +165,19 @@ impl Walk<'_> {
 
     fn shape(&mut self, shape: &Shape) {
         let id = shape.id.to_string();
-        if !self.seen_shapes.insert(id.clone()) {
+        let owner = shape
+            .catalog
+            .as_ref()
+            .map_or(0, |catalog| Arc::as_ptr(catalog).addr());
+        if !self.seen_shapes.insert((owner, id.clone())) {
             return;
+        }
+        if let Some(catalog) = &shape.catalog
+            && self.seen_catalogs.insert(owner)
+        {
+            for definition in catalog.definitions() {
+                self.shape(definition);
+            }
         }
         for rule in &shape.rules {
             self.rule(rule, &format!("sh:rule on {id}"));
@@ -195,6 +209,8 @@ impl Walk<'_> {
     fn constraints(&mut self, constraints: &[Constraint], owner: &str) {
         for constraint in constraints {
             match constraint {
+                // Catalog members were visited by the owning root above.
+                Constraint::Reference(_) => {}
                 Constraint::Expression { expr, .. } => {
                     self.node_expr(expr, &format!("sh:expression on {owner}"));
                 }

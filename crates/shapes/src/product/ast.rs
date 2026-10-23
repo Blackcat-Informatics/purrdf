@@ -205,7 +205,7 @@
 //! [`UnsupportedCapability`]: ProductDimension::UnsupportedCapability
 //! [`ArtifactSpec`]: purrdf_core::artifact::ArtifactSpec
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf_rdf::{FastMap, RdfTextDirection};
@@ -1118,6 +1118,12 @@ impl AstWriter {
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
+            Constraint::Reference(_) => {
+                return Err(ShapesProductError::new(
+                    ProductDimension::UnsupportedCapability,
+                    "a shared shape reference requires the catalog section of the prepared product",
+                ));
+            }
             Constraint::Class(classes) => {
                 self.tag(0);
                 self.count(classes.len());
@@ -1406,6 +1412,12 @@ impl AstWriter {
     /// Write a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        if shape.catalog.is_some() {
+            return Err(ShapesProductError::new(
+                ProductDimension::UnsupportedCapability,
+                "a shared shape catalog requires a catalog-aware prepared product",
+            ));
+        }
         self.term(&shape.id)?;
         self.count(shape.targets.len());
         for target in &shape.targets {
@@ -2374,6 +2386,7 @@ impl<'a> AstReader<'a> {
         let targets = self.seq(Self::target)?;
         let constraints = self.seq(Self::constraint)?;
         let shape = Shape {
+            catalog: None,
             id,
             targets,
             property_shapes: self.seq(Self::property_shape)?,
@@ -2545,6 +2558,7 @@ struct FnTable {
     by_iri: BTreeMap<String, Arc<CustomFunction>>,
     /// The live walk depth, bounded exactly as encoding is.
     depth: u32,
+    catalogs: BTreeSet<usize>,
 }
 
 impl FnTable {
@@ -2553,6 +2567,7 @@ impl FnTable {
         let mut table = Self {
             by_iri: BTreeMap::new(),
             depth: 0,
+            catalogs: BTreeSet::new(),
         };
         for shape in &shapes.node_shapes {
             table.shape(shape)?;
@@ -2565,6 +2580,12 @@ impl FnTable {
 }
 
 impl ModelWalk<'_> for FnTable {
+    fn first_catalog(
+        &mut self,
+        catalog: &Arc<crate::shapes::ShapeCatalog>,
+    ) -> Result<bool, ShapesProductError> {
+        Ok(self.catalogs.insert(Arc::as_ptr(catalog).addr()))
+    }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }

@@ -40,6 +40,7 @@ fn ex(local: &str) -> NamedNode {
 /// A node shape with nothing on it but an identity.
 fn leaf_shape(id: &str) -> Shape {
     Shape {
+        catalog: None,
         id: Term::NamedNode(ex(id)),
         targets: Vec::new(),
         constraints: Vec::new(),

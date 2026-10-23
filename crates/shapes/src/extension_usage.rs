@@ -36,6 +36,8 @@ use purrdf_sparql_eval::{ExtensionEnv, PredicateUse, predicate_use};
 
 use crate::expression::NodeExpr;
 use crate::rules::RuleBody;
+use std::sync::Arc;
+
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 
 /// Which declaration a SPARQL text came from.
@@ -348,7 +350,7 @@ pub(crate) fn reachable_call_to(
 
     let mut sink = Calls::default();
     walk_reachable(shapes, &mut sink);
-    let bodies: BTreeMap<String, std::sync::Arc<str>> =
+    let bodies: BTreeMap<String, Arc<str>> =
         shapes.functions.sparql_bodied_texts().into_iter().collect();
     let mut followed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     loop {
@@ -446,18 +448,31 @@ struct InFlight {
     /// Removed on the way out — see the type docs.
     fns: std::collections::BTreeSet<String>,
     /// Shape ids already walked. Never removed — see the type docs.
-    shapes: std::collections::BTreeSet<String>,
+    shapes: std::collections::BTreeSet<(usize, String)>,
+    catalogs: std::collections::BTreeSet<usize>,
 }
 
 /// Record every SPARQL text one node shape and its descendants carry.
 fn walk_shape(shape: &Shape, sink: &mut dyn SparqlSink, flight: &mut InFlight) {
     let id = shape.id.to_string();
-    if !flight.shapes.insert(id.clone()) {
+    let owner = shape
+        .catalog
+        .as_ref()
+        .map_or(0, |catalog| Arc::as_ptr(catalog).addr());
+    if !flight.shapes.insert((owner, id.clone())) {
         // Already walked. Its constraints are recorded under its own id, so a second
         // visit would merge into the identical entry -- the same report, for the cost
         // of walking the whole subtree again. This also cuts the shape-to-expression
         // cycle a `sh:filterShape` can close.
         return;
+    }
+
+    if let Some(catalog) = &shape.catalog
+        && flight.catalogs.insert(owner)
+    {
+        for definition in catalog.definitions() {
+            walk_shape(definition, sink, flight);
+        }
     }
 
     walk_targets(&shape.targets, &id, sink, flight);
@@ -573,7 +588,8 @@ fn walk_constraints(
                     text,
                 );
             }
-            Constraint::Class(_)
+            Constraint::Reference(_)
+            | Constraint::Class(_)
             | Constraint::Datatype(_)
             | Constraint::NodeKind(_)
             | Constraint::MinCount(_)

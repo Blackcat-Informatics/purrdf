@@ -40,6 +40,12 @@ impl Inventory<'_> {
 }
 
 impl<'model> ModelWalk<'model, Cause> for Inventory<'model> {
+    fn first_catalog(
+        &mut self,
+        catalog: &'model Arc<crate::shapes::ShapeCatalog>,
+    ) -> Result<bool, Cause> {
+        self.first(2, Arc::as_ptr(catalog).addr())
+    }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }

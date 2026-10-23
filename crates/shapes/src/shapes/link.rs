@@ -74,7 +74,7 @@ use crate::rules::{Rule, RuleBody};
 use crate::shapes::parser::functions::{
     NativeListCallee, invoke_expression_function, invoke_native_list_function,
 };
-use crate::shapes::{Constraint, PropertyShape, Shape, Target};
+use crate::shapes::{Constraint, PropertyShape, Shape, ShapeCatalog, Target};
 use crate::term::Term;
 
 /// The shapes graph's ONE `sh:nodeByExpression` resolution table.
@@ -157,6 +157,7 @@ pub(crate) fn link_global_rules(
         index: shape_index,
         depth: 0,
         seen_fns: Vec::new(),
+        seen_catalogs: Vec::new(),
     };
     for rule in rules {
         walk.rule(rule)?;
@@ -310,6 +311,7 @@ fn install_shape_index(
         index: shape_index,
         depth: 0,
         seen_fns: Vec::new(),
+        seen_catalogs: Vec::new(),
     };
     for shape in node_shapes {
         walk.shape(shape)?;
@@ -433,6 +435,9 @@ where
     /// Whatever the pass refuses about the handle.
     fn shape_index(&mut self, found: &'model ShapeIndex) -> Result<(), E>;
 
+    /// Admit a catalog once before visiting its definitions.
+    fn first_catalog(&mut self, catalog: &'model Arc<ShapeCatalog>) -> Result<bool, E>;
+
     /// Inspect one declared pattern at its existing model position.
     ///
     /// Linker and product passes need no work at a pattern; selected native
@@ -501,6 +506,13 @@ where
     /// A hook's refusal, or the depth ceiling.
     fn shape(&mut self, shape: &'model Shape) -> Result<(), E> {
         self.enter()?;
+        if let Some(catalog) = &shape.catalog
+            && self.first_catalog(catalog)?
+        {
+            for definition in catalog.definitions() {
+                self.shape(definition)?;
+            }
+        }
         self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
@@ -574,7 +586,8 @@ where
     fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
         self.enter()?;
         match constraint {
-            Constraint::Class(_)
+            Constraint::Reference(_)
+            | Constraint::Class(_)
             | Constraint::Datatype(_)
             | Constraint::NodeKind(_)
             | Constraint::MinCount(_)
@@ -741,9 +754,18 @@ struct ShapeIndexWalk<'a> {
     /// Declarations already walked, by handle identity. A body may call its own
     /// function, so this is what makes the cyclic value graph terminate.
     seen_fns: Vec<Arc<CustomFunction>>,
+    seen_catalogs: Vec<usize>,
 }
 
 impl ModelWalk<'_> for ShapeIndexWalk<'_> {
+    fn first_catalog(&mut self, catalog: &Arc<ShapeCatalog>) -> Result<bool, ShapesProductError> {
+        let address = Arc::as_ptr(catalog).addr();
+        if self.seen_catalogs.contains(&address) {
+            return Ok(false);
+        }
+        self.seen_catalogs.push(address);
+        Ok(true)
+    }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }

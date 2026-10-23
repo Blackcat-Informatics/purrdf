@@ -465,16 +465,28 @@ impl std::error::Error for ShapesError {
 }
 
 /// A preparation refusal, distinct from malformed shapes and nonconformance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparationRefusal {
     /// A recursive lowering or model-codec frame would enter the stack margin.
     StackMargin,
+    /// Two catalog definitions declare the same identity.
+    DuplicateDefinition(std::sync::Arc<crate::term::Term>),
+    /// A definition owns a catalog instead of being a bare catalog member.
+    OwningDefinition(std::sync::Arc<crate::term::Term>),
+    /// A reference was used outside an owning catalog root.
+    UnboundReference,
+    /// A catalog reference names no definition in that catalog.
+    UnknownReference(std::sync::Arc<crate::term::Term>),
 }
 
 impl fmt::Display for PreparationRefusal {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::StackMargin => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
+            Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
+            Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
+            Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ShapeCatalog::root"),
+            Self::UnknownReference(id) => write!(out, "shape reference {id} has no catalog definition; provide its definition"),
         }
     }
 }

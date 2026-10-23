@@ -247,7 +247,14 @@ pub struct ShapesProductError {
 
 impl From<crate::error::PreparationRefusal> for ShapesProductError {
     fn from(error: crate::error::PreparationRefusal) -> Self {
-        let mut refusal = Self::new(ProductDimension::DepthLimit, error.to_string());
+        let dimension = match &error {
+            crate::error::PreparationRefusal::StackMargin => ProductDimension::DepthLimit,
+            crate::error::PreparationRefusal::DuplicateDefinition(_)
+            | crate::error::PreparationRefusal::OwningDefinition(_)
+            | crate::error::PreparationRefusal::UnknownReference(_)
+            | crate::error::PreparationRefusal::UnboundReference => ProductDimension::Malformed,
+        };
+        let mut refusal = Self::new(dimension, error.to_string());
         refusal.preparation = Some(error);
         refusal
     }

@@ -4003,6 +4003,13 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     );
     for c in node_constraints {
         match c {
+            Constraint::Reference(_) => {
+                ctx.record(
+                    "shape-reference",
+                    &shape_iri,
+                    "shared shape identity requires a catalog-aware projection",
+                );
+            }
             Constraint::And(members) => {
                 for m in members {
                     all_of.push(compile_object_schema(m, ctx));
@@ -4545,6 +4552,7 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
 /// constraint dropped whole.
 const fn constraint_term(constraint: &Constraint) -> &'static str {
     match constraint {
+        Constraint::Reference(_) => "shape-reference",
         Constraint::Class(_) => "sh:class",
         Constraint::Datatype(_) => "sh:datatype",
         Constraint::NodeKind(_) => "sh:nodeKind",
@@ -4936,6 +4944,13 @@ fn compile_property(
 
     for c in constraints {
         match c {
+            Constraint::Reference(_) => {
+                ctx.record(
+                    "shape-reference",
+                    shape_iri,
+                    "shared shape identity requires a catalog-aware projection",
+                );
+            }
             Constraint::MinCount(n) => min_count = Some(min_count.map_or(*n, |m| m.max(*n))),
             Constraint::MaxCount(n) => max_count = Some(max_count.map_or(*n, |m| m.min(*n))),
             // A SHACL list value is a disjunction (SHACL 1.2 Core §4.1.2): every

@@ -1953,7 +1953,7 @@ impl PreparedShapes {
         let classes = lowered
             .as_ref()
             .map(|lowered| Arc::clone(lowered.classes()))
-            .map_err(|error| *error);
+            .map_err(Clone::clone);
         let prepared = Self::with_carried_analysis(shapes, provenance, classes);
         let _ = prepared.lowered.set(lowered);
         prepared

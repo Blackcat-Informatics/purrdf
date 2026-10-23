@@ -394,6 +394,8 @@ impl ClosedTypeIndex {
 /// A single SHACL constraint on a shape or property shape.
 #[derive(Debug, Clone)]
 pub enum Constraint {
+    /// A shape's definition in its shared catalog, without recursive unfolding.
+    Reference(Term),
     /// One `sh:class` value: a single class IRI (`sh:class ex:C`, one member) or a
     /// SHACL list of class IRIs (`sh:class ( ex:C ex:D )`).
     ///
@@ -787,6 +789,9 @@ pub struct PropertyShape {
 /// A node shape.
 #[derive(Debug, Clone)]
 pub struct Shape {
+    /// Shared definitions for identity references. Catalog definitions themselves
+    /// carry no owning handle, so recursive references do not create Arc cycles.
+    pub catalog: Option<Arc<ShapeCatalog>>,
     /// The shape node identity (IRI or blank node).
     pub id: Term,
     /// Target declarations for this shape.
@@ -830,6 +835,93 @@ pub struct Shape {
     /// which are the only shapes the rules engine drives (rules fire against a
     /// shape's target focus nodes).
     pub rules: Vec<crate::rules::Rule>,
+}
+
+/// Immutable definitions shared by identity-referenced shapes.
+///
+/// The public roots own this catalog; definitions only name each other by RDF
+/// identity. Cloning a root retains the graph without cloning its definitions.
+pub struct ShapeCatalog {
+    pub(crate) index: link::ShapeIndex,
+}
+
+purrdf_hash::debug_non_exhaustive!(ShapeCatalog {});
+
+impl ShapeCatalog {
+    /// Admit a complete definition table. Ownership stays on exported roots.
+    ///
+    /// # Errors
+    /// Refuses repeated identities and definitions that already own a catalog.
+    pub fn from_definitions(
+        definitions: Vec<Shape>,
+    ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        let mut entries = FastMap::with_capacity_and_hasher(
+            definitions.len(),
+            purrdf_hash::fixed::FixedState::default(),
+        );
+        for definition in definitions {
+            if definition.catalog.is_some() {
+                return Err(crate::PreparationRefusal::OwningDefinition(Arc::new(
+                    definition.id,
+                )));
+            }
+            match entries.entry(definition.id.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(definition);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(crate::PreparationRefusal::DuplicateDefinition(Arc::new(
+                        definition.id,
+                    )));
+                }
+            }
+        }
+        Ok(Arc::new(Self {
+            index: Arc::new(OnceLock::from(entries)),
+        }))
+    }
+
+    /// Borrow the original definition with this RDF identity.
+    #[must_use]
+    pub fn definition(&self, id: &Term) -> Option<&Shape> {
+        self.index.get().and_then(|entries| entries.get(id))
+    }
+
+    /// Export a target/rule root that retains its validation body by identity.
+    ///
+    /// Constraint trees and their reporting/deactivation metadata stay in the
+    /// original [`Self::definition`]; exporting and cloning roots do not copy
+    /// those bodies. Targets and rules remain on the root for their drivers.
+    #[must_use]
+    pub fn root(self: &Arc<Self>, id: &Term) -> Option<Shape> {
+        let definition = self.definition(id)?;
+        Some(Shape {
+            catalog: Some(Arc::clone(self)),
+            id: definition.id.clone(),
+            targets: definition.targets.clone(),
+            constraints: vec![Constraint::Reference(definition.id.clone())],
+            property_shapes: Vec::new(),
+            severity: definition.severity.clone(),
+            messages: Vec::new(),
+            constraint_annotations: Vec::new(),
+            deactivated: definition.deactivated,
+            deactivated_when: Vec::new(),
+            box_roles: Vec::new(),
+            rules: definition.rules.clone(),
+        })
+    }
+
+    /// Definitions in canonical identity order for deterministic model passes.
+    pub(crate) fn definitions(&self) -> Vec<&Shape> {
+        let mut definitions: Vec<_> = self
+            .index
+            .get()
+            .expect("catalog is initialized at construction")
+            .values()
+            .collect();
+        definitions.sort_unstable_by(|left, right| crate::term::canonical_cmp(&left.id, &right.id));
+        definitions
+    }
 }
 
 /// The parsed shapes graph — a collection of top-level [`Shape`]s.
@@ -2469,6 +2561,7 @@ impl<'s> Parser<'s> {
         let deactivated = ps.deactivated;
         let deactivated_when = ps.deactivated_when.clone();
         Ok(Shape {
+            catalog: None,
             id,
             targets,
             constraints: vec![],
@@ -2810,6 +2903,7 @@ impl<'s> Parser<'s> {
         self.check_annotations_applied(id)?;
 
         Ok(Shape {
+            catalog: None,
             id: id.clone(),
             targets,
             constraints: parsed.constraints,
@@ -3598,6 +3692,7 @@ impl<'s> Parser<'s> {
                 parser.parse_property_shape(&id)
             })?;
             Ok(Shape {
+                catalog: None,
                 id,
                 targets: vec![],
                 constraints: vec![],

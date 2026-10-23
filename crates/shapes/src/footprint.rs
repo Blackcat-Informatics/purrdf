@@ -670,7 +670,8 @@ impl FootprintWalk {
             | Constraint::SingleLine(_) => {}
             // Structural: the reads belong to what these REACH, and the lowering
             // walk reaches it.
-            Constraint::Not(_)
+            Constraint::Reference(_)
+            | Constraint::Not(_)
             | Constraint::And(_)
             | Constraint::Or(_)
             | Constraint::Xone(_)

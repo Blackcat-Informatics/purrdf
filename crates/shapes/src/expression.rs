@@ -2897,6 +2897,7 @@ mod tests {
         // output is exactly its candidate LIST — §4.2.5 "preserving the order in
         // the list", duplicates included.
         let shape = Shape {
+            catalog: None,
             id: ex("leaf"),
             targets: vec![],
             constraints: vec![],
@@ -3880,6 +3881,7 @@ mod tests {
             let data = load_data(DATA);
 
             let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                catalog: None,
                 id,
                 targets: vec![],
                 constraints,

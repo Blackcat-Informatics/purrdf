@@ -81,6 +81,7 @@ fn fixture_recursive_fn() -> Arc<CustomFunction> {
 /// A node shape with no constraints, targets, properties or rules.
 fn leaf_shape(id: &str) -> Shape {
     Shape {
+        catalog: None,
         id: ex_term(id),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -835,6 +836,7 @@ fn full_fixture() -> Shapes {
     constraints.extend(arg_key_constraints);
 
     let shape = Shape {
+        catalog: None,
         id: ex_term("EverythingShape"),
         targets: sample_targets(),
         constraints,

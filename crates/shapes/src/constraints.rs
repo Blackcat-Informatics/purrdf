@@ -564,6 +564,71 @@ trait ResultSink {
     fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow;
 }
 
+/// An identity edge can re-enter a shape beneath `NodeRoles<S>`. Erase that
+/// accumulated sink type at the edge so recursive references instantiate only
+/// the three concrete reporting modes, while retaining each outer role layer.
+trait DynamicSink {
+    fn forward_violation(
+        &mut self,
+        severity: &Severity,
+        build: &mut dyn FnMut() -> ResultRecord,
+    ) -> Flow;
+}
+
+impl<S: ResultSink> DynamicSink for S {
+    fn forward_violation(
+        &mut self,
+        severity: &Severity,
+        build: &mut dyn FnMut() -> ResultRecord,
+    ) -> Flow {
+        self.violation(severity, build)
+    }
+}
+
+struct ReferenceSink<'a, const VALUES: bool, const EVIDENCE: bool> {
+    inner: &'a mut dyn DynamicSink,
+}
+
+impl<const VALUES: bool, const EVIDENCE: bool> ResultSink for ReferenceSink<'_, VALUES, EVIDENCE> {
+    const RECORDS_RESULTS: bool = VALUES;
+    const RECORDS_EVIDENCE: bool = EVIDENCE;
+
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
+        let mut build = Some(build);
+        self.inner.forward_violation(severity, &mut || {
+            build
+                .take()
+                .expect("a sink builds each result at most once")()
+        })
+    }
+}
+
+fn walk_reference<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
+    if S::RECORDS_EVIDENCE {
+        walk_shape(
+            context,
+            focus,
+            &mut ReferenceSink::<true, true> { inner: sink },
+        )
+    } else if S::RECORDS_RESULTS {
+        walk_shape(
+            context,
+            focus,
+            &mut ReferenceSink::<true, false> { inner: sink },
+        )
+    } else {
+        walk_shape(
+            context,
+            focus,
+            &mut ReferenceSink::<false, false> { inner: sink },
+        )
+    }
+}
+
 /// The reporting sink: every result is kept, and the traversal always runs to
 /// completion because a SHACL report names every violation, not the first.
 #[derive(Default)]
@@ -2497,6 +2562,24 @@ fn eval_constraint<'a, S: ResultSink>(
     }
 
     Ok(match constraint {
+        PlannedConstraint::Reference(definition) => {
+            for value in value_nodes {
+                if matches!(
+                    walk_reference(
+                        ValidationContext {
+                            plan: definition,
+                            ..context
+                        },
+                        &value.as_focus(ds),
+                        sink,
+                    )?,
+                    Flow::Stop
+                ) {
+                    return Ok(Flow::Stop);
+                }
+            }
+            Flow::Continue
+        }
         // ── Count constraints (operate on the SET) ─────────────────────────────
         PlannedConstraint::MinCount(n) => {
             let count = value_nodes.len() as u64;
@@ -5042,6 +5125,7 @@ mod tests {
 
     fn shape_with(id: &str, constraints: Vec<Constraint>) -> Shape {
         Shape {
+            catalog: None,
             id: ex(id),
             targets: vec![],
             constraints,
@@ -5059,6 +5143,7 @@ mod tests {
     fn prop_shape(id: &str, path_iri: &str, constraints: Vec<Constraint>) -> Shape {
         use crate::shapes::Path;
         Shape {
+            catalog: None,
             id: ex(id),
             targets: vec![],
             constraints: vec![],
@@ -5474,6 +5559,7 @@ mod tests {
              ex:a a ex:Thing .\n"
         ));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -5531,6 +5617,7 @@ mod tests {
              ex:a a ex:Thing .\n"
         ));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -5578,6 +5665,7 @@ mod tests {
              ex:reifier rdf:reifies <<( ex:a ex:p ex:b )>> .\n"
         ));
         let reifier_shape = Shape {
+            catalog: None,
             id: ex("ReifierShape"),
             targets: vec![],
             constraints: vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
@@ -5593,6 +5681,7 @@ mod tests {
             rules: vec![],
         };
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -6883,6 +6972,7 @@ mod tests {
             "@prefix ex: <{EX}> . ex:child ex:parent ex:parent_node ."
         ));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -6946,6 +7036,7 @@ mod tests {
             ])))
         };
         let shape_with = |constraints: Vec<Constraint>| Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7007,6 +7098,7 @@ mod tests {
             "@prefix ex: <{EX}> . ex:unrelated ex:something ex:other ."
         ));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7188,6 +7280,7 @@ mod tests {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
         // Would fail NodeKind(Iri) if active.
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
@@ -7326,6 +7419,7 @@ mod tests {
             })
             .collect();
         Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![Constraint::Closed {
@@ -7734,6 +7828,7 @@ mod tests {
     fn deactivated_property_shape_produces_no_results() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
@@ -7771,6 +7866,7 @@ mod tests {
     fn property_shape_severity_and_message_propagate() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
         let shape = Shape {
+            catalog: None,
             id: ex("S"),
             targets: vec![],
             constraints: vec![],
