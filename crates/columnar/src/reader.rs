@@ -65,7 +65,7 @@ pub fn read(files: &ParquetFiles) -> Result<ColumnarRead, ColumnarError> {
     };
     let content_store = {
         let blobs = read_table(files.get(Table::Blobs), Table::Blobs)?;
-        decode_blobs(&blobs)?
+        decode_blobs(blobs)?
     };
     let dataset = reconstruct_dataset(&dictionary, &quad_rows, &reifier_rows, &annotation_rows)?;
 
@@ -493,9 +493,18 @@ fn decode_reifier_rows(
 }
 
 /// Verify every decoded payload, retaining its original digest cause and row.
-fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
-    let digests = bytes_column(data, 0)?;
-    let payloads = bytes_column(data, 1)?;
+fn decode_blobs(mut data: TableData) -> Result<ContentStore, ColumnarError> {
+    // Preserve column-refusal order before splitting the independently owned
+    // columns. The decoded payload moves into its final store after validation.
+    bytes_column(&data, 0)?;
+    bytes_column(&data, 1)?;
+    let (digest_columns, payload_columns) = data.columns.split_at_mut(1);
+    let ColumnValues::ByteArray(digests) = &digest_columns[0] else {
+        unreachable!("digest column was checked above")
+    };
+    let ColumnValues::ByteArray(payloads) = &mut payload_columns[0] else {
+        unreachable!("payload column was checked above")
+    };
     let mut previous = None;
     let mut store = ContentStore::new();
     for row in 0..data.row_count {
@@ -509,7 +518,9 @@ fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
                 format!("row {row} is not a 64-digit SHA-256 hex value"),
             )
         })?;
-        if digest_text != digest.to_hex() {
+        // Parsing has established exactly 64 ASCII hexadecimal digits. Only
+        // uppercase letters can now differ from the canonical spelling.
+        if digest_text.bytes().any(|byte| byte.is_ascii_uppercase()) {
             return Err(ColumnarError::malformed(
                 "blobs.digest",
                 format!("row {row} is not canonical lowercase hexadecimal"),
@@ -521,7 +532,8 @@ fn decode_blobs(data: &TableData) -> Result<ContentStore, ColumnarError> {
                 "digests are not strictly increasing",
             ));
         }
-        let payload = required_bytes(payloads, row, "blobs.bytes")?.to_vec();
+        required_bytes(payloads, row, "blobs.bytes")?;
+        let payload = payloads[row].take().expect("required payload is present");
         store
             .insert_checked(digest, payload)
             .map_err(|cause| ColumnarError::BlobContent { row, cause })?;
@@ -730,6 +742,45 @@ fn ensure_strict_order<T: Ord>(values: &[T], context: &'static str) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decoded_blob_transfer_keeps_the_original_payload_without_size_growth() {
+        let mut previous = None;
+        for length in [1_024, 1_048_576] {
+            let payload = vec![b'x'; length];
+            let original = payload.as_ptr();
+            let digest = ContentDigest::of(&payload);
+            let data = TableData::new(
+                Table::Blobs,
+                vec![
+                    ColumnValues::bytes(vec![Some(digest.to_hex().into_bytes())]),
+                    ColumnValues::bytes(vec![Some(payload)]),
+                ],
+            )
+            .unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let result = decode_blobs(data);
+            let measured = window.close();
+            let store = result.unwrap();
+            let retained = store.get(&digest).unwrap();
+            assert_eq!(retained.as_ptr(), original);
+            assert_eq!(retained.len(), length);
+            assert!(retained.iter().all(|byte| *byte == b'x'));
+            assert!(measured.requested_bytes < length as u64);
+            let traffic = (measured.allocations, measured.requested_bytes);
+            eprintln!(
+                "blob bytes={length}: allocations={}, requested={}",
+                traffic.0, traffic.1
+            );
+            if let Some(previous) = previous {
+                assert_eq!(
+                    traffic, previous,
+                    "payload length must not add allocator traffic"
+                );
+            }
+            previous = Some(traffic);
+        }
+    }
+
     use purrdf_core::{
         BlankScope, DatasetView, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
         datasets_isomorphic,
