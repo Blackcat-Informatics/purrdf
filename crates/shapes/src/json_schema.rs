@@ -5857,6 +5857,20 @@ fn compile_property(
         value.insert("$comment".to_owned(), json!(comments.join("; ")));
     }
 
+    // A lone catalog reference is already the complete value schema. Wrapping
+    // it in allOf allocates another container and makes downstream carriers
+    // report an intersection loss for a plain reference.
+    if value.is_empty()
+        && shape_conjuncts.len() == 1
+        && shape_conjuncts[0]
+            .as_object()
+            .is_some_and(|body| body.len() == 1 && body.contains_key("$ref"))
+    {
+        let mut reference = shape_conjuncts.pop().expect("one reference");
+        value.extend(std::mem::take(
+            reference.as_object_mut().expect("checked reference object"),
+        ));
+    }
     if !shape_conjuncts.is_empty() {
         let mut all = value
             .get("allOf")
@@ -7448,15 +7462,21 @@ fn compile_member_schema_body(
             comments.push(format!(
                 "a {term} constraint on a value shape of {key} was dropped"
             ));
-        } else {
+        } else if !matches!(constraint, Constraint::PropertyReference(_)) {
             constraints.push(constraint.clone());
         }
     }
-    if shape
-        .property_shapes
-        .iter()
-        .any(|nested| !nested.deactivated)
-    {
+    let mut has_properties = false;
+    for view in shape.properties_in(ctx.model.as_deref()) {
+        match view {
+            Ok(view) => has_properties |= !view.deactivated(),
+            Err(error) => {
+                ctx.pattern_error
+                    .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+            }
+        }
+    }
+    if has_properties {
         ctx.record(
             "sh:property",
             shape_iri,
