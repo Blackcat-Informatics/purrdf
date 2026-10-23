@@ -58,7 +58,7 @@ pub(super) fn emit(
         .map(|(key, info)| (key.clone(), info.name.clone()))
         .collect();
 
-    let mut renderer = Renderer::new(config, &elements);
+    let mut renderer = Renderer::new(config, &elements, definitions, compiled.schema_json.len());
     for (key, definition) in definitions {
         renderer.audit_schema(definition, &definition_path(key))?;
     }
@@ -689,6 +689,9 @@ fn is_linkml_continue(character: char) -> bool {
 struct Renderer<'a> {
     config: &'a LinkmlConfig,
     elements: &'a BTreeMap<String, ElementInfo>,
+    definitions: &'a Object,
+    slot_references: purrdf_core::SmallVec<[&'a Value; 4]>,
+    slot_expressions_left: usize,
     classes: Map<String, Value>,
     enums: Map<String, Value>,
     types: Map<String, Value>,
@@ -708,7 +711,12 @@ struct Renderer<'a> {
 }
 
 impl<'a> Renderer<'a> {
-    fn new(config: &'a LinkmlConfig, elements: &'a BTreeMap<String, ElementInfo>) -> Self {
+    fn new(
+        config: &'a LinkmlConfig,
+        elements: &'a BTreeMap<String, ElementInfo>,
+        definitions: &'a Object,
+        slot_expressions_left: usize,
+    ) -> Self {
         let mut used_names = BTreeMap::new();
         for (key, info) in elements {
             used_names.insert(info.name.clone(), definition_path(key));
@@ -719,6 +727,9 @@ impl<'a> Renderer<'a> {
         Self {
             config,
             elements,
+            definitions,
+            slot_references: purrdf_core::SmallVec::new(),
+            slot_expressions_left,
             classes: Map::new(),
             enums: Map::new(),
             types: Map::new(),
@@ -780,7 +791,7 @@ impl<'a> Renderer<'a> {
     }
 }
 
-impl Renderer<'_> {
+impl<'a> Renderer<'a> {
     fn render_enum(
         &self,
         name: &str,
@@ -901,11 +912,9 @@ impl Renderer<'_> {
 
     fn type_definition_base(&mut self, object: &Object, path: &str) -> Result<String, LinkmlError> {
         if let Some(reference) = object.get("$ref") {
-            let target = self
-                .reference_info(reference, &format!("{path}/$ref"))?
-                .clone();
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Type {
-                return Ok(target.name);
+                return Ok(target.name.clone());
             }
             self.record(
                 "keyword-validation-dropped",
@@ -1185,7 +1194,7 @@ impl Renderer<'_> {
         self.copy_element_annotations(object, &mut class, path)?;
 
         if let Some(reference) = object.get("$ref") {
-            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Class {
                 class.insert("is_a".to_owned(), Value::String(target.name.clone()));
             } else {
@@ -1314,7 +1323,7 @@ impl Renderer<'_> {
         };
 
         if let Some(reference) = object.get("$ref") {
-            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
             if target.kind == ElementKind::Class {
                 let mut expression = Map::new();
                 expression.insert("is_a".to_owned(), Value::String(target.name.clone()));
@@ -1618,7 +1627,11 @@ impl Renderer<'_> {
         Ok(name)
     }
 
-    fn reference_info(&self, value: &Value, path: &str) -> Result<&ElementInfo, LinkmlError> {
+    fn reference_info(
+        &self,
+        value: &Value,
+        path: &str,
+    ) -> Result<(&'a str, &'a ElementInfo, &'a Value), LinkmlError> {
         let reference = value
             .as_str()
             .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))?;
@@ -1627,9 +1640,15 @@ impl Renderer<'_> {
                 "{path} is not a direct local #/$defs reference: {reference:?}"
             ))
         })?;
-        self.elements
-            .get(&key)
-            .ok_or_else(|| LinkmlError::new(format!("{path} targets missing $defs key {key:?}")))
+        let (key, info) = self
+            .elements
+            .get_key_value(&key)
+            .ok_or_else(|| LinkmlError::new(format!("{path} targets missing $defs key {key:?}")))?;
+        let definition = self
+            .definitions
+            .get(key)
+            .expect("element_infos covers exactly the catalog definitions");
+        Ok((key, info, definition))
     }
 
     fn render_slot_expression(
@@ -1637,6 +1656,15 @@ impl Renderer<'_> {
         schema: &Value,
         path: &str,
     ) -> Result<Map<String, Value>, LinkmlError> {
+        // Reference diamonds can require exponentially many anonymous LinkML
+        // expressions. Bound that work by the input byte budget, as the catalog
+        // does for decoded nodes, rather than allocating the expanded graph.
+        self.slot_expressions_left =
+            self.slot_expressions_left.checked_sub(1).ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "{path} exceeds the source-sized slot expression budget"
+                ))
+            })?;
         let Value::Object(object) = schema else {
             self.record(
                 "keyword-validation-dropped",
@@ -1656,12 +1684,58 @@ impl Renderer<'_> {
         let mut slot = Map::new();
         self.copy_element_annotations(object, &mut slot, path)?;
         let mut has_carrier = if let Some(reference) = object.get("$ref") {
-            let target = self
-                .reference_info(reference, &format!("{path}/$ref"))?
-                .clone();
-            slot.insert("range".to_owned(), Value::String(target.name));
-            if target.kind == ElementKind::Class {
-                slot.insert("inlined".to_owned(), Value::Bool(true));
+            let (key, target, definition) =
+                self.reference_info(reference, &format!("{path}/$ref"))?;
+            // TypeDefinition cannot carry mixed ranges, and the 1.11 generator
+            // closes a named choice class over its own (empty) attribute set.
+            // Reuse the original slot expressions at their reference boundary.
+            if target.kind != ElementKind::Enum
+                && definition.as_object().is_some_and(|body| {
+                    is_alias_only(body)
+                        || (target.kind == ElementKind::Type
+                            && ["anyOf", "oneOf", "allOf", "not", "enum", "const"]
+                                .iter()
+                                .any(|keyword| body.contains_key(keyword)))
+                        || (target.kind == ElementKind::Class
+                            && !is_object_schema(body)
+                            && ["anyOf", "oneOf"]
+                                .iter()
+                                .any(|keyword| body.contains_key(keyword)))
+                })
+            {
+                if self
+                    .slot_references
+                    .iter()
+                    .any(|active| std::ptr::eq(*active, definition))
+                {
+                    return Err(LinkmlError::new(format!(
+                        "{path} contains a cyclic compound slot reference to {key:?}"
+                    )));
+                }
+                if purrdf_stack::is_low() {
+                    return Err(LinkmlError::new(format!(
+                        "{path} exhausted the stack margin resolving slot reference {key:?}"
+                    )));
+                }
+                self.slot_references.push(definition);
+                let expanded = self.render_slot_expression(definition, &definition_path(key));
+                self.slot_references.pop();
+                let mut expanded = expanded?;
+                if is_alias_only(object) {
+                    expanded.extend(slot);
+                    slot = expanded;
+                } else {
+                    conjoin_expression(
+                        &mut slot,
+                        "all_of",
+                        vec![crate::json_model::object(expanded)],
+                    );
+                }
+            } else {
+                slot.insert("range".to_owned(), Value::String(target.name.clone()));
+                if target.kind == ElementKind::Class {
+                    slot.insert("inlined".to_owned(), Value::Bool(true));
+                }
             }
             true
         } else {
@@ -2862,6 +2936,66 @@ mod tests {
     }
 
     #[test]
+    fn referenced_compound_members_keep_scalar_and_object_alternatives() {
+        let schema = json!({"$defs": {
+            "Member": {"anyOf": [
+                {"type": "integer"},
+                {"type": "object", "properties": {"@value": {"type": "integer"}}}
+            ]},
+            "Holder": {"type": "object", "properties": {
+                "ex:items": {"type": "array", "contains": {"$ref": "#/$defs/Member"}}
+            }}
+        }});
+        let output = emit(&compiled(&schema), &config()).expect("compound member emits");
+        let root = output.document.as_value();
+        let member = &root["classes"]["Holder"]["attributes"]["ex:items"]["has_member"];
+        let alternatives = member["any_of"]
+            .as_array()
+            .expect("both member alternatives");
+        assert_eq!(alternatives.len(), 2);
+        assert_eq!(alternatives[0]["range"], "integer");
+        let object = alternatives[1]["range"].as_str().expect("object range");
+        assert_eq!(
+            root["classes"][object]["attributes"]["@value"]["range"],
+            "integer"
+        );
+    }
+
+    #[test]
+    fn cyclic_compound_slot_references_fail_instead_of_expanding() {
+        let schema = json!({"$defs": {
+            "Member": {"anyOf": [{"type": "integer"}, {"$ref": "#/$defs/Member"}]},
+            "Holder": {"type": "object", "properties": {"ex:value": {"$ref": "#/$defs/Member"}}}
+        }});
+        let error = emit(&compiled(&schema), &config()).expect_err("cyclic member refuses");
+        assert!(error.detail().contains("cyclic compound slot reference"));
+    }
+
+    #[test]
+    fn compound_reference_diamonds_refuse_before_unbounded_output_growth() {
+        let mut definitions = Map::new();
+        definitions.insert("Member0".to_owned(), json!({"type": "integer"}));
+        for index in 1..=16 {
+            let reference = format!("#/$defs/Member{}", index - 1);
+            definitions.insert(
+                format!("Member{index}"),
+                json!({"anyOf": [
+                    {"$ref": reference}, {"$ref": reference}
+                ]}),
+            );
+        }
+        definitions.insert(
+            "Holder".to_owned(),
+            json!({"type": "object", "properties": {
+                "ex:value": {"$ref": "#/$defs/Member16"}
+            }}),
+        );
+        let schema = json!({"$defs": crate::json_model::object(definitions)});
+        let error = emit(&compiled(&schema), &config()).expect_err("diamond output is bounded");
+        assert!(error.detail().contains("slot expression budget"));
+    }
+
+    #[test]
     fn exact_projection_is_deterministic_reversible_and_lossless() {
         let compiled = compiled(&exact_schema());
         let first = emit(&compiled, &config()).expect("emit");
@@ -3488,7 +3622,8 @@ mod tests {
 
         let config = config();
         let elements = BTreeMap::new();
-        let renderer = Renderer::new(&config, &elements);
+        let definitions = Object::new();
+        let renderer = Renderer::new(&config, &elements, &definitions, 0);
         let mut seed = slot_name_seed(&config, "ex:a/b").expect("unsafe seed");
         let mut used_names =
             BTreeMap::from([(seed.direct_name.clone(), "safe direct owner".to_owned())]);

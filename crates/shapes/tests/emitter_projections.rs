@@ -2329,7 +2329,9 @@ fn linkml_projects_some_value() {
     let member = &subject["any_of"][1]["has_member"];
     assert_eq!(
         member,
-        &json(r#"{"inlined":true,"range":"ShapeRef0"}"#),
+        &json(
+            r#"{"any_of":[{"inlined":true,"range":"InlineDefsShapeRef0AnyOf0Object"},{"inlined":true,"range":"InlineDefsShapeRef0AnyOf1Object"}]}"#
+        ),
         "{subject}"
     );
     let classes = &emitted.linkml["classes"];
