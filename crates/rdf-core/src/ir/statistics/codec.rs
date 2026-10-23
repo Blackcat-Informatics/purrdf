@@ -8,6 +8,8 @@ use crate::ir::pack::bits::PackBitsError;
 use crate::ir::pack::bits::PackBitsError::Malformed as invalid;
 use crate::{GraphMatch, PredicateStatistics, StatisticsPosition};
 
+pub(in crate::ir) const PREDICATE_RECORD_BYTES: usize = 240;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::ir) enum StatisticsSection {
     Predicates,
@@ -27,7 +29,7 @@ impl StatisticsSection {
     }
     pub(in crate::ir) const fn width(self) -> usize {
         match self {
-            Self::Predicates => 136,
+            Self::Predicates => PREDICATE_RECORD_BYTES,
             Self::Domains => 1,
             Self::Frequencies => 16,
             Self::Kinds => 32,
@@ -41,6 +43,7 @@ pub(in crate::ir) struct PredicateRecord<I> {
     scope: Scope<I>,
     predicate: I,
     rows: u64,
+    pub(super) source: super::SourceSummary,
     subjects: [u64; 3],
     objects: [u64; 3],
     frequencies: Option<(u64, u64)>,
@@ -76,6 +79,7 @@ impl<I: StatisticsId> From<&Predicate<I>> for PredicateRecord<I> {
             scope: entry.key.1,
             predicate: entry.key.2,
             rows: entry.rows,
+            source: entry.source,
             subjects: domain(entry.subjects),
             objects: domain(entry.objects),
             frequencies: entry
@@ -88,14 +92,15 @@ impl<I: StatisticsId> From<&Predicate<I>> for PredicateRecord<I> {
 }
 
 impl<I: StatisticsId> PredicateRecord<I> {
-    fn words(self) -> [u64; 17] {
+    fn words(self) -> [u64; 30] {
         let (scope, graph) = match self.scope {
             Scope::Any => (0, 0),
             Scope::Graph(None) => (1, 0),
             Scope::Graph(Some(id)) => (2, id.statistics_index()),
         };
         let (frequency_offset, frequency_count) = self.frequencies.unwrap_or((0, 0));
-        [
+        let mut words = [0; 30];
+        words[..17].copy_from_slice(&[
             self.relation as u64,
             scope,
             graph,
@@ -113,11 +118,13 @@ impl<I: StatisticsId> PredicateRecord<I> {
             frequency_count,
             self.kinds.0,
             self.kinds.1,
-        ]
+        ]);
+        words[17..].copy_from_slice(&self.source.words());
+        words
     }
 
     pub(in crate::ir) fn decode(bytes: &[u8]) -> Result<Self, PackBitsError> {
-        let v = read_words::<17>(bytes)?;
+        let v = read_words::<30>(bytes)?;
         let relation = match v[0] {
             0 => Relation::Asserted,
             1 => Relation::Reifiers,
@@ -143,6 +150,7 @@ impl<I: StatisticsId> PredicateRecord<I> {
             scope,
             predicate: I::statistics_id(v[3])?,
             rows: v[4],
+            source: super::SourceSummary::decode(&v[17..], v[4])?,
             subjects: [v[5], v[6], v[7]],
             objects: [v[8], v[9], v[10]],
             frequencies,
@@ -208,6 +216,9 @@ impl<I: StatisticsId> PredicateRecord<I> {
     pub(in crate::ir) const fn frequency_range(self) -> Option<(u64, u64)> {
         self.frequencies
     }
+    pub(in crate::ir) const fn source_summary(self) -> super::SourceSummary {
+        self.source
+    }
     pub(in crate::ir) const fn kind_range(self) -> (u64, u64) {
         self.kinds
     }
@@ -259,7 +270,7 @@ pub(in crate::ir) fn decode_kind<I: StatisticsId>(
 }
 
 pub(super) struct RecordWords {
-    values: [u64; 17],
+    values: [u64; 30],
     length: usize,
 }
 impl RecordWords {
@@ -284,7 +295,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
         index: usize,
     ) -> Option<RecordWords> {
         let mut words = RecordWords {
-            values: [0; 17],
+            values: [0; 30],
             length: section.width() / 8,
         };
         match section {

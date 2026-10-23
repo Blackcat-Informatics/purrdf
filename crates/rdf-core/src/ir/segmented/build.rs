@@ -395,6 +395,7 @@ impl SegmentedImage {
             header.statistics[1],
             header.statistics[2],
             header.statistics[3],
+            header.effective_directory,
         ]
         .iter()
         .try_fold(1_u64, |n, stream| {
@@ -639,6 +640,12 @@ fn encode_dataset(
         block_bytes,
     )?;
     let statistics = append_statistics(dataset, limits.first_term_index, &mut blocks, block_bytes)?;
+    let effective_directory = append_source_directory(
+        dataset.predicate_statistics().effective_source_directory(),
+        format::SOURCE_DIRECTORY,
+        &mut blocks,
+        block_bytes,
+    )?;
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
@@ -659,7 +666,9 @@ fn encode_dataset(
         graphs,
         summaries,
         statistics,
+        effective_directory,
         flags,
+        source_union: dataset.predicate_statistics().source_union(),
     };
     let encoded = header.encode();
     blocks[0][..encoded.len()].copy_from_slice(&encoded);
@@ -670,6 +679,39 @@ fn encode_dataset(
     let mut bytes = blocks.concat();
     bytes.extend_from_slice(&make_tree(&bytes, block_bytes, count, leaves)?);
     SegmentedImage::certify(bytes)
+}
+
+fn append_source_directory(
+    directory: &super::super::source_directory::SourceDirectory,
+    kind: u8,
+    blocks: &mut Vec<Vec<u8>>,
+    block_bytes: usize,
+) -> Result<Stream, SegmentedError> {
+    let width = super::super::source_directory::RECORD_BYTES;
+    let per_block = (block_bytes - 9) / width;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut stream = Stream {
+        first: blocks.len() as u64,
+        blocks: 0,
+        rows: directory.len() as u64,
+    };
+    for start in (0..directory.len()).step_by(per_block) {
+        let count = (directory.len() - start).min(per_block);
+        let mut encoded = memory.collect(std::iter::repeat_n(0_u8, count * width))?;
+        directory.encode_records(start, &mut encoded);
+        append_fixed(
+            blocks,
+            std::iter::once(encoded.as_slice()),
+            count as u64,
+            kind,
+            width,
+            block_bytes,
+        )?;
+        memory.release_vec(encoded)?;
+        stream.blocks += 1;
+    }
+    Ok(stream)
 }
 
 fn translated_statistics(
@@ -1194,6 +1236,11 @@ fn validate_statistics(
     header: &Header,
     dataset: &RdfDataset,
 ) -> Result<(), SegmentedError> {
+    if header.source_union != dataset.predicate_statistics().source_union() {
+        return Err(SegmentedError::Corrupt(
+            "source union disagrees with RDF rows",
+        ));
+    }
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let statistics = translated_statistics(dataset, header.first_term_index, &mut memory)?;
@@ -1234,6 +1281,51 @@ fn validate_statistics(
         }
         memory.release_vec(expected)?;
     }
+    validate_source_directory(
+        bytes,
+        header,
+        dataset.predicate_statistics().effective_source_directory(),
+        header.effective_directory,
+        format::SOURCE_DIRECTORY,
+    )
+}
+
+fn validate_source_directory(
+    bytes: &[u8],
+    header: &Header,
+    directory: &super::super::source_directory::SourceDirectory,
+    stream: Stream,
+    kind: u8,
+) -> Result<(), SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    if stream.rows != directory.len() as u64 {
+        return Err(SegmentedError::Corrupt(
+            "source directory count disagrees with RDF rows",
+        ));
+    }
+    let width = super::super::source_directory::RECORD_BYTES;
+    let per = (header.block_bytes as usize - 9) / width;
+    let mut expected =
+        memory.collect(std::iter::repeat_n(0_u8, directory.len().min(per) * width))?;
+    let mut ordinal = 0;
+    for slot in stream.first..stream.first + stream.blocks {
+        let actual = fixed_records(block(bytes, header, slot)?, kind, width)?;
+        let count = (directory.len() - ordinal).min(per);
+        if actual.len() != count * width {
+            return Err(SegmentedError::Corrupt(
+                "source directory packing disagrees with RDF rows",
+            ));
+        }
+        directory.encode_records(ordinal, &mut expected[..actual.len()]);
+        if actual != &expected[..actual.len()] {
+            return Err(SegmentedError::Corrupt(
+                "source directory contents disagree with RDF rows",
+            ));
+        }
+        ordinal += count;
+    }
+    memory.release_vec(expected)?;
     Ok(())
 }
 pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8], SegmentedError> {
@@ -1488,6 +1580,19 @@ mod certification_tests {
             .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
             .unwrap();
         assert_eq!(count.rows.value, 13);
+        let content = DatasetView::source_summary(
+            &source,
+            predicate,
+            GraphMatch::Any,
+            StatisticsStream::Asserted,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(content.statement_count(), 13);
+        assert_eq!(
+            content.literal_rows(),
+            [purrdf_hash::multiset::Multiset256::default(); 2]
+        );
         assert_eq!(count.subjects.unwrap().value, 13);
         assert_eq!(
             source
@@ -1536,43 +1641,119 @@ mod certification_tests {
             }
             assert!(reads > 0);
         });
-        let refused = image
-            .open_session(SegmentedReadLimits::new(
-                8_000_000,
-                2,
-                u32::try_from(opening).unwrap(),
-                100_000_000,
-                8,
-            ))
-            .unwrap();
-        let predicate = refused.attach(source.handle(predicate).unwrap()).unwrap();
-        assert!(
-            refused
-                .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
-                .is_none()
-        );
-        assert_eq!(
-            refused.read_error(),
-            Some(SegmentedError::EvidenceExhausted)
-        );
+        for content in [false, true] {
+            let refused = image
+                .open_session(SegmentedReadLimits::new(
+                    8_000_000,
+                    2,
+                    u32::try_from(opening).unwrap(),
+                    100_000_000,
+                    8,
+                ))
+                .unwrap();
+            let predicate = refused.attach(source.handle(predicate).unwrap()).unwrap();
+            if content {
+                assert_eq!(
+                    DatasetView::source_summary(
+                        &refused,
+                        predicate,
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted,
+                    ),
+                    Err(SegmentedError::EvidenceExhausted)
+                );
+            } else {
+                assert!(
+                    refused
+                        .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
+                        .is_none()
+                );
+            }
+            assert_eq!(
+                refused.read_error(),
+                Some(SegmentedError::EvidenceExhausted)
+            );
+        }
     }
 
     #[test]
     fn recomputed_hashes_cannot_certify_false_statistics() {
         let image = image();
         let header = Header::decode(image.bytes()).unwrap();
-        let mut bytes = image.bytes().to_vec();
         let start =
             usize::try_from(header.statistics[0].first).unwrap() * header.block_bytes as usize + 9;
-        let rows = crate::bytes::read_u64_le(&bytes, start + 4 * 8).unwrap();
-        crate::bytes::put_u64_le(&mut bytes, start + 4 * 8, rows + 1).unwrap();
-        rehash(&mut bytes, image.receipt());
-        assert!(matches!(
-            SegmentedImage::certify(bytes),
-            Err(SegmentedError::Corrupt(
-                "statistical contents disagree with RDF rows"
-            ))
-        ));
+        for word in [4, 17, 18, 22, 26] {
+            let mut bytes = image.bytes().to_vec();
+            bytes[start + word * 8] ^= 1;
+            rehash(&mut bytes, image.receipt());
+            assert!(matches!(
+                SegmentedImage::certify(bytes),
+                Err(SegmentedError::Corrupt(
+                    "statistical contents disagree with RDF rows"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn source_directory_rejects_an_overflowing_physical_population() {
+        let image = image();
+        let mut header = Header::decode(image.bytes()).unwrap();
+        header.streams[0].rows = u64::MAX;
+        header.streams[1].rows = 1;
+        assert_eq!(
+            Header::decode(&header.encode()).unwrap_err(),
+            SegmentedError::AddressExhausted
+        );
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_a_false_source_directory() {
+        let image = image();
+        let header = Header::decode(image.bytes()).unwrap();
+        {
+            let stream = header.effective_directory;
+            assert!(stream.rows > 0);
+            let start = stream.first as usize * header.block_bytes as usize + 9;
+            for offset in [0, 32, 36, 40, 56] {
+                let mut bytes = image.bytes().to_vec();
+                bytes[start + offset] ^= 1;
+                rehash(&mut bytes, image.receipt());
+                assert_eq!(
+                    SegmentedImage::certify(bytes).unwrap_err(),
+                    SegmentedError::Corrupt("source directory contents disagree with RDF rows")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_a_false_source_union() {
+        let image = image();
+        assert!(
+            Header::decode(image.bytes())
+                .unwrap()
+                .source_union
+                .population()
+                > 0
+        );
+        for population in [false, true] {
+            let mut bytes = image.bytes().to_vec();
+            if population {
+                bytes[format::HEADER_BYTES - 48..format::HEADER_BYTES - 32].fill(0);
+            } else {
+                bytes[format::HEADER_BYTES - 32] ^= 1;
+            }
+            rehash(&mut bytes, image.receipt());
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt(if population {
+                    "effective source directory packing mismatch"
+                } else {
+                    "source union disagrees with RDF rows"
+                })
+            );
+        }
     }
 
     #[test]

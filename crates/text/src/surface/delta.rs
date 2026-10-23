@@ -1,218 +1,320 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Ordered replacement of source-backed surface documents.
+//! Source-keyed persistent document replacement.
 
-use super::postings::{FlatPostings, GramPosting, Joined, join_by};
-use super::{Occurrence, Source, SurfaceIndex, SurfaceTerm};
-use crate::TextDeltaError;
-use crate::error::term_ordinal;
+use super::{
+    Member, Source, Spelling, StoredTerm, SurfaceDocument, SurfaceIndex, TermMetadata,
+    compare_sources, distinct_codes, postings,
+};
+use crate::index::{Document, Table};
+use crate::{CorpusProfile, TextDeltaError, TextError};
+use purrdf_lex::allocation::shared::Shared;
+use std::collections::BTreeSet;
 
-impl SurfaceIndex {
-    /// Insert the supplied complete documents, replacing any existing documents
-    /// with the same identifiers. Only the supplied index's sources need analysis.
-    /// Retained source alignment, span shapes and pronunciation codes are moved
-    /// into the result; existing gram and code postings are merged in order.
-    ///
+impl<P: CorpusProfile> SurfaceIndex<P> {
+    /// Replace complete supplied documents, analyzing only the added input.
     /// # Errors
-    /// Refuses a different analyzer or a merged term table past its ID space.
-    pub fn with_documents(self, added: Self) -> Result<Self, TextDeltaError> {
+    /// Refuses incompatible analyzer or document-coordinate owners, source
+    /// collisions, allocation failure and index-size exhaustion.
+    pub fn with_documents(mut self, added: Self) -> Result<Self, TextDeltaError> {
+        self.check_analyzer(&added)?;
+        if added.sources.is_empty() {
+            return Ok(self);
+        }
+        if self.document_order.is_some() != added.document_order.is_some()
+            || self.coordinate_generation != added.coordinate_generation
+        {
+            return Err(TextError::config("surface document coordinate owners differ; update an indexed surface through TextIndex::with_delta").into());
+        }
+        let documents = added
+            .sources
+            .iter()
+            .map(|source| source.document.clone())
+            .collect();
+        self.remove_document_keys(&documents)?;
+        self = self.merge_disjoint(added)?;
+        self.generation = self.content_generation();
+        Ok(self)
+    }
+
+    /// Remove complete documents. Absent identifiers are no-ops.
+    /// # Errors
+    /// Refuses allocation failure or inconsistent retained source/index state.
+    pub fn without_documents(
+        mut self,
+        documents: impl IntoIterator<Item = u32>,
+    ) -> Result<Self, TextError> {
+        let documents = documents
+            .into_iter()
+            .filter_map(|id| match &self.document_order {
+                Some(order) => order
+                    .get(id as usize)
+                    .map(|document| SurfaceDocument::Indexed(document.clone())),
+                None => Some(SurfaceDocument::Ordinal(id)),
+            })
+            .collect();
+        if self.remove_document_keys(&documents)? {
+            self.generation = self.content_generation();
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn with_index_delta(
+        mut self,
+        added: Self,
+        removed: impl IntoIterator<Item = Shared<Document<P>>>,
+        order: Table<Shared<Document<P>>>,
+    ) -> Result<Self, TextDeltaError> {
+        self.check_analyzer(&added)?;
+        if self.document_order.is_none() || added.document_order.is_none() {
+            return Err(TextError::data(
+                "indexed surface update requires original document-coordinate owners",
+            )
+            .into());
+        }
+        let removed = removed.into_iter().map(SurfaceDocument::Indexed).collect();
+        self.remove_document_keys(&removed)?;
+        self.document_order = Some(order);
+        self.merge_disjoint(added)
+    }
+
+    fn check_analyzer(&self, added: &Self) -> Result<(), TextDeltaError> {
         let expected = self.analyzer.fingerprint();
         let actual = added.analyzer.fingerprint();
         if expected != actual {
             return Err(TextDeltaError::AnalyzerMismatch { expected, actual });
         }
-        if added.sources.is_empty() {
-            return Ok(self);
-        }
-        let retained = self.without_documents(added.sources.iter().map(|source| source.document));
-        let mut result = retained.merge_disjoint(added)?;
-        result.generation = result.content_generation();
-        Ok(result)
+        Ok(())
     }
 
-    /// Inputs were admitted and rebased by the enclosing text-index update.
-    pub(crate) fn merge_disjoint(self, added: Self) -> Result<Self, TextDeltaError> {
-        let retained = self;
-        let sources = merge_sources(retained.sources, added.sources)?;
-        let words = merge_terms(
-            retained
-                .words
-                .into_iter()
-                .zip(retained.codes.into_iter().zip(retained.canonical)),
-            added
-                .words
-                .into_iter()
-                .zip(added.codes.into_iter().zip(added.canonical)),
-            &sources.retained,
-            &sources.added,
-        )?;
-        let spans = merge_terms(
-            retained.spans.into_iter().zip(retained.shapes),
-            added.spans.into_iter().zip(added.shapes),
-            &sources.retained,
-            &sources.added,
-        )?;
-        let remap = |table: FlatPostings<u64, GramPosting>, ordinals: &[u32]| {
-            table.retain_remapped(|posting| {
-                Some(GramPosting {
-                    span: ordinals[posting.span as usize],
-                    ..posting
-                })
+    fn remove_document_keys(
+        &mut self,
+        documents: &BTreeSet<SurfaceDocument<P>>,
+    ) -> Result<bool, TextError> {
+        let mut changed = false;
+        for document in documents {
+            let start = self
+                .sources
+                .partition_point(|source| source.document < *document);
+            let end = self
+                .sources
+                .partition_point(|source| source.document <= *document);
+            let removed: Vec<_> = self.sources.slice(start, end).iter().cloned().collect();
+            for source in removed {
+                changed = true;
+                for name in &source.words {
+                    self.remove_source_term(name, &source, false)?;
+                }
+                for name in &source.spans {
+                    self.remove_source_term(name, &source, true)?;
+                }
+                let at = self
+                    .sources
+                    .binary_search_by(|candidate| compare_sources(candidate, &source))
+                    .expect("a removed surface source is still present");
+                self.sources = self.sources.remove(at)?;
+                self.source_state
+                    .remove(source.digest)
+                    .map_err(|error| TextError::data(error.to_string()))?;
+            }
+        }
+        Ok(changed)
+    }
+
+    fn remove_source_term(
+        &mut self,
+        name: &Spelling,
+        source: &Source<P>,
+        span: bool,
+    ) -> Result<(), TextError> {
+        let table = if span { &self.spans } else { &self.words };
+        let at = table
+            .binary_search_by(|term| term.text.cmp(name))
+            .map_err(|_| TextError::data("a retired surface source has no original term"))?;
+        let prior = table[at].clone();
+        let start = prior
+            .occurrences
+            .partition_point(|occurrence| compare_sources(occurrence.source(), source).is_lt());
+        let end = prior
+            .occurrences
+            .partition_point(|occurrence| !compare_sources(occurrence.source(), source).is_gt());
+        if start == end {
+            return Err(TextError::data(
+                "a surface source has no original term occurrences",
+            ));
+        }
+        let mut occurrences = prior.occurrences.clone();
+        for position in (start..end).rev() {
+            occurrences = occurrences.remove(position)?;
+        }
+        let members = adjust_member(&prior.members, &source.document, end - start, false)?;
+        let updated = if occurrences.is_empty() {
+            self.edit_term_postings(&prior, false)?;
+            None
+        } else {
+            Some(StoredTerm {
+                text: prior.text.clone(),
+                metadata: prior.metadata.clone(),
+                occurrences,
+                members,
             })
         };
-        let [left_one, left_two, left_three] = retained.grams;
-        let [right_one, right_two, right_three] = added.grams;
-        let grams = [
-            remap(left_one, &spans.retained).merge(remap(right_one, &spans.added)),
-            remap(left_two, &spans.retained).merge(remap(right_two, &spans.added)),
-            remap(left_three, &spans.retained).merge(remap(right_three, &spans.added)),
-        ];
-        let phonetic_postings = retained
-            .phonetic_postings
-            .retain_remapped(|word| Some(words.retained[word as usize]))
-            .merge(
-                added
-                    .phonetic_postings
-                    .retain_remapped(|word| Some(words.added[word as usize])),
-            );
-        let (codes, canonical) = words.metadata.into_iter().unzip();
-        let result = Self {
-            analyzer: retained.analyzer,
-            generation: [0; 32],
-            sources: sources.rows,
-            words: words.terms,
-            spans: spans.terms,
-            shapes: spans.metadata,
-            grams,
-            codes,
-            canonical,
-            phonetic_postings,
+        let table = if span {
+            &mut self.spans
+        } else {
+            &mut self.words
         };
-        Ok(result)
+        *table = if let Some(term) = updated {
+            table.replace(at, term)?
+        } else {
+            table.remove(at)?
+        };
+        Ok(())
+    }
+
+    pub(crate) fn merge_disjoint(mut self, added: Self) -> Result<Self, TextDeltaError> {
+        let Self {
+            sources,
+            words,
+            spans,
+            source_state,
+            ..
+        } = added;
+        for source in sources.iter() {
+            let at = self
+                .sources
+                .binary_search_by(|candidate| compare_sources(candidate, source));
+            match at {
+                Ok(_) => {
+                    return Err(TextDeltaError::SourceOverlap {
+                        document: self.document_id(&source.document),
+                        identity: source.identity,
+                    });
+                }
+                Err(at) => self.sources = self.sources.insert(at, source.clone())?,
+            }
+        }
+        self.source_state
+            .combine(source_state)
+            .map_err(|error| TextError::data(error.to_string()))?;
+        for (span, table) in [(false, words), (true, spans)] {
+            for term in table.iter() {
+                self.insert_term(term, span)?;
+            }
+        }
+        Ok(self)
+    }
+
+    fn insert_term(&mut self, term: &StoredTerm<P>, span: bool) -> Result<(), TextDeltaError> {
+        let table = if span { &self.spans } else { &self.words };
+        let position = table.binary_search_by(|prior| prior.text.cmp(&term.text));
+        let updated = if let Ok(at) = position {
+            let prior = &table[at];
+            let mut occurrences = prior.occurrences.clone();
+            for occurrence in term.occurrences.iter() {
+                let at = occurrences
+                    .binary_search_by(|candidate| candidate.cmp(occurrence))
+                    .map_or_else(
+                        |at| at,
+                        |_| unreachable!("disjoint sources cannot have equal occurrences"),
+                    );
+                occurrences = occurrences.insert(at, occurrence.clone())?;
+            }
+            let mut members = prior.members.clone();
+            for member in term.members.iter() {
+                members = adjust_member(&members, &member.document, member.count, true)?;
+            }
+            StoredTerm {
+                text: prior.text.clone(),
+                metadata: prior.metadata.clone(),
+                occurrences,
+                members,
+            }
+        } else {
+            crate::error::term_ordinal(table.len())?;
+            self.edit_term_postings(term, true)?;
+            term.clone()
+        };
+        let table = if span {
+            &mut self.spans
+        } else {
+            &mut self.words
+        };
+        *table = match position {
+            Ok(at) => table.replace(at, updated)?,
+            Err(at) => table.insert(at, updated)?,
+        };
+        Ok(())
+    }
+
+    fn edit_term_postings(&mut self, term: &StoredTerm<P>, added: bool) -> Result<(), TextError> {
+        match &*term.metadata {
+            TermMetadata::Span(_) => {
+                for (width, index) in self.grams.iter_mut().enumerate() {
+                    for (key, posting) in postings::gram_rows(&term.text, width + 1) {
+                        if added {
+                            index.insert(key, posting)?;
+                        } else {
+                            index.remove(&key, &posting)?;
+                        }
+                    }
+                }
+            }
+            TermMetadata::Word {
+                codes: Some(codes), ..
+            } => {
+                for code in distinct_codes(codes) {
+                    if added {
+                        self.phonetic_postings
+                            .insert(code.to_owned(), term.text.clone())?;
+                    } else {
+                        self.phonetic_postings
+                            .remove(&code.to_owned(), &term.text)?;
+                    }
+                }
+            }
+            TermMetadata::Word { codes: None, .. } => {}
+        }
+        Ok(())
     }
 }
 
-struct MergedSources {
-    rows: Vec<Source>,
-    retained: Vec<usize>,
-    added: Vec<usize>,
-}
-
-fn merge_sources(
-    retained: Vec<Source>,
-    added: Vec<Source>,
-) -> Result<MergedSources, TextDeltaError> {
-    let mut retained_ids = vec![0; retained.len()];
-    let mut added_ids = vec![0; added.len()];
-    let mut sources = Vec::with_capacity(retained.len() + added.len());
-    for row in join_by(
-        retained.into_iter().enumerate(),
-        added.into_iter().enumerate(),
-        |a, b| {
-            a.1.document
-                .cmp(&b.1.document)
-                .then_with(|| a.1.identity.cmp(&b.1.identity))
-        },
-    ) {
-        let source = match row {
-            Joined::Left((ordinal, source)) => {
-                retained_ids[ordinal] = sources.len();
-                source
-            }
-            Joined::Right((ordinal, source)) => {
-                added_ids[ordinal] = sources.len();
-                source
-            }
-            Joined::Both((_, source), _) => {
-                return Err(TextDeltaError::SourceOverlap {
-                    document: source.document,
-                    identity: source.identity,
-                });
-            }
-        };
-        sources.push(source);
+fn adjust_member<P: CorpusProfile>(
+    members: &Table<Member<P>>,
+    document: &SurfaceDocument<P>,
+    count: usize,
+    added: bool,
+) -> Result<Table<Member<P>>, TextError> {
+    let position = members.binary_search_by(|member| member.document.cmp(document));
+    let before = position.ok().map_or(0, |at| members[at].count);
+    let after = if added {
+        before.checked_add(count)
+    } else {
+        before.checked_sub(count)
     }
-    Ok(MergedSources {
-        rows: sources,
-        retained: retained_ids,
-        added: added_ids,
-    })
-}
-
-struct MergedTerms<M> {
-    terms: Vec<SurfaceTerm>,
-    metadata: Vec<M>,
-    retained: Vec<u32>,
-    added: Vec<u32>,
-}
-
-fn merge_terms<M>(
-    retained: impl ExactSizeIterator<Item = (SurfaceTerm, M)>,
-    added: impl ExactSizeIterator<Item = (SurfaceTerm, M)>,
-    retained_sources: &[usize],
-    added_sources: &[usize],
-) -> Result<MergedTerms<M>, TextDeltaError> {
-    let mut result = MergedTerms {
-        retained: vec![0; retained.len()],
-        added: vec![0; added.len()],
-        terms: Vec::new(),
-        metadata: Vec::new(),
-    };
-    for row in join_by(retained.enumerate(), added.enumerate(), |a, b| {
-        a.1.0.text.cmp(&b.1.0.text)
-    }) {
-        let ordinal = term_ordinal(result.terms.len())?;
-        let (term, metadata) = match row {
-            Joined::Left((old, (mut term, metadata))) => {
-                result.retained[old] = ordinal;
-                remap_sources(&mut term, retained_sources);
-                (term, metadata)
-            }
-            Joined::Right((new, (mut term, metadata))) => {
-                result.added[new] = ordinal;
-                remap_sources(&mut term, added_sources);
-                (term, metadata)
-            }
-            Joined::Both((old, (mut left, metadata)), (new, (mut right, _))) => {
-                result.retained[old] = ordinal;
-                result.added[new] = ordinal;
-                remap_sources(&mut left, retained_sources);
-                remap_sources(&mut right, added_sources);
-                left.documents = join_by(left.documents, right.documents, u32::cmp)
-                    .map(Joined::one)
-                    .collect();
-                left.occurrences = join_by(
-                    left.occurrences,
-                    right.occurrences,
-                    |a: &Occurrence, b: &Occurrence| {
-                        (a.source, a.range.start, a.range.end).cmp(&(
-                            b.source,
-                            b.range.start,
-                            b.range.end,
-                        ))
-                    },
-                )
-                .map(Joined::one)
-                .collect();
-                (left, metadata)
-            }
+    .ok_or_else(|| TextError::data("surface document occurrence population is inconsistent"))?;
+    if after == 0 {
+        members.remove(
+            position
+                .map_err(|_| TextError::data("a removed surface document membership is absent"))?,
+        )
+    } else {
+        let member = Member {
+            document: document.clone(),
+            count: after,
         };
-        result.terms.push(term);
-        result.metadata.push(metadata);
-    }
-    Ok(result)
-}
-
-fn remap_sources(term: &mut SurfaceTerm, ordinals: &[usize]) {
-    for occurrence in &mut term.occurrences {
-        occurrence.source = ordinals[occurrence.source];
+        match position {
+            Ok(at) => members.replace(at, member),
+            Err(at) => members.insert(at, member),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfaceIndex, merge_sources, term_ordinal};
+    use super::SurfaceIndex;
+    use crate::error::term_ordinal;
     use crate::{Analyzer, TextDeltaError};
 
     #[test]
@@ -240,8 +342,8 @@ mod tests {
         let original =
             SurfaceIndex::from_texts(Analyzer::empty_lexicon(), [(7, "source")]).unwrap();
         let identity = original.sources[0].identity;
-        let duplicate = original.sources.clone();
-        assert!(matches!(merge_sources(original.sources, duplicate),
+        let duplicate = original.clone();
+        assert!(matches!(original.merge_disjoint(duplicate),
             Err(TextDeltaError::SourceOverlap { document: 7, identity: actual }) if actual == identity));
     }
 
@@ -253,22 +355,22 @@ mod tests {
         let word = base
             .words
             .iter()
-            .position(|word| word.text == "smith")
+            .position(|word| word.text.text() == "smith")
             .unwrap();
-        let allocation = base.canonical[word].as_ref().unwrap().as_ptr();
+        let allocation = base.words[word].pronunciation().unwrap().1.as_ptr();
         let added = SurfaceIndex::from_texts(analyzer, [(1, "aardvark Smith")]).unwrap();
         let updated = base.with_documents(added).unwrap();
         let word = updated
             .words
             .iter()
-            .position(|word| word.text == "smith")
+            .position(|word| word.text.text() == "smith")
             .unwrap();
         assert_eq!(
-            updated.canonical[word].as_ref().unwrap().as_ptr(),
+            updated.words[word].pronunciation().unwrap().1.as_ptr(),
             allocation
         );
         let matches = updated.phonetic("Smith").unwrap();
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].term.documents(), [0, 1]);
+        assert_eq!(matches[0].term.documents().collect::<Vec<_>>(), [0, 1]);
     }
 }

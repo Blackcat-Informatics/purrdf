@@ -687,7 +687,7 @@ fn owned_workspace(
 /// The original live-byte/cache/request/first-fault owner shared by every
 /// descriptor read in one stack query. Opening an ordinary session uses the
 /// same owner with one descriptor.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct SegmentedOperation {
     limits: SegmentedReadLimits,
     state: Arc<Mutex<State>>,
@@ -828,7 +828,9 @@ impl SegmentedOperation {
                 graphs: Stream::default(),
                 summaries: Stream::default(),
                 statistics: [Stream::default(); 4],
+                effective_directory: Stream::default(),
                 flags: 0,
+                source_union: purrdf_hash::multiset::Multiset256::default(),
             },
             state: Arc::clone(&self.state),
             budget: Arc::clone(&self.budget),
@@ -951,6 +953,13 @@ impl SegmentedSession {
     fn fail<T>(&self, error: SegmentedError) -> Result<T, SegmentedError> {
         latch_error(&self.state, error)
     }
+    pub(super) fn source_union(
+        &self,
+    ) -> Result<purrdf_hash::multiset::Multiset256, SegmentedError> {
+        self.ready()?;
+        Ok(self.header.source_union)
+    }
+
     fn ready(&self) -> Result<(), SegmentedError> {
         let error = lock_read_state(&self.state).error.clone();
         if let Some(error) = error {
@@ -1772,8 +1781,26 @@ impl DatasetView for SegmentedSession {
     type ReadError = SegmentedError;
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(
+            self.header
+                .streams
+                .iter()
+                .map(|stream| u128::from(stream.rows))
+                .sum(),
+        ))
+    }
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         Some(self)
+    }
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Self::source_summary(self, predicate, graph, stream)
     }
     fn read_error(&self) -> Option<Self::ReadError> {
         self.ready().err()

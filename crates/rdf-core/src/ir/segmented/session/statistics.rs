@@ -15,7 +15,127 @@ use crate::{
 };
 use std::ops::ControlFlow;
 
+struct SourceDirectory<'a> {
+    session: &'a SegmentedSession,
+    stream: super::Stream,
+}
+
+impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
+    type Error = SegmentedError;
+    type Record = crate::ir::source_directory::SourceRecord;
+
+    fn len(&self) -> Result<usize, Self::Error> {
+        self.session.ready()?;
+        usize::try_from(self.stream.rows).map_err(|_| SegmentedError::AddressExhausted)
+    }
+
+    fn record(
+        &self,
+        index: usize,
+    ) -> Result<crate::ir::source_directory::SourceRecord, Self::Error> {
+        let bytes = self
+            .session
+            .fixed_record::<{ crate::ir::source_directory::RECORD_BYTES }>(
+                self.stream,
+                format::SOURCE_DIRECTORY,
+                index as u64,
+            )?;
+        let stream = match bytes[36] {
+            0 => StatisticsStream::Asserted,
+            1 => StatisticsStream::Reifiers,
+            2 => StatisticsStream::Annotations,
+            _ => return Err(SegmentedError::Corrupt("invalid source directory stream")),
+        };
+        if bytes[37..40] != [0; 3] {
+            return Err(SegmentedError::Corrupt(
+                "nonzero source directory reserved bytes",
+            ));
+        }
+        Ok(crate::ir::source_directory::SourceRecord {
+            digest: bytes[..32].try_into().expect("fixed source digest"),
+            ordinal: u32::from_le_bytes(bytes[32..36].try_into().expect("fixed source ordinal")),
+            stream,
+        })
+    }
+
+    fn prefix(
+        &self,
+        end: usize,
+        work: &mut crate::source::SourceDifferenceWork,
+    ) -> Result<purrdf_hash::multiset::Multiset256, Self::Error> {
+        if end == 0 {
+            self.session.ready()?;
+            return Ok(purrdf_hash::multiset::Multiset256::default());
+        }
+        let bytes = self
+            .session
+            .fixed_record::<{ crate::ir::source_directory::RECORD_BYTES }>(
+                self.stream,
+                format::SOURCE_DIRECTORY,
+                (end - 1) as u64,
+            )?;
+        work.members += 1;
+        let population =
+            u128::from_le_bytes(bytes[40..56].try_into().expect("fixed source population"));
+        if population != end as u128 {
+            return Err(SegmentedError::Corrupt(
+                "false source directory prefix population",
+            ));
+        }
+        Ok(purrdf_hash::multiset::Multiset256::from_parts(
+            bytes[56..].try_into().expect("fixed source prefix"),
+            population,
+        ))
+    }
+}
+
 impl SegmentedSession {
+    /// Independently certified normalized statement/reifier keys and addresses.
+    pub(in crate::ir::segmented) fn source_directory(
+        &self,
+    ) -> impl crate::ir::source_directory::DirectoryRead<
+        Error = SegmentedError,
+        Record = crate::ir::source_directory::SourceRecord,
+    > + '_ {
+        SourceDirectory {
+            session: self,
+            stream: self.header.effective_directory,
+        }
+    }
+
+    pub(in crate::ir::segmented) fn source_record_row(
+        &self,
+        record: crate::ir::source_directory::SourceRecord,
+    ) -> Result<crate::QuadIds<GlobalTermId>, SegmentedError> {
+        let table = match record.stream {
+            StatisticsStream::Asserted => 0,
+            StatisticsStream::Reifiers => 1,
+            StatisticsStream::Annotations => 2,
+        };
+        format::decode_quad(&self.fixed_record::<32>(
+            self.header.streams[table],
+            format::QUADS,
+            u64::from(record.ordinal),
+        )?)
+    }
+
+    pub(super) fn source_summary(
+        &self,
+        predicate: GlobalTermId,
+        graph: GraphMatch<GlobalTermId>,
+        stream: StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, SegmentedError> {
+        self.ready()?;
+        self.find_statistic(relation(stream), graph, predicate)
+            .map(|record| {
+                Some(record.map_or_else(
+                    crate::source::SourceSummary::default,
+                    PredicateRecord::source_summary,
+                ))
+            })
+            .or_else(|error| self.fail(error))
+    }
+
     fn narrow_subject_statistic(
         &self,
         pattern: crate::ProbePattern<GlobalTermId>,
@@ -52,14 +172,27 @@ impl SegmentedSession {
         ordinal: u64,
     ) -> Result<[u8; N], SegmentedError> {
         let stream = self.header.statistics[section.index()];
-        if N != section.width() || ordinal >= stream.rows {
+        if N != section.width() {
+            return Err(SegmentedError::Corrupt("wrong statistics record width"));
+        }
+        self.fixed_record(stream, format::statistics_kind(section), ordinal)
+    }
+
+    fn fixed_record<const N: usize>(
+        &self,
+        stream: super::Stream,
+        kind: u8,
+        ordinal: u64,
+    ) -> Result<[u8; N], SegmentedError> {
+        self.ready()?;
+        if ordinal >= stream.rows {
             return Err(SegmentedError::Corrupt(
-                "statistics ordinal outside section",
+                "fixed record ordinal outside section",
             ));
         }
         let per = (u64::from(self.header.block_bytes) - 9) / N as u64;
         let block = self.block(stream.first + ordinal / per)?;
-        let data = fixed_records(&block.encoded, format::statistics_kind(section), N)?;
+        let data = fixed_records(&block.encoded, kind, N)?;
         if data.len() as u64 / N as u64 != (stream.rows - ordinal / per * per).min(per) {
             return Err(SegmentedError::Corrupt("false statistics record packing"));
         }
@@ -74,9 +207,13 @@ impl SegmentedSession {
         &self,
         ordinal: u64,
     ) -> Result<PredicateRecord<GlobalTermId>, SegmentedError> {
-        let record = PredicateRecord::decode(
-            &self.statistic_record::<136>(StatisticsSection::Predicates, ordinal)?,
-        )?;
+        let record =
+            PredicateRecord::decode(
+                &self.statistic_record::<{ crate::ir::statistics::PREDICATE_RECORD_BYTES }>(
+                    StatisticsSection::Predicates,
+                    ordinal,
+                )?,
+            )?;
         record.validate_ranges(self.header.statistics.map(|stream| stream.rows))?;
         Ok(record)
     }

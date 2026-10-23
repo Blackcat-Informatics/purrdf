@@ -465,6 +465,25 @@ impl DatasetView for TripleRead<'_> {
             .map(|()| self as &dyn crate::SnapshotStatistics<TermId>)
     }
 
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        self.graph(graph)?;
+        Ok(Some(
+            self.dataset
+                .statistics
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(self.dataset.statistics.statement_count()))
+    }
+
     fn statement_cardinality_estimate(
         &self,
         pattern: crate::ProbePattern,

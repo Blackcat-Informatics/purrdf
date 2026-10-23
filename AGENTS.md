@@ -8,6 +8,31 @@ contributing to the PurRDF repository.
 
 ---
 
+## Shared engineering guidance
+
+Read [Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md).
+Repository-specific constraints in this file take precedence over generic guide
+examples, including dependency choices and test tooling.
+
+## WASM test ownership
+
+General semantics, correctness, grammar, arithmetic, refusal, ownership and
+conformance tests belong in native Rust. Do not add or execute WASM copies of
+those tests, regardless of their origin. A portable build, a 32-bit integer,
+a shared harness, or a test already being selected is not a justification.
+
+WASM execution is limited to actual WASM dispatch/SIMD kernels, shadow-stack
+floors, host imports/interfaces, and explicitly named frozen native byte/digest
+identity probes. Every retained selection must name that concrete obligation in
+[WASM_TESTING.md](./docs/WASM_TESTING.md). Exercise only its exact named cases;
+never run an entire mixed target on WASM. Keep ordinary cases in native coverage.
+`make wasm` separately establishes release-crate build portability.
+
+Before adding a WASM selection, inspect its implementation and identify the
+platform-specific branch or frozen native identity it exercises. General
+correctness, full-width values, source ownership and typed errors alone do not
+qualify. Audit existing selections by the same rule; do not grandfather them.
+
 ## Deficiency emergency ledger (non-negotiable)
 
 `.deficiencies` is the log of last resort for critically undone work. Every entry
@@ -148,6 +173,8 @@ order, with the home each names. Call the home; never write a second body.
 | `prefixed-name` | `purrdf_iri::contract_where` |
 | `structured-error-list` | `purrdf_hash::error::visit_list` |
 | `structured-error-capture` | `purrdf_testkit::error_capture::Capture::read` |
+| `multiset-256` | `purrdf_hash::multiset::Multiset256` |
+| `source-row-identity` | `purrdf_core::source::LiteralSourceRow` |
 
 ### Shared structures and constructors
 

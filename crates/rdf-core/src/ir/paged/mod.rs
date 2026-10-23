@@ -1403,6 +1403,23 @@ impl DatasetView for PagedDataset {
         Some(&self.statistics.values)
     }
 
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(Some(
+            self.statistics
+                .values
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(Some(self.statistics.values.statement_count()))
+    }
+
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         // Stream the reifier side table page-by-page (same lazy composition as `quads`).
         self.pages.iter().flat_map(move |slot| {

@@ -1070,14 +1070,6 @@ impl DatasetView for ShaclDatasetView {
             usize::MAX
         })
     }
-    fn annotations_of_with_graph(
-        &self,
-        reifier: TermId,
-    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
-        self.annotation_quads()
-            .filter(move |q| q.s == reifier)
-            .map(|q| (q.p, q.o, q.g))
-    }
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         let graphs = match &self.source {
             Source::Native(source) => Either::Left(source.named_graphs()),

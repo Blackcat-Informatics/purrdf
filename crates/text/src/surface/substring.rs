@@ -3,11 +3,13 @@
 
 //! Deterministic positional query planning, admission budgets and exact checking.
 
+use super::Spelling;
+use super::postings::PostingSlice;
 use super::{
     MatchProjection, SubstringMatch, SurfaceIndex,
     postings::{self, GramPosting},
 };
-use crate::TextError;
+use crate::{CorpusProfile, GraphLanguage, TextError};
 use std::fmt;
 
 /// Immutable logical work limits, included in the analyzer profile identity.
@@ -95,9 +97,9 @@ impl std::error::Error for SubstringRefusal {}
 
 /// Complete matches and the logical work used to establish them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SubstringReport<'a> {
+pub struct SubstringReport<'a, P: CorpusProfile = GraphLanguage> {
     /// Exact matches, in lexical span order; never a partial prefix.
-    pub matches: Vec<SubstringMatch<'a>>,
+    pub matches: Vec<SubstringMatch<'a, P>>,
     /// Deterministic work charged by this operation.
     pub counters: SubstringWork,
     /// Exact immutable index generation.
@@ -152,14 +154,14 @@ impl Budget {
 struct QueryGram<'a> {
     key: u64,
     offset: u64,
-    postings: &'a [GramPosting],
+    postings: PostingSlice<'a, u64, GramPosting>,
 }
 struct Candidate {
-    span: usize,
+    span: Spelling,
     starts: Vec<usize>,
 }
 
-impl SurfaceIndex {
+impl<P: CorpusProfile> SurfaceIndex<P> {
     /// Find exact substrings only after the positional index proves selectivity.
     /// Even a singleton matching index is nonselective and requires explicit
     /// exhaustive opt-in. Missing grams and empty indexes return empty results.
@@ -167,7 +169,7 @@ impl SurfaceIndex {
     /// # Errors
     /// Returns a typed refusal on universal candidates or a logical work limit;
     /// malformed or erroneous input is rejected through the analyzer.
-    pub fn substring(&self, fragment: &str) -> Result<Vec<SubstringMatch<'_>>, TextError> {
+    pub fn substring(&self, fragment: &str) -> Result<Vec<SubstringMatch<'_, P>>, TextError> {
         Ok(self.substring_report(fragment)?.matches)
     }
 
@@ -175,7 +177,7 @@ impl SurfaceIndex {
     ///
     /// # Errors
     /// Same admission and analysis refusals as [`Self::substring`].
-    pub fn substring_report(&self, fragment: &str) -> Result<SubstringReport<'_>, TextError> {
+    pub fn substring_report(&self, fragment: &str) -> Result<SubstringReport<'_, P>, TextError> {
         self.run_substring(fragment, false)
     }
 
@@ -188,7 +190,7 @@ impl SurfaceIndex {
     pub fn substring_exhaustive(
         &self,
         fragment: &str,
-    ) -> Result<Vec<SubstringMatch<'_>>, TextError> {
+    ) -> Result<Vec<SubstringMatch<'_, P>>, TextError> {
         Ok(self.substring_exhaustive_report(fragment)?.matches)
     }
 
@@ -199,7 +201,7 @@ impl SurfaceIndex {
     pub fn substring_exhaustive_report(
         &self,
         fragment: &str,
-    ) -> Result<SubstringReport<'_>, TextError> {
+    ) -> Result<SubstringReport<'_, P>, TextError> {
         self.run_substring(fragment, true)
     }
 
@@ -207,7 +209,7 @@ impl SurfaceIndex {
         &self,
         fragment: &str,
         exhaustive: bool,
-    ) -> Result<SubstringReport<'_>, TextError> {
+    ) -> Result<SubstringReport<'_, P>, TextError> {
         let terms = self.analyzer.substring_terms(fragment)?;
         let [needle] = terms.as_slice() else {
             return Err(TextError::data(
@@ -224,12 +226,16 @@ impl SurfaceIndex {
         let candidates = if exhaustive {
             let capacity = usize::try_from(budget.limits.candidate_spans).unwrap_or(usize::MAX);
             let mut candidates = Vec::with_capacity(self.spans.len().min(capacity));
-            for (span, shape) in self.shapes.iter().enumerate() {
+            for term in self.spans.iter() {
+                let shape = term.shape();
                 budget.charge(SubstringRefusalReason::CandidateSpans, 1)?;
                 let starts = (0..shape.offsets.len())
                     .filter(|&start| eligible(shape, start, scalar_count))
                     .collect();
-                candidates.push(Candidate { span, starts });
+                candidates.push(Candidate {
+                    span: term.text.clone(),
+                    starts,
+                });
             }
             candidates
         } else {
@@ -244,25 +250,30 @@ impl SurfaceIndex {
         for candidate in &candidates {
             budget.charge(
                 SubstringRefusalReason::VerificationBytes,
-                self.spans[candidate.span].text.len() as u64,
+                Self::term(&self.spans, candidate.span.text())
+                    .expect("a candidate has its span")
+                    .text
+                    .text()
+                    .len() as u64,
             )?;
         }
         let mut matches = Vec::new();
         for candidate in candidates {
-            let term = &self.spans[candidate.span];
-            let shape = &self.shapes[candidate.span];
+            let term =
+                Self::term(&self.spans, candidate.span.text()).expect("a candidate has its span");
+            let shape = term.shape();
             let ranges: Vec<_> = candidate
                 .starts
                 .into_iter()
                 .filter_map(|start| {
                     let range = shape.offsets[start]..shape.offsets[start + scalar_count];
-                    (term.text.get(range.clone()) == Some(needle.as_str())).then_some(range)
+                    (term.text.text().get(range.clone()) == Some(needle.as_str())).then_some(range)
                 })
                 .collect();
             if !ranges.is_empty() {
                 let evidence = self.evidence(term, &ranges, MatchProjection::SubstringSpan);
                 matches.push(SubstringMatch {
-                    term,
+                    term: self.view(term),
                     ranges,
                     evidence,
                 });
@@ -303,7 +314,7 @@ impl SurfaceIndex {
             .min_by_key(|gram| (gram.postings.len(), gram.key, gram.offset))
             .expect("nonempty needle");
         let mut candidates: Vec<Candidate> = Vec::new();
-        'anchor: for posting in anchor.postings {
+        'anchor: for posting in anchor.postings.iter() {
             budget.charge(SubstringRefusalReason::PostingOperations, 1)?;
             let Some(start) = posting.position.checked_sub(anchor.offset) else {
                 continue;
@@ -319,7 +330,7 @@ impl SurfaceIndex {
                 if gram
                     .postings
                     .binary_search(&GramPosting {
-                        span: posting.span,
+                        span: posting.span.clone(),
                         position,
                     })
                     .is_err()
@@ -327,11 +338,17 @@ impl SurfaceIndex {
                     continue 'anchor;
                 }
             }
-            let span = posting.span as usize;
+            let span = posting.span.clone();
             let Ok(start) = usize::try_from(start) else {
                 continue;
             };
-            if !eligible(&self.shapes[span], start, scalars.len()) {
+            if !eligible(
+                Self::term(&self.spans, span.text())
+                    .expect("a gram posting has its span")
+                    .shape(),
+                start,
+                scalars.len(),
+            ) {
                 continue;
             }
             if candidates

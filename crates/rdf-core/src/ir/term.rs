@@ -17,7 +17,8 @@
 
 use std::num::NonZeroU32;
 
-use purrdf_hash::frame::frame_le;
+mod canonical;
+pub(crate) use canonical::CanonicalNode;
 
 use super::term_walk::TermBox;
 use crate::RdfTextDirection;
@@ -873,7 +874,7 @@ impl TermValue {
     ///
     /// - Every variant opens with a distinct `u8` tag, so a byte string can be
     ///   attributed to at most one variant before any field is read.
-    /// - Every variable-length field is written framed by [`frame_le`]: an eight-byte
+    /// - Every variable-length field is written framed by [`purrdf_hash::frame::frame_le`]: an eight-byte
     ///   little-endian length, then exactly that many bytes. The reader therefore
     ///   always knows where a field ends without scanning for a delimiter — which
     ///   matters because RDF strings are arbitrary UTF-8 and no byte is reserved.
@@ -903,10 +904,10 @@ impl TermValue {
     ///
     /// # Relation to the other hand-written encodings
     ///
-    /// This is the third hand-written encoding of `TermValue`, alongside [`Ord`] and
-    /// [`Hash`], and it reuses `Hash`'s discriminant numbering verbatim (`Iri` = 0,
-    /// `Blank` = 1, `Literal` = 2, `Triple` = 3) so the type has one tag space, not
-    /// two. All three must be revisited together when the enum changes.
+    /// These byte tags (`Iri` = 0, `Blank` = 1, `Literal` = 2, `Triple` = 3)
+    /// are distinct from the kind ranks used by [`Ord`] and [`Hash`]. Changing
+    /// those ranks does not change this published encoding. All three must be
+    /// revisited when the enum changes.
     ///
     /// # Nesting
     ///
@@ -941,42 +942,14 @@ impl TermValue {
         let mut pending = Vec::new();
         memory.push(&mut pending, self)?;
         while let Some(term) = pending.pop() {
-            let mut bytes = 1usize;
-            let mut field = |length: usize| -> Result<(), StorageError> {
-                bytes = bytes
-                    .checked_add(8)
-                    .and_then(|bytes| bytes.checked_add(length))
+            let node = term.canonical_node();
+            let bytes = node.byte_len()?;
+            if matches!(term, Self::Triple { .. }) {
+                let required = pending
+                    .len()
+                    .checked_add(3)
                     .ok_or(StorageError::SizeOverflow)?;
-                Ok(())
-            };
-            match term {
-                Self::Iri(iri) => field(iri.len())?,
-                Self::Blank { label, .. } => {
-                    field(label.len())?;
-                    bytes = bytes.checked_add(4).ok_or(StorageError::SizeOverflow)?;
-                }
-                Self::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    field(lexical_form.len())?;
-                    field(datatype.len())?;
-                    if let Some(language) = language {
-                        field(language.len())?;
-                    }
-                    bytes = bytes
-                        .checked_add(2 + usize::from(direction.is_some()))
-                        .ok_or(StorageError::SizeOverflow)?;
-                }
-                Self::Triple { .. } => {
-                    let required = pending
-                        .len()
-                        .checked_add(3)
-                        .ok_or(StorageError::SizeOverflow)?;
-                    memory.reserve(&mut pending, required)?;
-                }
+                memory.reserve(&mut pending, required)?;
             }
             let required = out
                 .len()
@@ -992,62 +965,68 @@ impl TermValue {
                     ),
                 )?;
             }
-            term.canonical_bytes_shallow(out, &mut pending);
+            node.visit_bytes(&mut |bytes| out.extend_from_slice(bytes));
+            if let Self::Triple { s, p, o } = term {
+                pending.extend([&**o, &**p, &**s]);
+            }
         }
         memory.release_vec(pending)
     }
 
-    /// Append this term's own part of the canonical encoding — its tag and fields —
-    /// and, for a triple term, queue its components on `pending`, subject on top.
-    fn canonical_bytes_shallow<'a>(&'a self, out: &mut Vec<u8>, pending: &mut Vec<&'a Self>) {
+    /// Borrow this term's own encoding fields. The traversal remains with its
+    /// caller, so native ID-based readers and owned terms share the same codec.
+    pub(crate) fn canonical_node(&self) -> CanonicalNode<'_> {
         match self {
-            Self::Iri(iri) => {
-                out.push(0u8);
-                frame_le(out, iri.as_bytes());
-            }
-            Self::Blank { label, scope } => {
-                out.push(1u8);
-                frame_le(out, label.as_bytes());
-                // `BlankScope` is a `u32` newtype, not an enum, so its whole value
-                // space is covered by writing the ordinal at fixed width. Four
-                // little-endian bytes, unconditionally, keeps the field trivially
-                // decodable and target-independent.
-                out.extend_from_slice(&scope.ordinal().to_le_bytes());
-            }
+            Self::Iri(iri) => CanonicalNode::Iri(iri),
+            Self::Blank { label, scope } => CanonicalNode::Blank {
+                label,
+                scope: *scope,
+            },
             Self::Literal {
                 lexical_form,
                 datatype,
                 language,
                 direction,
-            } => {
-                out.push(2u8);
-                frame_le(out, lexical_form.as_bytes());
-                frame_le(out, datatype.as_bytes());
-                match language {
-                    None => out.push(0u8),
-                    Some(language) => {
-                        out.push(1u8);
-                        frame_le(out, language.as_bytes());
-                    }
-                }
-                match direction {
-                    None => out.push(0u8),
-                    Some(direction) => {
-                        out.push(1u8);
-                        // Exhaustive on purpose — no `_` arm. A new base direction
-                        // must not compile until it is given its own byte here.
-                        out.push(match direction {
-                            RdfTextDirection::Ltr => 0u8,
-                            RdfTextDirection::Rtl => 1u8,
-                        });
-                    }
-                }
-            }
-            Self::Triple { s, p, o } => {
-                out.push(3u8);
-                pending.extend([&**o, &**p, &**s]);
-            }
+            } => CanonicalNode::Literal {
+                lexical: lexical_form,
+                datatype,
+                language: language.as_deref(),
+                direction: *direction,
+            },
+            Self::Triple { .. } => CanonicalNode::Triple,
         }
+    }
+
+    /// Stream the canonical encoding without allocating an output buffer.
+    ///
+    /// The borrowed chunks are valid only during each callback. Traversal uses
+    /// an admitted heap work list, including for deeply nested triple terms.
+    ///
+    /// # Errors
+    /// Returns storage refusal before growing the traversal work list. Chunks
+    /// emitted before a refusal must not be published as a complete encoding.
+    pub fn visit_canonical_bytes_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        mut output: impl FnMut(&[u8]),
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        if !matches!(self, Self::Triple { .. }) {
+            self.canonical_node().visit_bytes(&mut output);
+            return Ok(());
+        }
+        memory.try_scope(|memory| {
+            let mut pending = Vec::new();
+            memory.push(&mut pending, self)?;
+            while let Some(term) = pending.pop() {
+                term.canonical_node().visit_bytes(&mut output);
+                if let Self::Triple { s, p, o } = term {
+                    for child in [&**o, &**p, &**s] {
+                        memory.push(&mut pending, child)?;
+                    }
+                }
+            }
+            memory.release_vec(pending)
+        })
     }
 
     /// This term's canonical byte encoding as a fresh `Vec<u8>`.

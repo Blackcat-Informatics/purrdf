@@ -6,6 +6,16 @@ OVER BINARY SIZE - STOP.**
 Read [AGENTS.md](./AGENTS.md) — it is the canonical contract for this repository
 (crate map, hard constraints, commands, performance discipline, brand rules).
 
+Read [Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md), subject to
+the repository-specific constraints in AGENTS.md.
+
+**WASM test ownership:** ordinary semantic, refusal, ownership and conformance
+tests run natively. WASM selections must exercise actual dispatch/SIMD,
+shadow-stack or host-interface behavior, or an explicitly frozen native byte
+identity. A 32-bit target or an existing selection is insufficient. Follow
+[the exact WASM execution inventory](./docs/WASM_TESTING.md); do not run whole
+mixed targets on WASM or extend them with ordinary native tests.
+
 Quick orientation:
 
 * **Gate before you claim done**: `make check` (fmt + clippy + build + tests +

@@ -15,6 +15,7 @@ mod format;
 mod query;
 mod session;
 mod stack;
+pub(crate) use query::SegmentedSourceVersion;
 
 pub use build::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
 #[cfg(not(target_arch = "wasm32"))]

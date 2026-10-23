@@ -1156,6 +1156,64 @@ pub trait DatasetView {
         None
     }
 
+    /// Exact source content for this predicate, graph selection and physical
+    /// stream. An absent predicate is an empty summary; `None` means that the
+    /// provider cannot supply independently maintained content evidence.
+    ///
+    /// This must not derive from a consumer's proposed delta or sizing bounds.
+    /// Operational failures return the original typed read error, including
+    /// from providers that do not latch errors. Consumers must also check final
+    /// completion before publishing any summary-based result. The default
+    /// performs no source scan and supplies no substitute evidence.
+    ///
+    /// # Errors
+    /// Returns the provider's original metadata, identity or admission failure.
+    fn source_summary(
+        &self,
+        _predicate: Self::Id,
+        _graph: GraphMatch<Self::Id>,
+        _stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Capture an independently observed source version for later transitions.
+    /// A first observation may read the source; successor transitions must use
+    /// its retained immutable source ownership and native change indexes.
+    ///
+    /// # Errors
+    /// Returns original source, identity or admission failure.
+    fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Exact total statement population, available without scanning payloads.
+    /// Includes nonliteral rows and the reifier family. None is unavailable,
+    /// never an estimate or a substitute zero.
+    ///
+    /// # Errors
+    /// Returns the provider's original metadata/read failure.
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Visit effective changes discovered by the source, independently of a
+    /// consumer's supplied delta. Values remain borrowed for each callback.
+    ///
+    /// # Errors
+    /// Returns the original typed read failure, including final readiness.
+    fn visit_source_changes<B>(
+        &self,
+        _previous: &crate::source::SourceVersion,
+        _visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::source::SourceFamily,
+            crate::source::SourceRowRef<'_>,
+        ) -> std::ops::ControlFlow<B>,
+    ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
+        Ok(crate::source::SourceVisit::Unavailable)
+    }
+
     /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
     /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
     /// quad carrying the declaration's own graph slot. Capability-gated: a backend
@@ -1249,13 +1307,15 @@ pub trait DatasetView {
 
     /// The `(predicate, object, graph)` annotations declared for `reifier` (`graph`
     /// `None` ⇒ default graph). Capability-gated: a backend with no annotation layer
-    /// yields nothing (the default ignores `reifier`).
+    /// yields nothing. The default filters the annotation stream; indexed
+    /// backends override it with a subject probe.
     fn annotations_of_with_graph(
         &self,
         reifier: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
-        let _ = reifier;
-        std::iter::empty()
+        self.annotation_quads()
+            .filter(move |quad| quad.s == reifier)
+            .map(|quad| (quad.p, quad.o, quad.g))
     }
 
     /// The reifier side-table rows scoped to graph `g`: the graph-narrowed twin of
@@ -1827,8 +1887,24 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(Some(self.predicate_statistics().statement_count()))
+    }
+
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         Some(self.predicate_statistics())
+    }
+
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(Some(
+            self.predicate_statistics()
+                .source_summary(predicate, graph, stream),
+        ))
     }
 
     frozen_term_nesting_bound_method! {
@@ -2214,6 +2290,35 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         (**self).statistics()
     }
 
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        (**self).source_summary(predicate, graph, stream)
+    }
+
+    fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
+        (**self).source_version()
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        (**self).source_statement_count()
+    }
+
+    fn visit_source_changes<B>(
+        &self,
+        previous: &crate::source::SourceVersion,
+        visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::source::SourceFamily,
+            crate::source::SourceRowRef<'_>,
+        ) -> std::ops::ControlFlow<B>,
+    ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
+        (**self).visit_source_changes(previous, visit)
+    }
+
     #[inline]
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         (**self).reifier_quads()
@@ -2309,6 +2414,8 @@ impl<T: DatasetView> DatasetView for Arc<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     use super::*;
     use crate::ir::RdfDatasetBuilder;
 
@@ -2473,21 +2580,20 @@ mod tests {
     /// the whole surface under test.
     struct ProbeView {
         inner: Arc<RdfDataset>,
-        status: std::cell::Cell<u8>,
+        status: AtomicU8,
     }
 
     impl ProbeView {
         /// `0` = Ready, `1` = Failed; the native import control uses `2` to
-        /// become Failed when quad draining begins. A `Cell<u8>` rather than a
-        /// `Cell<ViewOperationStatus<..>>` because the status carries a
-        /// non-`Copy` payload (the fault); the discriminant alone is all
-        /// `operation_status` needs to reconstruct it.
+        /// become Failed when quad draining begins; `3` returns a direct
+        /// metadata error without changing Ready status. The atomic discriminant
+        /// permits Arc forwarding; the test orders its own state transitions.
         fn new(faulted: bool) -> Self {
             Self {
                 inner: RdfDatasetBuilder::new()
                     .freeze()
                     .expect("empty dataset freezes"),
-                status: std::cell::Cell::new(u8::from(faulted)),
+                status: AtomicU8::new(u8::from(faulted)),
             }
         }
 
@@ -2495,7 +2601,7 @@ mod tests {
         /// from the `drain` closure `checkpointed_drain` invokes, standing in
         /// for a real view that broke partway through its own read.
         fn fault_now(&self) {
-            self.status.set(1);
+            self.status.store(1, Ordering::Relaxed);
         }
     }
 
@@ -2512,8 +2618,20 @@ mod tests {
             self.operation_status().error().cloned()
         }
 
+        fn source_summary(
+            &self,
+            _predicate: Self::Id,
+            _graph: GraphMatch<Self::Id>,
+            _stream: crate::StatisticsStream,
+        ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+            if self.status.load(Ordering::Relaxed) == 3 {
+                return Err(ProbeFault("source summary direct read failure"));
+            }
+            self.read_error().map_or(Ok(None), Err)
+        }
+
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-            if self.status.get() == 2 {
+            if self.status.load(Ordering::Relaxed) == 2 {
                 self.fault_now();
             }
             self.inner.quads()
@@ -2558,7 +2676,7 @@ mod tests {
         /// thereafter — the whole point of `ProbeView` is that this is the
         /// ONLY thing that determines the status a checkpoint observes.
         fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
-            if self.status.get() != 1 {
+            if self.status.load(Ordering::Relaxed) != 1 {
                 ViewOperationStatus::Ready { evidence: 0 }
             } else {
                 ViewOperationStatus::Failed {
@@ -2570,6 +2688,45 @@ mod tests {
     }
 
     #[test]
+    fn source_summary_distinguishes_unavailable_empty_and_direct_read_failure() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("urn:source-predicate").unwrap();
+        let view = Arc::new(ProbeView {
+            inner: builder.freeze().unwrap(),
+            status: AtomicU8::new(0),
+        });
+        let source = |provider: &Arc<ProbeView>| {
+            provider.source_summary(
+                predicate,
+                GraphMatch::Any,
+                crate::StatisticsStream::Asserted,
+            )
+        };
+        assert_eq!(source(&view), Ok(None));
+        assert_eq!(
+            view.inner.source_summary(
+                predicate,
+                GraphMatch::Any,
+                crate::StatisticsStream::Asserted,
+            ),
+            Ok(Some(crate::source::SourceSummary::default()))
+        );
+        view.status.store(3, Ordering::Relaxed);
+        assert_eq!(
+            source(&view),
+            Err(ProbeFault("source summary direct read failure"))
+        );
+        assert!(
+            view.read_error().is_none(),
+            "direct failure is not a status latch"
+        );
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ));
+    }
+
+    #[test]
     fn materialization_preserves_native_read_failure_before_and_after_drain() {
         use crate::ir::import::DatasetImportError;
         use crate::{DatasetMaterializationError, dataset_from_view};
@@ -2578,7 +2735,7 @@ mod tests {
 
         for status in [1, 2] {
             let view = ProbeView::new(false);
-            view.status.set(status);
+            view.status.store(status, Ordering::Relaxed);
             let error = dataset_from_view(&view).unwrap_err();
             drop(view);
             let expected = ProbeFault("the probe view was told to fault");

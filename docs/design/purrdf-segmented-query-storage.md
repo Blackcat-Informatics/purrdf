@@ -29,7 +29,7 @@ One encoded record, including its framing, must fit a block or sealing
 returns `ConstructionLimit`. The encoder does not retry the complete image with
 a larger layout. Selective term lookup uses authenticated stored ID ranges;
 opening still loads no dictionary directory or term map. Full-population
-blocks retain their direct first-probe lookup. Data profile 3 refuses older
+blocks retain their direct first-probe lookup. Data profile 4 refuses older
 profiles; regenerate their images from the original RDF input.
 
 Reverse lookup compares the referenced dictionary keys through the same admitted
@@ -88,10 +88,15 @@ ordinary positive LIMIT need not intern every reifier in the image.
 
 ## Statistical metadata
 
-Data profile 3 retains four authenticated statistical sections: predicate/scope
+Data profile 4 retains four authenticated statistical sections: predicate/scope
 records, compressed distinct-ID domains, selected object frequencies and
 object-category/datatype counts. Predicate records carry row and distinct counts
-and ranges into the other sections. Fixed record widths permit selective binary
+and ranges into the other sections. Each predicate/scope record also carries
+the graph-aware and graph-free literal-source sums, their exact population and
+a physical-record sum that distinguishes asserted, reifier and annotation rows.
+These content summaries are computed from validated rows during construction;
+all-graph summaries combine the graph partitions without rehashing their rows.
+They are distinct from the sizing statistics' cache discriminator. Fixed record widths permit selective binary
 searches for predicate, class and category counts without reading distinct-ID
 payloads, RDF rows or dictionary values. An explicit domain visit streams its
 requested range through the existing delta codec and read admission owner.
@@ -103,6 +108,52 @@ sections participate in representation identity. Earlier data-profile images
 require regeneration from their RDF input; this reader refuses unsupported
 profiles. The certification receipt's encoding and hash laws remain distinct
 from the data profile.
+
+The 384-byte profile 4 header also retains the exact normalized statement-union
+and reifier multiset: asserted and annotation occurrences of the same value quad
+count once in that union, while a virtual reifier declaration remains a separate
+family. Its 128-bit population and 256-bit sum are reconstructed and compared
+during full certification, even when a modified image has a rebuilt hash tree.
+This content fingerprint is independent of dictionary IDs and classification;
+it is neither a signature nor a membership proof. Chronological observations
+retain original immutable source owners and use the query's own visibility and
+read admission for overlap and removals. A source version's retained grant stays
+charged after the creating query drops.
+
+The final fixed-record stream is the normalized source directory. It collapses asserted/annotation copies
+of a statement and keeps virtual reifiers in their separate identity family;
+its entries retain actual source-local addresses for selective value reads.
+Each 88-byte record contains the canonical record digest, the source-local
+32-bit ordinal and stream tag, three reserved zero bytes, and the inclusive
+prefix's 128-bit population and 256-bit sum. Full certification reconstructs
+all directory bytes from the RDF rows. Selective reads compare digest ranges
+using those authenticated prefixes through the same algorithm as resident
+directories; only differing records fetch their physical rows. The original
+read operation owns every directory and row read. Replacing a sealed descriptor
+therefore does not itself require enumerating either complete layer.
+
+An observation retains an effective directory of canonical keys. Its immutable Patricia tree uses leaves of at most
+32 keys and copies only changed leaves and paths. Each node and leaf buffer
+retains its original read-account grant; keys carry no dataset, provider or row
+address. Successors retain the current snapshot and independent key storage,
+allowing replaced source owners to release. Initial positive composition reads
+certified keys rather than reconstructing RDF values. Removals and publication
+changes still use the original visibility engine to determine actual events.
+Known sealed prefixes share those keys. Regrouped intermediate prefixes may
+instead refer lazily to the current snapshot's certified directories, avoiding
+a retained-key copy merely to populate a cache. One admitted range traversal
+compares groups of directories; it never constructs a merged row/key array.
+Equal normalized contributor roots collapse before group comparison. Source
+removals retain chronological visibility checks, including old removals when
+comparison uses physical contributor bags rather than effective keys.
+
+Full compaction compares the maintained effective keys with the new normalized
+image directory. A retained suffix permits the same comparison against the
+replaced prefix. Sealing a head while starting a fresh batch transfers the
+previous complete directory into the new sealed prefix. A large head reset
+compares only its new operations when those are smaller than the native
+difference; unchanged cumulative heads use native directory differences.
+Publishing a single resident head uses the same normalized-key comparison.
 
 The reader exposes these counts through the common snapshot statistics seam.
 Residual bounds retain the tighter existing subject-range estimate where it is
@@ -130,7 +181,7 @@ The byte and peak figures in this section were recorded on main at
 `0d075201f`, before data profile 2 added the authenticated statistics sections.
 They are historical layout measurements. The 2,000/200,000-claim query control
 separately passed profile 2's answer, touched-value and live-byte limits. Neither
-result establishes profile 3's image size, lookup work or live residency; those
+result establishes profile 4's image size, lookup work or live residency; those
 require new measurements of the complete representation.
 
 The `segmented_query` integration control builds 200,000 RDF 1.2 claims, each
@@ -153,7 +204,7 @@ these two indexes occupy about 90% of this image. Sparse dictionary blocks,
 rather than the authentication tree, dominate the expansion over the compact
 pack. The row streams are ordinary, reifier and annotation rows, each in one
 subject-first order; they are not three permutations of the entire dataset.
-These totals do not measure profile 3's single dictionary and identifier-only
+These totals do not measure profile 4's single dictionary and identifier-only
 reverse index. New byte, reader-work and live-residency measurements are required
 before attributing a compression or memory improvement to that representation.
 

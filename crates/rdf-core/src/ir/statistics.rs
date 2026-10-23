@@ -10,13 +10,18 @@ use purrdf_lex::allocation::{Admission, Memory, StorageError, growth_capacity};
 use super::dataset::{QuadIds, ReifierRow, TermRef};
 use super::frozen_terms::FrozenTerms;
 use super::pack::bits::{DeltaListRef, write_varint};
+use super::source_directory::{SourceDirectory, SourceRecord};
 use super::term::TermId;
 use crate::{
     GraphMatch, PredicateStatistics, RdfTermKind, StatisticCount, StatisticsAccuracy, ViewTermId,
 };
 
 mod codec;
-pub(super) use codec::{PredicateRecord, StatisticsSection, decode_frequency, decode_kind};
+mod source;
+use crate::source::SourceSummary;
+pub(super) use codec::{
+    PREDICATE_RECORD_BYTES, PredicateRecord, StatisticsSection, decode_frequency, decode_kind,
+};
 
 // Keep complete frequencies for low-cardinality objects and every rdf:type
 // class. Higher-cardinality predicates retain exact domains and kind counts;
@@ -24,7 +29,7 @@ pub(super) use codec::{PredicateRecord, StatisticsSection, decode_frequency, dec
 const SELECTED_OBJECT_FREQUENCIES: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum Relation {
+pub(crate) enum Relation {
     Asserted,
     Reifiers,
     Annotations,
@@ -48,6 +53,7 @@ struct Domain {
 struct Predicate<I = TermId> {
     key: (Relation, Scope<I>, I),
     rows: u64,
+    source: SourceSummary,
     subjects: Domain,
     objects: Domain,
     frequencies: Option<(usize, usize)>,
@@ -77,6 +83,12 @@ pub(crate) struct LocalStatistics<I = TermId> {
     frequencies: Box<[Frequency<I>]>,
     kinds: Box<[KindCount<I>]>,
     fingerprint: u64,
+    // Native addresses are exposed only by LocalStatistics<TermId>. A merged
+    // global statistics table has no single physical row address space.
+    directory: SourceDirectory,
+    effective_directory: SourceDirectory,
+    source_union: purrdf_hash::multiset::Multiset256,
+    statement_count: u128,
 }
 purrdf_hash::debug_non_exhaustive!([I] LocalStatistics<I> { fingerprint });
 
@@ -85,6 +97,8 @@ pub(super) struct StatisticsBuilder<I = TermId> {
     domains: Vec<u8>,
     frequencies: Vec<Frequency<I>>,
     kinds: Vec<KindCount<I>>,
+    records: Vec<SourceRecord>,
+    union: Vec<SourceRecord>,
 }
 
 // Deriving Default would unnecessarily require an empty identity value.
@@ -95,6 +109,8 @@ impl<I> Default for StatisticsBuilder<I> {
             domains: Vec::new(),
             frequencies: Vec::new(),
             kinds: Vec::new(),
+            records: Vec::new(),
+            union: Vec::new(),
         }
     }
 }
@@ -193,6 +209,7 @@ impl StatisticsBuilder {
         let class_predicate = dictionary.term_id_by_iri(purrdf_iri::vocab::rdf::TYPE);
         let mut ordinals = memory.collect(0..count)?;
         let one_graph = (1..count).all(|index| row(index).g == row(0).g);
+        let mut pending = Vec::new();
         for graph_scoped in [false, true] {
             if graph_scoped && one_graph {
                 let end = self
@@ -230,11 +247,46 @@ impl StatisticsBuilder {
                     ordinals[begin..end].iter().map(|&index| row(index).s),
                     memory,
                 )?;
+                let mut source = SourceSummary::default();
+                if graph_scoped || one_graph {
+                    for &ordinal in &ordinals[begin..end] {
+                        let (digest, union) = source.add_row(
+                            relation,
+                            row(ordinal),
+                            dictionary,
+                            &mut pending,
+                            memory,
+                        )?;
+                        let stream = match relation {
+                            Relation::Asserted => Some(crate::StatisticsStream::Asserted),
+                            Relation::Reifiers => Some(crate::StatisticsStream::Reifiers),
+                            Relation::Annotations => Some(crate::StatisticsStream::Annotations),
+                            Relation::Targets => None,
+                        };
+                        if let Some(stream) = stream {
+                            let record = SourceRecord {
+                                digest,
+                                ordinal: u32::try_from(ordinal)
+                                    .map_err(|_| StorageError::SizeOverflow)?,
+                                stream,
+                            };
+                            memory.push(&mut self.records, record)?;
+                            memory.push(
+                                &mut self.union,
+                                SourceRecord {
+                                    digest: union,
+                                    ..record
+                                },
+                            )?;
+                        }
+                    }
+                }
                 memory.push(
                     &mut self.predicates,
                     Predicate {
                         key: group,
                         rows: (end - begin) as u64,
+                        source,
                         subjects,
                         objects: Domain {
                             offset: 0,
@@ -312,6 +364,29 @@ impl StatisticsBuilder {
             }
             self.predicates.sort_unstable_by_key(|entry| entry.key);
         }
+        if !one_graph {
+            // Any-graph summaries combine exact graph partitions; their rows
+            // are not hashed for a second time.
+            let start = self
+                .predicates
+                .partition_point(|entry| entry.key.0 < relation);
+            let end = self
+                .predicates
+                .partition_point(|entry| entry.key.0 <= relation);
+            for index in start..end {
+                if matches!(self.predicates[index].key.1, Scope::Graph(_)) {
+                    let entry = self.predicates[index];
+                    let any = self
+                        .predicates
+                        .binary_search_by_key(&(relation, Scope::Any, entry.key.2), |value| {
+                            value.key
+                        })
+                        .expect("the any-graph partition precedes graph partitions");
+                    self.predicates[any].source.combine(entry.source)?;
+                }
+            }
+        }
+        memory.release_vec(pending)?;
         memory.release_vec(ordinals)
     }
 }
@@ -353,6 +428,21 @@ impl<I: StatisticsId> StatisticsBuilder<I> {
         memory: &mut Memory<'_, S>,
     ) -> Result<LocalStatistics<I>, StorageError> {
         self.predicates.sort_unstable_by_key(|entry| entry.key);
+        let statement_count = self
+            .predicates
+            .iter()
+            .filter(|entry| matches!(entry.key.1, Scope::Any) && entry.key.0 != Relation::Targets)
+            .map(|entry| u128::from(entry.rows))
+            .sum();
+        self.union
+            .sort_unstable_by_key(|record| (record.digest, record.stream as u8, record.ordinal));
+        self.union.dedup_by_key(|record| record.digest);
+        let mut source_union = purrdf_hash::multiset::Multiset256::default();
+        for record in &self.union {
+            source_union
+                .insert(record.digest)
+                .map_err(|_| StorageError::SizeOverflow)?;
+        }
         let fingerprint = purrdf_hash::fixed::hash_one(&(
             &self.predicates,
             &self.domains,
@@ -365,11 +455,24 @@ impl<I: StatisticsId> StatisticsBuilder<I> {
             frequencies: memory.boxed_slice(self.frequencies)?,
             kinds: memory.boxed_slice(self.kinds)?,
             fingerprint,
+            directory: SourceDirectory::freeze(self.records, memory)?,
+            effective_directory: SourceDirectory::freeze(self.union, memory)?,
+            source_union,
+            statement_count,
         })
     }
 }
 
 impl LocalStatistics {
+    pub(crate) const fn source_union(&self) -> purrdf_hash::multiset::Multiset256 {
+        self.source_union
+    }
+    pub(crate) const fn source_directory(&self) -> &SourceDirectory {
+        &self.directory
+    }
+    pub(crate) const fn effective_source_directory(&self) -> &SourceDirectory {
+        &self.effective_directory
+    }
     pub(super) fn build<S: Admission + ?Sized>(
         dictionary: &FrozenTerms,
         asserted: (usize, impl Fn(usize) -> QuadIds),
@@ -425,6 +528,9 @@ impl LocalStatistics {
 }
 
 impl<I: StatisticsId> LocalStatistics<I> {
+    pub(crate) const fn statement_count(&self) -> u128 {
+        self.statement_count
+    }
     /// Merge disjoint effective row partitions into the destination dictionary.
     /// Translation precedes sorting and union: source-local numeric order never
     /// substitutes for destination identity. A missing selected frequency stays
@@ -463,6 +569,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
                 let key = keys[begin].0;
                 let end = begin + keys[begin..].partition_point(|entry| entry.0 == key);
                 let mut rows = 0_u64;
+                let mut source_summary = SourceSummary::default();
                 let mut complete_frequencies = true;
                 let mut unbounded_frequencies = false;
                 for &(_, source, index) in &keys[begin..end] {
@@ -470,6 +577,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
                     rows = rows
                         .checked_add(entry.rows)
                         .ok_or(StorageError::SizeOverflow)?;
+                    source_summary.combine(entry.source)?;
                     complete_frequencies &= entry.frequencies.is_some();
                     unbounded_frequencies |= entry.unbounded_frequencies;
                 }
@@ -578,6 +686,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
                     Predicate {
                         key,
                         rows,
+                        source: source_summary,
                         subjects: domains[0],
                         objects: domains[1],
                         frequencies: complete_frequencies.then_some((
@@ -616,6 +725,10 @@ impl<I: StatisticsId> LocalStatistics<I> {
                 frequencies,
                 kinds: memory.boxed_slice(kinds)?,
                 fingerprint: self.fingerprint,
+                directory: self.directory.clone_admitted(memory)?,
+                effective_directory: self.effective_directory.clone_admitted(memory)?,
+                source_union: self.source_union,
+                statement_count: self.statement_count,
             })
         })
     }
@@ -655,6 +768,16 @@ impl<I: StatisticsId> LocalStatistics<I> {
             .binary_search_by_key(&(relation, scope, predicate), |entry| entry.key)
             .ok()
             .map(|index| &self.predicates[index])
+    }
+
+    pub(crate) fn source_summary(
+        &self,
+        predicate: I,
+        graph: GraphMatch<I>,
+        stream: crate::StatisticsStream,
+    ) -> SourceSummary {
+        self.entry(relation(stream), predicate, graph)
+            .map_or_else(SourceSummary::default, |entry| entry.source)
     }
 
     pub(super) fn predicate(
@@ -742,7 +865,9 @@ impl<I: StatisticsId> LocalStatistics<I> {
         size_of_val(self.predicates.as_ref())
             .checked_add(self.domains.len())?
             .checked_add(size_of_val(self.frequencies.as_ref()))?
-            .checked_add(size_of_val(self.kinds.as_ref()))
+            .checked_add(size_of_val(self.kinds.as_ref()))?
+            .checked_add(self.directory.retained_bytes()?)?
+            .checked_add(self.effective_directory.retained_bytes()?)
     }
 }
 
@@ -976,6 +1101,13 @@ mod tests {
                         .collect();
                     let summary = statistics.predicate(predicate, graph, stream).unwrap();
                     assert_eq!(summary.rows, exact(selected.len() as u64));
+                    let source = view
+                        .source_summary(predicate, graph, stream)
+                        .unwrap()
+                        .expect("native content evidence is available independently of sizing");
+                    assert_eq!(source.statement_count(), selected.len() as u128);
+                    let literals = owned_literal_rows(view, selected.iter().map(|row| **row));
+                    assert_eq!(source.literal_rows(), literals);
                     for (position, expected, actual) in [
                         (
                             StatisticsPosition::Subject,
@@ -1025,6 +1157,43 @@ mod tests {
         }
     }
 
+    fn owned_literal_rows<D: DatasetView>(
+        view: &D,
+        rows: impl IntoIterator<Item = QuadIds<D::Id>>,
+    ) -> [purrdf_hash::multiset::Multiset256; 2] {
+        let mut literals = [purrdf_hash::multiset::Multiset256::default(); 2];
+        for row in rows {
+            let crate::TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } = view.term_value(row.o).unwrap()
+            else {
+                continue;
+            };
+            let subject = view.term_value(row.s).unwrap();
+            let predicate = view.term_value(row.p).unwrap();
+            let graph = row.g.map(|id| view.term_value(id).unwrap());
+            let mut admission = purrdf_lex::allocation::Resident;
+            let hashes = crate::source::LiteralSourceRow {
+                graph: graph.as_ref(),
+                subject: &subject,
+                predicate: &predicate,
+                lexical: &lexical_form,
+                datatype: &datatype,
+                language: language.as_deref(),
+                direction,
+            }
+            .hashes_with_memory(&mut Memory::new(&mut admission))
+            .unwrap();
+            for (summary, hash) in literals.iter_mut().zip(hashes) {
+                summary.insert(hash).unwrap();
+            }
+        }
+        literals
+    }
+
     #[test]
     fn native_summaries_match_actual_graph_streams_and_sorted_domains() {
         let (dataset, predicates, scopes) = fixture(true);
@@ -1055,6 +1224,47 @@ mod tests {
                 ),
                 Some(exact(expected))
             );
+        }
+    }
+
+    #[test]
+    fn sealed_source_rows_match_independent_owned_projection_and_codec() {
+        for named in [false, true] {
+            let (dataset, _, _) = fixture(named);
+            let statistics = dataset.predicate_statistics();
+            for (index, entry) in statistics.predicates.iter().enumerate() {
+                let rows: Vec<_> = match entry.key.0 {
+                    Relation::Asserted => dataset.quads().collect(),
+                    Relation::Annotations => dataset.annotation_quads().collect(),
+                    Relation::Reifiers => dataset.reifier_quads().collect(),
+                    Relation::Targets => continue,
+                };
+                let selected: Vec<_> = rows
+                    .into_iter()
+                    .filter(|row| {
+                        row.p == entry.key.2
+                            && match entry.key.1 {
+                                Scope::Any => true,
+                                Scope::Graph(graph) => graph == row.g,
+                            }
+                    })
+                    .collect();
+                let expected = owned_literal_rows(&*dataset, selected.iter().copied());
+                assert_eq!(entry.source.literals, expected, "{:?}", entry.key);
+                assert_eq!(entry.source.records.population(), selected.len() as u128);
+                let mut encoded = [0; PREDICATE_RECORD_BYTES];
+                statistics
+                    .encode_records(StatisticsSection::Predicates, index, &mut encoded)
+                    .unwrap();
+                let decoded = PredicateRecord::<TermId>::decode(&encoded).unwrap();
+                assert_eq!(decoded.source, entry.source);
+                // A hash tree can authenticate false metadata bytes. Their
+                // independently reconstructed source summary must still differ.
+                encoded[17 * 8 + 8] ^= 1;
+                if let Ok(altered) = PredicateRecord::<TermId>::decode(&encoded) {
+                    assert_ne!(altered.source, entry.source);
+                }
+            }
         }
     }
 

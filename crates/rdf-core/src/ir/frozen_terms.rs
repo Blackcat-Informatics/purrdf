@@ -35,6 +35,51 @@ pub(crate) struct FrozenTerms {
 }
 
 impl FrozenTerms {
+    /// Stream the same value encoding as TermValue without reconstructing an
+    /// owned term or copying lexical bytes. Batch callers reuse one admitted
+    /// pending buffer; local IDs never enter the emitted content.
+    pub(super) fn visit_canonical_bytes<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        id: TermId,
+        pending: &mut Vec<TermId>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut output: impl FnMut(&[u8]),
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use super::term::CanonicalNode;
+        pending.clear();
+        memory.push(pending, id)?;
+        while let Some(id) = pending.pop() {
+            let node = match self.resolve(id) {
+                TermRef::Iri(iri) => CanonicalNode::Iri(iri),
+                TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                        unreachable!("validated literal datatype is an IRI")
+                    };
+                    CanonicalNode::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    }
+                }
+                TermRef::Triple { s, p, o } => {
+                    for child in [o, p, s] {
+                        memory.push(pending, child)?;
+                    }
+                    CanonicalNode::Triple
+                }
+            };
+            node.visit_bytes(&mut output);
+        }
+        Ok(())
+    }
+
     /// Reifier targets have already passed the frozen triple-term validation.
     pub(super) fn triple_components(&self, target: TermId) -> [TermId; 3] {
         match self.terms[target.index()] {

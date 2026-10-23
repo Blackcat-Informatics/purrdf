@@ -107,9 +107,6 @@ jobs:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: ${{ github.workspace }}/scripts/wasm-test-runner.sh
           PURRDF_TEST_REQUIRE_EXACT: 1
         run: |
-          cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_governance -- --exact \
-            admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs \
-            admitted_datetime_refusal_precedes_any_copy_allocation
           cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test query_coordinates -- --exact \
             supplied_inputs_repeat_complete_results_without_host_reads \
             supplied_large_fraction_and_timezone_survive_repeated_now \

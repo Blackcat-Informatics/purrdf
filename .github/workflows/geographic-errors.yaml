@@ -129,4 +129,4 @@ jobs:
       - name: Execute public replay and inspection on actual WASM
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: ${{ github.workspace }}/scripts/wasm-test-runner.sh
-        run: cargo test --locked --target wasm32-unknown-unknown -p purrdf-geo-kernel --test geo_determinism
+        run: cargo test --locked --target wasm32-unknown-unknown -p purrdf-geo-kernel --test geo_determinism -- --exact public_geo_capability_replay

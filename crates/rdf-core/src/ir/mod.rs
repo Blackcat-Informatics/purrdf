@@ -40,7 +40,8 @@ pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
 mod frozen_terms;
-mod statistics;
+mod source_directory;
+pub(crate) mod statistics;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl.
 pub mod mutable;
 pub mod view_accounting;
