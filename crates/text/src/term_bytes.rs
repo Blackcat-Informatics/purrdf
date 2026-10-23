@@ -142,28 +142,40 @@ fn encode_node(value: &TermValue, out: &mut Vec<u8>) {
             language,
             direction,
         } => {
-            out.push(TAG_LITERAL);
-            frame_le(out, lexical_form.as_bytes());
-            frame_le(out, datatype.as_bytes());
-            match language {
-                Some(tag) => {
-                    out.push(PRESENT);
-                    frame_le(out, tag.as_bytes());
-                }
-                None => out.push(ABSENT),
-            }
-            match direction {
-                Some(dir) => {
-                    out.push(PRESENT);
-                    out.push(match dir {
-                        purrdf_core::RdfTextDirection::Ltr => DIRECTION_LTR,
-                        purrdf_core::RdfTextDirection::Rtl => DIRECTION_RTL,
-                    });
-                }
-                None => out.push(ABSENT),
-            }
+            encode_literal(lexical_form, datatype, language.as_deref(), *direction, out);
         }
         TermValue::Triple { .. } => out.push(TAG_TRIPLE),
+    }
+}
+
+/// The same literal node encoding for a caller that already owns its fields
+/// separately. No temporary `TermValue` or copied lexical text is required.
+pub(crate) fn encode_literal(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<purrdf_core::RdfTextDirection>,
+    out: &mut Vec<u8>,
+) {
+    out.push(TAG_LITERAL);
+    frame_le(out, lexical_form.as_bytes());
+    frame_le(out, datatype.as_bytes());
+    match language {
+        Some(tag) => {
+            out.push(PRESENT);
+            frame_le(out, tag.as_bytes());
+        }
+        None => out.push(ABSENT),
+    }
+    match direction {
+        Some(dir) => {
+            out.push(PRESENT);
+            out.push(match dir {
+                purrdf_core::RdfTextDirection::Ltr => DIRECTION_LTR,
+                purrdf_core::RdfTextDirection::Rtl => DIRECTION_RTL,
+            });
+        }
+        None => out.push(ABSENT),
     }
 }
 

@@ -73,8 +73,10 @@
 use crate::query_workspace::{data_error, query_error};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
+use purrdf_lex::allocation::shared::Shared;
 use purrdf_sparql_eval::NativeDiagnosticKind;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 mod delta;
 
@@ -90,12 +92,18 @@ use crate::ranking::{FieldInputs, PreparedCorpus, RankingProfile};
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v4");
+const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v6");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
-const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
+const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v2");
 /// Graph-free source and index identities omit every graph coordinate.
-const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/index/v1");
-const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v1");
+const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/index/v3");
+const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
+
+mod source_digest;
+use source_digest::SourceDigest;
+mod token_streams;
+use token_streams::TokenTable;
+pub(crate) use token_streams::{Slice, Table};
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -103,11 +111,6 @@ const SELECTOR_ANY: u8 = 0x01;
 const SELECTOR_DEFAULT: u8 = 0x02;
 /// Digest tag for [`GraphSelector::Named`].
 const SELECTOR_NAMED: u8 = 0x03;
-
-/// Digest presence byte for an absent optional field.
-const ABSENT: u8 = 0x00;
-/// Digest presence byte for a present optional field.
-const PRESENT: u8 = 0x01;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -321,6 +324,9 @@ pub struct SourceCoverage {
     /// The configured predicates no in-scope statement carried, in configuration
     /// order.
     unrepresented: Vec<TermValue>,
+    /// Exact asserted/annotation statement populations in configuration order,
+    /// including nonliteral objects and multiplicity across the two layers.
+    represented: Vec<u128>,
 }
 
 impl SourceCoverage {
@@ -337,6 +343,13 @@ impl SourceCoverage {
     /// dataset holds nothing and so carried nothing for anything.
     pub fn unrepresented_predicates(&self) -> &[TermValue] {
         &self.unrepresented
+    }
+
+    /// Exact in-scope statement populations, in the index configuration's
+    /// predicate order. Both asserted and annotation rows count, including
+    /// nonliteral objects; reifier declarations are not predicate assertions.
+    pub fn predicate_statement_counts(&self) -> &[u128] {
+        &self.represented
     }
 
     /// The configured predicates whose absence is a fact about the *data* rather
@@ -465,8 +478,15 @@ pub struct Document<P: CorpusProfile = GraphLanguage> {
     length: u64,
     /// Analyzed token counts by selected predicate ordinal.
     predicate_lengths: Vec<(u32, u64)>,
-    /// Which of the index's partitions this document belongs to.
-    partition: u32,
+}
+
+#[derive(Clone, Debug)]
+struct PartitionRow<P: CorpusProfile> {
+    key: PartitionKey<P>,
+    stats: PartitionStats,
+    members: u64,
+    field_totals: Vec<u128>,
+    field_populations: Vec<u64>,
 }
 
 impl Document<GraphLanguage> {
@@ -494,37 +514,23 @@ impl<P: CorpusProfile> Document<P> {
 }
 
 /// One term's occurrences in one document.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Posting {
-    /// The document id.
-    document: u32,
+#[derive(Clone, Debug)]
+struct Posting<P: CorpusProfile> {
+    /// Immutable document facts, independent of its current public rank.
+    document: Shared<Document<P>>,
     /// The token positions the term occupies, ascending.
     positions: Vec<u32>,
     /// Frequencies by predicate ordinal, retained independently of ranking.
     predicate_frequencies: Vec<(u32, u64)>,
 }
 
-/// The half-open run of one term's postings that belongs to one partition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PartitionSpan {
-    /// The partition index.
-    partition: u32,
-    /// The first posting in the run.
-    start: u32,
-    /// One past the last posting in the run.
-    end: u32,
-}
-
-/// One dictionary entry: a term, its postings, and where each partition's run
-/// of them begins.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TermEntry {
+/// One shared spelling and its immutable ordered postings.
+#[derive(Clone, Debug)]
+struct TermEntry<P: CorpusProfile> {
     /// The analyzed term text.
-    term: String,
+    term: Shared<String>,
     /// Postings ordered by `(partition, document)`.
-    postings: Vec<Posting>,
-    /// The partition runs of `postings`, ascending by partition.
-    spans: Vec<PartitionSpan>,
+    postings: Table<Shared<Posting<P>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -571,15 +577,11 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
     /// Selected predicate ordinals mapped to ranking fields.
     predicate_fields: Vec<usize>,
     /// Field lengths by document; derived without reanalysis.
-    field_lengths: Vec<Vec<u64>>,
-    /// Exact field token totals by partition.
-    field_totals: Vec<Vec<u128>>,
-    /// Positive-token carrier counts by partition and ranking field.
-    field_populations: Vec<Vec<u64>>,
+    field_lengths: Table<Shared<Vec<u64>>>,
     /// The Unicode table versions the analyzer resolved against at build time.
     unicode: UnicodeVersions,
     /// Documents in id order — that is, sorted by `(graph, subject, language)`.
-    documents: Vec<Document<P>>,
+    documents: Table<Shared<Document<P>>>,
     /// Document ids sorted by `(subject, id)` — the side index a subject lookup
     /// binary-searches.
     ///
@@ -588,23 +590,27 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
     /// digesting it would only make the digest depend on an implementation
     /// detail. It exists because the document table is sorted with the *graph*
     /// first, so the documents sharing one subject are not contiguous in it.
-    subject_order: Vec<u32>,
+    subject_order: Table<Shared<Document<P>>>,
     /// Partitions sorted by [`PartitionKey`], with their statistics.
-    partitions: Vec<(PartitionKey<P>, PartitionStats)>,
+    partitions: Table<Shared<PartitionRow<P>>>,
     /// The term dictionary, sorted by term text.
-    terms: Vec<TermEntry>,
+    terms: Table<Shared<TermEntry<P>>>,
     /// Original streams, sharing dictionary strings instead of re-analyzing documents.
-    token_streams: Vec<Vec<TokenOccurrence>>,
+    token_streams: TokenTable,
     /// Physical documents grouped by the logical occurrence key (subject, language).
-    occurrence_order: Vec<u32>,
+    occurrence_order: Table<Shared<Document<P>>>,
     /// Distinct pre-stem words and bounded punctuation-bearing spans.
-    surface: Option<SurfaceIndex>,
+    surface: Option<SurfaceIndex<P>>,
     /// Source-aligned Han unigram and bigram occurrences for the independent producer.
-    pub(crate) han_occurrences: Vec<crate::character::HanOccurrence>,
+    han_occurrences: Option<Table<SharedBuffer<crate::character::HanOccurrence>>>,
     /// The digest of everything that can change an answer.
     fingerprint: [u8; FINGERPRINT_BYTES],
     /// The digest of the source rows walked.
     source_fingerprint: [u8; FINGERPRINT_BYTES],
+    /// Reversible source accounting, retained independently of its published hash.
+    source_digest: SourceDigest,
+    /// Original source-owned observation for independently discovering changes.
+    source_version: Option<purrdf_core::source::SourceVersion>,
     /// Which configured predicates the build's walk found a statement for.
     ///
     /// Part of **neither** fingerprint, and deliberately: this says nothing about
@@ -615,6 +621,38 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
     /// observation about the source the walk saw, kept so a host holding only the
     /// index can still read it.
     coverage: SourceCoverage,
+}
+
+pub(crate) struct DocumentOrder<'a, P: CorpusProfile> {
+    index: &'a TextIndex<P>,
+    entries: &'a Table<Shared<Document<P>>>,
+}
+
+impl<P: CorpusProfile> DocumentOrder<'_, P> {
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub(crate) fn get_owned(
+        &self,
+        at: usize,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<u32>, purrdf_sparql_eval::EvalError> {
+        self.entries
+            .get(at)
+            .map(|document| self.index.document_rank_owned(document, workspace))
+            .transpose()
+    }
+    pub(crate) fn range_owned<'a>(
+        &'a self,
+        start: usize,
+        end: usize,
+        workspace: &'a purrdf_sparql_eval::WorkspaceCapability,
+    ) -> impl Iterator<Item = Result<u32, purrdf_sparql_eval::EvalError>> + 'a {
+        self.entries
+            .slice(start, end)
+            .iter()
+            .map(move |document| self.index.document_rank_owned(document, workspace))
+    }
 }
 
 impl<P: CorpusProfile> TextIndex<P> {
@@ -680,16 +718,24 @@ impl<P: CorpusProfile> TextIndex<P> {
         config: &TextIndexConfig<P>,
     ) -> Result<Self, TextError> {
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(rows.iter());
+        let version = dataset
+            .source_version()
+            .map_err(|error| TextError::source_read(error.to_string()))?;
+        let source = SourceDigest::from_rows(&rows);
         let (documents, dictionary) = analyze_rows(&rows, config)?;
-        Self::assemble(
+        let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
-            source_fingerprint,
+            source,
             coverage,
             RankingProfile::single_field(),
-        )
+        )?;
+        index.source_version = version;
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| TextError::source_read(error.to_string()))?;
+        Ok(index)
     }
 
     /// Build directly under a fielded ranking law, including documents whose
@@ -706,16 +752,24 @@ impl<P: CorpusProfile> TextIndex<P> {
             profile.field_for(predicate)?;
         }
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(rows.iter());
+        let version = dataset
+            .source_version()
+            .map_err(|error| TextError::source_read(error.to_string()))?;
+        let source = SourceDigest::from_rows(&rows);
         let (documents, dictionary) = analyze_rows(&rows, config)?;
-        Self::assemble(
+        let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
-            source_fingerprint,
+            source,
             coverage,
             profile,
-        )
+        )?;
+        index.source_version = version;
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| TextError::source_read(error.to_string()))?;
+        Ok(index)
     }
 
     /// Apply a complete ranking profile without re-tokenizing or rebuilding
@@ -779,20 +833,20 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// Substring and phonetic retrieval over distinct surface terms, including
     /// sorted document membership and inspectable exact match evidence.
     /// Returns `None` when the caller disabled surface indexing.
-    pub const fn surface_index(&self) -> Option<&SurfaceIndex> {
+    pub const fn surface_index(&self) -> Option<&SurfaceIndex<P>> {
         self.surface.as_ref()
     }
 
     /// Exact field token totals for a partition, in ranking field order.
     pub fn field_totals(&self, partition: &PartitionKey<P>) -> Option<&[u128]> {
         self.partition_index(partition)
-            .map(|at| self.field_totals[at as usize].as_slice())
+            .map(|at| self.partitions[at as usize].field_totals.as_slice())
     }
 
     /// Documents with positive analyzed length in each field, in ranking order.
     pub fn field_populations(&self, partition: &PartitionKey<P>) -> Option<&[u64]> {
         self.partition_index(partition)
-            .map(|at| self.field_populations[at as usize].as_slice())
+            .map(|at| self.partitions[at as usize].field_populations.as_slice())
     }
 
     /// Admit a partition under its selected population law without walking documents.
@@ -804,14 +858,14 @@ impl<P: CorpusProfile> TextIndex<P> {
             .partition_index(partition)
             .ok_or_else(|| TextError::data("ranking partition is absent"))?
             as usize;
-        let documents = self.partitions[at].1.document_count;
-        let totals = &self.field_totals[at];
+        let documents = self.partitions[at].stats.document_count;
+        let totals = &self.partitions[at].field_totals;
         if self.ranking.uses_field_populations() {
             PreparedCorpus::with_field_populations(
                 &self.ranking,
                 documents,
                 totals,
-                &self.field_populations[at],
+                &self.partitions[at].field_populations,
             )
         } else {
             PreparedCorpus::new(&self.ranking, documents, totals)
@@ -838,16 +892,26 @@ impl<P: CorpusProfile> TextIndex<P> {
             .expect("resolved index-owned partition");
         PreparedCorpus::from_index_owned(
             &self.ranking,
-            self.partitions[at].1.document_count,
-            &self.field_totals[at],
-            &self.field_populations[at],
+            self.partitions[at].stats.document_count,
+            &self.partitions[at].field_totals,
+            &self.partitions[at].field_populations,
             workspace,
         )
     }
 
-    /// Original token stream. Projection consumers must keep these positions.
-    pub fn token_occurrences(&self, document: u32) -> Option<&[TokenOccurrence]> {
-        self.token_streams.get(document as usize).map(Vec::as_slice)
+    /// Original token stream in the current canonical dictionary order.
+    /// Projection consumers must keep these positions. The iterator translates
+    /// private stable addresses without copying or rewriting retained buffers.
+    pub fn token_occurrences(
+        &self,
+        document: u32,
+    ) -> Option<impl ExactSizeIterator<Item = TokenOccurrence> + Clone + '_> {
+        self.token_streams.get(document as usize).map(|stream| {
+            stream
+                .as_slice()
+                .iter()
+                .map(move |token| token.projected(&self.terms))
+        })
     }
     /// Bound all consecutive positional derivations, including graph aliases.
     /// Each start contributes the product of physical choices through the rest
@@ -856,8 +920,8 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// per start. Saturation denotes a genuinely unrepresentable worst-case bag.
     pub(crate) fn phrase_row_bound(&self) -> u64 {
         let mut positions = std::collections::BTreeMap::new();
-        for (document, stream) in self.documents.iter().zip(&self.token_streams) {
-            for token in stream {
+        for (document, stream) in self.documents.iter().zip(self.token_streams.iter()) {
+            for token in stream.as_slice() {
                 let count = positions
                     .entry((
                         &document.subject,
@@ -889,13 +953,29 @@ impl<P: CorpusProfile> TextIndex<P> {
     pub fn occurrence_term(&self, term: u32) -> Option<&str> {
         self.terms.get(term as usize).map(|term| term.term.as_str())
     }
-    pub(crate) fn occurrence_order(&self) -> &[u32] {
-        &self.occurrence_order
+    pub(crate) fn occurrence_order(&self) -> DocumentOrder<'_, P> {
+        DocumentOrder {
+            index: self,
+            entries: &self.occurrence_order,
+        }
+    }
+
+    pub(crate) fn han_occurrences(
+        &self,
+        document: u32,
+    ) -> impl Iterator<Item = &crate::character::HanOccurrence> {
+        self.han_occurrences
+            .as_ref()
+            .and_then(|table| table.get(document as usize))
+            .map_or(&[][..], SharedBuffer::as_slice)
+            .iter()
     }
 
     /// A document's field lengths, in ranking field order.
     pub fn field_lengths(&self, document: u32) -> Option<&[u64]> {
-        self.field_lengths.get(document as usize).map(Vec::as_slice)
+        self.field_lengths
+            .get(document as usize)
+            .map(|lengths| lengths.as_slice())
     }
 
     /// Nonzero `(predicate ordinal, token count)` facts, in configuration order. These
@@ -919,17 +999,33 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// when the document holds no posting for it — including a term the
     /// dictionary does not hold and an id naming no document.
     ///
-    /// One binary search over the dictionary and one over the term's postings
-    /// within the document's own partition span: the point lookup that decides
+    /// One search over the dictionary and one over the ordered postings:
+    /// the point lookup that decides
     /// membership, returning the very facts the scorer reads, so a caller that
     /// both decides and scores searches once rather than twice.
     pub(crate) fn posted_frequencies(&self, document: u32, term: &str) -> Option<&[(u32, u64)]> {
-        let partition = self.documents.get(document as usize)?.partition;
-        let postings = span_slice(self.term_entry(term)?, partition);
-        postings
-            .binary_search_by_key(&document, |posting| posting.document)
+        self.document_posting(document, term)
+            .map(|posting| posting.predicate_frequencies.as_slice())
+    }
+
+    pub(crate) fn posted_frequencies_owned(
+        &self,
+        document: u32,
+        term: &str,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<&[(u32, u64)]>, purrdf_sparql_eval::EvalError> {
+        let Some(document) = self.document(document) else {
+            return Ok(None);
+        };
+        let Some(entry) = self.term_entry(term) else {
+            return Ok(None);
+        };
+        let found = entry.postings.try_binary_search_by(|posting| {
+            compare_documents_owned(&posting.document, document, true, workspace)
+        })?;
+        Ok(found
             .ok()
-            .map(|at| postings[at].predicate_frequencies.as_slice())
+            .map(|at| entry.postings[at].predicate_frequencies.as_slice()))
     }
 
     /// Assemble field inputs from a posting already located by the query walk.
@@ -967,7 +1063,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             .ok_or_else(|| data_error("field input names an absent document", workspace))?;
         let resident = purrdf_sparql_eval::WorkspaceCapability::default();
         let mut fields = FieldInputs::new(lengths.len(), workspace.unwrap_or(&resident))?;
-        for (input, &length) in fields.iter_mut().zip(lengths) {
+        for (input, &length) in fields.iter_mut().zip(lengths.iter()) {
             input.length = length;
         }
         for &(predicate, frequency) in frequencies {
@@ -989,14 +1085,22 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// The walk is [`Self::partition_postings`], shared with [`Self::postings`]; this
     /// projection yields each posting's per-predicate frequencies, the BM25F field
     /// statistics input, where `postings` yields its token positions.
-    pub(crate) fn field_postings<'a>(
+    pub(crate) fn field_postings_owned<'a>(
         &'a self,
         partition: &PartitionKey<P>,
         term: &str,
-    ) -> impl Iterator<Item = (u32, &'a [(u32, u64)])> + use<'a, P> {
-        self.partition_postings(partition, term)
+        workspace: &'a purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<
+        impl Iterator<Item = Result<FieldPosting<'a>, purrdf_sparql_eval::EvalError>> + use<'a, P>,
+        purrdf_sparql_eval::EvalError,
+    > {
+        Ok(self
+            .partition_postings_owned(partition, term, workspace)?
             .iter()
-            .map(|posting| (posting.document, posting.predicate_frequencies.as_slice()))
+            .map(move |posting| {
+                self.document_rank_owned(&posting.document, workspace)
+                    .map(|document| (document, posting.predicate_frequencies.as_slice()))
+            }))
     }
 
     /// Derive field statistics from retained predicate facts, validating every
@@ -1008,10 +1112,10 @@ impl<P: CorpusProfile> TextIndex<P> {
             .iter()
             .map(|predicate| self.ranking.field_for(predicate))
             .collect::<Result<_, _>>()?;
-        self.field_lengths = Vec::with_capacity(self.documents.len());
-        self.field_totals = vec![vec![0; self.ranking.fields().len()]; self.partitions.len()];
-        self.field_populations = vec![vec![0; self.ranking.fields().len()]; self.partitions.len()];
-        for document in &self.documents {
+        self.partitions = Table::default();
+        let documents = self.documents.clone();
+        let mut field_lengths = Vec::with_capacity(documents.len());
+        for document in documents.iter() {
             let mut lengths = vec![0_u64; self.ranking.fields().len()];
             for &(predicate, length) in &document.predicate_lengths {
                 let field = self.predicate_fields[predicate as usize];
@@ -1019,18 +1123,90 @@ impl<P: CorpusProfile> TextIndex<P> {
                     .checked_add(length)
                     .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
             }
-            for ((total, population), &length) in self.field_totals[document.partition as usize]
-                .iter_mut()
-                .zip(&mut self.field_populations[document.partition as usize])
-                .zip(&lengths)
-            {
-                *total += u128::from(length);
-                *population += u64::from(length != 0);
-            }
-            self.field_lengths.push(lengths);
+            self.adjust_partition(document, &lengths, true)?;
+            field_lengths.push(share_index(lengths)?);
         }
-        for (partition, _) in &self.partitions {
-            self.prepared_corpus(partition)?;
+        self.field_lengths = Table::from_streams(field_lengths)?;
+        for row in self.partitions.iter() {
+            self.prepared_corpus(&row.key)?;
+        }
+        Ok(())
+    }
+
+    fn adjust_partition(
+        &mut self,
+        document: &Document<P>,
+        fields: &[u64],
+        added: bool,
+    ) -> Result<(), TextError> {
+        let position = self.partitions.binary_search_by(|row| {
+            (&row.key.graph, &row.key.language).cmp(&(&document.graph, &document.language))
+        });
+        let mut row = if let Ok(at) = position {
+            (*self.partitions[at]).clone()
+        } else {
+            if !added {
+                return Err(TextError::data("removed document has no partition"));
+            }
+            PartitionRow {
+                key: PartitionKey {
+                    graph: document.graph.clone(),
+                    language: document.language.clone(),
+                },
+                stats: PartitionStats {
+                    document_count: 0,
+                    total_tokens: 0,
+                    average_document_length: Fixed::ZERO,
+                },
+                members: 0,
+                field_totals: vec![0; self.ranking.fields().len()],
+                field_populations: vec![0; self.ranking.fields().len()],
+            }
+        };
+        let adjust = |before: u64, amount| {
+            if added {
+                before.checked_add(amount)
+            } else {
+                before.checked_sub(amount)
+            }
+            .ok_or_else(|| TextError::data("partition population or token count is inconsistent"))
+        };
+        row.members = adjust(row.members, 1)?;
+        row.stats.document_count =
+            adjust(row.stats.document_count, u64::from(document.length != 0))?;
+        row.stats.total_tokens = adjust(row.stats.total_tokens, document.length)?;
+        if fields.len() != row.field_totals.len() {
+            return Err(TextError::data("partition field shape is inconsistent"));
+        }
+        for ((total, population), &length) in row
+            .field_totals
+            .iter_mut()
+            .zip(&mut row.field_populations)
+            .zip(fields)
+        {
+            *total = if added {
+                total.checked_add(u128::from(length))
+            } else {
+                total.checked_sub(u128::from(length))
+            }
+            .ok_or_else(|| TextError::data("partition field token total is inconsistent"))?;
+            *population = adjust(*population, u64::from(length != 0))?;
+        }
+        if row.members == 0 {
+            self.partitions = self
+                .partitions
+                .remove(position.expect("a removed partition was present"))?;
+        } else {
+            row.stats.average_document_length = if row.stats.document_count == 0 {
+                Fixed::ZERO
+            } else {
+                exact_average(row.stats.total_tokens, row.stats.document_count)?
+            };
+            let row = share_index(row)?;
+            self.partitions = match position {
+                Ok(at) => self.partitions.replace(at, row)?,
+                Err(at) => self.partitions.insert(at, row)?,
+            };
         }
         Ok(())
     }
@@ -1071,31 +1247,31 @@ impl<P: CorpusProfile> TextIndex<P> {
     pub fn max_documents_in_any_partition(&self) -> u64 {
         self.partitions
             .iter()
-            .map(|(_, stats)| stats.document_count)
+            .map(|row| row.stats.document_count)
             .max()
             .unwrap_or(0)
     }
 
     /// Every partition and its statistics, ascending by [`PartitionKey`].
     pub fn partitions(&self) -> impl Iterator<Item = (&PartitionKey<P>, &PartitionStats)> {
-        self.partitions.iter().map(|(key, stats)| (key, stats))
+        self.partitions.iter().map(|row| (&row.key, &row.stats))
     }
 
     /// One partition's statistics, or `None` if the index has no such partition.
     pub fn partition_stats(&self, partition: &PartitionKey<P>) -> Option<&PartitionStats> {
         self.partition_index(partition)
             .and_then(|index| self.partitions.get(index as usize))
-            .map(|(_, stats)| stats)
+            .map(|row| &row.stats)
     }
 
     /// Every document, in id order.
     pub fn documents(&self) -> impl Iterator<Item = &Document<P>> {
-        self.documents.iter()
+        self.documents.iter().map(|document| &**document)
     }
 
     /// The document `id` names, or `None` if there is no such document.
     pub fn document(&self, id: u32) -> Option<&Document<P>> {
-        self.documents.get(id as usize)
+        self.documents.get(id as usize).map(|document| &**document)
     }
 
     /// Every document id whose subject is `subject`, ascending.
@@ -1103,13 +1279,17 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// A subject is not a document: `(graph, subject, language)` is, so one
     /// subject carrying `"the cat"@en` and `"le chat"@fr` in two named graphs is
     /// four documents. This is the lookup that turns the one into the other, in
-    /// `O(log n)` rather than by scanning the document table.
+    /// Ordered tree lookups avoid scanning the document table; result ordinals
+    /// are projected from the current immutable document order.
     ///
     /// Empty for a subject the index holds no text for, which is the true answer
     /// rather than a failure: a query may legitimately name a subject that has
     /// no indexed literals.
-    pub fn documents_with_subject(&self, subject: &TermValue) -> &[u32] {
-        let compare = |id: &u32| self.documents[*id as usize].subject.cmp(subject);
+    pub fn documents_with_subject<'a>(
+        &'a self,
+        subject: &TermValue,
+    ) -> impl ExactSizeIterator<Item = u32> + Clone + use<'a, P> {
+        let compare = |document: &Shared<Document<P>>| document.subject.cmp(subject);
         let start = self
             .subject_order
             .partition_point(|id| compare(id) == Ordering::Less);
@@ -1117,8 +1297,9 @@ impl<P: CorpusProfile> TextIndex<P> {
             .subject_order
             .partition_point(|id| compare(id) != Ordering::Greater);
         self.subject_order
-            .get(start..end)
-            .expect("partition_point yields in-range, ordered offsets")
+            .slice(start, end)
+            .iter()
+            .map(move |document| self.document_rank(document))
     }
 
     /// The existing two subject-side binary searches with admitted native term
@@ -1128,7 +1309,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         &self,
         subject: &TermValue,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<&[u32], purrdf_sparql_eval::EvalError> {
+    ) -> Result<purrdf_sparql_eval::AdmittedVec<u32>, purrdf_sparql_eval::EvalError> {
         fn partition<P: CorpusProfile>(
             index: &TextIndex<P>,
             subject: &TermValue,
@@ -1136,11 +1317,11 @@ impl<P: CorpusProfile> TextIndex<P> {
             upper: bool,
         ) -> Result<usize, purrdf_sparql_eval::EvalError> {
             let mut failure = None;
-            let result = index.subject_order.partition_point(|id| {
+            let result = index.subject_order.partition_point(|document| {
                 if failure.is_some() {
                     return false;
                 }
-                match workspace.terms_cmp(&index.documents[*id as usize].subject, subject) {
+                match workspace.terms_cmp(&document.subject, subject) {
                     Ok(order) => {
                         if upper {
                             order != Ordering::Greater
@@ -1161,19 +1342,34 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         let start = partition(self, subject, workspace, false)?;
         let end = partition(self, subject, workspace, true)?;
-        Ok(&self.subject_order[start..end])
+        let mut result = purrdf_sparql_eval::AdmittedVec::with_capacity(end - start, workspace)?;
+        for document in self.subject_order.slice(start, end).iter() {
+            result.push(self.document_rank_owned(document, workspace)?)?;
+        }
+        Ok(result)
     }
 
     /// Borrow one immutable positional posting without copying the caller's index.
-    pub(crate) fn posting_at(
+    pub(crate) fn posting_at_owned(
         &self,
         partition: usize,
         term: &str,
         ordinal: usize,
-    ) -> Option<(u32, &[u32])> {
-        let key = &self.partitions.get(partition)?.0;
-        let posting = self.partition_postings(key, term).get(ordinal)?;
-        Some((posting.document, &posting.positions))
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<(u32, &[u32])>, purrdf_sparql_eval::EvalError> {
+        let Some(row) = self.partitions.get(partition) else {
+            return Ok(None);
+        };
+        let Some(posting) = self
+            .partition_postings_owned(&row.key, term, workspace)?
+            .get(ordinal)
+        else {
+            return Ok(None);
+        };
+        Ok(Some((
+            self.document_rank_owned(&posting.document, workspace)?,
+            &posting.positions,
+        )))
     }
 
     /// The partitions holding a document whose subject is `subject`, ascending
@@ -1199,8 +1395,7 @@ impl<P: CorpusProfile> TextIndex<P> {
     pub fn partitions_holding_subject(&self, subject: &TermValue) -> Vec<PartitionKey<P>> {
         let mut keys: Vec<PartitionKey<P>> = self
             .documents_with_subject(subject)
-            .iter()
-            .filter_map(|&id| self.partition_key_of(id).cloned())
+            .filter_map(|id| self.partition_key_of(id).cloned())
             .collect();
         keys.sort();
         keys.dedup();
@@ -1211,30 +1406,48 @@ impl<P: CorpusProfile> TextIndex<P> {
     pub fn partition_key_of(&self, id: u32) -> Option<&PartitionKey<P>> {
         let document = self.documents.get(id as usize)?;
         self.partitions
-            .get(document.partition as usize)
-            .map(|(key, _)| key)
+            .get(self.document_partition(document))
+            .map(|row| &row.key)
     }
 
-    /// The stored partition ordinal of one document, without comparing terms.
-    pub(crate) fn partition_ordinal_of(&self, document: u32) -> Option<usize> {
-        self.documents
-            .get(document as usize)
-            .map(|document| document.partition as usize)
+    pub(crate) fn partition_ordinal_of_owned(
+        &self,
+        document: u32,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<usize>, purrdf_sparql_eval::EvalError> {
+        let Some(document) = self.document(document) else {
+            return Ok(None);
+        };
+        let result = self.partitions.try_binary_search_by(|row| {
+            Ok::<_, purrdf_sparql_eval::EvalError>(
+                compare_graphs_owned(
+                    P::graph(&row.key.graph),
+                    P::graph(&document.graph),
+                    workspace,
+                )?
+                .then_with(|| row.key.language.cmp(&document.language)),
+            )
+        })?;
+        Ok(result.ok())
+    }
+
+    pub(crate) fn partition_key_of_owned(
+        &self,
+        document: u32,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<&PartitionKey<P>>, purrdf_sparql_eval::EvalError> {
+        Ok(self
+            .partition_ordinal_of_owned(document, workspace)?
+            .map(|at| &self.partitions[at].key))
     }
 
     /// Resolve an actual index-owned key borrow to its stable ordinal.
     pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey<P>) -> Option<usize> {
-        let first = &self.partitions.first()?.0;
-        let stride = size_of::<(PartitionKey<P>, PartitionStats)>();
-        let distance = core::ptr::from_ref(partition)
-            .addr()
-            .checked_sub(core::ptr::from_ref(first).addr())?;
-        if distance.checked_rem(stride)? != 0 {
-            return None;
-        }
-        let ordinal = distance.checked_div(stride)?;
-        let candidate = &self.partitions.get(ordinal)?.0;
-        core::ptr::eq(candidate, partition).then_some(ordinal)
+        let at = self
+            .partitions
+            .binary_search_by(|row| row.key.cmp(partition))
+            .ok()?;
+        core::ptr::eq(&raw const self.partitions[at].key, partition).then_some(at)
     }
 
     /// Resolve an external key through fallible native graph-term comparison.
@@ -1244,11 +1457,9 @@ impl<P: CorpusProfile> TextIndex<P> {
         partition: &PartitionKey<P>,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
     ) -> Result<Option<&PartitionKey<P>>, purrdf_sparql_eval::EvalError> {
-        if let Some(ordinal) = self.local_partition_ordinal(partition) {
-            return Ok(Some(&self.partitions[ordinal].0));
-        }
         let mut failure = None;
-        let result = self.partitions.binary_search_by(|(key, _)| {
+        let result = self.partitions.binary_search_by(|row| {
+            let key = &row.key;
             if failure.is_some() {
                 return Ordering::Equal;
             }
@@ -1268,14 +1479,14 @@ impl<P: CorpusProfile> TextIndex<P> {
         });
         match failure {
             Some(error) => Err(error),
-            None => Ok(result.ok().map(|ordinal| &self.partitions[ordinal].0)),
+            None => Ok(result.ok().map(|ordinal| &self.partitions[ordinal].key)),
         }
     }
 
     /// How many analyzed tokens the document `id` names holds, or `None` if
     /// there is no such document. Auxiliary-only documents have length zero.
     pub fn document_length(&self, id: u32) -> Option<u64> {
-        self.documents.get(id as usize).map(Document::length)
+        self.document(id).map(Document::length)
     }
 
     /// Every analyzed term in the dictionary, ascending.
@@ -1292,6 +1503,17 @@ impl<P: CorpusProfile> TextIndex<P> {
         self.partition_postings(partition, term).len() as u64
     }
 
+    pub(crate) fn document_frequency_owned(
+        &self,
+        partition: &PartitionKey<P>,
+        term: &str,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<u64, purrdf_sparql_eval::EvalError> {
+        Ok(self
+            .partition_postings_owned(partition, term, workspace)?
+            .len() as u64)
+    }
+
     /// The postings of `term` within `partition`, ascending by document id.
     ///
     /// Each item is a document id and that document's ascending token positions
@@ -1304,7 +1526,12 @@ impl<P: CorpusProfile> TextIndex<P> {
     ) -> impl Iterator<Item = (u32, &'a [u32])> + use<'a, P> {
         self.partition_postings(partition, term)
             .iter()
-            .map(|posting| (posting.document, posting.positions.as_slice()))
+            .map(|posting| {
+                (
+                    self.document_rank(&posting.document),
+                    posting.positions.as_slice(),
+                )
+            })
     }
 
     /// How many times `term` occurs in the document `id` names.
@@ -1332,6 +1559,27 @@ impl<P: CorpusProfile> TextIndex<P> {
         term: &str,
         predicate: &TermValue,
     ) -> Result<u64, TextError> {
+        let ordinal = self.predicate_ordinal(predicate)?;
+        Ok(self.document_posting(id, term).map_or(0, |posting| {
+            predicate_frequency(&posting.predicate_frequencies, ordinal)
+        }))
+    }
+
+    pub(crate) fn term_frequency_in_predicate_owned(
+        &self,
+        id: u32,
+        term: &str,
+        predicate: &TermValue,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<u64, TextError> {
+        let ordinal = self.predicate_ordinal(predicate)?;
+        Ok(
+            crate::query_workspace::admitted(self.posted_frequencies_owned(id, term, workspace))?
+                .map_or(0, |frequencies| predicate_frequency(frequencies, ordinal)),
+        )
+    }
+
+    fn predicate_ordinal(&self, predicate: &TermValue) -> Result<u32, TextError> {
         let ordinal = self
             .config
             .predicates
@@ -1339,39 +1587,90 @@ impl<P: CorpusProfile> TextIndex<P> {
             .map_err(|_| {
                 TextError::config("field scope predicate is not selected by this text index")
             })?;
-        let ordinal = u32::try_from(ordinal).map_err(|_| {
+        u32::try_from(ordinal).map_err(|_| {
             TextError::overflow("field scope predicate ordinal exceeds index representation")
-        })?;
-        Ok(self
-            .document_posting(id, term)
-            .and_then(|posting| {
-                posting
-                    .predicate_frequencies
-                    .binary_search_by_key(&ordinal, |entry| entry.0)
-                    .ok()
-                    .map(|at| posting.predicate_frequencies[at].1)
-            })
-            .unwrap_or(0))
+        })
     }
 
-    fn document_posting(&self, id: u32, term: &str) -> Option<&Posting> {
+    fn document_posting(&self, id: u32, term: &str) -> Option<&Posting<P>> {
         let document = self.documents.get(id as usize)?;
         let entry = self.term_entry(term)?;
-        let postings = span_slice(entry, document.partition);
-        postings
-            .binary_search_by_key(&id, |posting| posting.document)
+        entry
+            .postings
+            .binary_search_by(|posting| compare_posting_documents(&posting.document, document))
             .ok()
-            .and_then(|at| postings.get(at))
+            .and_then(|at| entry.postings.get(at))
+            .map(|posting| &**posting)
+    }
+
+    fn document_rank(&self, document: &Document<P>) -> u32 {
+        self.documents
+            .binary_search_by(|candidate| compare_document_keys(candidate, document))
+            .expect("a posting's immutable document is live") as u32
+    }
+
+    fn document_rank_owned(
+        &self,
+        document: &Document<P>,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<u32, purrdf_sparql_eval::EvalError> {
+        let result = self.documents.try_binary_search_by(|candidate| {
+            compare_documents_owned(candidate, document, false, workspace)
+        })?;
+        result.map(|at| at as u32).map_err(|_| {
+            purrdf_sparql_eval::NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                format_args!("an index-owned document is absent from canonical order"),
+                workspace,
+            )
+        })
+    }
+
+    fn document_partition(&self, document: &Document<P>) -> usize {
+        self.partitions
+            .binary_search_by(|row| {
+                (&row.key.graph, &row.key.language).cmp(&(&document.graph, &document.language))
+            })
+            .expect("a live document has its partition")
+    }
+
+    fn edit_document_orders(
+        &mut self,
+        document: &Shared<Document<P>>,
+        added: bool,
+    ) -> Result<(), TextError> {
+        for (table, compare) in [
+            (
+                &mut self.subject_order,
+                compare_subject_documents::<P> as fn(&Document<P>, &Document<P>) -> Ordering,
+            ),
+            (
+                &mut self.occurrence_order,
+                compare_occurrence_documents::<P> as fn(&Document<P>, &Document<P>) -> Ordering,
+            ),
+        ] {
+            let at = table.binary_search_by(|candidate| compare(candidate, document));
+            *table = if added {
+                table.insert(
+                    at.expect_err("an inserted document is absent from its side order"),
+                    document.clone(),
+                )?
+            } else {
+                table.remove(at.expect("a removed document is present in its side order"))?
+            };
+        }
+        Ok(())
     }
 
     /// The digest of everything about this index that can change an answer.
     ///
     /// It covers the configuration (the sorted predicates and the graph
-    /// selector), all four Unicode table versions the analyzer depends on, the
-    /// document table, the term dictionary, every posting with its positions,
-    /// and every partition's statistics. Two independently built indexes over
-    /// the same content agree on it, and any change that would move a ranked
-    /// answer moves it.
+    /// selector and enabled projections), the complete analyzer and ranking
+    /// laws, all four Unicode table versions, and the exact source multiset
+    /// identity. These inputs determine the document table, dictionary, postings,
+    /// positions and partition statistics. Independent builds over the same
+    /// inputs agree; changing an input that can move an answer moves the identity.
+    /// Computing it visits only the configuration, independent of corpus size.
     ///
     /// An index holding nothing still has one, and it is not a placeholder: the
     /// configuration, the ranking law and the Unicode versions are digested before
@@ -1424,28 +1723,67 @@ impl<P: CorpusProfile> TextIndex<P> {
             return u32::try_from(ordinal).ok();
         }
         self.partitions
-            .binary_search_by(|(key, _)| key.cmp(partition))
+            .binary_search_by(|row| row.key.cmp(partition))
             .ok()
             .map(|at| at as u32)
     }
 
     /// The dictionary entry for `term`, if it holds one.
-    fn term_entry(&self, term: &str) -> Option<&TermEntry> {
+    fn term_entry(&self, term: &str) -> Option<&TermEntry<P>> {
         self.terms
             .binary_search_by(|entry| entry.term.as_str().cmp(term))
             .ok()
             .and_then(|at| self.terms.get(at))
+            .map(|entry| &**entry)
     }
 
     /// `term`'s postings restricted to `partition`; empty when either is absent.
-    fn partition_postings(&self, partition: &PartitionKey<P>, term: &str) -> &[Posting] {
-        let Some(partition) = self.partition_index(partition) else {
-            return &[];
-        };
+    fn partition_postings(
+        &self,
+        partition: &PartitionKey<P>,
+        term: &str,
+    ) -> Slice<'_, Shared<Posting<P>>> {
         let Some(entry) = self.term_entry(term) else {
-            return &[];
+            return Slice::empty();
         };
-        span_slice(entry, partition)
+        let compare = |posting: &Shared<Posting<P>>| {
+            (&posting.document.graph, &posting.document.language)
+                .cmp(&(&partition.graph, &partition.language))
+        };
+        let start = entry
+            .postings
+            .partition_point(|posting| compare(posting).is_lt());
+        let end = entry
+            .postings
+            .partition_point(|posting| !compare(posting).is_gt());
+        entry.postings.slice(start, end)
+    }
+
+    fn partition_postings_owned(
+        &self,
+        partition: &PartitionKey<P>,
+        term: &str,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Slice<'_, Shared<Posting<P>>>, purrdf_sparql_eval::EvalError> {
+        let Some(entry) = self.term_entry(term) else {
+            return Ok(Slice::empty());
+        };
+        let compare =
+            |posting: &Shared<Posting<P>>| -> Result<Ordering, purrdf_sparql_eval::EvalError> {
+                Ok(compare_graphs_owned(
+                    P::graph(&posting.document.graph),
+                    P::graph(&partition.graph),
+                    workspace,
+                )?
+                .then_with(|| posting.document.language.cmp(&partition.language)))
+            };
+        let start = entry
+            .postings
+            .try_partition_point(|posting| compare(posting).map(Ordering::is_lt))?;
+        let end = entry
+            .postings
+            .try_partition_point(|posting| compare(posting).map(|order| !order.is_gt()))?;
+        Ok(entry.postings.slice(start, end))
     }
 
     /// Turn sorted documents and an intern-ordered dictionary into the finished
@@ -1454,44 +1792,38 @@ impl<P: CorpusProfile> TextIndex<P> {
         config: TextIndexConfig<P>,
         documents: Vec<AnalyzedDocument<P>>,
         dictionary: &[String],
-        source_fingerprint: [u8; FINGERPRINT_BYTES],
+        source: SourceDigest,
         coverage: SourceCoverage,
         ranking: RankingProfile,
     ) -> Result<Self, TextError> {
         check_document_count(documents.len())?;
 
-        let (partitions, partition_of) = build_partitions(documents.iter().map(|document| {
-            (
-                &document.key.graph,
-                &document.key.subject,
-                &document.key.language,
-                document.tokens.len() as u64,
-            )
-        }))?;
-        let table: Vec<Document<P>> = documents
+        let table: Vec<Shared<Document<P>>> = documents
             .iter()
-            .map(|document| Document {
-                graph: document.key.graph.clone(),
-                subject: document.key.subject.clone(),
-                language: document.key.language.clone(),
-                length: document.tokens.len() as u64,
-                predicate_lengths: document.predicate_lengths.clone(),
-                partition: partition_of[&document.key],
+            .map(|document| {
+                share_index(Document {
+                    graph: document.key.graph.clone(),
+                    subject: document.key.subject.clone(),
+                    language: document.key.language.clone(),
+                    length: document.tokens.len() as u64,
+                    predicate_lengths: document.predicate_lengths.clone(),
+                })
             })
-            .collect();
-        let (terms, token_streams) = build_terms(&documents, dictionary, &table);
-        let occurrence_order = build_occurrence_order(&table);
-        let subject_order = build_subject_order(&table);
+            .collect::<Result<_, _>>()?;
+        let (terms, token_streams) = build_terms(&documents, dictionary, &table)?;
+        let table = Table::from_streams(table)?;
+        let occurrence_order = build_occurrence_order(&table)?;
+        let subject_order = build_subject_order(&table)?;
         let mut analyses = Vec::new();
-        let mut han_occurrences = Vec::new();
+        let mut han_buffers = Vec::new();
         for (id, document) in documents.into_iter().enumerate() {
+            let mut han_occurrences = Vec::new();
             for (literal, analysis) in document.analyses {
                 if config.projection == IndexProjection::Han {
                     han_occurrences.extend(
                         crate::character::index_projections(&analysis)
                             .into_iter()
                             .map(|projection| crate::character::HanOccurrence {
-                                document: id as u32,
                                 literal,
                                 projection,
                             }),
@@ -1501,10 +1833,19 @@ impl<P: CorpusProfile> TextIndex<P> {
                     analyses.push((id as u32, literal, analysis));
                 }
             }
+            if config.projection == IndexProjection::Han {
+                han_buffers.push(share_buffer(han_occurrences)?);
+            }
         }
+        let han_occurrences = if config.projection == IndexProjection::Han {
+            Some(Table::from_streams(han_buffers)?)
+        } else {
+            None
+        };
         let surface = if config.surface {
-            Some(SurfaceIndex::from_analyses(
+            Some(SurfaceIndex::from_index_analyses(
                 config.analyzer.clone(),
+                table.clone(),
                 analyses,
             )?)
         } else {
@@ -1515,20 +1856,20 @@ impl<P: CorpusProfile> TextIndex<P> {
             config,
             ranking,
             predicate_fields: Vec::new(),
-            field_lengths: Vec::new(),
-            field_totals: Vec::new(),
-            field_populations: Vec::new(),
+            field_lengths: Table::default(),
             unicode: unicode_versions(),
             documents: table,
             subject_order,
-            partitions,
-            terms,
-            token_streams,
+            partitions: Table::default(),
+            terms: Table::from_streams(terms)?,
+            token_streams: TokenTable::from_streams(token_streams)?,
             occurrence_order,
             surface,
             han_occurrences,
             fingerprint: [0; FINGERPRINT_BYTES],
-            source_fingerprint,
+            source_fingerprint: source.fingerprint::<P>(),
+            source_digest: source,
+            source_version: None,
             coverage,
         };
         index.rebuild_field_statistics()?;
@@ -1539,7 +1880,10 @@ impl<P: CorpusProfile> TextIndex<P> {
         Ok(index)
     }
 
-    /// Digest the whole index, in the order [`Self::fingerprint`] documents.
+    /// Bind the complete inputs of the deterministic index construction.
+    /// Derived tables add no independent information: hashing them again would
+    /// turn a one-document update into a whole-corpus traversal. In particular,
+    /// the source identity binds original literals, not merely corpus statistics.
     fn compute_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
         let mut digest = Digest::new(if P::GRAPH_FREE {
             TRIPLE_INDEX_DIGEST_DOMAIN
@@ -1588,64 +1932,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             digest.number(version.patch);
         }
 
-        digest.tag(u8::from(self.surface.is_some()));
-        if let Some(surface) = &self.surface {
-            for terms in [surface.words(), surface.spans()] {
-                digest.count(terms.len());
-                for term in terms {
-                    digest.text(term.text());
-                    digest.count(term.documents().len());
-                    for &document in term.documents() {
-                        digest.number(u64::from(document));
-                    }
-                }
-            }
-        }
-
-        digest.count(self.documents.len());
-        for document in &self.documents {
-            if !P::GRAPH_FREE {
-                digest.optional_term(P::graph(&document.graph));
-            }
-            digest.term(&document.subject);
-            digest.optional_text(document.language.as_deref());
-            digest.number(document.length);
-            digest.count(document.predicate_lengths.len());
-            for &(predicate, length) in &document.predicate_lengths {
-                digest.number(u64::from(predicate));
-                digest.number(length);
-            }
-            digest.number(u64::from(document.partition));
-        }
-
-        digest.count(self.terms.len());
-        for entry in &self.terms {
-            digest.text(&entry.term);
-            digest.count(entry.postings.len());
-            for posting in &entry.postings {
-                digest.number(u64::from(posting.document));
-                digest.count(posting.predicate_frequencies.len());
-                for &(predicate, frequency) in &posting.predicate_frequencies {
-                    digest.number(u64::from(predicate));
-                    digest.number(frequency);
-                }
-                digest.count(posting.positions.len());
-                for position in &posting.positions {
-                    digest.number(u64::from(*position));
-                }
-            }
-        }
-
-        digest.count(self.partitions.len());
-        for (key, stats) in &self.partitions {
-            if !P::GRAPH_FREE {
-                digest.optional_term(P::graph(&key.graph));
-            }
-            digest.optional_text(key.language.as_deref());
-            digest.number(stats.document_count);
-            digest.number(stats.total_tokens);
-            digest.raw(stats.average_document_length.into_raw());
-        }
+        digest.tag(u8::from(self.config.surface));
 
         digest.finish()
     }
@@ -1657,28 +1944,68 @@ impl<P: CorpusProfile> TextIndex<P> {
 /// carries, so the side index is a pure function of the document table exactly
 /// as the document table is a pure function of the content. The `id` tiebreak
 /// keeps a subject's run ascending, so a lookup's result is ascending too.
-fn build_subject_order<P: CorpusProfile>(table: &[Document<P>]) -> Vec<u32> {
-    let mut order: Vec<u32> = (0..table.len())
-        .map(|id| u32::try_from(id).expect("the caller has already bounded the id space"))
-        .collect();
-    order.sort_by(|&left, &right| {
-        table[left as usize]
-            .subject
-            .cmp(&table[right as usize].subject)
-            .then_with(|| left.cmp(&right))
-    });
-    order
+fn build_subject_order<P: CorpusProfile>(
+    table: &Table<Shared<Document<P>>>,
+) -> Result<Table<Shared<Document<P>>>, TextError> {
+    let mut order: Vec<_> = table.iter().cloned().collect();
+    order.sort_by(|a, b| compare_subject_documents(a, b));
+    Table::from_streams(order)
 }
 
-/// `entry`'s postings that belong to `partition`; empty when it holds none.
-fn span_slice(entry: &TermEntry, partition: u32) -> &[Posting] {
-    entry
-        .spans
-        .binary_search_by_key(&partition, |span| span.partition)
+fn compare_subject_documents<P: CorpusProfile>(a: &Document<P>, b: &Document<P>) -> Ordering {
+    (&a.subject, &a.graph, &a.language).cmp(&(&b.subject, &b.graph, &b.language))
+}
+
+fn compare_occurrence_documents<P: CorpusProfile>(a: &Document<P>, b: &Document<P>) -> Ordering {
+    (&a.subject, &a.language, &a.graph).cmp(&(&b.subject, &b.language, &b.graph))
+}
+
+pub(crate) fn compare_document_keys<P: CorpusProfile>(
+    a: &Document<P>,
+    b: &Document<P>,
+) -> Ordering {
+    (&a.graph, &a.subject, &a.language).cmp(&(&b.graph, &b.subject, &b.language))
+}
+
+fn compare_posting_documents<P: CorpusProfile>(a: &Document<P>, b: &Document<P>) -> Ordering {
+    (&a.graph, &a.language, &a.subject).cmp(&(&b.graph, &b.language, &b.subject))
+}
+
+fn compare_graphs_owned(
+    a: Option<&TermValue>,
+    b: Option<&TermValue>,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<Ordering, purrdf_sparql_eval::EvalError> {
+    match (a, b) {
+        (None, None) => Ok(Ordering::Equal),
+        (None, Some(_)) => Ok(Ordering::Less),
+        (Some(_), None) => Ok(Ordering::Greater),
+        (Some(a), Some(b)) => workspace.terms_cmp(a, b),
+    }
+}
+
+fn compare_documents_owned<P: CorpusProfile>(
+    a: &Document<P>,
+    b: &Document<P>,
+    posting: bool,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<Ordering, purrdf_sparql_eval::EvalError> {
+    let graph = compare_graphs_owned(P::graph(&a.graph), P::graph(&b.graph), workspace)?;
+    if graph != Ordering::Equal {
+        return Ok(graph);
+    }
+    let language = a.language.cmp(&b.language);
+    if posting && language != Ordering::Equal {
+        return Ok(language);
+    }
+    Ok(workspace.terms_cmp(&a.subject, &b.subject)?.then(language))
+}
+
+fn predicate_frequency(frequencies: &[(u32, u64)], ordinal: u32) -> u64 {
+    frequencies
+        .binary_search_by_key(&ordinal, |entry| entry.0)
         .ok()
-        .and_then(|at| entry.spans.get(at))
-        .and_then(|span| entry.postings.get(span.start as usize..span.end as usize))
-        .unwrap_or(&[])
+        .map_or(0, |at| frequencies[at].1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,18 +2038,6 @@ struct SourceRow<P: CorpusProfile = GraphLanguage> {
     direction: Option<RdfTextDirection>,
 }
 
-impl<P: CorpusProfile> SourceRow<P> {
-    /// The row's object, rebuilt as a term for the source digest.
-    fn literal(&self) -> TermValue {
-        TermValue::Literal {
-            lexical_form: self.lexical_form.clone(),
-            datatype: self.datatype.clone(),
-            language: self.language.clone(),
-            direction: self.direction,
-        }
-    }
-}
-
 /// The `(graph, subject, language)` key that identifies a document.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct DocumentKey<P: CorpusProfile = GraphLanguage> {
@@ -1748,6 +2063,66 @@ pub struct TokenOccurrence {
     pub ordinal: usize,
 }
 
+/// A private term address. Reuse never crosses an index generation's map.
+/// Stored coordinates retain stable addresses; public ordinals are projected
+/// only for the requested document, without rewriting any retained buffer.
+#[derive(Clone, Debug)]
+struct StoredToken {
+    term: Shared<String>,
+    position: u32,
+    predicate: u32,
+    ordinal: usize,
+}
+
+impl StoredToken {
+    fn projected<P: CorpusProfile>(&self, terms: &Table<Shared<TermEntry<P>>>) -> TokenOccurrence {
+        TokenOccurrence {
+            term: terms
+                .binary_search_by(|entry| entry.term.as_str().cmp(self.term.as_str()))
+                .expect("a retained token's spelling is live") as u32,
+            position: self.position,
+            predicate: self.predicate,
+            ordinal: self.ordinal,
+        }
+    }
+}
+
+/// Immutable buffers share across index snapshots; empty streams allocate none.
+#[derive(Clone, Debug)]
+struct SharedBuffer<T>(Option<Shared<Vec<T>>>);
+
+impl<T> Default for SharedBuffer<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+type TokenStream = SharedBuffer<StoredToken>;
+
+type FieldPosting<'a> = (u32, &'a [(u32, u64)]);
+type BuiltTerms<P> = (Vec<Shared<TermEntry<P>>>, Vec<TokenStream>);
+
+impl<T> SharedBuffer<T> {
+    fn as_slice(&self) -> &[T] {
+        self.0.as_ref().map_or(&[], |tokens| tokens.as_slice())
+    }
+}
+
+fn share_buffer<T>(tokens: Vec<T>) -> Result<SharedBuffer<T>, TextError> {
+    if tokens.is_empty() {
+        return Ok(SharedBuffer::default());
+    }
+    share_index(tokens).map(|tokens| SharedBuffer(Some(tokens)))
+}
+
+pub(crate) fn share_index<T>(value: T) -> Result<Shared<T>, TextError> {
+    Shared::try_new(value).map_err(|_| {
+        TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+            construct: "text index value",
+        })
+    })
+}
+
 /// A document with its analyzed token stream, before ids are assigned.
 #[derive(Clone, Debug)]
 struct AnalyzedDocument<P: CorpusProfile = GraphLanguage> {
@@ -1759,6 +2134,18 @@ struct AnalyzedDocument<P: CorpusProfile = GraphLanguage> {
     predicate_lengths: Vec<(u32, u64)>,
     /// Once-computed, source-aligned projections and source row identities.
     analyses: Vec<([u8; 32], crate::analysis::Analysis)>,
+}
+
+fn document_key<P: CorpusProfile>(
+    graph: &P::Graph,
+    subject: &TermValue,
+    language: Option<&str>,
+) -> DocumentKey<P> {
+    DocumentKey {
+        graph: graph.clone(),
+        subject: subject.clone(),
+        language: language.map(str::to_owned),
+    }
 }
 
 /// Read every configured predicate's literal rows out of both RDF 1.2 layers,
@@ -1784,77 +2171,130 @@ fn collect_rows<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
     config: &TextIndexConfig<P>,
 ) -> Result<(Vec<SourceRow<P>>, SourceCoverage), TextError> {
+    dataset
+        .checked_read(|dataset| {
+            let (rows, counts) = collect_selected_rows(dataset, config, None)?;
+            Ok((rows, SourceCoverage::of_walk(dataset, config, counts)))
+        })
+        .map_err(|error| TextError::source_read(error.to_string()))?
+}
+
+/// Read replacement documents through the source's subject indexes in both
+/// physical text-bearing layers. Predicate and graph selection use the same
+/// production collector as a fresh build and a delta operand.
+fn collect_subject_rows<D: DatasetView, P: CorpusProfile>(
+    dataset: &D,
+    config: &TextIndexConfig<P>,
+    subjects: &BTreeSet<&TermValue>,
+) -> Result<Vec<SourceRow<P>>, TextError> {
+    dataset
+        .checked_read(|dataset| {
+            collect_selected_rows(dataset, config, Some(subjects)).map(|(rows, _)| rows)
+        })
+        .map_err(|error| TextError::source_read(error.to_string()))?
+}
+
+fn collect_selected_rows<D: DatasetView, P: CorpusProfile>(
+    dataset: &D,
+    config: &TextIndexConfig<P>,
+    subjects: Option<&BTreeSet<&TermValue>>,
+) -> Result<(Vec<SourceRow<P>>, Vec<u128>), TextError> {
     if P::GRAPH_FREE && dataset.supports_named_graphs() {
         return Err(TextError::config(
             "the graph-free text profile requires a graph-free source",
         ));
     }
-    dataset
-        .checked_read(|dataset| {
-            let Some(graph) = P::resolve(config.graph(), dataset)
-                .map_err(|error| TextError::source_read(error.to_string()))?
-            else {
-                return Ok((
-                    Vec::new(),
-                    SourceCoverage::nothing_in_scope(dataset, config),
-                ));
-            };
-            let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
-                Vec::with_capacity(config.predicates().len());
-            for (ordinal, predicate) in config.predicates().iter().enumerate() {
-                if let Some(id) = dataset
-                    .term_id_by_value(predicate)
-                    .map_err(|error| TextError::source_read(error.to_string()))?
-                {
-                    predicate_ids.push((id, predicate, ordinal));
-                }
-            }
-            if predicate_ids.is_empty() {
-                // No configured predicate is interned, so no statement in either layer
-                // can carry one. Returning here rather than sweeping the annotation side
-                // table to match every row against an empty id set.
-                return Ok((
-                    Vec::new(),
-                    SourceCoverage::nothing_in_scope(dataset, config),
-                ));
-            }
+    let Some(graph) = P::resolve(config.graph(), dataset)
+        .map_err(|error| TextError::source_read(error.to_string()))?
+    else {
+        return Ok((Vec::new(), vec![0; config.predicates().len()]));
+    };
+    let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
+        Vec::with_capacity(config.predicates().len());
+    for (ordinal, predicate) in config.predicates().iter().enumerate() {
+        if let Some(id) = dataset
+            .term_id_by_value(predicate)
+            .map_err(|error| TextError::source_read(error.to_string()))?
+        {
+            predicate_ids.push((id, predicate, ordinal));
+        }
+    }
+    if predicate_ids.is_empty() {
+        // No configured predicate is interned, so no statement in either layer
+        // can carry one. Returning here rather than sweeping the annotation side
+        // table to match every row against an empty id set.
+        return Ok((Vec::new(), vec![0; config.predicates().len()]));
+    }
 
-            let mut rows = Vec::new();
-            let mut represented = vec![false; config.predicates().len()];
+    let subject_ids = subjects
+        .map(|subjects| {
+            subjects
+                .iter()
+                .map(|subject| {
+                    dataset
+                        .term_id_by_value(subject)
+                        .map_err(|error| TextError::source_read(error.to_string()))
+                })
+                .filter_map(Result::transpose)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
 
-            // Layer one: the asserted triple table.
-            for &(predicate_id, predicate, ordinal) in &predicate_ids {
-                for quad in dataset.quads_for_pattern(None, Some(predicate_id), None, graph) {
-                    represented[ordinal] = true;
-                    push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
-                }
-            }
+    let mut rows = Vec::new();
+    let mut represented = vec![0; config.predicates().len()];
 
-            // Layer two: the RDF 1.2 annotation side table, whose subject IS the
-            // reifier. `quads_for_pattern` above cannot see these rows at all.
-            for quad in dataset.annotation_quads() {
-                if !graph.matches(quad.g) {
-                    continue;
-                }
-                let Some(&(_, predicate, ordinal)) =
-                    predicate_ids.iter().find(|&&(id, _, _)| id == quad.p)
-                else {
-                    continue;
-                };
-                represented[ordinal] = true;
+    // Layer one: the asserted triple table.
+    let asserted_subjects = subject_ids
+        .iter()
+        .flat_map(|ids| ids.iter().copied())
+        .map(Some)
+        .chain(std::iter::once(None).filter(|_| subject_ids.is_none()));
+    for subject in asserted_subjects {
+        for &(predicate_id, predicate, ordinal) in &predicate_ids {
+            for quad in dataset.quads_for_pattern(subject, Some(predicate_id), None, graph) {
+                represented[ordinal] += 1;
                 push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
             }
+        }
+    }
 
-            rows.sort();
-            let coverage = SourceCoverage::of_walk(dataset, config, &represented);
-            Ok((rows, coverage))
-        })
-        .map_err(|error| TextError::source_read(error.to_string()))?
+    // Layer two: the RDF 1.2 annotation side table, whose subject IS the
+    // reifier. `quads_for_pattern` above cannot see these rows at all.
+    let mut annotation = |quad: purrdf_core::QuadIds<D::Id>| {
+        if !graph.matches(quad.g) {
+            return Ok(());
+        }
+        let Some(&(_, predicate, ordinal)) = predicate_ids.iter().find(|&&(id, _, _)| id == quad.p)
+        else {
+            return Ok(());
+        };
+        represented[ordinal] += 1;
+        push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)
+    };
+    if let Some(subjects) = subject_ids {
+        for subject in subjects {
+            for (p, o, g) in dataset.annotations_of_with_graph(subject) {
+                annotation(purrdf_core::QuadIds {
+                    s: subject,
+                    p,
+                    o,
+                    g,
+                })?;
+            }
+        }
+    } else {
+        for quad in dataset.annotation_quads() {
+            annotation(quad)?;
+        }
+    }
+
+    rows.sort();
+    Ok((rows, represented))
 }
 
 impl SourceCoverage {
-    /// The coverage of a walk that recorded `represented[ordinal]` for each of
-    /// `config`'s predicates.
+    /// The coverage of a walk that counted `represented[ordinal]` for each of
+    /// `config`'s predicates, before filtering literal objects.
     ///
     /// The dataset is probed for a single statement only when something came up
     /// unrepresented, because that probe exists solely to tell the two
@@ -1864,33 +2304,31 @@ impl SourceCoverage {
     fn of_walk<D: DatasetView, P: CorpusProfile>(
         dataset: &D,
         config: &TextIndexConfig<P>,
-        represented: &[bool],
+        represented: Vec<u128>,
+    ) -> Self {
+        let dataset_holds_statements =
+            represented.iter().all(|&count| count != 0) || holds_a_statement(dataset);
+        Self::of_counts(dataset_holds_statements, config, represented)
+    }
+
+    /// Coverage from exact counts and an independently observed nonempty bit.
+    /// The delta path can reuse that source observation without probing again.
+    fn of_counts<P: CorpusProfile>(
+        dataset_holds_statements: bool,
+        config: &TextIndexConfig<P>,
+        represented: Vec<u128>,
     ) -> Self {
         let unrepresented: Vec<TermValue> = config
             .predicates()
             .iter()
-            .zip(represented)
-            .filter(|&(_, &seen)| !seen)
+            .zip(&represented)
+            .filter(|&(_, &count)| count == 0)
             .map(|(predicate, _)| predicate.clone())
             .collect();
-        let dataset_holds_statements = unrepresented.is_empty() || holds_a_statement(dataset);
         Self {
             dataset_holds_statements,
             unrepresented,
-        }
-    }
-
-    /// The coverage of a walk that could not begin: no configured predicate is
-    /// interned, or the configured named graph is not a term of this dataset. No
-    /// in-scope statement carries any configured predicate, because there is no
-    /// in-scope statement to carry one.
-    fn nothing_in_scope<D: DatasetView, P: CorpusProfile>(
-        dataset: &D,
-        config: &TextIndexConfig<P>,
-    ) -> Self {
-        Self {
-            dataset_holds_statements: holds_a_statement(dataset),
-            unrepresented: config.predicates().to_vec(),
+            represented,
         }
     }
 }
@@ -1904,8 +2342,9 @@ impl SourceCoverage {
 /// dataset is empty" for it would call a mistyped predicate an index waiting for
 /// its documents.
 ///
-/// Each probe stops at the first row, so this costs one step of up to three lazy
-/// iterators rather than a scan.
+/// Each iterator stops at its first row. A backend may still initialize traversal
+/// metadata before yielding that row; delta accounting reuses its original
+/// source observation instead of repeating this probe.
 fn holds_a_statement<D: DatasetView>(dataset: &D) -> bool {
     dataset.quads().next().is_some()
         || dataset.reifier_quads().next().is_some()
@@ -2076,95 +2515,13 @@ fn analyze_rows<P: CorpusProfile>(
     Ok((documents, dictionary))
 }
 
-/// The partition table and the map from a document's key to its partition
-/// index — [`build_partitions`]'s two results.
-type Partitioning<P> = (
-    Vec<(PartitionKey<P>, PartitionStats)>,
-    FastMap<DocumentKey<P>, u32>,
-);
-
-/// Borrowed document identity and token count, without copying source terms.
-type DocumentFacts<'a, P> = (
-    &'a <P as CorpusProfile>::Graph,
-    &'a TermValue,
-    &'a Option<String>,
-    u64,
-);
-
-fn document_key<P: CorpusProfile>(
-    graph: &P::Graph,
-    subject: &TermValue,
-    language: Option<&str>,
-) -> DocumentKey<P> {
-    DocumentKey {
-        graph: graph.clone(),
-        subject: subject.clone(),
-        language: language.map(str::to_owned),
-    }
-}
-
-/// Assign partition indices and compute each partition's statistics.
-fn build_partitions<'a, P: CorpusProfile + 'a>(
-    documents: impl Clone + Iterator<Item = DocumentFacts<'a, P>>,
-) -> Result<Partitioning<P>, TextError> {
-    let mut totals: FastMap<PartitionKey<P>, (u64, u64)> = FastMap::default();
-    for (graph, _, language, length) in documents.clone() {
-        let key = PartitionKey {
-            graph: graph.clone(),
-            language: language.clone(),
-        };
-        let entry = totals.entry(key).or_insert((0, 0));
-        entry.0 += u64::from(length != 0);
-        entry.1 += length;
-    }
-
-    let mut keys: Vec<PartitionKey<P>> = totals.keys().cloned().collect();
-    keys.sort();
-
-    let mut partitions = Vec::with_capacity(keys.len());
-    let mut index_of: FastMap<PartitionKey<P>, u32> = FastMap::default();
-    for (index, key) in keys.into_iter().enumerate() {
-        let (document_count, total_tokens) = totals[&key];
-        partitions.push((
-            key.clone(),
-            PartitionStats {
-                document_count,
-                total_tokens,
-                average_document_length: if document_count == 0 {
-                    Fixed::ZERO
-                } else {
-                    exact_average(total_tokens, document_count)?
-                },
-            },
-        ));
-        index_of.insert(key, index as u32);
-    }
-
-    let mut partition_of: FastMap<DocumentKey<P>, u32> = FastMap::default();
-    for (graph, subject, language, _) in documents {
-        let key = PartitionKey {
-            graph: graph.clone(),
-            language: language.clone(),
-        };
-        partition_of.insert(
-            document_key(graph, subject, language.as_deref()),
-            index_of[&key],
-        );
-    }
-    Ok((partitions, partition_of))
-}
-
 /// The physical stream order used by phrase occurrence traversal.
-fn build_occurrence_order<P: CorpusProfile>(table: &[Document<P>]) -> Vec<u32> {
-    let mut order: Vec<_> = (0..table.len()).map(|id| id as u32).collect();
-    order.sort_unstable_by(|&a, &b| {
-        let (a, b) = (&table[a as usize], &table[b as usize]);
-        a.subject
-            .cmp(&b.subject)
-            .then_with(|| a.language.cmp(&b.language))
-            .then_with(|| a.partition.cmp(&b.partition))
-    });
-    order
+fn build_occurrence_order<P: CorpusProfile>(
+    table: &Table<Shared<Document<P>>>,
+) -> Result<Table<Shared<Document<P>>>, TextError> {
+    let mut order: Vec<_> = table.iter().cloned().collect();
+    order.sort_by(|a, b| compare_occurrence_documents(a, b));
+    Table::from_streams(order)
 }
 
 /// `total / count`, exactly, in fixed point.
@@ -2183,8 +2540,8 @@ fn exact_average(total: u64, count: u64) -> Result<Fixed, TextError> {
 fn build_terms<P: CorpusProfile>(
     documents: &[AnalyzedDocument<P>],
     dictionary: &[String],
-    table: &[Document<P>],
-) -> (Vec<TermEntry>, Vec<Vec<TokenOccurrence>>) {
+    table: &[Shared<Document<P>>],
+) -> Result<BuiltTerms<P>, TextError> {
     let mut order: Vec<u32> = (0..dictionary.len() as u32).collect();
     order.sort_by(|&left, &right| dictionary[left as usize].cmp(&dictionary[right as usize]));
     let mut rank = vec![0_u32; dictionary.len()];
@@ -2192,23 +2549,30 @@ fn build_terms<P: CorpusProfile>(
         rank[interned as usize] = sorted as u32;
     }
 
+    let words: Vec<_> = order
+        .iter()
+        .map(|&interned| share_index(dictionary[interned as usize].clone()))
+        .collect::<Result<_, _>>()?;
+
     let token_streams = documents
         .iter()
         .map(|document| {
-            document
-                .tokens
-                .iter()
-                .enumerate()
-                .map(|(ordinal, &(term, position, predicate))| TokenOccurrence {
-                    term: rank[term as usize],
-                    position,
-                    predicate,
-                    ordinal,
-                })
-                .collect()
+            share_buffer(
+                document
+                    .tokens
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, &(term, position, predicate))| StoredToken {
+                        term: words[rank[term as usize] as usize].clone(),
+                        position,
+                        predicate,
+                        ordinal,
+                    })
+                    .collect(),
+            )
         })
-        .collect();
-    let mut postings: Vec<Vec<Posting>> = vec![Vec::new(); dictionary.len()];
+        .collect::<Result<_, _>>()?;
+    let mut postings: Vec<Vec<Shared<Posting<P>>>> = vec![Vec::new(); dictionary.len()];
     for (id, document) in documents.iter().enumerate() {
         let mut tokens: Vec<(u32, u32, u32)> = document
             .tokens
@@ -2231,52 +2595,25 @@ fn build_terms<P: CorpusProfile>(
                 }
                 at += 1;
             }
-            postings[term as usize].push(Posting {
-                document: id as u32,
+            postings[term as usize].push(share_index(Posting {
+                document: table[id].clone(),
                 positions,
                 predicate_frequencies,
-            });
+            })?);
         }
     }
 
-    let sorted_terms: Vec<String> = order
-        .iter()
-        .map(|&interned| dictionary[interned as usize].clone())
-        .collect();
-
-    let mut entries = Vec::with_capacity(sorted_terms.len());
-    for (term, mut list) in sorted_terms.into_iter().zip(postings) {
+    let mut entries = Vec::with_capacity(words.len());
+    for (term, mut list) in words.into_iter().zip(postings) {
         // Documents were pushed in ascending id order, so a *stable* sort by
         // partition leaves each partition's run ascending by document id too.
-        list.sort_by_key(|posting| table[posting.document as usize].partition);
-
-        let spans = posting_spans(&list, table);
-        entries.push(TermEntry {
+        list.sort_by(|a, b| compare_posting_documents(&a.document, &b.document));
+        entries.push(share_index(TermEntry {
             term,
-            postings: list,
-            spans,
-        });
+            postings: Table::from_streams(list)?,
+        })?);
     }
-    (entries, token_streams)
-}
-
-/// Partition runs over the canonical posting order, shared by build and update.
-fn posting_spans<P: CorpusProfile>(list: &[Posting], table: &[Document<P>]) -> Vec<PartitionSpan> {
-    let mut spans = Vec::new();
-    let mut at = 0;
-    while at < list.len() {
-        let partition = table[list[at].document as usize].partition;
-        let start = at;
-        while at < list.len() && table[list[at].document as usize].partition == partition {
-            at += 1;
-        }
-        spans.push(PartitionSpan {
-            partition,
-            start: start as u32,
-            end: at as u32,
-        });
-    }
-    spans
+    Ok((entries, token_streams))
 }
 
 // ---------------------------------------------------------------------------
@@ -2312,21 +2649,7 @@ pub(crate) fn source_digest<D: DatasetView, P: CorpusProfile>(
 fn digest_rows<'a, P: CorpusProfile + 'a>(
     rows: impl ExactSizeIterator<Item = &'a SourceRow<P>>,
 ) -> [u8; FINGERPRINT_BYTES] {
-    let mut digest = Digest::new(if P::GRAPH_FREE {
-        TRIPLE_SOURCE_DIGEST_DOMAIN
-    } else {
-        SOURCE_DIGEST_DOMAIN
-    });
-    digest.count(rows.len());
-    for row in rows {
-        if !P::GRAPH_FREE {
-            digest.optional_term(P::graph(&row.graph));
-        }
-        digest.term(&row.subject);
-        digest.term(&row.predicate);
-        digest.term(&row.literal());
-    }
-    digest.finish()
+    SourceDigest::from_rows(rows).fingerprint::<P>()
 }
 
 /// A streaming digest over the crate's one term encoding.
@@ -2342,6 +2665,12 @@ struct Digest {
     hasher: purrdf_hash::blake3::Hasher,
     /// The reused encoding buffer.
     scratch: Vec<u8>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Actual bytes fed to this identity encoder on the current test thread.
+    static DIGEST_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Digest {
@@ -2365,17 +2694,18 @@ impl Digest {
 
     /// Absorb a one-byte tag.
     fn tag(&mut self, tag: u8) {
-        self.hasher.update(&[tag]);
+        self.absorb(&[tag]);
     }
 
     /// Absorb a `u64`, little-endian.
     fn number(&mut self, value: u64) {
-        self.hasher.update(&value.to_le_bytes());
+        self.absorb(&value.to_le_bytes());
     }
 
-    /// Absorb an `i128`, little-endian — a [`Fixed`]'s raw representation.
-    fn raw(&mut self, value: i128) {
-        self.hasher.update(&value.to_le_bytes());
+    fn absorb(&mut self, bytes: &[u8]) {
+        #[cfg(test)]
+        DIGEST_BYTES.set(DIGEST_BYTES.get() + bytes.len());
+        self.hasher.update(bytes);
     }
 
     /// Absorb a collection's length.
@@ -2387,36 +2717,18 @@ impl Digest {
     fn text(&mut self, value: &str) {
         self.scratch.clear();
         frame_le(&mut self.scratch, value.as_bytes());
+        #[cfg(test)]
+        DIGEST_BYTES.set(DIGEST_BYTES.get() + self.scratch.len());
         self.hasher.update(&self.scratch);
-    }
-
-    /// Absorb an optional string, presence byte first.
-    fn optional_text(&mut self, value: Option<&str>) {
-        match value {
-            Some(value) => {
-                self.tag(PRESENT);
-                self.text(value);
-            }
-            None => self.tag(ABSENT),
-        }
     }
 
     /// Absorb a term in the crate's injective encoding.
     fn term(&mut self, value: &TermValue) {
         self.scratch.clear();
         encode_term(value, &mut self.scratch);
+        #[cfg(test)]
+        DIGEST_BYTES.set(DIGEST_BYTES.get() + self.scratch.len());
         self.hasher.update(&self.scratch);
-    }
-
-    /// Absorb an optional term, presence byte first.
-    fn optional_term(&mut self, value: Option<&TermValue>) {
-        match value {
-            Some(value) => {
-                self.tag(PRESENT);
-                self.term(value);
-            }
-            None => self.tag(ABSENT),
-        }
     }
 
     /// The finished digest.
@@ -2494,18 +2806,6 @@ mod tests {
             digest.finish()
         };
         assert_ne!(split("ab", "c"), split("a", "bc"));
-    }
-
-    /// An absent optional field is distinguishable from a present empty one, so
-    /// an untagged literal's partition cannot collide with a tagged one.
-    #[test]
-    fn an_absent_language_differs_from_an_empty_one() {
-        let of = |language: Option<&str>| {
-            let mut digest = Digest::new(SOURCE_DIGEST_DOMAIN);
-            digest.optional_text(language);
-            digest.finish()
-        };
-        assert_ne!(of(None), of(Some("")));
     }
 
     /// The partition key's accessors report the distinction its documentation

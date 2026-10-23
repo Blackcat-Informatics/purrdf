@@ -1155,8 +1155,9 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     ) -> Result<AdmittedVec<Holding<'_>>, TextError> {
         let documents = admitted(self.index.documents_with_subject_owned(subject, workspace))?;
         let mut held = admitted(AdmittedVec::with_capacity(documents.len(), workspace))?;
-        for &document in documents {
-            let Some(key) = self.index.partition_key_of(document) else {
+        for &document in &documents {
+            let Some(key) = admitted(self.index.partition_key_of_owned(document, workspace))?
+            else {
                 continue;
             };
             if !language_matches(language, key) {
@@ -1167,21 +1168,32 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 self.observations
                     .membership_lookups
                     .fetch_add(1, Ordering::Relaxed);
-                if let Some(counts) = self.index.posted_frequencies(document, term) {
+                if let Some(counts) = admitted(
+                    self.index
+                        .posted_frequencies_owned(document, term, workspace),
+                )? {
                     admitted(located.push((ordinal, counts)))?;
                 }
             }
             if !located.is_empty()
-                && matches_predicate(&self.index, document, terms.iter().copied(), predicate)?
+                && matches_predicate(
+                    &self.index,
+                    document,
+                    terms.iter().copied(),
+                    predicate,
+                    workspace,
+                )?
             {
-                let partition = self.index.partition_ordinal_of(document).ok_or_else(|| {
-                    query_error(
-                        workspace,
-                        NativeDiagnosticKind::Internal,
-                        format_args!("text index document {document} has no partition"),
-                    )
-                    .unwrap_or_else(|failure| failure)
-                })?;
+                let partition =
+                    admitted(self.index.partition_ordinal_of_owned(document, workspace))?
+                        .ok_or_else(|| {
+                            query_error(
+                                workspace,
+                                NativeDiagnosticKind::Internal,
+                                format_args!("text index document {document} has no partition"),
+                            )
+                            .unwrap_or_else(|failure| failure)
+                        })?;
                 admitted(held.push(Holding {
                     document,
                     partition,
@@ -1251,6 +1263,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                         document,
                         needle.iter().map(QueryString::as_str),
                         predicate,
+                        workspace,
                     )
                 },
             },
@@ -1287,6 +1300,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                         document,
                         needle.iter().map(QueryString::as_str),
                         selection.predicate,
+                        workspace,
                     )? {
                         return Ok(false);
                     }
@@ -1325,7 +1339,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         for mut row in scored {
             let key = self
                 .index
-                .partition_ordinal_of(row.document)
+                .partition_ordinal_of_owned(row.document, workspace)?
                 .ok_or_else(|| {
                     NativeDiagnostic::error(
                         NativeDiagnosticKind::Internal,
@@ -2143,14 +2157,21 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
             ));
         }
         let mut partitions = AdmittedVec::new(&workspace);
+        let mut document_partitions = AdmittedVec::new(&workspace);
+        if let Some(documents) = &documents {
+            for &document in documents {
+                if let Some(partition) = self
+                    .index
+                    .partition_ordinal_of_owned(document, &workspace)?
+                {
+                    document_partitions.push(partition)?;
+                }
+            }
+        }
         if analyzed.first().is_some_and(|term| !term.is_empty()) {
             for (ordinal, (key, _)) in self.index.partitions().enumerate() {
                 if language_matches(&language, key)
-                    && documents.is_none_or(|documents| {
-                        documents.iter().any(|&document| {
-                            self.index.partition_ordinal_of(document) == Some(ordinal)
-                        })
-                    })
+                    && (documents.is_none() || document_partitions.contains(&ordinal))
                 {
                     partitions.push(ordinal)?;
                 }
@@ -2347,7 +2368,8 @@ impl<P: CorpusProfile> OccurrenceCursor<P> {
                 return Ok(None);
             };
             let Some((document, positions)) =
-                self.index.posting_at(partition, term, self.posting_at)
+                self.index
+                    .posting_at_owned(partition, term, self.posting_at, &self.workspace)?
             else {
                 self.partition_at += 1;
                 self.posting_at = 0;

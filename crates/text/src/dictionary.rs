@@ -247,13 +247,21 @@ impl Dictionary {
         while begin < order.len() {
             let first = result
                 .index
-                .document(order[begin])
+                .document(
+                    order
+                        .get_owned(begin, workspace)?
+                        .expect("index-owned document"),
+                )
                 .expect("index-owned document");
             let mut end = begin + 1;
             while end < order.len() {
                 let next = result
                     .index
-                    .document(order[end])
+                    .document(
+                        order
+                            .get_owned(end, workspace)?
+                            .expect("index-owned document"),
+                    )
                     .expect("index-owned document");
                 if next.language() != first.language()
                     || !workspace.terms_equal(next.subject(), first.subject())?
@@ -263,10 +271,11 @@ impl Dictionary {
                 end += 1;
             }
             let mut occurrences = AdmittedVec::new(workspace);
-            for &document in &order[begin..end] {
+            for document in order.range_owned(begin, end, workspace) {
+                let document = document?;
                 let partition = result
                     .index
-                    .partition_ordinal_of(document)
+                    .partition_ordinal_of_owned(document, workspace)?
                     .expect("index-owned partition");
                 for token in result
                     .index

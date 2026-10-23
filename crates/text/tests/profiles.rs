@@ -223,7 +223,7 @@ fn substring_candidates_are_verified_and_short_fragments_have_postings() {
     let matches = index.substring("damant").unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].term.text(), "adamantine");
-    assert_eq!(matches[0].term.documents(), [3, 7]);
+    assert_eq!(matches[0].term.documents().collect::<Vec<_>>(), [3, 7]);
     assert_eq!(matches[0].ranges.as_slice(), std::slice::from_ref(&(1..7)));
     assert_eq!(index.substring(":30").unwrap()[0].term.text(), "12:30");
     assert_eq!(index.substring(":3").unwrap().len(), 2);
@@ -270,7 +270,7 @@ fn phonetics_read_surface_words_and_expose_refinement_evidence() {
         [("smith", 0), ("smyth", 1)]
     );
     assert!(matches.iter().all(|m| !m.shared_codes.is_empty()));
-    assert!(index.words().iter().any(|term| term.text() == "running"));
+    assert!(index.words().any(|term| term.text() == "running"));
     assert_eq!(index.phonetic("running").unwrap()[0].term.text(), "running");
     assert!(index.phonetic("中文").is_err());
     assert!(index.phonetic("foo bar").is_err());

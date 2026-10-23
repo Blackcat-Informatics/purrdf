@@ -20,6 +20,8 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TextDeltaError {
+    /// The provider has no independent content metadata or source transition.
+    SourceObservationUnavailable,
     /// The effective additions do not occur in the supplied next source.
     MissingAddition {
         /// Canonical selected addition ordinal.
@@ -31,6 +33,20 @@ pub enum TextDeltaError {
         expected: [u8; 32],
         /// Identity reconstructed from the supplied source and delta.
         actual: [u8; 32],
+    },
+    /// Statement populations implied by the delta disagree with the source,
+    /// including nonliteral rows that do not participate in the text digest.
+    CoverageMismatch {
+        /// The configured predicate whose population disagrees.
+        predicate: Box<purrdf_core::TermValue>,
+        /// Population in the indexed source.
+        before: u128,
+        /// Population in the supplied additions.
+        added: u128,
+        /// Population in the supplied removals.
+        removed: u128,
+        /// Population independently observed in the next source.
+        observed: u128,
     },
     /// The original source, analysis, capacity or ranking refusal.
     Indexing(TextError),
@@ -62,6 +78,9 @@ pub enum TextDeltaError {
 impl core::fmt::Display for TextDeltaError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::SourceObservationUnavailable => {
+                f.write_str("text delta requires independently maintained source content evidence")
+            }
             Self::MissingAddition { ordinal } => write!(
                 f,
                 "text delta addition {ordinal} is absent from the next source"
@@ -71,6 +90,16 @@ impl core::fmt::Display for TextDeltaError {
                 "text delta source mismatch: expected {}, reconstructed {}",
                 purrdf_hash::hex::Lower(expected),
                 purrdf_hash::hex::Lower(actual)
+            ),
+            Self::CoverageMismatch {
+                predicate,
+                before,
+                added,
+                removed,
+                observed,
+            } => write!(
+                f,
+                "text delta coverage mismatch for {predicate:?}: {before} previous, {added} added, {removed} removed, {observed} observed"
             ),
             Self::Indexing(cause) => cause.fmt(f),
             Self::AnalyzerMismatch { expected, actual } => write!(
@@ -100,8 +129,10 @@ impl std::error::Error for TextDeltaError {
             Self::Indexing(cause) => Some(cause),
             Self::TermCapacity { cause, .. } => Some(cause),
             Self::AnalyzerMismatch { .. }
+            | Self::SourceObservationUnavailable
             | Self::SourceOverlap { .. }
             | Self::MissingAddition { .. }
+            | Self::CoverageMismatch { .. }
             | Self::SourceMismatch { .. } => None,
         }
     }

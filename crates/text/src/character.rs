@@ -42,9 +42,8 @@ pub struct HanMatchEvidence {
     pub generation: [u8; 32],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HanOccurrence {
-    pub document: u32,
     pub literal: [u8; 32],
     pub projection: Projection,
 }
@@ -102,11 +101,8 @@ impl HanCharacterIndex {
     #[must_use]
     pub fn evidence(&self, document: u32, canonical: &str) -> Vec<HanMatchEvidence> {
         self.index
-            .han_occurrences
-            .iter()
-            .filter(|occurrence| {
-                occurrence.document == document && occurrence.projection.text == canonical
-            })
+            .han_occurrences(document)
+            .filter(|occurrence| occurrence.projection.text == canonical)
             .map(|occurrence| HanMatchEvidence {
                 document,
                 literal: occurrence.literal,

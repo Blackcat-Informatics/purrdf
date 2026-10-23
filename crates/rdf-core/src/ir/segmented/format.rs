@@ -12,8 +12,8 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG3";
-pub(super) const HEADER_BYTES: usize = 312;
+pub(super) const MAGIC: &[u8; 8] = b"PURRSEG4";
+pub(super) const HEADER_BYTES: usize = 384;
 pub(super) const RECORD_HEADER: usize = 13;
 const COMPRESSED_RECORDS: u32 = 1 << 31;
 pub(super) const SUMMARY_BYTES: usize = 88;
@@ -23,6 +23,7 @@ pub(super) const REVERSE: u8 = 2;
 pub(super) const QUADS: u8 = 3;
 pub(super) const GRAPHS: u8 = 4;
 pub(super) const SUMMARIES: u8 = 5;
+pub(super) const SOURCE_DIRECTORY: u8 = 10;
 
 pub(super) const fn statistics_kind(section: super::super::statistics::StatisticsSection) -> u8 {
     6 + section.index() as u8
@@ -65,14 +66,16 @@ pub(super) struct Header {
     pub graphs: Stream,
     pub summaries: Stream,
     pub statistics: [Stream; 4],
+    pub effective_directory: Stream,
     pub flags: u8,
+    pub source_union: purrdf_hash::multiset::Multiset256,
 }
 
 impl Header {
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
         out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&3_u32.to_le_bytes());
+        out.extend_from_slice(&4_u32.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -92,16 +95,19 @@ impl Header {
             self.statistics[1],
             self.statistics[2],
             self.statistics[3],
+            self.effective_directory,
         ] {
             for value in [stream.first, stream.blocks, stream.rows] {
                 out.extend_from_slice(&value.to_le_bytes());
             }
         }
+        out.extend_from_slice(&self.source_union.population().to_le_bytes());
+        out.extend_from_slice(self.source_union.sum());
         out
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(3) {
+        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(4) {
             return Err(SegmentedError::Corrupt(
                 "unsupported segmented format/profile",
             ));
@@ -124,7 +130,7 @@ impl Header {
         first_term_index
             .checked_add(terms)
             .ok_or(SegmentedError::AddressExhausted)?;
-        let mut streams = [Stream::default(); 11];
+        let mut streams = [Stream::default(); 12];
         for stream in &mut streams {
             *stream = Stream {
                 first: input.u64()?,
@@ -132,6 +138,16 @@ impl Header {
                 rows: input.u64()?,
             };
         }
+        let source_population = u128::from_le_bytes(
+            input
+                .take(16)?
+                .try_into()
+                .map_err(|_| SegmentedError::Corrupt("truncated source population"))?,
+        );
+        let source_sum = input
+            .take(32)?
+            .try_into()
+            .map_err(|_| SegmentedError::Corrupt("truncated source sum"))?;
         let header = Self {
             block_bytes,
             records_per_block,
@@ -145,7 +161,21 @@ impl Header {
             graphs: streams[5],
             summaries: streams[6],
             statistics: [streams[7], streams[8], streams[9], streams[10]],
+            effective_directory: streams[11],
+            source_union: purrdf_hash::multiset::Multiset256::from_parts(
+                source_sum,
+                source_population,
+            ),
         };
+        let physical_rows = header.streams.iter().try_fold(0_u64, |rows, stream| {
+            rows.checked_add(stream.rows)
+                .ok_or(SegmentedError::AddressExhausted)
+        })?;
+        if source_population > u128::from(physical_rows) {
+            return Err(SegmentedError::Corrupt(
+                "source population exceeds physical rows",
+            ));
+        }
         if header.dictionary.rows != terms || header.reverse.rows != terms {
             return Err(SegmentedError::Corrupt(
                 "dictionary/index cardinality mismatch",
@@ -166,6 +196,16 @@ impl Header {
                 return Err(SegmentedError::Corrupt("statistics block count mismatch"));
             }
         }
+        let per_block =
+            (u64::from(block_bytes) - 9) / super::super::source_directory::RECORD_BYTES as u64;
+        if u128::from(header.effective_directory.rows) != source_population
+            || header.effective_directory.blocks
+                != header.effective_directory.rows.div_ceil(per_block)
+        {
+            return Err(SegmentedError::Corrupt(
+                "effective source directory packing mismatch",
+            ));
+        }
         Ok(header)
     }
 
@@ -183,6 +223,7 @@ impl Header {
             self.statistics[1],
             self.statistics[2],
             self.statistics[3],
+            self.effective_directory,
         ] {
             if stream.first != next || (stream.blocks == 0) != (stream.rows == 0) {
                 return Err(SegmentedError::Corrupt("non-contiguous block directory"));

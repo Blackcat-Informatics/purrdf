@@ -21,7 +21,9 @@ use super::{
     SegmentedStackSnapshot,
 };
 
+mod changes;
 mod statistics;
+pub(crate) use changes::SegmentedSourceVersion;
 mod view;
 pub use view::SegmentedStackTermGuard;
 
@@ -100,6 +102,13 @@ impl SegmentedStackSnapshot {
         limits: SegmentedReadLimits,
     ) -> Result<SegmentedStackQuery<'_>, SegmentedError> {
         let operation = SegmentedOperation::new(limits)?;
+        self.query_with_operation(operation)
+    }
+
+    fn query_with_operation(
+        &self,
+        operation: SegmentedOperation,
+    ) -> Result<SegmentedStackQuery<'_>, SegmentedError> {
         let mut storage = QueryStorage::new(&operation)?;
         let mut sessions = Vec::new();
         storage.run(|memory| memory.reserve(&mut sessions, self.layers.len()))?;
@@ -351,7 +360,7 @@ impl SegmentedStackQuery<'_> {
 }
 
 #[derive(Debug)]
-pub(super) struct QueryStorage {
+pub(crate) struct QueryStorage {
     pub(super) reservation: SegmentedReservation,
     pub(super) cause: Option<SegmentedError>,
 }

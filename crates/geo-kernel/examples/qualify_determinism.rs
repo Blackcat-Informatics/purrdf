@@ -174,17 +174,17 @@ mod native {
         Ok(count)
     }
 
-    fn records(text: &str, expected_tests: usize) -> Result<Vec<Record>> {
+    fn records(text: &str, expected_tests: usize, filtered: usize) -> Result<Vec<Record>> {
         let summaries = text
             .lines()
             .filter_map(|line| line.strip_prefix("test result: "))
             .collect::<Vec<_>>();
         let expected = format!(
-            "ok. {expected_tests} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;"
+            "ok. {expected_tests} passed; 0 failed; 0 ignored; 0 measured; {filtered} filtered out;"
         );
         if summaries.len() != 1 || !summaries[0].starts_with(&expected) {
             return Err(format!(
-                "expected all {expected_tests} registered tests with no ignored or filtered cases; got {summaries:?}"
+                "expected {expected_tests} selected tests and {filtered} filtered native cases, with no ignored cases; got {summaries:?}"
             ));
         }
         let mut records = Vec::new();
@@ -227,6 +227,11 @@ mod native {
         ]);
         if !matches!(lane, Lane::Native) {
             command.args(["--target", "wasm32-unknown-unknown"]);
+            // WASM owns frozen cross-target identities, not the native semantic
+            // and refusal cases registered alongside those replay functions.
+            command.args(["--", "--exact"]);
+            command.args(corpus.records.iter().map(|record| record.case));
+            command.env("PURRDF_TEST_REQUIRE_EXACT", "1");
             command.env(
                 "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER",
                 root.join("scripts/wasm-test-runner.sh"),
@@ -276,7 +281,12 @@ mod native {
         for lane in Lane::ALL {
             let output = execute(root, corpus, lane)?;
             print!("{output}");
-            let observed = records(&output, test_count)?;
+            let selected = if matches!(lane, Lane::Native) {
+                test_count
+            } else {
+                corpus.records.len()
+            };
+            let observed = records(&output, selected, test_count - selected)?;
             if observed.len() != corpus.records.len() {
                 return Err(format!("unexpected digest records: {observed:?}"));
             }
@@ -330,14 +340,14 @@ mod native {
         #[test]
         fn refuses_skipped_cases_and_missing_or_malformed_records() {
             let valid = "test sample ... determinism-digest case=sample digest=8273649182736491 corpus_len=20\nok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0s\n";
-            assert_eq!(records(valid, 1).unwrap().len(), 1);
+            assert_eq!(records(valid, 1, 0).unwrap().len(), 1);
             for changed in [
                 valid.replace("1 passed;", "0 passed;"),
                 valid.replace("0 ignored;", "1 ignored;"),
                 valid.replace("0 filtered out;", "1 filtered out;"),
                 valid.replace("8273649182736491", "0123"),
             ] {
-                assert!(records(&changed, 1).is_err());
+                assert!(records(&changed, 1, 0).is_err());
             }
             assert_eq!(
                 golden("const PIN: u64 = 0x8273_6491_8273_6491;", "PIN").unwrap(),

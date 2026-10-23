@@ -974,6 +974,30 @@ impl DatasetView for PagedQueryView<'_> {
             .then_some(&self.dataset.statistics.values)
     }
 
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(
+            self.dataset
+                .statistics
+                .values
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(self.dataset.statistics.values.statement_count()))
+    }
+
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
         self.dataset.pages.iter().flat_map(move |slot| {
             self.page(slot.id).into_iter().flat_map(move |page| {

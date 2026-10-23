@@ -407,7 +407,6 @@ fn literal_matches<P: CorpusProfile>(
                     for token in index
                         .token_occurrences(document)
                         .expect("index stream")
-                        .iter()
                         .filter(|token| {
                             token.position == position
                                 && index.occurrence_term(token.term) == Some(term.as_str())

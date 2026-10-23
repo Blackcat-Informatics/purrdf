@@ -73,6 +73,36 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
+        file: "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+        name: "BUILDS",
+        safety: Safety::NotCompiledIn,
+        reason: "Effective-directory node counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
+        name: "COPIES",
+        safety: Safety::NotCompiledIn,
+        reason: "Effective-directory copied-key counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index.rs",
+        name: "DIGEST_BYTES",
+        safety: Safety::NotCompiledIn,
+        reason: "Index identity work counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index/token_streams.rs",
+        name: "HANDLE_CLONES",
+        safety: Safety::NotCompiledIn,
+        reason: "Persistent-table clone counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
+        file: "crates/text/src/index/token_streams.rs",
+        name: "NODE_BUILDS",
+        safety: Safety::NotCompiledIn,
+        reason: "Persistent-table node counter guarded by cfg(test); absent from the shipped WASM package.",
+    },
+    ThreadLocal {
         file: "crates/text/src/analysis.rs",
         name: "PROJECTION_CALLS",
         safety: Safety::NotCompiledIn,

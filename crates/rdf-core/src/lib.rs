@@ -77,6 +77,7 @@ pub mod describe;
 pub mod diagnostic;
 pub mod evidence;
 pub mod query_scope;
+pub mod source;
 pub mod statistics;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
