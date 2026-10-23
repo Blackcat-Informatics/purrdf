@@ -235,7 +235,19 @@ pub(crate) fn eval_planned_ids_from_id(
     path: &LoweredPath,
     binding: &DatasetBinding,
 ) -> Result<IdVec, crate::error::ShapesError> {
-    let ids = eval_planned_inner_ids(ds, focus_id, path, binding)?;
+    eval_planned_ids_with_paths(ds, focus_id, path, binding, &[])
+}
+
+/// The same path evaluator over a footprint's shared path arena.
+pub(crate) fn eval_planned_ids_with_paths(
+    ds: &impl ShaclRead,
+    focus_id: TermId,
+    path: &LoweredPath,
+    binding: &DatasetBinding,
+    paths: &[LoweredPath],
+) -> Result<IdVec, crate::error::ShapesError> {
+    let mut memo = purrdf_core::FastMap::default();
+    let ids = eval_planned_inner_ids(ds, focus_id, path, binding, paths, &mut memo)?;
     let mut seen = FrontierDedup::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
     for id in ids {
@@ -262,7 +274,7 @@ pub(crate) fn eval_planned(
         // quads, so every predicate/inverse STEP is empty. The only value a path
         // can yield is the focus term itself, via reflexive (zero-length)
         // inclusion.
-        if admits_empty_planned_path(path) {
+        if admits_empty_planned_path(path)? {
             return Ok(vec![focus.clone()]);
         }
         return Ok(Vec::new());
@@ -280,21 +292,30 @@ pub(crate) fn eval_planned(
 /// Stated over the lowering rather than delegated to the AST so a lowered path is
 /// self-sufficient: the evaluator holds no `Path` to consult for the one question
 /// that decides a non-interned focus's whole result.
-fn admits_empty_planned_path(path: &LoweredPath) -> bool {
-    match path {
+fn admits_empty_planned_path(path: &LoweredPath) -> Result<bool, crate::error::ShapesError> {
+    Ok(match path {
+        LoweredPath::Reference(_) | LoweredPath::SharedReference(_) => {
+            return Err(crate::error::ShapesError::internal(
+                "a shared footprint path was used without its path arena",
+            ));
+        }
         // A predicate step is never zero-length.
         LoweredPath::Predicate(_) | LoweredPath::InversePredicate(_) => false,
         // Inversion does not change reflexivity: `^p` admits empty iff `p` does,
         // so the already-inverted lowering answers for the declared `^(…)`.
-        LoweredPath::InvertedComposite(inverted) => admits_empty_planned_path(inverted),
-        LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner),
+        LoweredPath::InvertedComposite(inverted) => admits_empty_planned_path(inverted)?,
+        LoweredPath::OneOrMore(inner) => admits_empty_planned_path(inner)?,
         // A sequence admits empty only if EVERY step can be taken in zero steps.
-        LoweredPath::Sequence(parts) => parts.iter().all(admits_empty_planned_path),
+        LoweredPath::Sequence(parts) => parts.iter().try_fold(true, |empty, part| {
+            Ok::<_, crate::error::ShapesError>(admits_empty_planned_path(part)? && empty)
+        })?,
         // An alternative admits empty if ANY branch does.
-        LoweredPath::Alternative(parts) => parts.iter().any(admits_empty_planned_path),
+        LoweredPath::Alternative(parts) => parts.iter().try_fold(false, |empty, part| {
+            Ok::<_, crate::error::ShapesError>(admits_empty_planned_path(part)? || empty)
+        })?,
         // The reflexive closures always admit the zero-length path.
         LoweredPath::ZeroOrMore(_) | LoweredPath::ZeroOrOne(_) => true,
-    }
+    })
 }
 
 /// The recursive id-native evaluator for a lowered path and an interned `focus`.
@@ -303,8 +324,41 @@ fn eval_planned_inner_ids(
     focus: TermId,
     path: &LoweredPath,
     binding: &DatasetBinding,
+    paths: &[LoweredPath],
+    memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
 ) -> Result<IdVec, crate::error::ShapesError> {
+    if purrdf_stack::is_low() {
+        return Err(crate::error::ShapesError::Processor(
+            crate::error::ProcessorFailure::ExpressionStackMargin,
+        ));
+    }
     Ok(match path {
+        LoweredPath::Reference(index) | LoweredPath::SharedReference(index) => {
+            let shared = matches!(path, LoweredPath::SharedReference(_));
+            if shared && let Some(ids) = memo.get(&(*index, focus)) {
+                return Ok(ids.clone());
+            }
+            let path = paths.get(*index).ok_or_else(|| {
+                crate::error::ShapesError::internal("a shared path reference has no prepared path")
+            })?;
+            let mut ids = eval_planned_inner_ids(ds, focus, path, binding, paths, memo)?;
+            if shared {
+                // Cache a set, not an alternative's repeated intermediate rows.
+                // Sharing must bound both repeated computation and result storage.
+                let mut seen = FrontierDedup::default();
+                let mut end = 0;
+                for position in 0..ids.len() {
+                    let id = ids[position];
+                    if seen.insert(&ids[..end], id) {
+                        ids[end] = id;
+                        end += 1;
+                    }
+                }
+                ids.truncate(end);
+                memo.insert((*index, focus), ids.clone());
+            }
+            ids
+        }
         LoweredPath::Predicate(slot) => match binding.term(*slot)? {
             Some(p_id) => {
                 quads_for_pattern_ids(ds, Some(focus), Some(p_id), None, GraphFilter::DefaultGraph)
@@ -326,7 +380,7 @@ fn eval_planned_inner_ids(
         // rewrite here and nothing to re-resolve: this is an ordinary recursive
         // step over slots.
         LoweredPath::InvertedComposite(inverted) => {
-            eval_planned_inner_ids(ds, focus, inverted, binding)?
+            eval_planned_inner_ids(ds, focus, inverted, binding, paths, memo)?
         }
         LoweredPath::Sequence(parts) => {
             // Fold the frontier through each step, deduplicating per step
@@ -340,7 +394,7 @@ fn eval_planned_inner_ids(
                 next.clear();
                 seen.clear();
                 for &node in &frontier {
-                    for value in eval_planned_inner_ids(ds, node, part, binding)? {
+                    for value in eval_planned_inner_ids(ds, node, part, binding, paths, memo)? {
                         if seen.insert(&next, value) {
                             next.push(value);
                         }
@@ -353,15 +407,23 @@ fn eval_planned_inner_ids(
         LoweredPath::Alternative(parts) => {
             let mut out: IdVec = IdVec::new();
             for part in parts {
-                out.extend(eval_planned_inner_ids(ds, focus, part, binding)?);
+                out.extend(eval_planned_inner_ids(
+                    ds, focus, part, binding, paths, memo,
+                )?);
             }
             out
         }
-        LoweredPath::ZeroOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, true)?,
-        LoweredPath::OneOrMore(inner) => planned_closure_ids(ds, focus, inner, binding, false)?,
+        LoweredPath::ZeroOrMore(inner) => {
+            planned_closure_ids(ds, focus, inner, binding, true, paths, memo)?
+        }
+        LoweredPath::OneOrMore(inner) => {
+            planned_closure_ids(ds, focus, inner, binding, false, paths, memo)?
+        }
         LoweredPath::ZeroOrOne(inner) => {
             let mut nodes: IdVec = smallvec![focus];
-            nodes.extend(eval_planned_inner_ids(ds, focus, inner, binding)?);
+            nodes.extend(eval_planned_inner_ids(
+                ds, focus, inner, binding, paths, memo,
+            )?);
             nodes
         }
     })
@@ -374,6 +436,8 @@ fn planned_closure_ids(
     inner: &LoweredPath,
     binding: &DatasetBinding,
     reflexive: bool,
+    paths: &[LoweredPath],
+    memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
 ) -> Result<IdVec, crate::error::ShapesError> {
     // `order` IS the visited set: every id the dedup admits is pushed to it, and
     // it is never popped, so the closure's membership question is answered against
@@ -388,7 +452,7 @@ fn planned_closure_ids(
         // — and the dedup reads `order` itself, so pushing IS recording it.
         order.push(focus);
     } else {
-        for value in eval_planned_inner_ids(ds, focus, inner, binding)? {
+        for value in eval_planned_inner_ids(ds, focus, inner, binding, paths, memo)? {
             if seen.insert(&order, value) {
                 order.push(value);
             }
@@ -398,7 +462,7 @@ fn planned_closure_ids(
     while cursor < order.len() {
         let node = order[cursor];
         cursor += 1;
-        for value in eval_planned_inner_ids(ds, node, inner, binding)? {
+        for value in eval_planned_inner_ids(ds, node, inner, binding, paths, memo)? {
             if seen.insert(&order, value) {
                 order.push(value);
             }
@@ -650,6 +714,27 @@ mod tests {
 
     use super::*;
     use crate::term::Literal;
+
+    #[test]
+    fn missing_shared_paths_are_processor_failures() {
+        let data = load_data("<http://example.org/a> <http://example.org/p> 1.");
+        let lowering =
+            lower_standalone_path(&Path::Predicate(NamedNode::from("http://example.org/p")))
+                .unwrap();
+        let binding = lowering.bind(&data);
+        let focus = data.term_id_by_iri("http://example.org/a").unwrap();
+        for reference in [LoweredPath::Reference(0), LoweredPath::SharedReference(0)] {
+            let error =
+                eval_planned_ids_with_paths(&data, focus, &reference, &binding, &[]).unwrap_err();
+            assert!(matches!(
+                error,
+                crate::error::ShapesError::Processor(
+                    crate::error::ProcessorFailure::Internal { .. }
+                )
+            ));
+            assert!(admits_empty_planned_path(&reference).is_err());
+        }
+    }
 
     #[test]
     fn deep_path_copy_inversion_and_destruction_use_heap_work_lists() {

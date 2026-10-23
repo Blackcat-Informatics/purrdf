@@ -464,7 +464,7 @@ fn function_resolution_reports_the_calls_inside_targets() {
            sh:targetWhere [ sh:expression [ sparql:isIRI ( sh:this ) ] ] ;
            sh:nodeKind sh:Literal .",
     );
-    let report = evaluated.function_resolution();
+    let report = evaluated.function_resolution().unwrap();
     let owners = |function: &str| -> Vec<String> {
         report
             .sites()
@@ -478,7 +478,7 @@ fn function_resolution_reports_the_calls_inside_targets() {
     );
     assert_eq!(owners("http://www.w3.org/ns/sparql#isIRI").len(), 1);
     let constant = shapes("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .");
-    assert_eq!(constant.function_resolution().sites().count(), 0);
+    assert_eq!(constant.function_resolution().unwrap().sites().count(), 0);
 }
 
 /// `Shapes::extension_usage` reads the SPARQL a target carries: a `sh:select`
@@ -492,10 +492,14 @@ fn extension_usage_reads_the_sparql_inside_a_target_node_expression() {
            sh:targetNode [ sh:select \"SELECT ?n WHERE { ?n <http://example.org/ns#related> ?o }\" ] ;
            sh:nodeKind sh:Literal .",
     );
-    let usage = evaluated.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = evaluated
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(usage.data().contains(relation), "{usage:?}");
     let constant = shapes("ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:nodeKind sh:Literal .");
-    let usage = constant.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = constant
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(!usage.data().contains(relation), "{usage:?}");
 }
 

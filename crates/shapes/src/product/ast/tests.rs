@@ -32,8 +32,8 @@ use crate::report::Severity;
 use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
-    ConstraintAnnotation, NodeKindValue, Path, PropertyShape, Shape, Shapes, SparqlTargetType,
-    Target, TargetTypeParam,
+    ConstraintAnnotation, NodeKindValue, Path, PropertyReference, PropertyShape, Shape, Shapes,
+    SparqlTargetType, Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -57,6 +57,26 @@ fn fixture_index() -> &'static crate::shapes::link::ShapeIndex {
         let definition = leaf_shape("SharedShape");
         let mut definitions = ::purrdf_rdf::FastMap::default();
         definitions.insert(definition.id.clone(), definition);
+        let property = Shape {
+            property_shapes: vec![PropertyShape {
+                id: ex_term("SharedProperty"),
+                path: Path::Predicate(ex("linked")),
+                values: None,
+                default_value: None,
+                constraints: Vec::new(),
+                property_shapes: Vec::new(),
+                reifier_shapes: Vec::new(),
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: Vec::new(),
+                constraint_annotations: Vec::new(),
+                deactivated: false,
+                deactivated_when: Vec::new(),
+                box_roles: Vec::new(),
+            }],
+            ..leaf_shape("SharedProperty")
+        };
+        definitions.insert(property.id.clone(), property);
         Arc::new(OnceLock::from(definitions))
     })
 }
@@ -500,6 +520,13 @@ fn sample_constraints(func: &Arc<CustomFunction>) -> Vec<Constraint> {
             ],
         },
         Constraint::Reference(ex_term("SharedShape")),
+        Constraint::PropertyReference(PropertyReference {
+            target: ex_term("SharedProperty"),
+            deactivated: false,
+            deactivated_when: vec![NodeExpr::This],
+            severity: Some(Severity::Info),
+            messages: vec![Literal::new_simple_literal("edge")],
+        }),
     ]
 }
 
@@ -832,6 +859,103 @@ fn shapes_of(node_shapes: Vec<Shape>) -> Shapes {
     Shapes {
         node_shapes,
         ..Shapes::default()
+    }
+}
+
+#[test]
+fn shared_index_keeps_each_owning_function_domain_before_and_after_roundtrip() {
+    use crate::engine::PreparedShapes;
+    use crate::shapes::ModelOwner;
+
+    let mut definition = leaf_shape("SharedBody");
+    definition.constraints = vec![Constraint::Expression {
+        expr: NodeExpr::CustomCall {
+            func: ex("function"),
+            args: Vec::new(),
+        },
+        messages: Vec::new(),
+        severity: None,
+    }];
+    let target = definition.id.clone();
+    let definitions = ModelOwner::from_definitions(vec![definition]).unwrap();
+    let index = Arc::clone(&definitions.index);
+    let mut roots = Vec::new();
+    for (name, value) in [("First", "true"), ("Second", "false")] {
+        let function = Arc::new(CustomFunction {
+            iri: ex("function"),
+            kind: CustomFnKind::ListParameter,
+            params: Vec::new(),
+            required: 0,
+            body: OnceLock::from(NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal(
+                    value,
+                    NamedNode::from(purrdf_xsd::datatype::XSD_BOOLEAN),
+                ),
+            ))),
+        });
+        let owner = ModelOwner::from_declarations(Arc::clone(&index), vec![function]).unwrap();
+        let mut root = leaf_shape(name);
+        root.owner = Some(owner);
+        root.targets = vec![Target::Node(ex_term("focus"))];
+        root.constraints = vec![Constraint::Reference(target.clone())];
+        roots.push(root);
+    }
+    let shapes = shapes_of(roots);
+    let (_, _, restored) = round_trip(&shapes);
+    let dataset = crate::text_ingest::parse_turtle_to_dataset("", None).unwrap();
+    for model in [shapes, restored] {
+        let prepared = PreparedShapes::new(Arc::new(model));
+        let report = prepared.bind_dataset(&dataset).unwrap().validate().unwrap();
+        assert!(!report.conforms, "the second original body returns false");
+        assert_eq!(
+            report.results.len(),
+            1,
+            "each owning domain evaluates its own function body"
+        );
+        assert_eq!(report.results[0].source_shape, target);
+    }
+}
+
+#[test]
+fn an_owned_expression_resolves_named_shape_references_in_its_original_domain() {
+    use crate::engine::PreparedShapes;
+    use crate::shapes::ModelOwner;
+
+    let mut foreign = leaf_shape("SameName");
+    foreign.constraints = vec![Constraint::NodeKind(vec![NodeKindValue::Literal])];
+    let foreign = ModelOwner::from_definitions(vec![foreign]).unwrap();
+    let mut reference = leaf_shape("SameName");
+    reference.constraints = vec![Constraint::Reference(reference.id.clone())];
+    let mut root = leaf_shape("Root");
+    root.targets = vec![Target::Node(ex_term("focus"))];
+    root.constraints = vec![Constraint::Expression {
+        expr: NodeExpr::Owned {
+            owner: foreign,
+            expr: Box::new(NodeExpr::ConformsToShape {
+                node: Box::new(NodeExpr::Constant(Term::Literal(
+                    Literal::new_simple_literal("literal"),
+                ))),
+                shape: ShapeArg::Named(Box::new(reference)),
+            }),
+        },
+        messages: Vec::new(),
+        severity: None,
+    }];
+    let mut local = leaf_shape("SameName");
+    local.constraints = vec![Constraint::NodeKind(vec![NodeKindValue::Iri])];
+    let root_id = root.id.clone();
+    let owner = ModelOwner::from_definitions(vec![root, local]).unwrap();
+    let shapes = shapes_of(vec![owner.root(&root_id).unwrap()]);
+    let (_, _, restored) = round_trip(&shapes);
+    let dataset = crate::text_ingest::parse_turtle_to_dataset("", None).unwrap();
+    for model in [shapes, restored] {
+        let prepared = PreparedShapes::new(Arc::new(model));
+        let report = prepared.bind_dataset(&dataset).unwrap().validate().unwrap();
+        assert!(
+            report.conforms,
+            "the foreign literal shape, not the local IRI shape, judges the value"
+        );
+        assert!(report.results.is_empty());
     }
 }
 

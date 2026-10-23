@@ -466,11 +466,12 @@ impl PreparedTargets {
                     }
                 }
                 Target::ImplicitClass(_) => {}
-                Target::Where(shape) => {
+                Target::Where(where_shape) => {
                     for node in crate::target_eval::where_targets(
                         data,
-                        shape,
+                        where_shape,
                         binding.conformance_disallows(),
+                        shape.owner.as_ref(),
                     )? {
                         prepared.explicit_ids.insert(node);
                     }
@@ -1189,6 +1190,7 @@ pub(crate) fn resolve_focus_nodes(
                 data,
                 where_shape,
                 binding.conformance_disallows(),
+                model,
             )?),
             Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
         };
@@ -3114,9 +3116,14 @@ impl PreparedValidator {
                         }
                     }
                     Some(path) => {
-                        for id in
-                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)
-                                .map_err(|error| error.to_string())?
+                        for id in crate::path::eval_planned_ids_with_paths(
+                            core,
+                            read_node,
+                            path,
+                            binding,
+                            self.bound.footprint().paths(),
+                        )
+                        .map_err(|error| error.to_string())?
                         {
                             if seen.insert(id) {
                                 affected.push(FocusId::new(dataset, id));

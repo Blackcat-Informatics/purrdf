@@ -57,10 +57,17 @@ fn products_preserve_same_named_function_bodies_in_their_original_domains() {
     let data = purrdf_shapes::data::ShaclData::new(Arc::clone(&dataset), dataset, None);
     let focus = Term::BlankNode("outside".to_owned());
     for model in [&prepared, &restored] {
-        let Constraint::Expression { expr, .. } = &model.shapes().node_shapes[0].constraints[0]
-        else {
-            panic!("the expression remains present");
-        };
+        let expr = model.shapes().node_shapes[0]
+            .constraints
+            .iter()
+            .find_map(|constraint| {
+                if let Constraint::Expression { expr, .. } = constraint {
+                    Some(expr)
+                } else {
+                    None
+                }
+            })
+            .expect("the authored expression remains present beside the original body reference");
         let values = eval_node_expr(&data, &focus, expr, &mut RecursionGuard::default()).unwrap();
         assert_eq!(
             values,

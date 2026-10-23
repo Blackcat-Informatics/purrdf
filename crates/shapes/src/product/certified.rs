@@ -274,7 +274,6 @@ fn assemble_functions_request(
         shapes.dataset(),
         shapes.provenance(),
         &shapes.owner.functions,
-        &shapes.node_shapes,
         &mut registry,
         shapes.validation_options.shacl_profile,
     )

@@ -391,11 +391,55 @@ impl ClosedTypeIndex {
     }
 }
 
+/// One `sh:property` edge to an original property-shape definition.
+/// Overrides belong to this edge; the shared definition stays unchanged.
+#[derive(Debug, Clone)]
+pub struct PropertyReference {
+    /// The original property shape's RDF identity.
+    pub target: Term,
+    /// Whether this edge is statically deactivated.
+    pub deactivated: bool,
+    /// Additional deactivation expressions declared on the edge.
+    pub deactivated_when: Vec<NodeExpr>,
+    /// Edge severity, below the property's own constraint-statement annotations.
+    pub severity: Option<Severity>,
+    /// Edge messages, below the property's own constraint-statement annotations.
+    pub messages: Vec<Literal>,
+}
+
+/// A shared definition under the metadata of its particular incoming edge.
+#[derive(Clone, Copy)]
+pub(crate) struct PropertyView<'a> {
+    pub(crate) property: &'a PropertyShape,
+    pub(crate) edge: Option<&'a PropertyReference>,
+}
+
+impl<'a> PropertyView<'a> {
+    pub(crate) fn deactivated(self) -> bool {
+        self.property.deactivated || self.edge.is_some_and(|edge| edge.deactivated)
+    }
+
+    pub(crate) fn severity(self) -> &'a Severity {
+        self.edge
+            .and_then(|edge| edge.severity.as_ref())
+            .unwrap_or(&self.property.severity)
+    }
+
+    pub(crate) fn messages(self) -> &'a [Literal] {
+        self.edge
+            .map(|edge| edge.messages.as_slice())
+            .filter(|messages| !messages.is_empty())
+            .unwrap_or(&self.property.messages)
+    }
+}
+
 /// A single SHACL constraint on a shape or property shape.
 #[derive(Debug, Clone)]
 pub enum Constraint {
     /// A shape's definition in its shared catalog, without recursive unfolding.
     Reference(Term),
+    /// A `sh:property` edge, evaluated without stamping its parent's path or focus.
+    PropertyReference(PropertyReference),
     /// One `sh:class` value: a single class IRI (`sh:class ex:C`, one member) or a
     /// SHACL list of class IRIs (`sh:class ( ex:C ex:D )`).
     ///
@@ -837,6 +881,67 @@ pub struct Shape {
     pub rules: Vec<crate::rules::Rule>,
 }
 
+impl Shape {
+    pub(crate) fn as_property(&self) -> Option<&PropertyShape> {
+        match self.property_shapes.as_slice() {
+            [property] if self.constraints.is_empty() && property.id == self.id => Some(property),
+            _ => None,
+        }
+    }
+
+    /// Resolve an identity handle once; a definition keeps its own constraints.
+    pub(crate) fn resolved_in<'a>(
+        &'a self,
+        model: Option<&'a ModelOwner>,
+    ) -> Result<&'a Self, crate::PreparationRefusal> {
+        if let [Constraint::Reference(target)] = self.constraints.as_slice()
+            && self.property_shapes.is_empty()
+            && self.owner.is_some()
+            && *target == self.id
+        {
+            self.owner
+                .as_deref()
+                .or(model)
+                .ok_or(crate::PreparationRefusal::UnboundReference)?
+                .definition_required(target)
+        } else {
+            Ok(self)
+        }
+    }
+
+    pub(crate) fn properties_in<'a>(
+        &'a self,
+        model: Option<&'a ModelOwner>,
+    ) -> impl Iterator<Item = Result<PropertyView<'a>, crate::PreparationRefusal>> + use<'a> {
+        let domain = self.owner.as_deref().or(model);
+        self.property_shapes
+            .iter()
+            .map(|property| {
+                Ok(PropertyView {
+                    property,
+                    edge: None,
+                })
+            })
+            .chain(
+                self.constraints
+                    .iter()
+                    .filter_map(|constraint| match constraint {
+                        Constraint::PropertyReference(edge) => Some(edge),
+                        _ => None,
+                    })
+                    .map(move |edge| {
+                        let property = domain
+                            .ok_or(crate::PreparationRefusal::UnboundReference)?
+                            .property_definition(&edge.target)?;
+                        Ok(PropertyView {
+                            property,
+                            edge: Some(edge),
+                        })
+                    }),
+            )
+    }
+}
+
 /// The declaration and resolution domain retained by exported model roots.
 /// Logical calls name declarations by IRI, keeping recursive calls non-owning.
 pub struct ModelOwner {
@@ -896,6 +1001,16 @@ impl ModelOwner {
 purrdf_hash::default_from_new!(ModelOwner => empty);
 
 impl ModelOwner {
+    /// Borrow every original bare definition without exporting or cloning it.
+    /// Iteration order is not a canonical identity order; consumers that emit an
+    /// ordered artifact must select and sort the identities they actually use.
+    pub fn definitions(&self) -> impl Iterator<Item = &Shape> {
+        self.index
+            .get()
+            .expect("admitted model has an initialized definition index")
+            .values()
+    }
+
     /// Admit a complete definition table. Ownership stays on exported roots.
     ///
     /// # Errors
@@ -914,6 +1029,13 @@ impl ModelOwner {
         definitions: Vec<Shape>,
         functions: Vec<Arc<crate::expression::CustomFunction>>,
     ) -> Result<Arc<Self>, crate::PreparationRefusal> {
+        let entries = Self::definition_map(definitions)?;
+        Self::from_declarations(Arc::new(OnceLock::from(entries)), functions)
+    }
+
+    fn definition_map(
+        definitions: Vec<Shape>,
+    ) -> Result<FastMap<Term, Shape>, crate::PreparationRefusal> {
         let mut entries = FastMap::with_capacity_and_hasher(
             definitions.len(),
             purrdf_hash::fixed::FixedState::default(),
@@ -935,13 +1057,43 @@ impl ModelOwner {
                 }
             }
         }
-        Self::from_declarations(Arc::new(OnceLock::from(entries)), functions)
+        Ok(entries)
+    }
+
+    pub(crate) fn install_definitions(
+        index: &link::ShapeIndex,
+        definitions: Vec<Shape>,
+    ) -> Result<(), crate::PreparationRefusal> {
+        if index.get().is_some() {
+            return Err(crate::PreparationRefusal::InitializedIndex);
+        }
+        index
+            .set(Self::definition_map(definitions)?)
+            .map_err(|_| crate::PreparationRefusal::InitializedIndex)
     }
 
     /// Borrow the original definition with this RDF identity.
     #[must_use]
     pub fn definition(&self, id: &Term) -> Option<&Shape> {
         self.index.get().and_then(|entries| entries.get(id))
+    }
+
+    pub(crate) fn definition_required(
+        &self,
+        id: &Term,
+    ) -> Result<&Shape, crate::PreparationRefusal> {
+        self.definition(id)
+            .ok_or_else(|| crate::PreparationRefusal::UnknownReference(Arc::new(id.clone())))
+    }
+
+    pub(crate) fn property_definition(
+        &self,
+        id: &Term,
+    ) -> Result<&PropertyShape, crate::PreparationRefusal> {
+        let definition = self.definition_required(id)?;
+        definition
+            .as_property()
+            .ok_or_else(|| crate::PreparationRefusal::ExpectedProperty(Arc::new(id.clone())))
     }
 
     /// Export a target/rule root that retains its validation body by identity.
@@ -966,18 +1118,6 @@ impl ModelOwner {
             box_roles: Vec::new(),
             rules: definition.rules.clone(),
         })
-    }
-
-    /// Definitions in canonical identity order for deterministic model passes.
-    pub(crate) fn definitions(&self) -> Vec<&Shape> {
-        let mut definitions: Vec<_> = self
-            .index
-            .get()
-            .expect("catalog is initialized at construction")
-            .values()
-            .collect();
-        definitions.sort_unstable_by(|left, right| crate::term::canonical_cmp(&left.id, &right.id));
-        definitions
     }
 }
 
@@ -1791,9 +1931,9 @@ enum Preparation {
 pub(crate) enum InFlight {
     /// A shape node being parsed, keyed by its rendered node id (the parser
     /// already carries that rendering for its error messages).
-    Shape(String),
+    Shape(Term),
     /// A property shape, including its constraints, currently being expanded.
-    PropertyShape(String),
+    PropertyShape(Term),
     /// A SHACL-AF node expression being parsed, keyed by its node term.
     NodeExpr(Term),
 }
@@ -1854,6 +1994,9 @@ pub(crate) struct Parser<'s> {
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
     in_flight: FastSet<InFlight>,
+    /// Each definition is admitted once; dependencies remain native identity edges.
+    catalog_seen: FastSet<Term>,
+    catalog_pending: purrdf_lex::walk::WorkList<Term, 16>,
     /// The variables the node expression being parsed can find bound by its context
     /// when it runs, beyond `$this` and the shape context: `value` inside an
     /// `sh:expression` constraint, a custom function's argument names inside its
@@ -1916,18 +2059,6 @@ pub(crate) struct Parser<'s> {
     /// adds nothing to the custom index, and is recorded only so SHACL 1.2 SPARQL
     /// Extensions §7.3 registration can give it its native implementation.
     native_list_fns: std::collections::BTreeSet<String>,
-    /// Whether `sh:rule` is parsed on the shape currently being read.
-    ///
-    /// It is switched OFF for the duration of a `sh:condition`'s own shape parse,
-    /// and for exactly one reason: a condition is evaluated by
-    /// [`crate::constraints::conforms`], which reads a shape's CONSTRAINTS and
-    /// never its rules, so a condition shape's rules are dead weight — and
-    /// carrying them would make condition resolution non-terminating, because a
-    /// shape whose rule names that same shape as its condition (the W3C
-    /// `square-triple` case does exactly this) would re-enter its own rule parse
-    /// without bound. Dropping the one thing a condition cannot use is what makes
-    /// resolving conditions at LOAD time finite.
-    parse_rules_enabled: bool,
     /// Every CONSTANT shape IRI a `sh:nodeByExpression` names, with the shape that
     /// named it, checked against [`Self::node_shape_index`] once that index is
     /// filled (SHACL 1.2 Node Expressions §7.2).
@@ -2038,6 +2169,8 @@ impl<'s> Parser<'s> {
             select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
+            catalog_seen: FastSet::default(),
+            catalog_pending: purrdf_lex::walk::WorkList::new(),
             base,
             prefix_resolver: prefixes::PrefixResolver::new(doc_prefixes),
             box_role_vocab,
@@ -2049,7 +2182,6 @@ impl<'s> Parser<'s> {
             node_shape_index: Arc::new(OnceLock::new()),
             custom_fns: parser::custom_fn::CustomFnIndex::default(),
             native_list_fns: std::collections::BTreeSet::new(),
-            parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
             current_shape: None,
             node_expr_scope: Vec::new(),
@@ -2290,20 +2422,17 @@ impl<'s> Parser<'s> {
         self.custom_fns = linked.custom;
         self.native_list_fns = linked.native_list;
 
-        // Parse each top-level shape in stable (sorted) order. A node with
-        // sh:path is a (standalone) PROPERTY shape: its path-scoped constraints
-        // are wrapped in a single-property Shape carrying the node's targets.
-        let mut node_shapes: Vec<Shape> = Vec::new();
+        // Retain every original definition, independently of the exported target
+        // roots. Dependencies enqueue identities rather than unfolding bodies.
         let mut ids: Vec<Term> = shape_ids.into_iter().collect();
         crate::term::sort_terms_canonical(&mut ids);
-        for term in ids {
-            let shape = if self.first_object_of(&term, sh::PATH).is_some() {
-                self.parse_standalone_property_shape(term)?
-            } else {
-                self.parse_node_shape(&term)?
-            };
-            node_shapes.push(shape);
+        let catalog_ids = self.spec_shapes();
+        self.catalog_seen.reserve(catalog_ids.len());
+        for id in catalog_ids.iter().rev().chain(ids.iter().rev()) {
+            self.request_shape(id);
         }
+        let mut definitions = Vec::with_capacity(self.catalog_seen.len());
+        self.parse_pending_definitions(&mut definitions)?;
 
         // The caller's free-standing node expressions, read by the same parser so
         // the linking pass below reaches their call sites too.
@@ -2331,8 +2460,9 @@ impl<'s> Parser<'s> {
 
         let mut functions = UserFunctionRegistry::default();
         self.parse_sparql_functions(&mut functions)?;
+        self.parse_pending_definitions(&mut definitions)?;
 
-        // The post-tree linking pass: install the bodies, fill the one shared
+        // The model linking pass: install the bodies, fill the one shared
         // `sh:nodeByExpression` resolution table (§7.2), register the
         // expression-bodied functions — and PROVE the sharing topology, which is
         // the part no downstream test could observe. See `shapes::link`.
@@ -2340,7 +2470,7 @@ impl<'s> Parser<'s> {
             custom_fns.iter().map(Arc::clone).collect();
         let owner = if preparation == Preparation::LinkedModel {
             let owner = link::link_shapes(
-                &node_shapes,
+                definitions,
                 &self.node_shape_index,
                 &declarations,
                 &self.native_list_fns,
@@ -2354,9 +2484,20 @@ impl<'s> Parser<'s> {
             self.check_node_by_expression_constants()?;
             owner
         } else {
+            link::install_bodies(&declarations, bodies).map_err(|error| error.to_string())?;
+            ModelOwner::install_definitions(&self.node_shape_index, definitions)
+                .map_err(|error| error.to_string())?;
             ModelOwner::from_declarations(Arc::clone(&self.node_shape_index), declarations)
                 .map_err(|error| error.to_string())?
         };
+        let mut node_shapes = ids
+            .iter()
+            .map(|id| {
+                owner.root(id).ok_or_else(|| {
+                    format!("exported shape {id} has no admitted original definition")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         link::retain_roots(&mut node_shapes, &mut rules, &owner);
         let expressions: Vec<_> = expressions
             .into_iter()
@@ -2417,6 +2558,7 @@ impl<'s> Parser<'s> {
                 &self.select_prebound.borrow(),
                 self.profile,
             )
+            .map_err(|error| error.to_string())?
             && violation.requires_parse_failure()
         {
             return Err(self.refuse_query(format!("the {site}"), violation));
@@ -2444,6 +2586,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &javascript)
+            .map_err(|error| error.to_string())?
         else {
             return Ok(());
         };
@@ -2474,6 +2617,7 @@ impl<'s> Parser<'s> {
             return Ok(());
         }
         let Some((site, function)) = crate::extension_usage::reachable_call_to(shapes, &violating)
+            .map_err(|error| error.to_string())?
         else {
             return Ok(());
         };
@@ -2632,7 +2776,6 @@ impl<'s> Parser<'s> {
         let rules = self.parse_rules(&id)?;
         let ps = self.parse_property_shape(&id)?;
         let deactivated = ps.deactivated;
-        let deactivated_when = ps.deactivated_when.clone();
         Ok(Shape {
             owner: None,
             id,
@@ -2643,7 +2786,7 @@ impl<'s> Parser<'s> {
             messages: vec![],
             constraint_annotations: vec![],
             deactivated,
-            deactivated_when,
+            deactivated_when: Vec::new(),
             box_roles: vec![],
             rules,
         })
@@ -2938,7 +3081,7 @@ impl<'s> Parser<'s> {
 
     /// Parse a top-level node shape.
     fn parse_node_shape(&mut self, id: &Term) -> Result<Shape, String> {
-        self.with_expansion(InFlight::Shape(id.to_string()), |parser| {
+        self.with_expansion(InFlight::Shape(id.clone()), |parser| {
             parser.parse_shape_inner(id)
         })
     }
@@ -2959,17 +3102,13 @@ impl<'s> Parser<'s> {
         let targets = self.parse_targets(id)?;
 
         // -- Property shapes (via sh:property) --
-        let mut property_shape_nodes: Vec<Term> = self.objects_of(id, sh::PROPERTY);
-        crate::term::sort_terms_canonical(&mut property_shape_nodes);
-        let mut property_shapes = Vec::new();
-        for ps_node in property_shape_nodes {
-            let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &ps_node)])?;
-            let ps = self.parse_property_shape(&ps_node)?;
-            property_shapes.push(annotate_property_edge(ps, annotated));
-        }
+        let properties = self.parse_property_references(id)?;
 
         // -- Node-level constraints --
-        let parsed = self.parse_constraints(id, false)?;
+        let mut parsed = self.parse_constraints(id, false)?;
+        parsed
+            .constraints
+            .extend(properties.into_iter().map(Constraint::PropertyReference));
         let box_roles = self.box_roles_of(id)?;
         // -- SHACL-AF rules (sh:rule) --
         let rules = self.parse_rules(id)?;
@@ -2980,7 +3119,7 @@ impl<'s> Parser<'s> {
             id: id.clone(),
             targets,
             constraints: parsed.constraints,
-            property_shapes,
+            property_shapes: Vec::new(),
             severity,
             messages,
             constraint_annotations: parsed.annotations,
@@ -3379,13 +3518,13 @@ impl<'s> Parser<'s> {
 
     /// Parse a property shape node.
     fn parse_property_shape(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
-        self.with_expansion(InFlight::PropertyShape(ps_node.to_string()), |parser| {
+        self.with_expansion(InFlight::PropertyShape(ps_node.clone()), |parser| {
             parser.parse_property_shape_inner(ps_node)
         })
     }
 
     fn parse_property_shape_inner(&mut self, ps_node: &Term) -> Result<PropertyShape, String> {
-        let ps_str = ps_node.to_string();
+        let ps_str = ps_node;
 
         // sh:path is required
         let path_node = self
@@ -3410,19 +3549,16 @@ impl<'s> Parser<'s> {
             self.deactivation_of(ps_node, ps_node, DeactivationSite::Shape)?;
 
         // constraints on the property shape
-        let parsed = self.parse_constraints(ps_node, true)?;
+        let mut parsed = self.parse_constraints(ps_node, true)?;
         let mut constraint_annotations = parsed.annotations;
 
         // Each nested property shape applies to this shape's value nodes.
         // The entry guard covers constraints and nested properties alike.
-        let mut nested_nodes: Vec<Term> = self.objects_of(ps_node, sh::PROPERTY);
-        crate::term::sort_terms_canonical(&mut nested_nodes);
-        let mut property_shapes: Vec<PropertyShape> = Vec::new();
-        for nested in nested_nodes {
-            let annotated = self.constraint_annotation(ps_node, &[(sh::PROPERTY, &nested)])?;
-            let parsed = self.parse_property_shape(&nested)?;
-            property_shapes.push(annotate_property_edge(parsed, annotated));
-        }
+        parsed.constraints.extend(
+            self.parse_property_references(ps_node)?
+                .into_iter()
+                .map(Constraint::PropertyReference),
+        );
 
         let box_roles = self.box_roles_of(ps_node)?;
         let reification_required_term = self.first_object_of(ps_node, sh::REIFICATION_REQUIRED);
@@ -3502,7 +3638,7 @@ impl<'s> Parser<'s> {
             values,
             default_value,
             constraints: parsed.constraints,
-            property_shapes,
+            property_shapes: Vec::new(),
             reifier_shapes,
             reification_required,
             severity,
@@ -3759,77 +3895,75 @@ impl<'s> Parser<'s> {
     /// the path+constraints are wrapped into a single `PropertyShape` entry and
     /// the resulting `Shape` has empty node-level constraints.
     fn parse_inline_shape(&mut self, id: Term) -> Result<Shape, String> {
-        if self.first_object_of(&id, sh::PATH).is_some() {
-            // Treat as an inline property shape
-            let ps = self.with_expansion(InFlight::Shape(id.to_string()), |parser| {
-                parser.parse_property_shape(&id)
-            })?;
-            Ok(Shape {
-                owner: None,
-                id,
-                targets: vec![],
-                constraints: vec![],
-                property_shapes: vec![ps],
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                deactivated_when: Vec::new(),
-                box_roles: vec![],
-                rules: vec![],
-            })
-        } else {
-            self.parse_node_shape(&id)
+        self.request_shape(&id);
+        Ok(Shape {
+            owner: None,
+            id: id.clone(),
+            targets: Vec::new(),
+            constraints: vec![Constraint::Reference(id)],
+            property_shapes: Vec::new(),
+            severity: Severity::Violation,
+            messages: Vec::new(),
+            constraint_annotations: Vec::new(),
+            deactivated: false,
+            deactivated_when: Vec::new(),
+            box_roles: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
+
+    fn request_shape(&mut self, id: &Term) {
+        if self.catalog_seen.insert(id.clone()) {
+            self.catalog_pending.push(id.clone());
         }
+    }
+
+    fn parse_pending_definitions(&mut self, definitions: &mut Vec<Shape>) -> Result<(), String> {
+        while let Some(id) = self.catalog_pending.pop() {
+            let definition = self.with_empty_node_expr_scope(|parser| {
+                if parser.first_object_of(&id, sh::PATH).is_some() {
+                    parser.parse_standalone_property_shape(id)
+                } else {
+                    parser.parse_node_shape(&id)
+                }
+            })?;
+            definitions.push(definition);
+        }
+        Ok(())
+    }
+
+    fn parse_property_references(&mut self, id: &Term) -> Result<Vec<PropertyReference>, String> {
+        let mut nodes = self.objects_of(id, sh::PROPERTY);
+        crate::term::sort_terms_canonical(&mut nodes);
+        let mut properties = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            if self.first_object_of(&node, sh::PATH).is_none() {
+                return Err(format!("property shape {node} missing sh:path"));
+            }
+            self.request_shape(&node);
+            let annotated = self.constraint_annotation(id, &[(sh::PROPERTY, &node)])?;
+            let (deactivated, deactivated_when, severity, messages) = match annotated {
+                Annotated::Plain => (false, Vec::new(), None, Vec::new()),
+                Annotated::Deactivated => (true, Vec::new(), None, Vec::new()),
+                Annotated::Override {
+                    severity,
+                    messages,
+                    deactivated_when,
+                } => (false, deactivated_when, severity, messages),
+            };
+            properties.push(PropertyReference {
+                target: node,
+                deactivated,
+                deactivated_when,
+                severity,
+                messages,
+            });
+        }
+        Ok(properties)
     }
 }
 
 // ── Helper functions ───────────────────────────────────────────────────────────
-
-/// A property shape as the `sh:property` statement that reaches it is annotated.
-///
-/// `sh:property` is a constraint parameter (`sh:PropertyConstraintComponent`),
-/// and "the validation results are the results of validating v as focus node
-/// against the property shape $property" — the results that constraint causes
-/// are the property shape's. So a reifier on the `sh:property` statement
-/// annotates exactly those results: `sh:deactivated true` deactivates this reach of
-/// the property shape (the same shape reached through another, unannotated
-/// statement still validates, and the reach keeps its path in `sh:closed`'s
-/// permitted set), and `sh:severity` / `sh:message` take the place of
-/// the property shape's own for this reach, below any reifier annotation on the
-/// property shape's own constraint statements, which names the constraint that
-/// caused the result more narrowly still. A node-expression `sh:deactivated` joins
-/// the property shape's own, so this reach is deactivated where any of them produces
-/// `true`.
-fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> PropertyShape {
-    match annotated {
-        // The edge stays: `sh:closed`'s permitted set P is syntactic, "the set of IRI
-        // properties that can be reached from the current shape via the SPARQL path
-        // sh:property/sh:path", and `sh:property` is no parameter of the closed
-        // constraint, so a deactivated reach must not shrink it. Marked deactivated, the
-        // property shape validates nothing here — exactly as its own `sh:deactivated
-        // true` does — and the always-true expression spelling already keeps it.
-        Annotated::Deactivated => {
-            ps.deactivated = true;
-            ps
-        }
-        Annotated::Plain => ps,
-        Annotated::Override {
-            severity,
-            messages,
-            deactivated_when,
-        } => {
-            if let Some(severity) = severity {
-                ps.severity = severity;
-            }
-            if !messages.is_empty() {
-                ps.messages = messages;
-            }
-            ps.deactivated_when.extend(deactivated_when);
-            ps
-        }
-    }
-}
 
 /// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.
 pub(crate) fn parse_u64(term: &Term) -> Option<u64> {

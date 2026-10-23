@@ -139,7 +139,7 @@
 //! | [`Path`] | `Predicate` `Inverse` `Sequence` `Alternative` `ZeroOrMore` `OneOrMore` `ZeroOrOne` |
 //! | [`Target`] | `Class` `SubjectsOf` `ObjectsOf` `Node` `ImplicitClass` `Sparql` `Where` `NodeExpression` |
 //! | [`ComponentValidator`] | `Ask` `Select` |
-//! | [`Constraint`] | 41 arms, tags 0–39 for the existing constraints, 40 for `Reference` |
+//! | [`Constraint`] | 42 arms, tags 0–39 for the existing constraints, 40 for `Reference`, 41 for `PropertyReference` |
 //! | [`ClosedMode`] | `Declared` `ByTypes` |
 //! | [`NodeExpr`] | 33 arms, `Constant` … `Select`, then `Owned` at tag 32 |
 //! | [`ShapeArg`] | `Named` `Computed` |
@@ -206,7 +206,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
-use ::purrdf_rdf::{FastMap, RdfTextDirection};
+use ::purrdf_rdf::RdfTextDirection;
 use purrdf_core::ir::pack::bits::{PackBitsError, read_varint, write_varint};
 
 use crate::expression::{
@@ -219,8 +219,8 @@ use crate::rules::{OrderKey, Rule, RuleBody, RuleGraph, RuleSetDeclaration};
 use crate::shapes::link::{ModelWalk, ShapeIndex, ShapeIndexRef};
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ClosedTypeIndex, ComponentValidator, Constraint,
-    ConstraintAnnotation, ModelOwner, NodeKindValue, Path, PropertyShape, Shape, Shapes,
-    SparqlTargetType, Target, TargetTypeParam,
+    ConstraintAnnotation, ModelOwner, NodeKindValue, Path, PropertyReference, PropertyShape, Shape,
+    Shapes, SparqlTargetType, Target, TargetTypeParam,
 };
 use crate::term::{Literal, NamedNode, Term, Triple};
 
@@ -319,7 +319,7 @@ const TAGS_TARGET: u8 = 8;
 /// The number of [`ComponentValidator`] tags.
 const TAGS_COMPONENT_VALIDATOR: u8 = 2;
 /// The number of [`Constraint`] tags.
-const TAGS_CONSTRAINT: u8 = 41;
+const TAGS_CONSTRAINT: u8 = 42;
 /// The number of [`ClosedMode`] tags.
 const TAGS_CLOSED_MODE: u8 = 2;
 /// The number of [`NodeExpr`] tags.
@@ -1160,6 +1160,17 @@ impl AstWriter {
     fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
         self.enter()?;
         match constraint {
+            Constraint::PropertyReference(edge) => {
+                self.tag(41);
+                self.term(&edge.target)?;
+                self.flag(edge.deactivated);
+                self.count(edge.deactivated_when.len());
+                for expression in &edge.deactivated_when {
+                    self.node_expr(expression)?;
+                }
+                self.opt_severity(edge.severity.as_ref());
+                self.messages(&edge.messages);
+            }
             Constraint::Reference(target) => {
                 self.tag(40);
                 self.term(target)?;
@@ -2434,7 +2445,14 @@ impl<'a> AstReader<'a> {
                 shape: self.term()?,
                 targets: self.seq(Self::target)?,
             },
-            _ => Constraint::Reference(self.term()?),
+            40 => Constraint::Reference(self.term()?),
+            _ => Constraint::PropertyReference(PropertyReference {
+                target: self.term()?,
+                deactivated: self.flag()?,
+                deactivated_when: self.seq(Self::node_expr)?,
+                severity: self.opt_severity()?,
+                messages: self.messages()?,
+            }),
         };
         self.leave();
         Ok(constraint)
@@ -3053,15 +3071,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     ownership.finish()?;
     for (index, rows) in reader.indexes.iter().zip(definitions) {
         if let Some(rows) = rows {
-            let mut map = FastMap::default();
-            for shape in rows {
-                if map.insert(shape.id.clone(), shape).is_some() {
-                    return Err(malformed("duplicate retained shape definition"));
-                }
-            }
-            index
-                .set(map)
-                .map_err(|_| malformed("retained definition domain was filled twice"))?;
+            ModelOwner::install_definitions(index, rows)?;
         }
     }
     for (function, body) in reader.functions.iter().zip(bodies) {

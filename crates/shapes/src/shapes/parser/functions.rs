@@ -62,13 +62,10 @@ use crate::shapes::Parser;
 ///
 /// # What the common case pays
 ///
-/// Four pattern probes, each of which resolves its class IRI against the dataset's
-/// term table and stops there when the graph never mentions it — two for the custom
-/// node-expression classes, two for `sh:SPARQLFunction` and `sh:Function`. A shapes
-/// graph that declares neither kind therefore walks no quads and builds no
-/// declaration; what it does pay is one short-lived [`Parser`], whose construction
-/// copies the document prefix map. That is the restore path's common case, and it is
-/// bounded by the prefix map rather than by the graph.
+/// Five term-table probes cover the three node-expression declaring classes and
+/// `sh:SPARQLFunction` / `sh:Function`. If none occurs, no declaration can exist,
+/// so no parser or prefix-map copy is needed. Otherwise the original declaration
+/// readers perform their normal checks, including malformed declarations.
 ///
 /// # Errors
 ///
@@ -79,10 +76,18 @@ pub(crate) fn register_declared_sparql_functions(
     dataset: &Arc<RdfDataset>,
     provenance: &ParseProvenance,
     reached: &[Arc<CustomFunction>],
-    node_shapes: &[crate::shapes::Shape],
     registry: &mut UserFunctionRegistry,
     profile: crate::profile::ShaclProfile,
 ) -> Result<BTreeSet<String>, crate::report::CompleteValidationError> {
+    // No declaration can name a class absent from the term table. Avoid
+    // constructing a prefix resolver when there is no function syntax to read.
+    if [sh::SPARQL_FUNCTION, sh::FUNCTION]
+        .into_iter()
+        .chain(crate::spec::FunctionClass::ALL.map(crate::spec::FunctionClass::iri))
+        .all(|class| dataset.term_id_by_iri(class).is_none())
+    {
+        return Ok(BTreeSet::new());
+    }
     let mut parser = Parser::new(
         dataset.as_ref(),
         provenance.base().map(ToOwned::to_owned),
@@ -96,7 +101,7 @@ pub(crate) fn register_declared_sparql_functions(
         let linked = parser.discover_custom_functions()?;
         parser.custom_fns = linked.custom;
         parser.parse_sparql_functions(registry)?;
-        parser.register_unreached_list_functions(reached, node_shapes, registry)?;
+        parser.register_unreached_list_functions(reached, registry)?;
         Ok(linked.native_list)
     };
     register(&mut parser).map_err(|message| parser.load_complete_error(message))
@@ -107,14 +112,12 @@ impl Parser<'_> {
     /// decoded model does not reach — the restore-time half of SHACL 1.2 SPARQL
     /// Extensions §7.3 registration.
     ///
-    /// A prepared product's model carries the custom declarations its node
-    /// expressions CALL, because those are what its call sites point at. A
-    /// declaration called only from SPARQL text (`BIND (ex:f('a') AS ?v)` inside a
-    /// `sh:sparql`) has no call site in the model, so the model does not carry it;
-    /// yet a parse registers it, and a restore that did not would resolve that
-    /// query's call to nothing. Its declaration and body are in the carried shapes
-    /// graph, so they are re-derived here — by the one parser, as a parse would —
-    /// exactly as `sh:SPARQLFunction` declarations are.
+    /// A native parse retains every declaration in its original domain. An
+    /// assembled model may omit a declaration called only from SPARQL text
+    /// (`BIND (ex:f('a') AS ?v)` inside a `sh:sparql`), which has no native call
+    /// site to retain it. The declaration and its complete resolution domain
+    /// remain in the carried shapes dataset, so the one parser re-derives them
+    /// here, exactly as it does for `sh:SPARQLFunction` declarations.
     ///
     /// Free in the common case: nothing is parsed unless the graph declares a list
     /// function the model does not reach. When it does, EVERY declaration's body is
@@ -123,7 +126,6 @@ impl Parser<'_> {
     fn register_unreached_list_functions(
         &mut self,
         reached: &[Arc<CustomFunction>],
-        node_shapes: &[crate::shapes::Shape],
         registry: &mut UserFunctionRegistry,
     ) -> Result<(), String> {
         let reached: BTreeSet<&str> = reached.iter().map(|f| f.iri.as_str()).collect();
@@ -140,31 +142,23 @@ impl Parser<'_> {
             return Ok(());
         }
         let index = self.custom_fns.clone();
-        let mut bodies = self.parse_custom_function_bodies(&index)?;
-        for func in index.iter() {
-            if let Some(body) = bodies.remove(func.iri.as_str()) {
-                func.body.set(body).map_err(|_| {
-                    format!(
-                        "internal error: custom node-expression function <{}> already had a \
-                         body installed",
-                        func.iri.as_str()
-                    )
-                })?;
-            }
+        let bodies = self.parse_custom_function_bodies(&index)?;
+        // These bodies belong to this parser's declarations. Retain their entire
+        // original resolution domain, rather than copying another model's root
+        // handles into this domain and losing private definitions or functions.
+        let ids = self.spec_shapes();
+        self.catalog_seen.reserve(ids.len());
+        for id in ids.iter().rev() {
+            self.request_shape(id);
         }
-        // A body may resolve a computed shape argument against the graph's shape
-        // index; fill this parser's cell from the model's own shapes when one did.
-        if Arc::strong_count(&self.node_shape_index) > 1 {
-            let _ = self.node_shape_index.set(
-                node_shapes
-                    .iter()
-                    .map(|shape| (shape.id.clone(), shape.clone()))
-                    .collect(),
-            );
-        }
-        let owner = crate::shapes::ModelOwner::from_declarations(
-            Arc::clone(&self.node_shape_index),
-            index.iter().map(Arc::clone).collect(),
+        let mut definitions = Vec::with_capacity(self.catalog_seen.len());
+        self.parse_pending_definitions(&mut definitions)?;
+        let declarations: Vec<_> = index.iter().map(Arc::clone).collect();
+        let owner = crate::shapes::link::link_definitions(
+            definitions,
+            &self.node_shape_index,
+            &declarations,
+            bodies,
         )
         .map_err(|error| error.to_string())?;
         crate::shapes::link::register_expression_bodied_functions(&unreached, &owner, registry);
@@ -918,6 +912,49 @@ fn projected_variables(pattern: &purrdf_sparql_algebra::GraphPattern) -> Option<
 mod tests {
     use super::*;
     use crate::error::{PrebindingViolation, ProcessorFailure};
+
+    #[test]
+    fn an_unreached_function_keeps_its_complete_original_definition_domain() {
+        let mut shapes = crate::engine::parse_shapes(
+            r#"
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+            @prefix ex: <http://example.org/> .
+            ex:conforms a sh:ListParameterExpressionFunction ;
+              sh:parameter [ sh:path shnex:arg0 ], [ sh:path shnex:arg1 ] ;
+              sh:bodyExpression [ shnex:conformsToShape ( [ shnex:arg 0 ] [ shnex:arg 1 ] ) ] .
+            ex:Hidden sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:S a sh:NodeShape ; sh:targetNode ex:a, ex:b ;
+              sh:sparql [ sh:select "SELECT $this WHERE { FILTER (!ex:conforms($this, ex:Hidden)) }" ] .
+            "#,
+            None,
+        ).unwrap();
+        let mut registry = UserFunctionRegistry::default();
+        // A caller-supplied model need not carry declarations used only in its
+        // SPARQL text. Force this restore seam to reconstruct that domain.
+        register_declared_sparql_functions(
+            shapes.dataset(),
+            shapes.provenance(),
+            &[],
+            &mut registry,
+            crate::profile::ShaclProfile::LEGACY,
+        )
+        .unwrap();
+        shapes.functions = Arc::new(registry);
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(
+            "<http://example.org/a> <http://example.org/required> 1.
+             <http://example.org/b> <http://example.org/unrelated> 1.",
+            None,
+        )
+        .unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let report = crate::engine::validate_with(&data, &shapes).unwrap();
+        assert_eq!(report.results.len(), 1, "{report:?}");
+        assert_eq!(
+            report.results[0].focus_node,
+            Term::NamedNode(NamedNode::from("http://example.org/b"))
+        );
+    }
 
     /// SHACL 1.2 SPARQL Extensions §7.3: an evaluation failure is the call's SPARQL error
     /// (`Ok(None)`); a failure of the processor and a refusal of the shapes graph still

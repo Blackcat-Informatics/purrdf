@@ -48,7 +48,7 @@ use crate::data::{ShaclData, resolve_id};
 use crate::data_view::ShaclRead;
 use crate::error::PreparationRefusal;
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
-use crate::footprint::{Footprint, FootprintWalk, Trigger, applies_to_current_node};
+use crate::footprint::{Footprint, FootprintWalk, applies_to_current_node};
 use crate::report::ConformanceDisallows;
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
@@ -347,10 +347,20 @@ impl LoweredShapes {
         // asked about it — once per value node. A shape node the data graph does
         // not intern simply has no entry: it can never be the answer to a
         // data-derived production, and the term-keyed lookup still reaches it.
-        let indexes: Box<[FastMap<TermId, Term>]> = self
+        // Static references already carry their model term and never probe this
+        // data-id row. Retain positions up to the last computed domain only;
+        // a static-only model therefore needs no binding allocation here.
+        let indexed = self
             .indexes
             .iter()
+            .rposition(|index| index.complete)
+            .map_or(0, |position| position + 1);
+        let indexes: Box<[FastMap<TermId, Term>]> = self.indexes[..indexed]
+            .iter()
             .map(|index| {
+                if !index.complete {
+                    return FastMap::default();
+                }
                 index
                     .shapes
                     .keys()
@@ -468,6 +478,13 @@ struct LoweredIndex {
     /// alive. Holding the `Arc` is what makes the key stable for as long as the
     /// lowering that uses it.
     cell: Arc<OnceLock<FastMap<Term, Shape>>>,
+    /// Original function domain of these bare definitions.
+    owner: Arc<crate::shapes::ModelOwner>,
+    /// Native body identities already queued; no RDF key copies on cache hits.
+    requested: FastMap<usize, usize>,
+    footprint: usize,
+    /// A computed reference has requested the complete resolution domain.
+    complete: bool,
     /// The lowering of every shape the index can resolve to, keyed — like the
     /// cell beside it — by the shape's own identity term.
     shapes: FastMap<Term, LoweredShape>,
@@ -526,6 +543,10 @@ pub(crate) struct LoweredProperty {
 /// step never re-hashes its predicate IRI per focus node.
 #[derive(Debug)]
 pub(crate) enum LoweredPath {
+    /// A shared path in the footprint's sealed, acyclic path arena.
+    Reference(usize),
+    /// A path-arena entry with multiple incoming edges; evaluate each data pair once.
+    SharedReference(usize),
     /// A predicate step, as the slot holding the predicate's dataset identity.
     Predicate(TermSlot),
     /// `sh:inversePath` over a plain predicate — the one inverse form that needs no
@@ -601,6 +622,10 @@ pub(crate) type BoundParse = Option<purrdf_xsd::XsdValue>;
 pub(crate) enum LoweredConstraint {
     Reference {
         catalog: u32,
+    },
+    PropertyReference {
+        catalog: u32,
+        deactivated_when: Box<[LoweredExpr]>,
     },
     /// `sh:class` — where the dataset identities of the value's classes are
     /// resolved: one term slot for a single class, one set slot for a list of them.
@@ -1006,6 +1031,26 @@ impl<'a> ShapePlan<'a> {
         self.shape
     }
 
+    /// The original body of an exported owning handle, without copying it.
+    pub(crate) fn definition(self) -> Result<Self, crate::error::ShapesError> {
+        if self.shape.owner.is_some()
+            && let [Constraint::Reference(target)] = self.shape.constraints.as_slice()
+            && *target == self.shape.id
+            && self.shape.property_shapes.is_empty()
+        {
+            let (constraint, lowered) = self.constraints()?.next().ok_or_else(|| {
+                crate::error::ShapesError::internal("owning shape handle has no prepared reference")
+            })?;
+            if let PlannedConstraint::Reference(definition) = self.planned(constraint, lowered)? {
+                return Ok(definition);
+            }
+            return Err(crate::error::ShapesError::internal(
+                "owning shape handle was not lowered as a reference",
+            ));
+        }
+        Ok(self)
+    }
+
     /// The `sh:deactivated` expressions of the shape, each paired with its
     /// lowering.
     ///
@@ -1185,7 +1230,47 @@ impl<'a> ShapePlan<'a> {
             &self.lowered.properties,
             "shape",
         )?
-        .map(move |(property, lowered)| (property, PropertyPlan { plan, lowered })))
+        .map(move |(property, lowered)| {
+            (
+                property,
+                PropertyPlan {
+                    plan,
+                    lowered,
+                    edge: None,
+                },
+            )
+        }))
+    }
+
+    /// Direct identity property edges, in source order, with borrowed bodies.
+    pub(crate) fn referenced_properties(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = Result<(&'a PropertyShape, PropertyPlan<'a>), crate::error::ShapesError>>,
+        crate::error::ShapesError,
+    > {
+        let plan = *self;
+        Ok(self
+            .constraints()?
+            .filter_map(move |(constraint, lowered)| {
+                if !matches!(constraint, Constraint::PropertyReference(_)) {
+                    return None;
+                }
+                Some(plan.planned(constraint, lowered).and_then(|planned| {
+                    if let PlannedConstraint::PropertyReference {
+                        definition,
+                        edge,
+                        deactivated_when,
+                    } = planned
+                    {
+                        PropertyPlan::from_reference(definition, edge, deactivated_when)
+                    } else {
+                        Err(crate::error::ShapesError::internal(
+                            "property identity edge has a different prepared constraint",
+                        ))
+                    }
+                }))
+            }))
     }
 
     /// The compared side of a property-pair constraint: an IRI path keeps the
@@ -1270,11 +1355,49 @@ impl<'a> ShapePlan<'a> {
 /// its own lowering.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PropertyPlan<'a> {
+    edge: Option<(&'a crate::shapes::PropertyReference, &'a [LoweredExpr])>,
     plan: ShapePlan<'a>,
     lowered: &'a LoweredProperty,
 }
 
 impl<'a> PropertyPlan<'a> {
+    /// The one prepared property body an identity edge names.
+    pub(crate) fn from_reference(
+        definition: ShapePlan<'a>,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    ) -> Result<(&'a PropertyShape, Self), crate::error::ShapesError> {
+        let (property, plan) = definition.properties()?.next().ok_or_else(|| {
+            crate::error::ShapesError::internal(format!(
+                "property reference {} has no prepared property definition",
+                edge.target
+            ))
+        })?;
+        Ok((property, plan.with_edge(edge, deactivated_when)))
+    }
+    pub(crate) fn with_edge(
+        mut self,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    ) -> Self {
+        self.edge = Some((edge, deactivated_when));
+        self
+    }
+
+    pub(crate) const fn edge(&self) -> Option<&'a crate::shapes::PropertyReference> {
+        match self.edge {
+            Some((edge, _)) => Some(edge),
+            None => None,
+        }
+    }
+
+    pub(crate) fn edge_deactivation(
+        &self,
+    ) -> impl Iterator<Item = (&'a NodeExpr, &'a LoweredExpr)> + use<'a> {
+        self.edge
+            .into_iter()
+            .flat_map(|(edge, lowered)| edge.deactivated_when.iter().zip(lowered))
+    }
     /// This property shape's lowered path.
     #[inline]
     pub(crate) fn path(&self) -> &'a LoweredPath {
@@ -1396,7 +1519,16 @@ impl<'a> PropertyPlan<'a> {
             &self.lowered.properties,
             "property shape",
         )?
-        .map(move |(nested, lowered)| (nested, Self { plan, lowered })))
+        .map(move |(nested, lowered)| {
+            (
+                nested,
+                Self {
+                    plan,
+                    lowered,
+                    edge: None,
+                },
+            )
+        }))
     }
 
     /// The reifier shapes of this property shape, each paired with its lowering.
@@ -1537,6 +1669,11 @@ impl PlannedClasses<'_> {
 pub(crate) enum PlannedConstraint<'a> {
     /// An identity reference into an already lowered shared definition table.
     Reference(ShapePlan<'a>),
+    PropertyReference {
+        definition: ShapePlan<'a>,
+        edge: &'a crate::shapes::PropertyReference,
+        deactivated_when: &'a [LoweredExpr],
+    },
     /// `sh:class` — the dataset identities of the value's classes, resolved at
     /// bind; a value node conforms when it is an instance of ANY of them.
     ///
@@ -1744,6 +1881,22 @@ impl<'a> ShapePlan<'a> {
         lowered: &'a LoweredConstraint,
     ) -> Result<PlannedConstraint<'a>, crate::error::ShapesError> {
         Ok(match (constraint, lowered) {
+            (
+                Constraint::PropertyReference(edge),
+                LoweredConstraint::PropertyReference {
+                    catalog,
+                    deactivated_when,
+                },
+            ) => PlannedConstraint::PropertyReference {
+                definition: self.indexed(*catalog, &edge.target)?.ok_or_else(|| {
+                    format!(
+                        "property reference {} is absent from its catalog",
+                        edge.target
+                    )
+                })?,
+                edge,
+                deactivated_when,
+            },
             (Constraint::Reference(target), LoweredConstraint::Reference { catalog }) => {
                 PlannedConstraint::Reference(self.indexed(*catalog, target)?.ok_or_else(|| {
                     format!("shape reference {target} is absent from its catalog")
@@ -2025,6 +2178,7 @@ fn shape_list<'a>(
 fn constraint_kind(constraint: &Constraint) -> &'static str {
     match constraint {
         Constraint::Reference(_) => "a shape identity reference",
+        Constraint::PropertyReference(_) => "sh:property",
         Constraint::Class(_) => "sh:class",
         Constraint::Datatype(_) => "sh:datatype",
         Constraint::NodeKind(_) => "sh:nodeKind",
@@ -2329,6 +2483,10 @@ struct ShapeWalk {
     owner: Option<Arc<crate::shapes::ModelOwner>>,
     /// The catalog whose bare definitions are currently being lowered.
     current_catalog: Option<u32>,
+    definition_footprints: purrdf_core::SmallVec<[FootprintWalk; 2]>,
+    root_targets: bool,
+    /// Bare definitions waiting to be lowered, without recursive graph descent.
+    pending_definitions: purrdf_lex::walk::WorkList<(u32, Term), 16>,
     /// Every class IRI the walk has reached.
     classes: FastSet<NamedNode>,
     /// Every term whose dataset identity a lowered node will need, in slot order.
@@ -2473,6 +2631,10 @@ impl ShapeWalk {
 
     /// Seal the walk into the lowering it produced.
     fn finish(mut self, shapes: Vec<LoweredShape>) -> LoweringResult<LoweredShapes> {
+        self.lower_pending_definitions()?;
+        for index in &mut self.indexes {
+            index.requested = FastMap::default();
+        }
         // Reverse and lower every trigger chain HERE, once per shapes graph.
         //
         // The change expansion runs a trigger backwards, and the reversal is a
@@ -2483,21 +2645,11 @@ impl ShapeWalk {
         // dataset dictionary at every step of every changed row. Reversing into a
         // `LoweredPath` means the expansion reads the same binding-row slots the
         // validation hot path reads, on the same evaluator.
-        let pending = self.footprint.take_triggers();
-        let mut triggers = Vec::with_capacity(pending.len());
-        for trigger in pending {
-            let reversed = trigger
-                .chain
-                .as_ref()
-                .map(|chain| lower_path(&crate::path::invert(chain), &mut self))
-                .transpose()?;
-            triggers.push(Trigger {
-                predicate: trigger.predicate,
-                endpoint: trigger.endpoint,
-                reversed,
-            });
-        }
-        let footprint = self.footprint.finish(triggers);
+        let mut main = std::mem::take(&mut self.footprint);
+        let mut definitions = std::mem::take(&mut self.definition_footprints);
+        let footprint = crate::footprint::resolve(&mut main, &mut definitions, |chain| {
+            lower_path(&crate::path::invert(chain), &mut self)
+        })?;
         Ok(LoweredShapes {
             terms: self.terms.into_boxed_slice(),
             sets: self.sets.into_boxed_slice(),
@@ -2513,7 +2665,8 @@ impl ShapeWalk {
         })
     }
 
-    /// The position of the lowered form of `index`, entering it exactly once.
+    /// Register an original domain. Static references request only their actual
+    /// destination; computed references admit every possible destination once.
     fn index_position(
         &mut self,
         index: &Arc<OnceLock<FastMap<Term, Shape>>>,
@@ -2523,46 +2676,97 @@ impl ShapeWalk {
             // A computed reference chooses its destination at evaluation.
             self.opaque_references += 1;
         }
-        let cell = Arc::as_ptr(index).addr();
-        if let Some(position) = self
-            .indexes
-            .iter()
-            .position(|entry| Arc::as_ptr(&entry.cell).addr() == cell)
-        {
-            return Ok(position as u32);
+        let owner = self.owner.clone().ok_or(PreparationRefusal::UnboundModel)?;
+        if !Arc::ptr_eq(&owner.index, index) {
+            return Err(PreparationRefusal::ForeignIndex);
         }
-        // Claim the position BEFORE lowering the shapes inside, so a shape held by
-        // the index that carries a constraint resolving against the same index
-        // finds the entry already made instead of entering it again.
-        let position = self.indexes.len() as u32;
-        self.indexes.push(LoweredIndex {
-            cell: Arc::clone(index),
-            shapes: FastMap::default(),
-        });
-        // An unfilled index resolves nothing: the constraint refuses loudly at
-        // evaluation rather than silently conforming, so there is no shape here
-        // whose classes could go unplanned.
-        if let Some(shapes) = index.get() {
-            let previous_catalog = self.current_catalog;
-            // References inside definitions belong to this exact domain, even
-            // when a computed expression first reached it from another catalog.
-            self.current_catalog = Some(position);
-            // The index is entered once, from wherever the walk first reached it,
-            // but the shapes inside are resolved PER VALUE NODE against data — so
-            // the node their reads start from is not the node this walk happens to
-            // be standing on. Walking them unrooted makes the footprint say so
-            // instead of describing them from an arbitrary chain, and keeps the
-            // derivation independent of arrival order.
-            let saved = self.footprint.enter_unrooted();
-            let lowered: FastMap<Term, LoweredShape> = shapes
-                .iter()
-                .map(|(id, shape)| Ok((id.clone(), lower_shape(shape, self)?)))
-                .collect::<LoweringResult<_>>()?;
-            self.footprint.leave(saved);
-            self.indexes[position as usize].shapes = lowered;
-            self.current_catalog = previous_catalog;
+        let cell = Arc::as_ptr(index).addr();
+        let position = if let Some(position) = self.indexes.iter().position(|entry| {
+            Arc::as_ptr(&entry.cell).addr() == cell && Arc::ptr_eq(&entry.owner, &owner)
+        }) {
+            position as u32
+        } else {
+            let position = self.indexes.len() as u32;
+            if self.indexes.is_empty() {
+                self.indexes.reserve_exact(1);
+            }
+            let footprint = self.definition_footprints.len();
+            self.definition_footprints.push(FootprintWalk::definition());
+            self.indexes.push(LoweredIndex {
+                cell: Arc::clone(index),
+                owner,
+                requested: FastMap::default(),
+                footprint,
+                complete: false,
+                shapes: FastMap::default(),
+            });
+            position
+        };
+        if !definitions {
+            self.footprint
+                .reference(self.indexes[position as usize].footprint, true);
+        }
+        if !definitions && !self.indexes[position as usize].complete {
+            self.indexes[position as usize].complete = true;
+            let shapes = index.get().ok_or(PreparationRefusal::UnboundReference)?;
+            for target in shapes.keys() {
+                let member = self.request_definition(position, target, false)?;
+                let catalog = self.indexes[position as usize].footprint;
+                self.definition_footprints[catalog].catalog_member(member);
+            }
         }
         Ok(position)
+    }
+
+    fn request_definition(
+        &mut self,
+        catalog: u32,
+        target: &Term,
+        property: bool,
+    ) -> LoweringResult<usize> {
+        let index = &mut self.indexes[catalog as usize];
+        let definition = index
+            .cell
+            .get()
+            .ok_or(PreparationRefusal::UnboundReference)?
+            .get(target)
+            .ok_or_else(|| PreparationRefusal::UnknownReference(Arc::new(target.clone())))?;
+        if property && definition.as_property().is_none() {
+            return Err(PreparationRefusal::ExpectedProperty(Arc::new(
+                target.clone(),
+            )));
+        }
+        let address = std::ptr::from_ref(definition).addr();
+        if let Some(&footprint) = index.requested.get(&address) {
+            return Ok(footprint);
+        }
+        let footprint = self.definition_footprints.len();
+        self.definition_footprints.push(FootprintWalk::definition());
+        index.requested.insert(address, footprint);
+        self.pending_definitions.push((catalog, target.clone()));
+        Ok(footprint)
+    }
+
+    fn lower_pending_definitions(&mut self) -> LoweringResult<()> {
+        while let Some((catalog, target)) = self.pending_definitions.pop() {
+            let owner = Arc::clone(&self.indexes[catalog as usize].owner);
+            let definition = owner.definition_required(&target)?;
+            let previous_owner = self.owner.replace(Arc::clone(&owner));
+            let previous_catalog = self.current_catalog.replace(catalog);
+            let footprint =
+                self.indexes[catalog as usize].requested[&std::ptr::from_ref(definition).addr()];
+            let relative = std::mem::take(&mut self.definition_footprints[footprint]);
+            let previous = std::mem::replace(&mut self.footprint, relative);
+            let lowered = lower_shape(definition, self)?;
+            self.definition_footprints[footprint] =
+                std::mem::replace(&mut self.footprint, previous);
+            self.current_catalog = previous_catalog;
+            self.owner = previous_owner;
+            self.indexes[catalog as usize]
+                .shapes
+                .insert(target, lowered);
+        }
+        Ok(())
     }
 }
 
@@ -2575,13 +2779,25 @@ impl ShapeWalk {
 pub(crate) fn lower_shapes<'a>(
     shapes: impl IntoIterator<Item = &'a Shape>,
 ) -> LoweringResult<LoweredShapes> {
+    lower_shapes_in_model(shapes, None)
+}
+
+/// Lower borrowed roots in the original domain held by their calling driver.
+pub(crate) fn lower_shapes_in_model<'a>(
+    shapes: impl IntoIterator<Item = &'a Shape>,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
+) -> LoweringResult<LoweredShapes> {
     scoped_lowering(|| {
-        let mut walk = ShapeWalk::default();
+        let mut walk = ShapeWalk {
+            owner: model.cloned(),
+            ..ShapeWalk::default()
+        };
         let lowered: Vec<LoweredShape> = shapes
             .into_iter()
             .enumerate()
             .map(|(position, shape)| {
                 walk.footprint.enter_root(position);
+                walk.root_targets = true;
                 // Recorded for every top-level shape, deactivated or not, exactly as
                 // its declared targets are: the walk describes the shapes graph, and
                 // validation decides which shapes run.
@@ -2746,19 +2962,21 @@ fn lower_shape(shape: &Shape, walk: &mut ShapeWalk) -> LoweringResult<LoweredSha
         walk.current_catalog = Some(walk.index_position(&owner.index, true)?);
     }
     let scope = walk.footprint.enter_shape();
-    for target in &shape.targets {
-        walk.footprint.record_target(target);
-        match target {
-            Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
-                walk.classes.insert(class.clone());
+    if std::mem::take(&mut walk.root_targets) {
+        for target in &shape.targets {
+            walk.footprint.record_target(target);
+            match target {
+                Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
+                    walk.classes.insert(class.clone());
+                }
+                Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. }
+                | Target::Where(_)
+                | Target::NodeExpression(_) => {}
             }
-            Target::SubjectsOf(_)
-            | Target::ObjectsOf(_)
-            | Target::Node(_)
-            | Target::ImplicitClass(_)
-            | Target::Sparql { .. }
-            | Target::Where(_)
-            | Target::NodeExpression(_) => {}
         }
     }
     // Deactivation expressions read from the shape's own focus node.
@@ -2940,6 +3158,30 @@ fn lower_path(path: &Path, walk: &mut ShapeWalk) -> LoweringResult<LoweredPath> 
     })
 }
 
+fn lower_reference(target: &Term, property: bool, walk: &mut ShapeWalk) -> LoweringResult<u32> {
+    let catalog = if let Some(position) = walk.current_catalog
+        && walk
+            .owner
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, &walk.indexes[position as usize].owner))
+    {
+        position
+    } else {
+        let index = walk
+            .owner
+            .as_ref()
+            .map(|owner| Arc::clone(&owner.index))
+            .ok_or(PreparationRefusal::UnboundReference)?;
+        walk.index_position(&index, true)?
+    };
+    let footprint = walk.request_definition(catalog, target, property)?;
+    walk.footprint.reference(footprint, false);
+    // Its body is shared rather than inline. Until that closure is lowered,
+    // preserve the existing exhaustive-deactivation guard for indirect reads.
+    walk.opaque_references += 1;
+    Ok(catalog)
+}
+
 /// Lower a constraint list, in declaration order.
 ///
 /// `siblings` are the property shapes of whatever DECLARED these constraints, and
@@ -2953,7 +3195,7 @@ fn lower_constraints(
 ) -> LoweringResult<Box<[LoweredConstraint]>> {
     constraints
         .iter()
-        .map(|constraint| lower_constraint(constraint, siblings, walk))
+        .map(|constraint| lower_constraint(constraint, constraints, siblings, walk))
         .collect()
 }
 
@@ -2966,6 +3208,7 @@ fn lower_constraints(
 /// constraining, with every existing test still green.
 fn lower_constraint(
     constraint: &Constraint,
+    declaring_constraints: &[Constraint],
     siblings: &[PropertyShape],
     walk: &mut ShapeWalk,
 ) -> LoweringResult<LoweredConstraint> {
@@ -2975,27 +3218,21 @@ fn lower_constraint(
     // it reaches is reached again below, by this same walk.
     walk.footprint.record_constraint(constraint);
     Ok(match constraint {
-        Constraint::Reference(target) => {
-            let catalog = if let Some(position) = walk.current_catalog {
-                position
-            } else {
-                let index = walk
-                    .owner
-                    .as_ref()
-                    .map(|owner| Arc::clone(&owner.index))
-                    .ok_or(PreparationRefusal::UnboundReference)?;
-                walk.index_position(&index, true)?
-            };
-            let definitions = walk.indexes[catalog as usize]
-                .cell
-                .get()
-                .ok_or(PreparationRefusal::UnboundReference)?;
-            if !definitions.contains_key(target) {
-                return Err(PreparationRefusal::UnknownReference(Arc::new(
-                    target.clone(),
-                )));
+        Constraint::Reference(target) => LoweredConstraint::Reference {
+            catalog: lower_reference(target, false, walk)?,
+        },
+        Constraint::PropertyReference(edge) => {
+            let catalog = lower_reference(&edge.target, true, walk)?;
+            let deactivated_when = edge
+                .deactivated_when
+                .iter()
+                .map(|expression| lower_expression(expression, walk))
+                .collect::<LoweringResult<_>>()?;
+            walk.deactivations += edge.deactivated_when.len();
+            LoweredConstraint::PropertyReference {
+                catalog,
+                deactivated_when,
             }
-            LoweredConstraint::Reference { catalog }
         }
         Constraint::Class(classes) => LoweredConstraint::Class(walk.class_slots(classes)),
         Constraint::Datatype(_) => LoweredConstraint::Datatype,
@@ -3019,27 +3256,44 @@ fn lower_constraint(
         Constraint::Closed {
             ignored,
             mode: ClosedMode::Declared,
-        } => LoweredConstraint::Closed {
-            permitted: walk.set_slot(
-                siblings
-                    .iter()
-                    .filter_map(|sibling| match &sibling.path {
-                        Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
-                        Path::Inverse(_)
-                        | Path::Sequence(_)
-                        | Path::Alternative(_)
-                        | Path::ZeroOrMore(_)
-                        | Path::OneOrMore(_)
-                        | Path::ZeroOrOne(_) => None,
-                    })
-                    .chain(
-                        ignored
-                            .iter()
-                            .map(|predicate| Term::NamedNode(predicate.clone())),
-                    ),
-            ),
-            by_types: None,
-        },
+        } => {
+            let domain = walk
+                .current_catalog
+                .map(|position| Arc::clone(&walk.indexes[position as usize].cell))
+                .or_else(|| walk.owner.as_ref().map(|owner| Arc::clone(&owner.index)));
+            let referenced = declaring_constraints.iter().filter_map(|constraint| {
+                let Constraint::PropertyReference(edge) = constraint else {
+                    return None;
+                };
+                let definition = domain.as_ref()?.get()?.get(&edge.target)?;
+                match &definition.property_shapes.first()?.path {
+                    Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
+                    _ => None,
+                }
+            });
+            LoweredConstraint::Closed {
+                permitted: walk.set_slot(
+                    siblings
+                        .iter()
+                        .filter_map(|sibling| match &sibling.path {
+                            Path::Predicate(predicate) => Some(Term::NamedNode(predicate.clone())),
+                            Path::Inverse(_)
+                            | Path::Sequence(_)
+                            | Path::Alternative(_)
+                            | Path::ZeroOrMore(_)
+                            | Path::OneOrMore(_)
+                            | Path::ZeroOrOne(_) => None,
+                        })
+                        .chain(referenced)
+                        .chain(
+                            ignored
+                                .iter()
+                                .map(|predicate| Term::NamedNode(predicate.clone())),
+                        ),
+                ),
+                by_types: None,
+            }
+        }
         // SHACL 1.2 Core §7.9.1: under `sh:ByTypes`, "P is the set of IRI
         // properties that can be reached from the value node via the following
         // algorithm, plus rdf:type" — and the shape's OWN `sh:property` paths are
@@ -3809,7 +4063,7 @@ ex:FlagShape a sh:NodeShape ;
             }
             // Reference catalogs are visited once by collect_class_slots, rather
             // than recursively following backedges from this constraint.
-            LoweredConstraint::Reference { .. } => {}
+            LoweredConstraint::Reference { .. } | LoweredConstraint::PropertyReference { .. } => {}
             // Kinds that name neither a class nor a shape.
             LoweredConstraint::Datatype
             | LoweredConstraint::NodeKind
@@ -3986,13 +4240,15 @@ ex:Shape a sh:NodeShape ;
             .expect("the fixture shape has a lowering");
 
         // The honest pairing resolves.
-        let property = &shapes.node_shapes[0].property_shapes[0];
-        let (constraint, lowering) = plan
-            .properties()
-            .expect("the shape's property shapes pair with their lowerings")
+        let (property, property_plan) = plan
+            .definition()
+            .unwrap()
+            .referenced_properties()
+            .expect("the original shape's property references pair with their lowerings")
             .next()
             .expect("the fixture declares one property shape")
-            .1
+            .unwrap();
+        let (constraint, lowering) = property_plan
             .constraints(property)
             .expect("the property shape's constraints pair with their lowerings")
             .next()
@@ -4001,6 +4257,7 @@ ex:Shape a sh:NodeShape ;
             matches!(constraint, Constraint::In(_)),
             "the fixture's one constraint is an sh:in"
         );
+        let plan = property_plan.parent();
         plan.planned(constraint, lowering)
             .expect("an sh:in beside its own lowering resolves");
 
@@ -4158,6 +4415,7 @@ ex:Inner a sh:NodeShape ;
 
     planned_constraint_kind_names! {
         PlannedConstraint::Reference(_) => "reference",
+        PlannedConstraint::PropertyReference { .. } => "property_reference",
         PlannedConstraint::Class(_) => "class",
         PlannedConstraint::Datatype(_) => "datatype",
         PlannedConstraint::NodeKind(_) => "node_kind",
@@ -4241,7 +4499,9 @@ ex:Inner a sh:NodeShape ;
         "not",
         "or",
         "pattern",
+        "property_reference",
         "qualified_value_shape",
+        "reference",
         "root_class",
         "single_line",
         "some_value",

@@ -13,6 +13,116 @@ use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 #[test]
+fn metadata_follows_references_without_activating_unused_catalog_definitions() {
+    use purrdf_shapes::expression::{FnCall, NodeExpr};
+    let mut shapes = parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         <http://example.org/Root> a sh:NodeShape .",
+        None,
+    )
+    .unwrap();
+    let root_id = shapes.node_shapes[0].id.clone();
+    let prototype = shapes.owner.definition(&root_id).unwrap();
+    let members: Vec<_> = ["used", "unused"].into_iter().map(|name| {
+        let mut definition = prototype.clone();
+        definition.id = Term::NamedNode(NamedNode::new_unchecked(format!("http://example.org/{name}")));
+        definition.constraints = vec![Constraint::Expression {
+            expr: NodeExpr::Union(vec![
+                NodeExpr::Call(FnCall::UserDefined {
+                    iri: NamedNode::new_unchecked(format!("http://example.org/{name}-call")),
+                    args: Vec::new(),
+                }),
+                NodeExpr::Select {
+                    query: format!("SELECT ?value WHERE {{ ?subject <http://example.org/{name}-relation> ?value }}"),
+                    variable: "value".to_owned(), key: "sh:select",
+                },
+            ]), messages: Vec::new(), severity: None,
+        }];
+        definition
+    }).collect();
+    let mut root = prototype.clone();
+    root.constraints = vec![Constraint::Reference(members[0].id.clone())];
+    shapes.owner =
+        ModelOwner::from_definitions(std::iter::once(root).chain(members).collect()).unwrap();
+    shapes.node_shapes = vec![shapes.owner.root(&root_id).unwrap()];
+    let resolution = shapes.function_resolution().unwrap();
+    assert!(
+        resolution
+            .sites()
+            .any(|site| site.function == "http://example.org/used-call")
+    );
+    assert!(
+        !resolution
+            .sites()
+            .any(|site| site.function == "http://example.org/unused-call")
+    );
+    let usage = shapes
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
+    assert!(usage.data().contains("http://example.org/used-relation"));
+    assert!(!usage.data().contains("http://example.org/unused-relation"));
+}
+
+#[test]
+fn metadata_returns_native_missing_definition_and_function_body_refusals() {
+    use purrdf_shapes::PreparationRefusal;
+    use purrdf_shapes::expression::{CustomFnKind, CustomFunction, NodeExpr};
+    use std::sync::OnceLock;
+    let mut shapes = parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         <http://example.org/Root> a sh:NodeShape .",
+        None,
+    )
+    .unwrap();
+    let absent = Term::NamedNode(NamedNode::from("http://example.org/Absent"));
+    shapes.node_shapes[0].constraints = vec![Constraint::Reference(absent.clone())];
+    let function_error = shapes.function_resolution().unwrap_err();
+    let usage_error = shapes
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap_err();
+    assert_eq!(function_error, usage_error);
+    assert!(matches!(&function_error, PreparationRefusal::UnknownReference(id) if **id == absent));
+
+    let iri = NamedNode::from("http://example.org/function");
+    shapes.node_shapes[0].constraints = vec![Constraint::Expression {
+        expr: NodeExpr::CustomCall {
+            func: iri.clone(),
+            args: Vec::new(),
+        },
+        messages: Vec::new(),
+        severity: None,
+    }];
+    let unknown = shapes.function_resolution().unwrap_err();
+    assert_eq!(unknown, PreparationRefusal::UnknownFunction(iri.clone()));
+    assert_eq!(
+        shapes
+            .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+            .unwrap_err(),
+        unknown
+    );
+    let owner = ModelOwner::from_functions(vec![Arc::new(CustomFunction {
+        iri: iri.clone(),
+        kind: CustomFnKind::ListParameter,
+        params: Vec::new(),
+        required: 0,
+        body: OnceLock::new(),
+    })])
+    .unwrap();
+    shapes.node_shapes[0].owner = Some(Arc::clone(&owner));
+    shapes.owner = owner;
+    let missing_body = shapes.function_resolution().unwrap_err();
+    assert_eq!(missing_body, PreparationRefusal::MissingFunctionBody(iri));
+    assert_eq!(
+        shapes
+            .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+            .unwrap_err(),
+        missing_body
+    );
+    drop(shapes);
+    assert!(matches!(&function_error, PreparationRefusal::UnknownReference(id) if **id == absent));
+}
+
+#[test]
 fn nested_same_named_domains_keep_both_function_and_relation_inventory() {
     use purrdf_shapes::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr};
     use std::sync::OnceLock;
@@ -68,10 +178,13 @@ fn nested_same_named_domains_keep_both_function_and_relation_inventory() {
     assert!(
         shapes
             .function_resolution()
+            .unwrap()
             .sites()
             .any(|site| site.function == marker)
     );
-    let usage = shapes.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = shapes
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(usage.is_complete(), "{usage:?}");
     assert!(usage.data().contains(relation), "{usage:?}");
 }
@@ -121,7 +234,7 @@ fn exported_flat_reference_keeps_its_original_model_domain() {
     let shapes = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          @prefix ex: <http://example.org/> .
-         ex:Root a sh:NodeShape; sh:nodeByExpression ex:Leaf .
+         ex:Root a sh:NodeShape .
          ex:Leaf a sh:NodeShape; sh:nodeKind sh:IRI .",
         None,
     )
@@ -134,9 +247,6 @@ fn exported_flat_reference_keeps_its_original_model_domain() {
         .find(|shape| shape.id == root_id)
         .unwrap()
         .clone();
-    // Replace the existing computed edge by its flat identity form. The linked
-    // parser retains domains reached by actual computed references; complete
-    // once-parsed catalog admission is a separate unfinished parser change.
     root.constraints = vec![Constraint::Reference(leaf_id.clone())];
     drop(shapes);
     let dataset = parse_turtle_to_dataset("", None).unwrap();
@@ -158,7 +268,7 @@ fn exported_flat_reference_keeps_its_original_model_domain() {
 
 #[test]
 fn catalog_chain_keeps_conformance_reporting_and_owner_after_export() {
-    let mut parsed = parse_shapes(
+    let parsed = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          @prefix ex: <http://example.org/> .
          ex:Root a sh:NodeShape . ex:Middle a sh:NodeShape .
@@ -166,12 +276,10 @@ fn catalog_chain_keeps_conformance_reporting_and_owner_after_export() {
         None,
     )
     .unwrap();
-    let mut definitions: Vec<_> = std::mem::take(&mut parsed.node_shapes)
-        .into_iter()
-        .map(|mut root| {
-            root.owner = None;
-            root
-        })
+    let mut definitions: Vec<_> = parsed
+        .node_shapes
+        .iter()
+        .map(|root| parsed.owner.definition(&root.id).unwrap().clone())
         .collect();
     drop(parsed);
     let root_id = Term::NamedNode(NamedNode::new_unchecked("http://example.org/Root"));
@@ -221,7 +329,7 @@ fn parsed_computed_shape_index_releases_its_owner_with_the_model() {
     let weak = shapes
         .node_shapes
         .iter()
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| &shapes.owner.definition(&shape.id).unwrap().constraints)
         .find_map(|constraint| match constraint {
             Constraint::NodeByExpression { shapes, .. } => Some(shapes.clone()),
             _ => None,

@@ -50,6 +50,7 @@
 use purrdf_shapes::product_fixture::core_product;
 use std::sync::Arc;
 
+use purrdf_core::ContentDigest;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView, Identity};
 use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
@@ -172,7 +173,8 @@ fn component_of(bytes: &[u8], label: &str) -> Vec<u8> {
 /// Rebuild a product with a replacement AST section, and optionally a replacement
 /// `class-catalog` identity component.
 ///
-/// A full repack: every digest is recomputed, so nothing that refuses a product
+/// A full repack: the complete-model identity and every container digest are
+/// recomputed, so nothing that refuses a product
 /// built here is refusing an edit the envelope could have caught on its own.
 fn reframe(bytes: &[u8], ast: &[u8], class_catalog: Option<&[u8]>) -> Vec<u8> {
     let view = ArtifactView::from_bytes(SPEC, bytes).expect("the product's envelope opens");
@@ -180,6 +182,10 @@ fn reframe(bytes: &[u8], ast: &[u8], class_catalog: Option<&[u8]>) -> Vec<u8> {
     let mut identity = Identity::new();
     let mut replaced = class_catalog.is_none();
     for component in view.identity().components() {
+        if component.label() == "model" {
+            identity.push("model", ContentDigest::of(ast).as_bytes());
+            continue;
+        }
         match class_catalog {
             Some(value) if component.label() == CLASS_CATALOG_LABEL => {
                 identity.push(CLASS_CATALOG_LABEL, value);

@@ -491,6 +491,24 @@ pub enum PreparationRefusal {
     UnboundReference,
     /// A catalog reference names no definition in that catalog.
     UnknownReference(std::sync::Arc<crate::term::Term>),
+    /// A property edge names a catalog definition that is not a property shape.
+    ExpectedProperty(std::sync::Arc<crate::term::Term>),
+    /// A model's definition cell was installed more than once.
+    InitializedIndex,
+}
+
+impl PreparationRefusal {
+    /// Stop a model-inspection walk at its first refusal or physical stack bound.
+    pub(crate) fn admit_walk(refusal: &mut Option<Self>) -> bool {
+        if refusal.is_some() {
+            return false;
+        }
+        if purrdf_stack::is_low() {
+            *refusal = Some(Self::StackMargin);
+            return false;
+        }
+        true
+    }
 }
 
 impl fmt::Display for PreparationRefusal {
@@ -508,6 +526,8 @@ impl fmt::Display for PreparationRefusal {
             Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
             Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
             Self::UnknownReference(id) => write!(out, "shape reference {id} has no catalog definition; provide its definition"),
+            Self::ExpectedProperty(id) => write!(out, "property reference {id} does not name a property-shape definition; provide a shape with its own sh:path"),
+            Self::InitializedIndex => out.write_str("model definitions were already installed; link the original model exactly once"),
         }
     }
 }

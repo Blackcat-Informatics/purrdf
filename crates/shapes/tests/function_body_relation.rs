@@ -332,7 +332,7 @@ fn extension_usage_reports_whether_a_function_body_reaches_its_relation() {
     // Registered: the body's predicate is a CALL.
     let wired = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("the fixture declarations read cleanly");
-    let usage = shapes.extension_usage(&wired);
+    let usage = shapes.extension_usage(&wired).unwrap();
     assert!(
         usage.reaches(REL),
         "the registered relation is reached from the function body: {usage:?}"
@@ -346,7 +346,7 @@ fn extension_usage_reports_whether_a_function_body_reaches_its_relation() {
     // an ordinary data edge. This is the answer a host debugging a silent
     // `conforms: true` actually needs.
     let bare = purrdf_sparql_eval::ExtensionEnv::empty();
-    let usage = shapes.extension_usage(bare);
+    let usage = shapes.extension_usage(bare).unwrap();
     assert!(
         !usage.reaches(REL),
         "with nothing registered nothing is reached: {usage:?}"
@@ -364,7 +364,7 @@ fn extension_usage_names_the_declaration_a_predicate_sits_in() {
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("the fixture declarations read cleanly");
-    let usage = shapes(REL).extension_usage(&env);
+    let usage = shapes(REL).extension_usage(&env).unwrap();
 
     let site = format!("sh:SPARQLFunction <{EX}isFlagged>");
     let used = usage
@@ -383,7 +383,7 @@ fn extension_usage_does_not_claim_a_merely_same_prefixed_sibling() {
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("the fixture declarations read cleanly");
-    let usage = shapes(REL_SIBLING).extension_usage(&env);
+    let usage = shapes(REL_SIBLING).extension_usage(&env).unwrap();
     assert!(
         !usage.reaches(REL_SIBLING),
         "a sibling sharing a registered IRI's prefix is not reached: {usage:?}"
@@ -481,7 +481,7 @@ fn a_registered_iri_outside_predicate_position_is_not_a_call() {
         let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*registry().0).clone())
             .expect("the fixture declarations read cleanly");
         assert!(
-            !shapes.extension_usage(&env).reaches(REL),
+            !shapes.extension_usage(&env).unwrap().reaches(REL),
             "{label}: the usage report must not claim a call either"
         );
     }
@@ -565,7 +565,7 @@ ex:CensusShape
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("the fixture declarations read cleanly");
-    let usage = shapes.extension_usage(&env);
+    let usage = shapes.extension_usage(&env).unwrap();
 
     // Every construct in the fixture is represented, named by its own declaration.
     let sites: Vec<&str> = usage.sites().map(|(site, _)| site.as_str()).collect();
@@ -594,7 +594,9 @@ ex:CensusShape
 
     // The control: with nothing registered, not one of them reaches it. This is
     // what makes the assertions above attributable to the registration.
-    let bare = shapes.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let bare = shapes
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(
         !bare.reaches(REL),
         "with nothing registered no door reaches the relation: {bare:?}"
@@ -831,7 +833,9 @@ fn a_site_this_environment_cannot_read_is_reported_with_its_reason() {
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("environment over the registry");
 
-    let usage = shapes_with_relation_in_a_construct_template().extension_usage(&env);
+    let usage = shapes_with_relation_in_a_construct_template()
+        .extension_usage(&env)
+        .unwrap();
 
     assert!(
         !usage.is_complete(),
@@ -863,7 +867,8 @@ fn a_site_this_environment_cannot_read_is_reported_with_its_reason() {
 #[test]
 fn the_same_graph_under_an_empty_environment_reads_completely() {
     let usage = shapes_with_relation_in_a_construct_template()
-        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
 
     assert!(
         usage.is_complete(),
@@ -1078,7 +1083,7 @@ ex:NestedShape
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("environment over the registry");
-    let usage = shapes.extension_usage(&env);
+    let usage = shapes.extension_usage(&env).unwrap();
 
     assert!(
         usage.reaches(REL),
@@ -1146,7 +1151,7 @@ fn an_inline_filter_shape_s_sparql_is_reported_like_a_named_one_s() {
     for inline in [false, true] {
         let shapes = purrdf_shapes::engine::parse_shapes(&filter_shape_ttl(inline), None)
             .unwrap_or_else(|error| panic!("inline={inline}: the fixture must load: {error}"));
-        let usage = shapes.extension_usage(&env);
+        let usage = shapes.extension_usage(&env).unwrap();
         assert!(
             usage.reaches(REL),
             "inline={inline}: the constraint inside the filter shape names the relation, \
@@ -1193,7 +1198,7 @@ ex:BodyShape
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("environment over the registry");
-    let usage = shapes.extension_usage(&env);
+    let usage = shapes.extension_usage(&env).unwrap();
 
     assert!(
         usage.reaches(REL),
@@ -1255,7 +1260,7 @@ ex:Outer
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("environment over the registry");
 
-    let usage = shapes.extension_usage(&env);
+    let usage = shapes.extension_usage(&env).unwrap();
 
     // TERMINATION is this test's oracle, and its only one. A stack overflow aborts
     // rather than unwinding, so reaching the line below is the verdict; with the
@@ -1320,7 +1325,7 @@ ex:Second
     let (relations, _) = registry();
     let env = purrdf_sparql_eval::ExtensionEnv::over_relations((*relations).clone())
         .expect("environment over the registry");
-    let usage = shapes.extension_usage(&env);
+    let usage = shapes.extension_usage(&env).unwrap();
 
     let reached: Vec<String> = usage
         .sites()
@@ -1357,7 +1362,9 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ;
 "#
     );
     let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None).expect("the shapes load");
-    let usage = shapes.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = shapes
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(usage.data().contains(VALIDATED), "{usage:?}");
     assert!(usage.data().contains(NESTED), "{usage:?}");
     let control = purrdf_shapes::engine::parse_shapes(
@@ -1368,6 +1375,8 @@ ex:S a sh:NodeShape ; sh:targetNode ex:a ;
         None,
     )
     .expect("the control loads");
-    let usage = control.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    let usage = control
+        .extension_usage(purrdf_sparql_eval::ExtensionEnv::empty())
+        .unwrap();
     assert!(!usage.data().contains(VALIDATED) && !usage.data().contains(NESTED));
 }

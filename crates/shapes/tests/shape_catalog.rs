@@ -20,6 +20,142 @@ use purrdf_shapes::{PreparationRefusal, ShapesError};
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 #[test]
+fn shared_reading_dag_preparation_and_expansion_have_no_unfolding_growth() {
+    use purrdf_rdf::{DatasetMut, MutableDataset, QuadValues, TermValue};
+    use purrdf_shapes::engine::PreparedShapes;
+    use std::fmt::Write;
+
+    let base = parse_turtle_to_dataset(
+        "@prefix ex: <http://example.org/> .
+         ex:a ex:p ex:a; ex:q ex:a.
+         ex:untouched ex:p ex:untouched; ex:q ex:untouched; ex:read 0.",
+        None,
+    )
+    .unwrap();
+    let mut mutation = MutableDataset::new(base);
+    assert!(
+        mutation
+            .insert(QuadValues {
+                s: TermValue::iri("http://example.org/a"),
+                p: TermValue::iri("http://example.org/read"),
+                o: TermValue::simple_literal("changed"),
+                g: None,
+            })
+            .unwrap()
+    );
+    let snapshot = Arc::new(mutation.snapshot_view().unwrap());
+    let mut baseline: Option<(
+        u64,
+        purrdf_alloc_probe::Measurement,
+        purrdf_alloc_probe::Measurement,
+    )> = None;
+    for depth in [1, 8, 32] {
+        let mut source = String::from(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .
+             @prefix ex: <http://example.org/> .
+             ex:D0 sh:property [ sh:path ex:read; sh:minCount 1 ] .\n",
+        );
+        for level in 1..=depth {
+            writeln!(&mut source,
+                "ex:D{level} sh:property [ sh:path ex:p; sh:node ex:D{} ], [ sh:path ex:q; sh:node ex:D{} ] .",
+                level - 1, level - 1,
+            ).unwrap();
+        }
+        writeln!(
+            &mut source,
+            "ex:Root a sh:NodeShape; sh:targetNode ex:a, ex:untouched; sh:node ex:D{depth} ."
+        )
+        .unwrap();
+        let shapes = Arc::new(parse_shapes(&source, None).unwrap());
+        let window = CurrentThreadWindow::open();
+        let validator = PreparedShapes::new(shapes)
+            .bind_delta_with_shapes_graph(
+                Arc::clone(&snapshot),
+                None,
+                purrdf_rdf::ir::ViewLimits::default(),
+            )
+            .unwrap();
+        let preparation = window.close();
+        let window = CurrentThreadWindow::open();
+        let expansion = validator.affected_focus_node_ids(&snapshot).unwrap();
+        let expansion_cost = window.close();
+        assert_eq!(
+            expansion
+                .ids()
+                .expect("shared ordinary paths stay bounded")
+                .len(),
+            1
+        );
+        eprintln!("depth {depth}: preparation {preparation:?}, expansion {expansion_cost:?}");
+        // A linear envelope anchored at depth one accommodates geometric table
+        // capacity steps. Comparing adjacent ratios instead assumes that every
+        // sample uses exactly the same fraction of its backing capacity.
+        if let Some((first_depth, old_preparation, old_expansion)) = baseline {
+            let multiplier = depth / first_depth;
+            assert!(preparation.allocations <= old_preparation.allocations * multiplier);
+            assert!(preparation.requested_bytes <= old_preparation.requested_bytes * multiplier);
+            assert!(
+                preparation.retained_bytes
+                    <= old_preparation.retained_bytes * i64::try_from(multiplier).unwrap()
+            );
+            assert!(
+                preparation.peak_working_bytes
+                    <= old_preparation.peak_working_bytes * i64::try_from(multiplier).unwrap()
+            );
+            assert!(expansion_cost.allocations <= old_expansion.allocations * multiplier);
+            assert!(expansion_cost.requested_bytes <= old_expansion.requested_bytes * multiplier);
+            assert!(
+                expansion_cost.peak_working_bytes
+                    <= old_expansion.peak_working_bytes * i64::try_from(multiplier).unwrap()
+            );
+        } else {
+            baseline = Some((depth, preparation, expansion_cost));
+        }
+    }
+}
+
+#[test]
+fn static_root_preparation_does_not_copy_unreferenced_catalog_bodies() {
+    let parsed = parse_shapes(
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .
+         <http://example.org/S> a sh:NodeShape; sh:nodeKind sh:IRI .",
+        None,
+    )
+    .unwrap();
+    let prototype = parsed.owner.definition(&parsed.node_shapes[0].id).unwrap();
+    let dataset = parse_turtle_to_dataset("", None).unwrap();
+    let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+    let focus = Term::NamedNode(NamedNode::from("http://example.org/outside"));
+    let mut baseline = None;
+    for population in [1, 8, 32] {
+        let definitions = (0..population)
+            .map(|index| {
+                let mut definition = prototype.clone();
+                definition.id = Term::BlankNode(format!("s{index}"));
+                definition
+            })
+            .collect();
+        let owner = ModelOwner::from_definitions(definitions).unwrap();
+        let root = owner.root(&Term::BlankNode("s0".to_owned())).unwrap();
+        let window = CurrentThreadWindow::open();
+        assert!(conforms(&data, &focus, &root).unwrap());
+        let measured = window.close();
+        eprintln!("static root in {population}-definition catalog: {measured:?}");
+        assert!(measured.allocations <= 18, "{measured:?}");
+        assert!(measured.requested_bytes <= 3106, "{measured:?}");
+        assert_eq!(measured.retained_bytes, 0, "{measured:?}");
+        assert!(measured.peak_working_bytes <= 1674, "{measured:?}");
+        if let Some(baseline) = baseline {
+            assert_eq!(
+                measured, baseline,
+                "unused definitions must not add preparation allocations"
+            );
+        }
+        baseline = Some(measured);
+    }
+}
+
+#[test]
 fn function_domain_admission_has_no_per_declaration_allocation() {
     use purrdf_shapes::expression::{CustomFnKind, CustomFunction, NodeExpr};
     use std::sync::OnceLock;
@@ -62,14 +198,17 @@ fn function_domain_admission_has_no_per_declaration_allocation() {
 
 #[test]
 fn catalog_admission_allocation_growth_and_retained_reference_execution() {
-    let mut parsed = parse_shapes(
+    let parsed = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          <http://example.org/S> a sh:NodeShape; sh:class <http://example.org/Expected> .",
         None,
     )
     .unwrap();
-    let mut prototype = parsed.node_shapes.pop().unwrap();
-    prototype.owner = None;
+    let prototype = parsed
+        .owner
+        .definition(&parsed.node_shapes[0].id)
+        .unwrap()
+        .clone();
     drop(parsed);
     let dataset = parse_turtle_to_dataset("", None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
@@ -116,14 +255,17 @@ fn catalog_admission_allocation_growth_and_retained_reference_execution() {
 
 #[test]
 fn catalog_root_export_and_clone_share_constraint_bodies() {
-    let mut parsed = parse_shapes(
+    let parsed = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          <http://example.org/S> a sh:NodeShape; sh:class <http://example.org/Expected> .",
         None,
     )
     .unwrap();
-    let mut prototype = parsed.node_shapes.pop().unwrap();
-    prototype.owner = None;
+    let prototype = parsed
+        .owner
+        .definition(&parsed.node_shapes[0].id)
+        .unwrap()
+        .clone();
     let dataset = parse_turtle_to_dataset("", None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
     let focus = Term::BlankNode("focus".to_owned());
@@ -159,15 +301,28 @@ fn catalog_root_export_and_clone_share_constraint_bodies() {
 
 #[test]
 fn identity_reference_report_retains_caller_path_role_vocabulary() {
-    let mut parsed = parse_shapes(
+    let parsed = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          <http://example.org/S> a sh:NodeShape;
            sh:property [ sh:path <http://example.org/p>; sh:nodeKind sh:IRI ] .",
         None,
     )
     .unwrap();
-    let mut definition = parsed.node_shapes.pop().unwrap();
-    definition.owner = None;
+    let mut definition = parsed
+        .owner
+        .definition(&parsed.node_shapes[0].id)
+        .unwrap()
+        .clone();
+    let [Constraint::PropertyReference(edge)] = definition.constraints.as_slice() else {
+        panic!("the parsed shape has one property identity edge");
+    };
+    definition.property_shapes = parsed
+        .owner
+        .definition(&edge.target)
+        .unwrap()
+        .property_shapes
+        .clone();
+    definition.constraints.clear();
     let id = definition.id.clone();
     let dataset = parse_turtle_to_dataset(
         "<http://example.org/focus> <http://example.org/p> \"bad\" .
@@ -198,14 +353,17 @@ fn identity_reference_report_retains_caller_path_role_vocabulary() {
 
 #[test]
 fn missing_catalog_identity_retains_the_original_term_without_clone_allocation() {
-    let mut parsed = parse_shapes(
+    let parsed = parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          <http://example.org/S> a sh:NodeShape .",
         None,
     )
     .unwrap();
-    let mut definition = parsed.node_shapes.pop().unwrap();
-    definition.owner = None;
+    let mut definition = parsed
+        .owner
+        .definition(&parsed.node_shapes[0].id)
+        .unwrap()
+        .clone();
     let missing = Term::BlankNode("absent".to_owned());
     definition.constraints = vec![Constraint::Reference(missing.clone())];
     let id = definition.id.clone();

@@ -66,6 +66,11 @@ impl Ownership {
     }
 
     pub(super) fn finish(mut self) -> Result<(), ShapesProductError> {
+        // Logical references add no strong edges. An edgeless ownership graph
+        // cannot cycle, so it needs no SCC work or per-vertex scratch storage.
+        if self.adjacency.iter().all(Vec::is_empty) {
+            return Ok(());
+        }
         for row in &mut self.adjacency {
             row.sort_unstable();
             row.dedup();

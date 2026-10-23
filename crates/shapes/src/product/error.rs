@@ -267,6 +267,8 @@ impl From<crate::error::PreparationRefusal> for ShapesProductError {
             | crate::error::PreparationRefusal::ExpiredIndex
             | crate::error::PreparationRefusal::ForeignIndex
             | crate::error::PreparationRefusal::UnknownReference(_)
+            | crate::error::PreparationRefusal::ExpectedProperty(_)
+            | crate::error::PreparationRefusal::InitializedIndex
             | crate::error::PreparationRefusal::UnboundReference => ProductDimension::Malformed,
         };
         let mut refusal = Self::new(dimension, error.to_string());

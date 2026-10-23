@@ -84,11 +84,6 @@ impl Parser<'_> {
     ///
     /// Hard-fails on a malformed rule — see [`Self::parse_rule`].
     pub(crate) fn parse_rules(&mut self, id: &Term) -> Result<Vec<Rule>, String> {
-        // Inside a `sh:condition`'s own shape parse, rules are not read: a condition is
-        // checked by `conforms`, which never looks at them.
-        if !self.parse_rules_enabled {
-            return Ok(Vec::new());
-        }
         let mut rule_nodes: Vec<Term> = self.objects_of(id, sh::RULE);
         crate::term::sort_terms_canonical(&mut rule_nodes);
         let mut rules: Vec<Rule> = Vec::with_capacity(rule_nodes.len());
@@ -663,8 +658,6 @@ impl Parser<'_> {
             }
             self.class_shape_closure(&node, &mut nodes)?;
         }
-        let saved_in_flight = std::mem::take(&mut self.in_flight);
-        let saved_rules = std::mem::replace(&mut self.parse_rules_enabled, false);
         let mut conditions: Vec<crate::shapes::Shape> = Vec::with_capacity(nodes.len());
         let mut outcome = Ok(());
         for node in nodes {
@@ -676,10 +669,6 @@ impl Parser<'_> {
                 }
             }
         }
-        // Restore on EVERY path: a parser left with a cleared in-flight set would lose its
-        // cycle guard for the rest of the document.
-        self.in_flight = saved_in_flight;
-        self.parse_rules_enabled = saved_rules;
         outcome.map(|()| conditions)
     }
 

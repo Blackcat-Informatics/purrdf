@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The post-tree LINKING pass: the one place a parsed shapes graph's shared,
+//! The model linking pass: the one place a parsed shapes graph's shared,
 //! logical references are established and their shared topology is checked.
 //!
 //! A [`Shapes`](crate::shapes::Shapes) is not a tree. Its model domain owns the
@@ -14,11 +14,9 @@
 //!   call its own IRI (SHACL 1.2 Node Expressions §6.1/§6.2). Calls resolve in
 //!   the original model domain without owning the declaration they name.
 //!
-//! Neither can be built during the tree walk that produces the values: a map built
-//! eagerly while a shape is still being parsed would recurse forever, and a body
-//! inlined at discovery would too. So both are minted EMPTY up front, handed out by
-//! reference, and filled exactly once here — after every shape and every body is in
-//! hand.
+//! Parsing queues identities and produces each bare definition once. The shared
+//! cells are created before parsing and filled here after every definition and
+//! function body is available. Logical dependencies never own another body.
 //!
 //! # Why this is a function and not two copies of a recipe
 //!
@@ -159,10 +157,9 @@ fn depth_limit() -> ShapesProductError {
 ///    interned before any body was built and calls resolve through that domain.
 /// 2. **The shape index.** Every shape-index handle reachable in the linked model
 ///    is checked against `shape_index`, and the index is then built ONCE from
-///    `node_shapes` and written into that single cell. Building it is skipped when
-///    no computed reference or declared native conforms-to-shape function reads
-///    the cell. The model owner retains it even when unused, so strong reference
-///    counts cannot distinguish an actual reader. Computed references are weak.
+///    `node_shapes` by moving their original bodies into that single cell. The
+///    complete catalog retains definitions even when no exported target uses
+///    them; retaining a definition does not activate its constraints.
 /// 3. **Registration.** Every `sh:ListParameterExpressionFunction` is registered
 ///    into `registry` as a callable SPARQL function (SHACL 1.2 SPARQL Extensions
 ///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle — a custom
@@ -201,23 +198,29 @@ pub(crate) fn link_global_rules(
 }
 
 pub(crate) fn link_shapes(
-    node_shapes: &[Shape],
+    node_shapes: Vec<Shape>,
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
     native_list: &BTreeSet<String>,
     bodies: BTreeMap<String, NodeExpr>,
     registry: &mut UserFunctionRegistry,
 ) -> Result<Arc<crate::shapes::ModelOwner>, ShapesProductError> {
+    let owner = link_definitions(node_shapes, shape_index, custom_fns, bodies)?;
+    register_model_functions(&owner, native_list, registry);
+    Ok(owner)
+}
+
+/// Install and audit one complete original domain before exposing its functions.
+pub(super) fn link_definitions(
+    node_shapes: Vec<Shape>,
+    shape_index: &ShapeIndex,
+    custom_fns: &[Arc<CustomFunction>],
+    bodies: BTreeMap<String, NodeExpr>,
+) -> Result<Arc<crate::shapes::ModelOwner>, ShapesProductError> {
     install_bodies(custom_fns, bodies)?;
     let owner =
         crate::shapes::ModelOwner::from_declarations(Arc::clone(shape_index), custom_fns.to_vec())?;
-    install_shape_index(
-        node_shapes,
-        shape_index,
-        custom_fns,
-        native_list.contains(crate::model::shnex::CONFORMS_TO_SHAPE),
-    )?;
-    register_model_functions(&owner, native_list, registry);
+    install_shape_index(node_shapes, shape_index, custom_fns)?;
     Ok(owner)
 }
 
@@ -293,7 +296,7 @@ pub(crate) fn register_native_list_functions(
 /// moments: the parser supplies every body in `bodies`, while the decoder has
 /// already installed them from the byte stream and supplies none. Only the
 /// after-the-fact check covers both.
-fn install_bodies(
+pub(crate) fn install_bodies(
     custom_fns: &[Arc<CustomFunction>],
     mut bodies: BTreeMap<String, NodeExpr>,
 ) -> Result<(), ShapesProductError> {
@@ -333,15 +336,12 @@ fn install_bodies(
 
 /// Step 2: prove the shape-index topology, then fill the one cell.
 ///
-/// The walk runs BEFORE the fill and unconditionally — including when the fill is
-/// skipped — because a foreign handle can leave the real cell without a reader.
-/// Skipping the check whenever the fill is skipped
-/// would make the unshared-handle bug invisible in precisely the graph that has it.
+/// The walk runs before moving the bare bodies into the index. A foreign handle
+/// is refused even when no currently exported root reads the definition.
 fn install_shape_index(
-    node_shapes: &[Shape],
+    node_shapes: Vec<Shape>,
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
-    native_reader: bool,
 ) -> Result<(), ShapesProductError> {
     let mut walk = ShapeIndexWalk {
         index: shape_index,
@@ -349,7 +349,7 @@ fn install_shape_index(
         seen_fns: Vec::new(),
         seen_catalogs: Vec::new(),
     };
-    for shape in node_shapes {
+    for shape in &node_shapes {
         walk.shape(shape)?;
     }
     // Bodies are reachable from a shape only through a call site; a declaration
@@ -358,21 +358,7 @@ fn install_shape_index(
         walk.declare(func)?;
     }
 
-    let index = if native_reader || Arc::weak_count(shape_index) > 0 {
-        node_shapes
-            .iter()
-            .map(|shape| (shape.id.clone(), shape.clone()))
-            .collect()
-    } else {
-        FastMap::default()
-    };
-    shape_index.set(index).map_err(|_| {
-        malformed(
-            "this shapes model's sh:nodeByExpression shape index was already filled before \
-             linking; link a model exactly once, because a second index would be discarded \
-             and every constraint would keep resolving against the first",
-        )
-    })?;
+    crate::shapes::ModelOwner::install_definitions(shape_index, node_shapes)?;
     Ok(())
 }
 
@@ -663,6 +649,11 @@ where
     fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
         self.enter()?;
         match constraint {
+            Constraint::PropertyReference(edge) => {
+                for expression in &edge.deactivated_when {
+                    self.node_expr(expression)?;
+                }
+            }
             Constraint::Reference(_)
             | Constraint::Class(_)
             | Constraint::Datatype(_)

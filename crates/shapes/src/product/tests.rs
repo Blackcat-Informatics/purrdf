@@ -133,10 +133,9 @@ ex:high a ex:Thing ; ex:n "2"^^xsd:integer .
 /// A `sh:ListParameterExpressionFunction` no NODE EXPRESSION calls, called instead
 /// from `sh:sparql` query TEXT.
 ///
-/// The declarative model is what a product carries, and a declaration nothing in
-/// that model reaches is not in it — while the `sh:select` body above still names
-/// the function by IRI. A restore therefore re-derives the declaration from the
-/// carried shapes dataset rather than from the model; see
+/// The complete original domain carries this declaration even though no native
+/// call site reaches it. The `sh:select` body still names it by IRI, so registry
+/// restoration must expose it just as parsing did; see
 /// `a_declaration_the_model_does_not_reach_is_carried`.
 const UNREACHABLE_FN_SHAPES: &str = r#"
 ex:incomeTotal a sh:ListParameterExpressionFunction ;
@@ -965,9 +964,8 @@ fn a_declared_sparql_function_survives_the_round_trip() {
 // ── Declarations the model does not reach ──────────────────────────────────────
 
 /// A §7.3 list-parameter declaration that no node expression calls is CARRIED:
-/// nothing in the declarative model reaches it, but a `sh:sparql` body names it,
-/// and the restore re-derives it from the shapes dataset the product carries —
-/// the same way it re-derives `sh:SPARQLFunction` declarations. Both restore
+/// no native call site reaches it, but a `sh:sparql` body names it and the complete
+/// retained declaration domain restores its registry entry. Both restore
 /// seams must answer what the document answers, and the negative control must
 /// flip identically through all three.
 #[test]

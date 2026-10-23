@@ -91,11 +91,15 @@ fn declaration() -> Arc<CustomFunction> {
     })
 }
 
-/// Every shape-index handle a parsed shapes graph's top-level constraints carry.
+/// Every shape-index handle the original top-level definitions carry.
 fn handles_of(shapes: &crate::shapes::Shapes) -> Vec<ShapeIndex> {
     let mut found = Vec::new();
     for shape in &shapes.node_shapes {
-        for constraint in &shape.constraints {
+        let definition = shapes
+            .owner
+            .definition(&shape.id)
+            .expect("original parsed definition");
+        for constraint in &definition.constraints {
             if let Constraint::NodeByExpression { shapes, .. } = constraint {
                 found.push(
                     shapes
@@ -167,7 +171,7 @@ fn link_refuses_unshared_index() {
 
     let mut registry = UserFunctionRegistry::default();
     let error = link_shapes(
-        &[shape],
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -201,7 +205,7 @@ fn link_accepts_correctly_shared_index() {
 
     let mut registry = UserFunctionRegistry::default();
     link_shapes(
-        std::slice::from_ref(&shape),
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -217,11 +221,16 @@ fn link_accepts_correctly_shared_index() {
 /// VALID NEIGHBOUR: a graph with NO shape-index site at all still links, and the
 /// index retains no cloned shapes because no computed reader needs them.
 #[test]
-fn link_accepts_a_graph_with_no_shape_index_site() {
+fn linking_moves_unreferenced_definition_bodies_into_the_complete_catalog() {
     let index: ShapeIndex = Arc::new(OnceLock::new());
     let mut registry = UserFunctionRegistry::default();
-    link_shapes(
-        &[leaf_shape("A")],
+    let mut shape = leaf_shape("A");
+    shape.constraints = vec![Constraint::NodeKind(vec![
+        crate::shapes::NodeKindValue::Iri,
+    ])];
+    let original_body = shape.constraints.as_ptr();
+    let owner = link_shapes(
+        vec![shape],
         &index,
         &[],
         &BTreeSet::new(),
@@ -230,9 +239,11 @@ fn link_accepts_a_graph_with_no_shape_index_site() {
     )
     .expect("a graph with no sh:nodeByExpression must link");
 
-    assert!(
-        index.get().unwrap().is_empty(),
-        "only the model owner holds the handle, so shape bodies are never cloned",
+    let definition = owner.definition(&Term::NamedNode(ex("A"))).unwrap();
+    assert_eq!(
+        definition.constraints.as_ptr(),
+        original_body,
+        "move the original body rather than cloning it for the index"
     );
 }
 
@@ -242,7 +253,7 @@ fn a_declared_native_shape_reader_retains_the_index_without_weak_sites() {
     let mut registry = UserFunctionRegistry::default();
     let iri = crate::model::shnex::CONFORMS_TO_SHAPE;
     let owner = link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         &[],
         &BTreeSet::from([iri.to_owned()]),
@@ -265,7 +276,7 @@ fn link_refuses_unfilled_custom_function_body() {
     let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -298,7 +309,7 @@ fn link_accepts_a_supplied_custom_function_body() {
     let mut registry = UserFunctionRegistry::default();
 
     link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -330,7 +341,7 @@ fn link_accepts_a_body_installed_before_linking() {
 
     let mut registry = UserFunctionRegistry::default();
     link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         std::slice::from_ref(&func),
         &BTreeSet::new(),
@@ -354,7 +365,7 @@ fn link_refuses_a_body_with_no_declaration() {
     let mut registry = UserFunctionRegistry::default();
 
     let error = link_shapes(
-        &[leaf_shape("A")],
+        vec![leaf_shape("A")],
         &index,
         &[],
         &BTreeSet::new(),

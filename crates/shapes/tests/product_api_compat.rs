@@ -173,6 +173,7 @@ fn shapes_still_builds_via_default_then_field_assignment() {
 fn constraint_name(constraint: &Constraint) -> &'static str {
     match constraint {
         Constraint::Reference(_) => "reference",
+        Constraint::PropertyReference(_) => "property_reference",
         Constraint::Class(_) => "class",
         Constraint::Datatype(_) => "datatype",
         Constraint::NodeKind(_) => "node-kind",

@@ -1081,7 +1081,9 @@ impl PyShapes {
                 pyo3::exceptions::PyValueError::new_err(format!("extension usage: {e}"))
             })?;
 
-        let usage = py.detach(|| self.inner.extension_usage(&env));
+        let usage = py
+            .detach(|| self.inner.extension_usage(&env))
+            .map_err(|error| shapes_error(py, purrdf_validate::ShapesError::Preparation(error)))?;
 
         let sites = PyDict::new(py);
         for (site, used) in usage.sites() {

@@ -101,7 +101,7 @@ const DECLARATION_ROOT: &str = "CustomFunction";
 /// Checked for equality against the closure in [`census_closure_is_complete`], so
 /// this list cannot go stale in either direction — a reachable type missing from it
 /// fails, and a row here that the model no longer reaches fails too.
-const CENSUS_TYPES: [&str; 34] = [
+const CENSUS_TYPES: [&str; 35] = [
     "AnnotatedConstraint",
     "ArgKey",
     "BoxRoleVocab",
@@ -120,6 +120,7 @@ const CENSUS_TYPES: [&str; 34] = [
     "NodeKindValue",
     "OrderKey",
     "Path",
+    "PropertyReference",
     "PropertyShape",
     "ResultAnnotation",
     "Rule",
@@ -1088,15 +1089,21 @@ const CLASS_ANALYSIS_SOURCE: &str = "crates/shapes/src/plan.rs";
 /// analysis, and the stage id speaks for the analysis.
 // Retained definition discovery decides which class references enter the walk,
 // so its two indexed traversal homes belong to the carried analysis as well.
-const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 9] = [
+const CLASS_ANALYSIS_SITES: [(&str, &str, &str); 15] = [
     ("", "struct", "ShapeWalk"),
+    ("", "struct", "LoweredIndex"),
     ("ShapeWalk", "fn", "reference_index"),
     ("ShapeWalk", "fn", "index_position"),
+    ("ShapeWalk", "fn", "request_definition"),
+    ("ShapeWalk", "fn", "lower_pending_definitions"),
+    ("ShapeWalk", "fn", "finish"),
     ("ClassCatalog", "fn", "from_walk"),
     ("", "fn", "lower_shapes"),
+    ("", "fn", "lower_shapes_in_model"),
     ("", "fn", "lower_shape"),
     ("", "fn", "lower_property"),
     ("", "fn", "lower_constraint"),
+    ("", "fn", "lower_reference"),
     ("", "fn", "lower_expression"),
 ];
 

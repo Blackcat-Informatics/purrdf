@@ -671,13 +671,15 @@ pub fn lint(
         Ok((shapes, unexecuted)) => {
             // The load that just succeeded parsed the same registry, so this cannot
             // refuse; were it to, the report says so rather than listing nothing.
-            match alternative_validators(dataset, &resolved.prefixes) {
-                Ok(alternatives) => (
-                    None,
-                    Some(shapes.function_resolution()),
-                    Some(alternatives),
-                    Some(unexecuted),
-                ),
+            match alternative_validators(dataset, &resolved.prefixes).and_then(|alternatives| {
+                shapes
+                    .function_resolution()
+                    .map(|functions| (alternatives, functions))
+                    .map_err(|error| error.to_string())
+            }) {
+                Ok((alternatives, functions)) => {
+                    (None, Some(functions), Some(alternatives), Some(unexecuted))
+                }
                 Err(error) => (Some(error), None, None, None),
             }
         }

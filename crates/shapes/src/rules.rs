@@ -67,7 +67,7 @@ use crate::data_view::ShaclRead as _;
 use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
 use crate::model::{rdf, sh};
-use crate::shapes::{Path, PropertyShape, Shape, Shapes, Target};
+use crate::shapes::{Path, Shape, Shapes, Target};
 use crate::srl::reads::{Anchor, ReadPattern};
 use crate::srl::{self, Inference};
 use crate::term::canonical_cmp;
@@ -1298,11 +1298,12 @@ fn discover(
     rule: &Rule,
     shape: &Shape,
     gained: &[[Term; 3]],
-) -> Option<Vec<Term>> {
+) -> Result<Option<Vec<Term>>, crate::error::ShapesError> {
     // Which focus nodes a node-expression `sh:deactivated` leaves is decided over the
     // graph as it stands, not from the triples gained.
-    if !rule.conditions.is_empty() || !shape.deactivated_when.is_empty() {
-        return None;
+    let definition = shape.resolved_in(shape.owner.as_deref())?;
+    if !rule.conditions.is_empty() || !definition.deactivated_when.is_empty() {
+        return Ok(None);
     }
     let mut classes: Vec<&str> = Vec::new();
     for target in &shape.targets {
@@ -1311,7 +1312,7 @@ fn discover(
                 classes.push(class.as_str());
             }
             Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) => {}
-            _ => return None,
+            _ => return Ok(None),
         }
     }
     let is = |term: &Term, iri: &str| matches!(term, Term::NamedNode(node) if node.as_str() == iri);
@@ -1319,7 +1320,7 @@ fn discover(
     let mut found = Vec::new();
     for [subject, predicate, object] in gained {
         if is(predicate, crate::model::rdfs::SUB_CLASS_OF) || is(predicate, sh::SHAPE) {
-            return None;
+            return Ok(None);
         }
         for target in &shape.targets {
             match target {
@@ -1341,7 +1342,7 @@ fn discover(
             }
         }
     }
-    Some(found)
+    Ok(Some(found))
 }
 
 impl FocusRecord {
@@ -1479,7 +1480,7 @@ pub(crate) fn execute_rule(
             }
             FocusSelection::Incremental { record, gained, .. } => {
                 let executed = record.slot(index);
-                match discover(data, rule, shape, gained) {
+                match discover(data, rule, shape, gained)? {
                     Some(found) => {
                         let mut focus_nodes: Vec<Term> = found
                             .into_iter()
@@ -1783,8 +1784,9 @@ fn read_constructed(graph: &RdfDataset, out: &mut Vec<[Term; 3]>) {
 /// Whether property shape `ps` computes derived value nodes for one of
 /// `expected`: it is not deactivated, its path is one of those predicates, and it
 /// declares `sh:values` or `sh:defaultValue`.
-fn derives_expected(ps: &PropertyShape, expected: &FastSet<&str>) -> bool {
-    !ps.deactivated
+fn derives_expected(view: crate::shapes::PropertyView<'_>, expected: &FastSet<&str>) -> bool {
+    let ps = view.property;
+    !view.deactivated()
         && (ps.values.is_some() || ps.default_value.is_some())
         && matches!(&ps.path, Path::Predicate(p) if expected.contains(p.as_str()))
 }
@@ -1817,15 +1819,25 @@ pub(crate) fn expected_derived_triples(
 ) -> Result<Vec<[Term; 3]>, crate::error::ShapesError> {
     let mut out: Vec<[Term; 3]> = Vec::new();
     for shape in &shapes.node_shapes {
-        if shape.deactivated
-            || !shape
-                .property_shapes
-                .iter()
-                .any(|ps| derives_expected(ps, expected))
-        {
+        if shape.deactivated {
             continue;
         }
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape))?;
+        let model = shape.owner.as_ref().unwrap_or(&shapes.owner);
+        let definition = shape.resolved_in(Some(model))?;
+        if definition.deactivated {
+            continue;
+        }
+        let mut derives = false;
+        for view in definition.properties_in(Some(model)) {
+            if derives_expected(view?, expected) {
+                derives = true;
+                break;
+            }
+        }
+        if !derives {
+            continue;
+        }
+        let lowered = crate::plan::lower_shapes_in_model(std::iter::once(definition), Some(model))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
         let focus_nodes = resolve_focus_nodes(
             data,
@@ -1835,9 +1847,20 @@ pub(crate) fn expected_derived_triples(
             lowered.classes(),
             shape.owner.as_ref(),
         )?;
-        let plan = lowered.untargeted_plan(shape, 0, &binding)?;
-        for (ps, property_plan) in plan.properties()? {
-            if !derives_expected(ps, expected) {
+        let plan = lowered.untargeted_plan(definition, 0, &binding)?;
+        for property in plan
+            .properties()?
+            .map(Ok)
+            .chain(plan.referenced_properties()?)
+        {
+            let (ps, property_plan) = property?;
+            if !derives_expected(
+                crate::shapes::PropertyView {
+                    property: ps,
+                    edge: property_plan.edge(),
+                },
+                expected,
+            ) {
                 continue;
             }
             let Path::Predicate(predicate) = &ps.path else {
@@ -1860,11 +1883,18 @@ pub(crate) fn expected_derived_triples(
                     plan.deactivated_when()?,
                 )? || crate::constraints::deactivated_at(
                     data,
-                    plan,
+                    property_plan.parent(),
                     0,
                     &focus_node,
                     &ps.id,
                     property_plan.deactivated_when(ps)?,
+                )? || crate::constraints::deactivated_at(
+                    data,
+                    property_plan.parent(),
+                    0,
+                    &focus_node,
+                    &ps.id,
+                    property_plan.edge_deactivation(),
                 )? {
                     continue;
                 }
@@ -1943,7 +1973,7 @@ impl<'a> RulePlan<'a> {
 
     /// The plan of the rule's own shape.
     fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
-        self.plan_at(self.shape, 0)
+        self.plan_at(self.shape, 0)?.definition()
     }
 
     /// The plan of the `position`-th `sh:condition` shape.

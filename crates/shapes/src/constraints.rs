@@ -26,7 +26,7 @@ use crate::plan::{
 use crate::report::{ConformanceDisallows, ResultRecord, Severity, ValidationResult};
 use crate::shapes::{
     AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
-    PropertyShape, Shape, annotation_for,
+    PropertyReference, PropertyShape, PropertyView, Shape, annotation_for,
 };
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
 use purrdf_xsd::XsdDatatype;
@@ -376,11 +376,13 @@ impl<'a> ConstraintSource<'a> {
         ps: &'a PropertyShape,
         which: AnnotatedConstraint,
         profile: crate::profile::ShaclProfile,
+        edge: Option<&'a PropertyReference>,
     ) -> Self {
+        let view = PropertyView { property: ps, edge };
         let mut source = Self::annotated(
             &ps.id,
-            &ps.severity,
-            &ps.messages,
+            view.severity(),
+            view.messages(),
             annotation_for(&ps.constraint_annotations, which),
             profile,
         );
@@ -1284,20 +1286,7 @@ fn walk_shape<S: ResultSink>(
 ) -> Result<Flow, crate::error::ShapesError> {
     let plan = context.plan;
     let shape = plan.shape();
-    if purrdf_stack::is_low() {
-        return Err(crate::error::ProcessorFailure::ValidationStackMargin {
-            shape: Box::new(shape.id.clone()),
-        }
-        .into());
-    }
-    if context.depth > crate::expression::MAX_RECURSION_DEPTH {
-        return Err(crate::error::ProcessorFailure::ValidationDepth {
-            shape: shape.id.to_string(),
-            depth: context.depth,
-            limit: crate::expression::MAX_RECURSION_DEPTH,
-        }
-        .into());
-    }
+    admit_validation(&shape.id, context.depth)?;
     if shape.deactivated {
         return Ok(Flow::Continue);
     }
@@ -1313,15 +1302,8 @@ fn walk_shape<S: ResultSink>(
     }
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
-    // The single value node IS the focus term. Keep an interned focus id-native;
-    // only a genuinely foreign SHACL-AF term needs an owned clone.
     let node_value_nodes = [ValueNode::of_focus(focus)];
     {
-        // A node-level result carries the shape's roles and no path roles.
-        let mut node_sink = NodeRoles {
-            inner: &mut *sink,
-            roles: &shape.box_roles,
-        };
         for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
             if !shape.constraint_annotations.is_empty()
                 && deactivated_at(
@@ -1335,6 +1317,31 @@ fn walk_shape<S: ResultSink>(
             {
                 continue;
             }
+            if let PlannedConstraint::PropertyReference {
+                definition,
+                edge,
+                deactivated_when,
+            } = plan.planned(constraint, lowered)?
+            {
+                if eval_property_reference(
+                    context,
+                    focus,
+                    definition,
+                    edge,
+                    deactivated_when,
+                    &shape.box_roles,
+                    sink,
+                )?
+                .stopped()
+                {
+                    return Ok(Flow::Stop);
+                }
+                continue;
+            }
+            let mut node_sink = NodeRoles {
+                inner: &mut *sink,
+                roles: &shape.box_roles,
+            };
             if eval_constraint(
                 context,
                 focus,
@@ -1359,11 +1366,7 @@ fn walk_shape<S: ResultSink>(
         }
     }
 
-    // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
-    // `eval_closed` stamps each result's box roles itself — the source roles plus
-    // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
-    // same predicate attribution that property-shape results do — violations
-    // must not drop their predicate role.
+    // --- sh:closed ---
     for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
         let PlannedConstraint::Closed {
             permitted,
@@ -1398,8 +1401,25 @@ fn walk_shape<S: ResultSink>(
             return Ok(Flow::Stop);
         }
     }
-
     Ok(Flow::Continue)
+}
+
+fn admit_validation(shape: &Term, depth: u32) -> Result<(), crate::error::ShapesError> {
+    if purrdf_stack::is_low() {
+        return Err(crate::error::ProcessorFailure::ValidationStackMargin {
+            shape: Box::new(shape.clone()),
+        }
+        .into());
+    }
+    if depth > crate::expression::MAX_RECURSION_DEPTH {
+        return Err(crate::error::ProcessorFailure::ValidationDepth {
+            shape: shape.to_string(),
+            depth,
+            limit: crate::expression::MAX_RECURSION_DEPTH,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// Evaluate `sh:closed` against one value node (SHACL 1.2 Core §7.9.1).
@@ -1690,6 +1710,52 @@ pub(crate) fn deactivated_at<'e>(
     Ok(false)
 }
 
+fn eval_property_reference<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    definition: ShapePlan<'a>,
+    edge: &'a PropertyReference,
+    deactivated_when: &'a [crate::plan::LoweredExpr],
+    parent_roles: &[NamedNode],
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
+    let (property, plan) = PropertyPlan::from_reference(definition, edge, deactivated_when)?;
+    let context = ValidationContext {
+        plan: definition,
+        ..context
+    };
+    // Identity edges erase accumulated sink decorators, as ordinary references
+    // do. The actual property evaluator still owns path/focus/role stamping.
+    if S::RECORDS_EVIDENCE {
+        eval_property_shape(
+            context,
+            focus,
+            property,
+            plan,
+            parent_roles,
+            &mut ReferenceSink::<true, true> { inner: sink },
+        )
+    } else if S::RECORDS_RESULTS {
+        eval_property_shape(
+            context,
+            focus,
+            property,
+            plan,
+            parent_roles,
+            &mut ReferenceSink::<true, false> { inner: sink },
+        )
+    } else {
+        eval_property_shape(
+            context,
+            focus,
+            property,
+            plan,
+            parent_roles,
+            &mut ReferenceSink::<false, false> { inner: sink },
+        )
+    }
+}
+
 /// Evaluate one property shape at `focus`, sending what it finds to `sink`.
 ///
 /// Sink-polymorphic for the same reason the node-shape walk is: there is ONE
@@ -1721,8 +1787,9 @@ fn eval_property_shape<'a, S: ResultSink>(
     sink: &mut S,
 ) -> Result<Flow, crate::error::ShapesError> {
     let store = context.store;
+    admit_validation(&ps.id, context.depth)?;
     // A deactivated property shape validates nothing (SHACL §2.1.3.3).
-    if ps.deactivated {
+    if ps.deactivated || property_plan.edge().is_some_and(|edge| edge.deactivated) {
         return Ok(Flow::Continue);
     }
     if deactivated_at(
@@ -1732,6 +1799,16 @@ fn eval_property_shape<'a, S: ResultSink>(
         focus,
         &ps.id,
         property_plan.deactivated_when(ps)?,
+    )? {
+        return Ok(Flow::Continue);
+    }
+    if deactivated_at(
+        store,
+        property_plan.parent(),
+        context.depth,
+        focus,
+        &ps.id,
+        property_plan.edge_deactivation(),
     )? {
         return Ok(Flow::Continue);
     }
@@ -1766,6 +1843,34 @@ fn eval_property_shape<'a, S: ResultSink>(
         {
             continue;
         }
+        if let PlannedConstraint::PropertyReference {
+            definition,
+            edge,
+            deactivated_when,
+        } = context.plan.planned(constraint, lowered)?
+        {
+            for value in &value_nodes {
+                let roles = if S::RECORDS_RESULTS {
+                    stamp.source_roles()
+                } else {
+                    &[]
+                };
+                if eval_property_reference(
+                    context,
+                    &value.as_focus(store.core_view()),
+                    definition,
+                    edge,
+                    deactivated_when,
+                    roles,
+                    sink,
+                )?
+                .stopped()
+                {
+                    return Ok(Flow::Stop);
+                }
+            }
+            continue;
+        }
         // The stamp travels with the sink rather than being applied to a returned
         // vector, so the property shape's path, focus and roles are resolved
         // inside the result builder — which a conformance-only traversal never
@@ -1784,6 +1889,7 @@ fn eval_property_shape<'a, S: ResultSink>(
                 ps,
                 AnnotatedConstraint::Constraint(index),
                 context.report_profile(),
+                property_plan.edge(),
             ),
             &mut stamped,
         )?
@@ -1809,7 +1915,11 @@ fn eval_property_shape<'a, S: ResultSink>(
                 &value.as_focus(store.core_view()),
                 nested,
                 nested_plan,
-                stamp.source_roles(),
+                if S::RECORDS_RESULTS {
+                    stamp.source_roles()
+                } else {
+                    &[]
+                },
                 sink,
             )?
             .stopped()
@@ -1828,13 +1938,21 @@ fn eval_property_shape<'a, S: ResultSink>(
     // rendered inside a result builder, which a conforming focus node never runs.
     if !ps.reifier_shapes.is_empty() || ps.reification_required {
         return eval_reifier_shapes(
-            ReifierEvalContext {
+            &ReifierEvalContext {
                 context,
                 focus,
                 value_nodes: &value_nodes,
                 ps,
-                source_roles: stamp.source_roles(),
-                path_roles: stamp.path_roles(),
+                source_roles: if S::RECORDS_RESULTS {
+                    stamp.source_roles()
+                } else {
+                    &[]
+                },
+                path_roles: if S::RECORDS_RESULTS {
+                    stamp.path_roles()
+                } else {
+                    &[]
+                },
                 lazy: &lazy,
                 property_plan,
             },
@@ -2037,7 +2155,7 @@ impl ReifierEvalContext<'_, '_, '_> {
 /// [`AnyViolation`] and stops at the first inner violation instead of building
 /// the rest.
 fn eval_reifier_shapes<S: ResultSink>(
-    ctx: ReifierEvalContext<'_, '_, '_>,
+    ctx: &ReifierEvalContext<'_, '_, '_>,
     sink: &mut S,
 ) -> Result<Flow, crate::error::ShapesError> {
     let ReifierEvalContext {
@@ -2049,7 +2167,7 @@ fn eval_reifier_shapes<S: ResultSink>(
         path_roles,
         lazy: _,
         property_plan,
-    } = ctx;
+    } = *ctx;
     if ps.reifier_shapes.is_empty() && !ps.reification_required {
         return Ok(Flow::Continue);
     }
@@ -2088,11 +2206,19 @@ fn eval_reifier_shapes<S: ResultSink>(
     let predicate_id = ds.term_id_by_iri(predicate.as_str());
     let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
 
-    let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    let source_roles = if S::RECORDS_RESULTS {
+        with_cbox_role(source_roles, context.box_role_vocab)
+    } else {
+        Cow::Borrowed(&[] as &[NamedNode])
+    };
     // The reifier-shape constraint's severity and message: its reifier
     // annotation's when it has one, else the property shape's.
-    let source =
-        ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier, context.report_profile());
+    let source = ConstraintSource::of_property(
+        ps,
+        AnnotatedConstraint::Reifier,
+        context.report_profile(),
+        property_plan.edge(),
+    );
     let disallows = context.plan.binding().conformance_disallows();
     // The reifier identities of ONE value node's statement, in canonical term
     // order. Inline for the sizes a statement layer actually carries — a handful
@@ -2198,7 +2324,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                             first_messages(&[&reifier_shape.messages, &ps.messages])
                         };
                         ResultRecord::plain(reifier_result(
-                            &ctx,
+                            ctx,
                             value,
                             &source_roles,
                             &source,
@@ -2241,7 +2367,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     // focus node — are the result's `sh:detail`, so the reifier
                     // and why it fails are carried beside the value node.
                     let value = reifier_result(
-                        &ctx,
+                        ctx,
                         value,
                         &source_roles,
                         &source,
@@ -2561,6 +2687,11 @@ fn eval_constraint<'a, S: ResultSink>(
     }
 
     Ok(match constraint {
+        PlannedConstraint::PropertyReference { .. } => {
+            return Err(crate::error::ShapesError::internal(
+                "property reference reached scalar constraint dispatch".to_owned(),
+            ));
+        }
         PlannedConstraint::Reference(definition) => {
             for value in value_nodes {
                 if matches!(

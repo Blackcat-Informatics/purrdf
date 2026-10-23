@@ -31,6 +31,8 @@ pub enum FunctionClass {
 }
 
 impl FunctionClass {
+    /// Every declaring class, in discovery precedence order.
+    pub const ALL: [Self; 3] = [Self::ListParameter, Self::NamedParameter, Self::Plain];
     /// The class IRI a declaration is typed with.
     #[must_use]
     pub const fn iri(self) -> &'static str {
@@ -44,9 +46,7 @@ impl FunctionClass {
     /// The class `iri` names, if it is one of the three declaring classes.
     #[must_use]
     pub fn from_iri(iri: &str) -> Option<Self> {
-        [Self::NamedParameter, Self::ListParameter, Self::Plain]
-            .into_iter()
-            .find(|class| class.iri() == iri)
+        Self::ALL.into_iter().find(|class| class.iri() == iri)
     }
 }
 
@@ -874,7 +874,7 @@ pub(crate) static COMPONENTS: &[ComponentRow] = &[
     ComponentRow {
         iri: sh::PROPERTY_CONSTRAINT_COMPONENT,
         params: &[param(sh::PROPERTY, ValueRule::Shape)],
-        carrier: Carrier::ShapeField("property_shapes"),
+        carrier: Carrier::Constraint(&["PropertyReference"]),
     },
     native(
         sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,

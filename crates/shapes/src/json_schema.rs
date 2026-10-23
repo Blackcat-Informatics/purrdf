@@ -146,6 +146,7 @@ use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_be_labelled;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use crate::json_model::{Map, ToJson, Value, ValueKind, json};
 use ::purrdf_rdf::RdfDataset;
@@ -162,8 +163,8 @@ use crate::schema_surface::{
     facet_supported, non_negative_integer, xsd_pattern_as_xpath,
 };
 use crate::shapes::{
-    AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
-    PropertyShape, Shape, Shapes, Target,
+    AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, ModelOwner, NodeKindValue,
+    Path, PropertyShape, PropertyView, Shape, Shapes, Target,
 };
 use crate::term::{NamedNode, Term};
 
@@ -1239,6 +1240,11 @@ pub struct ValueVocabProjection<'a> {
 /// Accumulates losses while compiling so every emitter helper can record one,
 /// and carries the caller-supplied [`Namespaces`] every helper compacts with.
 struct Ctx<'ns> {
+    model: Option<Arc<ModelOwner>>,
+    catalog_keys: ::purrdf_rdf::FastMap<(usize, usize, bool), String>,
+    catalog_defs: Map<String, (Value, Term)>,
+    catalog_ordinal: usize,
+    reserved_defs: BTreeSet<String>,
     pattern_error: Option<SchemaCompileError>,
     /// The runtime loss ledger this compilation accumulates into (surfaced as
     /// [`CompiledSchema::losses`]).
@@ -1269,7 +1275,7 @@ struct Ctx<'ns> {
     /// The shapes whose value schema [`compile_member_schema`] is compiling, innermost
     /// last: a shape reached again through its own value-position constraints is not
     /// inlined a second time.
-    member_stack: Vec<Term>,
+    member_stack: Vec<(usize, usize)>,
     /// The ontology's declared datatypes (`rdfs:Datatype`, `owl:DataRange`),
     /// which decide whether a named OWL filler projects as a literal or as a
     /// node. Empty outside ontology-complete compilation.
@@ -1299,6 +1305,11 @@ impl<'ns> Ctx<'ns> {
         ns: &'ns Namespaces,
     ) -> Self {
         Self {
+            model: None,
+            catalog_keys: ::purrdf_rdf::FastMap::default(),
+            catalog_defs: Map::new(),
+            catalog_ordinal: 0,
+            reserved_defs: BTreeSet::new(),
             pattern_error: None,
             ledger: LossLedger::new(),
             emitted_defs,
@@ -1316,6 +1327,82 @@ impl<'ns> Ctx<'ns> {
     }
 
     /// The ontology's datatypes and definitions, as the surface judges them.
+    fn catalog_ref(&mut self, target: &Term, member: Option<(&str, &str)>) -> Value {
+        let Some(model) = self.model.clone() else {
+            self.pattern_error.get_or_insert_with(|| {
+                SchemaCompileError::Materialization(
+                    crate::PreparationRefusal::UnboundReference.into(),
+                )
+            });
+            return json!({});
+        };
+        let Some(definition) = model.definition(target) else {
+            self.pattern_error.get_or_insert_with(|| {
+                SchemaCompileError::Materialization(
+                    crate::PreparationRefusal::UnknownReference(Arc::new(target.clone())).into(),
+                )
+            });
+            return json!({});
+        };
+        // Runtime identities never enter the artifact. A cache hit borrows the
+        // original body without allocating another owned RDF term key.
+        let identity = (
+            Arc::as_ptr(&model).addr(),
+            std::ptr::from_ref(definition).addr(),
+            member.is_some(),
+        );
+        if let Some(key) = self.catalog_keys.get(&identity) {
+            return json!({ "$ref": format!("#/$defs/{key}") });
+        }
+        let key = loop {
+            let key = format!("ShapeRef{}", self.catalog_ordinal);
+            let Some(next) = self.catalog_ordinal.checked_add(1) else {
+                self.pattern_error
+                    .get_or_insert(SchemaCompileError::SizeOverflow {
+                        resource: "catalog definition keys",
+                    });
+                return json!({});
+            };
+            self.catalog_ordinal = next;
+            if key != "Annotation"
+                && key != "Node"
+                && key != LITERAL_DEF_KEY
+                && !self.emitted_defs.contains(&key)
+                && !self.reserved_defs.contains(&key)
+            {
+                break key;
+            }
+        };
+        self.catalog_keys.insert(identity, key.clone());
+        let body = match member {
+            Some((shape, property)) => compile_member_schema(definition, shape, property, self),
+            None => compile_object_schema(definition, self),
+        };
+        self.catalog_defs
+            .insert(key.clone(), (body, target.clone()));
+        json!({ "$ref": format!("#/$defs/{key}") })
+    }
+
+    fn append_catalog_defs(
+        &mut self,
+        defs: &mut Map<String, Value>,
+    ) -> Result<(), SchemaCompileError> {
+        if let Some(error) = self.pattern_error.take() {
+            return Err(error);
+        }
+        for (key, (body, target)) in std::mem::take(&mut self.catalog_defs) {
+            if defs.contains_key(&key) {
+                return Err(SchemaCompileError::DefinitionCollision {
+                    key,
+                    first: "existing schema definition".to_owned(),
+                    second: target.to_string(),
+                });
+            }
+            defs.insert(key, body);
+        }
+        Ok(())
+    }
+
     const fn datatype_scope(&self) -> DatatypeScope<'_> {
         DatatypeScope {
             names: &self.surface_datatypes,
@@ -1502,6 +1589,7 @@ pub fn compile_with_value_vocab(
     let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
 
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.model = Some(Arc::clone(&shapes.owner));
     // Enum enumeration losses (empty vocab, blank-node member) recorded first,
     // deterministically, ahead of the per-shape losses.
     ctx.record_entries(vocab_losses);
@@ -1632,12 +1720,10 @@ pub fn compile_with_value_vocab(
         "only the ontology surface reads OWL values"
     );
 
+    ctx.append_catalog_defs(&mut defs)?;
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
-    if let Some(error) = ctx.pattern_error {
-        return Err(error);
-    }
     Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
         openapi_json: to_pretty(&openapi),
@@ -1668,6 +1754,13 @@ fn compile_with_surface(
         .collect();
     let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.model = Some(Arc::clone(&shapes.owner));
+    ctx.reserved_defs.extend(
+        surface
+            .fragments
+            .keys()
+            .map(|(owner, property)| fragment_key(ns, owner, property.as_deref())),
+    );
     ctx.surface_datatypes.clone_from(&surface.datatypes);
     ctx.literal_disjoint.clone_from(&surface.literal_disjoint);
     ctx.datatype_definitions
@@ -1799,9 +1892,7 @@ fn compile_with_surface(
         defs.insert(LITERAL_DEF_KEY.to_owned(), checked_literal_def(ns));
     }
 
-    if let Some(error) = ctx.pattern_error {
-        return Err(error);
-    }
+    ctx.append_catalog_defs(&mut defs)?;
     Ok(CompiledSchema {
         schema_json: to_pretty(&root_schema(&defs, ns)),
         openapi_json: to_pretty(&openapi_doc(&defs)),
@@ -2721,7 +2812,7 @@ fn tagged_restriction_schema(
             XSD_PATTERN => lexical_facets.push(Constraint::Pattern {
                 regex: xsd_pattern_as_xpath(literal.value()),
                 flags: None,
-                compiled: std::sync::Arc::default(),
+                compiled: Arc::default(),
             }),
             _ => {}
         }
@@ -2915,7 +3006,7 @@ fn value_space_schema(
             constraints.push(Constraint::Pattern {
                 regex: pattern.clone(),
                 flags: None,
-                compiled: std::sync::Arc::default(),
+                compiled: Arc::default(),
             });
         }
         constraints.extend(value_facets.iter().cloned());
@@ -3854,6 +3945,34 @@ fn typed_literal_schema() -> Value {
 /// body). Property shapes become `properties`; node-level logical/closed
 /// constraints become `allOf`/`anyOf`/`oneOf`/`not`/`additionalProperties`.
 fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
+    if shape.deactivated {
+        return json!({});
+    }
+    let previous = ctx.model.clone();
+    if let Some(model) = &shape.owner {
+        ctx.model = Some(Arc::clone(model));
+    }
+    let domain = ctx.model.clone();
+    let result = if shape.owner.is_some()
+        && shape.constraint_annotations.is_empty()
+        && shape.deactivated_when.is_empty()
+    {
+        match shape.resolved_in(domain.as_deref()) {
+            Ok(body) => compile_object_schema_in_model(body, ctx),
+            Err(error) => {
+                ctx.pattern_error
+                    .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                json!({})
+            }
+        }
+    } else {
+        compile_object_schema_in_model(shape, ctx)
+    };
+    ctx.model = previous;
+    result
+}
+
+fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // "Deactivated shapes are ignored during validation": every node conforms to
     // a deactivated shape nested under `sh:and`/`sh:or`/`sh:xone`/`sh:node`/
     // `sh:someValue`, which the empty schema states exactly. (A deactivated
@@ -3901,12 +4020,22 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     // emitted for them: SHACL 1.2 Core §7.9.1 collects the permitted properties
     // from every `sh:property/sh:path` IRI, whatever the property shape's state.
     let mut permitted_keys: Vec<String> = Vec::new();
-    for ps in &shape.property_shapes {
+    let domain = ctx.model.clone();
+    for view in shape.properties_in(domain.as_deref()) {
+        let view = match view {
+            Ok(view) => view,
+            Err(error) => {
+                ctx.pattern_error
+                    .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                return json!({});
+            }
+        };
+        let ps = view.property;
         // Only direct predicate paths shape outgoing JSON properties; inverse
         // and composite paths (sequence/alternative/closures) are dropped, and
         // the loss recorded.
         let Path::Predicate(pred) = &ps.path else {
-            if !ps.deactivated {
+            if !view.deactivated() {
                 let path_text = crate::path::path_to_sparql(&ps.path);
                 ctx.record(
                     "sh:path",
@@ -3926,7 +4055,7 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         let key = ctx.ns.compact_iri(pred.as_str());
         // "Deactivated shapes are ignored during validation": nothing to project,
         // and nothing dropped.
-        if ps.deactivated {
+        if view.deactivated() {
             permitted_keys.push(key);
             continue;
         }
@@ -3960,7 +4089,7 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         let enforced = enforced_constraints(
             &ps.constraints,
             &ps.constraint_annotations,
-            &ps.severity,
+            view.severity(),
             &shape_iri,
             Some(&key),
             &mut comments,
@@ -4003,13 +4132,8 @@ fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
     );
     for c in node_constraints {
         match c {
-            Constraint::Reference(_) => {
-                ctx.record(
-                    "shape-reference",
-                    &shape_iri,
-                    "shared shape identity requires a catalog-aware projection",
-                );
-            }
+            Constraint::Reference(target) => all_of.push(ctx.catalog_ref(target, None)),
+            Constraint::PropertyReference(_) => {}
             Constraint::And(members) => {
                 for m in members {
                     all_of.push(compile_object_schema(m, ctx));
@@ -4449,6 +4573,48 @@ fn undecisive_annotation(
 /// `sh:not`/`sh:and`/`sh:or`/`sh:xone`/`sh:node`, non-predicate paths, nested or
 /// reifier property shapes, an empty inner) ⇒ `None`.
 fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
+    compile_negand_guarded(inner, ctx, &mut ShapeProofStack::new())
+}
+
+fn compile_negand_guarded(
+    inner: &Shape,
+    ctx: &mut Ctx<'_>,
+    active: &mut ShapeProofStack,
+) -> Option<Vec<Value>> {
+    if purrdf_stack::is_low() {
+        ctx.pattern_error.get_or_insert_with(|| {
+            SchemaCompileError::Materialization(crate::PreparationRefusal::StackMargin.into())
+        });
+        return None;
+    }
+    let previous = ctx.model.clone();
+    if let Some(model) = &inner.owner {
+        ctx.model = Some(Arc::clone(model));
+    }
+    let identity = (
+        ctx.model
+            .as_ref()
+            .map_or(0, |model| Arc::as_ptr(model).addr()),
+        std::ptr::from_ref(inner).addr(),
+    );
+    // A complement needs a finite exact proof; revisiting a body is no proof
+    // and does not select any recursive conformance assignment.
+    if active.contains(&identity) {
+        ctx.model = previous;
+        return None;
+    }
+    active.push(identity);
+    let result = compile_negand_body(inner, ctx, active);
+    active.pop();
+    ctx.model = previous;
+    result
+}
+
+fn compile_negand_body(
+    inner: &Shape,
+    ctx: &mut Ctx<'_>,
+    active: &mut ShapeProofStack,
+) -> Option<Vec<Value>> {
     // An empty inner is the permissive base; negating it rejects everything.
     // Never emit a vacuous negation for it.
     if inner.constraints.is_empty() && inner.property_shapes.is_empty() {
@@ -4460,6 +4626,11 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     // negating the constraints would reject nodes `sh:not` accepts.
     let disallowed = ConformanceDisallows::default();
     if inner.deactivated
+        || !inner.deactivated_when.is_empty()
+        || inner
+            .constraint_annotations
+            .iter()
+            .any(|annotation| !annotation.deactivated_when.is_empty())
         || !disallowed.contains(&inner.severity)
         || undecisive_annotation(&inner.constraint_annotations, &disallowed)
     {
@@ -4472,6 +4643,29 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     // node-identity discriminator; anything else is not expressible in the
     // object projection and forces the whole negation to a loss.
     for c in &inner.constraints {
+        if let Constraint::Reference(target) = c {
+            let Some(model) = ctx.model.clone() else {
+                ctx.pattern_error.get_or_insert_with(|| {
+                    SchemaCompileError::Materialization(
+                        crate::PreparationRefusal::UnboundReference.into(),
+                    )
+                });
+                return None;
+            };
+            let definition = match model.definition_required(target) {
+                Ok(definition) => definition,
+                Err(error) => {
+                    ctx.pattern_error
+                        .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                    return None;
+                }
+            };
+            parts.extend(compile_negand_guarded(definition, ctx, active)?);
+            continue;
+        }
+        if matches!(c, Constraint::PropertyReference(_)) {
+            continue;
+        }
         // A class LIST is a disjunction, which one type discriminator cannot
         // state; only a single-class value is expressible here.
         let Constraint::Class(classes) = c else {
@@ -4489,9 +4683,27 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
     // Property shapes: express only direct-predicate paths whose every value
     // constraint round-trips through `compile_property`.
     let inner_iri = inner.id.to_string();
-    for ps in &inner.property_shapes {
-        if ps.deactivated
-            || !disallowed.contains(&ps.severity)
+    let model = ctx.model.clone();
+    for view in inner.properties_in(model.as_deref()) {
+        let view = match view {
+            Ok(view) => view,
+            Err(error) => {
+                ctx.pattern_error
+                    .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                return None;
+            }
+        };
+        let ps = view.property;
+        if view.deactivated()
+            || !ps.deactivated_when.is_empty()
+            || view
+                .edge
+                .is_some_and(|edge| !edge.deactivated_when.is_empty())
+            || ps
+                .constraint_annotations
+                .iter()
+                .any(|annotation| !annotation.deactivated_when.is_empty())
+            || !disallowed.contains(view.severity())
             || undecisive_annotation(&ps.constraint_annotations, &disallowed)
             || !ps.property_shapes.is_empty()
             || !ps.reifier_shapes.is_empty()
@@ -4553,6 +4765,7 @@ fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
 const fn constraint_term(constraint: &Constraint) -> &'static str {
     match constraint {
         Constraint::Reference(_) => "shape-reference",
+        Constraint::PropertyReference(_) => "sh:property",
         Constraint::Class(_) => "sh:class",
         Constraint::Datatype(_) => "sh:datatype",
         Constraint::NodeKind(_) => "sh:nodeKind",
@@ -4653,6 +4866,15 @@ fn enforced_constraints<'c>(
     let disallowed = ConformanceDisallows::default();
     let mut enforced = Vec::with_capacity(constraints.len());
     for (index, constraint) in constraints.iter().enumerate() {
+        // Identity edges carry the referenced definition's severities. Filtering
+        // the edge by its container would discard active child constraints.
+        if matches!(
+            constraint,
+            Constraint::Reference(_) | Constraint::PropertyReference(_)
+        ) {
+            enforced.push(constraint);
+            continue;
+        }
         let severity = constraint_severity(annotations, index, shape_severity);
         if disallowed.contains(severity) {
             enforced.push(constraint);
@@ -4685,18 +4907,27 @@ fn enforced_constraints<'c>(
 /// Whether an active property shape's emitted constraints exclude the unchecked
 /// XMLLiteral branch. Count constraints apply here to the property's values;
 /// member node shapes discard those counts before compiling a value schema.
-pub(crate) fn property_excludes_xml(property: &PropertyShape) -> bool {
-    !property.deactivated
-        && property.values.is_none()
-        && property.default_value.is_none()
-        && constraints_exclude_xml(
-            &property.constraints,
-            &property.constraint_annotations,
-            &property.severity,
-            XmlConstraintPosition::Property,
-            &ConformanceDisallows::default(),
-        )
+pub(crate) fn property_excludes_xml(
+    view: PropertyView<'_>,
+    model: Option<&ModelOwner>,
+) -> Result<bool, SchemaCompileError> {
+    let property = view.property;
+    if view.deactivated() || property.values.is_some() || property.default_value.is_some() {
+        return Ok(false);
+    }
+    constraints_exclude_xml(
+        &property.constraints,
+        &property.constraint_annotations,
+        view.severity(),
+        XmlConstraintPosition::Property,
+        &ConformanceDisallows::default(),
+        model,
+        &mut ShapeProofStack::new(),
+    )
+    .map_err(|error| SchemaCompileError::Materialization(error.into()))
 }
+
+type ShapeProofStack = purrdf_core::SmallVec<[(usize, usize); 8]>;
 
 #[derive(Clone, Copy)]
 enum XmlConstraintPosition {
@@ -4712,22 +4943,56 @@ fn constraints_exclude_xml(
     severity: &Severity,
     position: XmlConstraintPosition,
     disallowed: &ConformanceDisallows,
-) -> bool {
-    constraints.iter().enumerate().any(|(index, constraint)| {
-        disallowed.contains(constraint_severity(annotations, index, severity))
-            && constraint_excludes_xml(constraint, position, disallowed)
-    })
+    model: Option<&ModelOwner>,
+    active: &mut ShapeProofStack,
+) -> Result<bool, crate::PreparationRefusal> {
+    for (index, constraint) in constraints.iter().enumerate() {
+        if (matches!(
+            constraint,
+            Constraint::Reference(_) | Constraint::PropertyReference(_)
+        ) || disallowed.contains(constraint_severity(annotations, index, severity)))
+            && constraint_excludes_xml(constraint, position, disallowed, model, active)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-fn member_excludes_xml(shape: &Shape, disallowed: &ConformanceDisallows) -> bool {
-    !shape.deactivated
-        && constraints_exclude_xml(
-            &shape.constraints,
-            &shape.constraint_annotations,
-            &shape.severity,
-            XmlConstraintPosition::Member,
-            disallowed,
-        )
+fn member_excludes_xml(
+    shape: &Shape,
+    disallowed: &ConformanceDisallows,
+    model: Option<&ModelOwner>,
+    active: &mut ShapeProofStack,
+) -> Result<bool, crate::PreparationRefusal> {
+    if purrdf_stack::is_low() {
+        return Err(crate::PreparationRefusal::StackMargin);
+    }
+    if shape.deactivated || !shape.deactivated_when.is_empty() {
+        return Ok(false);
+    }
+    let model = shape.owner.as_deref().or(model);
+    let identity = (
+        model.map_or(0, |model| std::ptr::from_ref(model).addr()),
+        std::ptr::from_ref(shape).addr(),
+    );
+    // Exclusion requires a finite witness. A repeated body supplies none; this
+    // proof does not choose a recursive conformance assignment.
+    if active.contains(&identity) {
+        return Ok(false);
+    }
+    active.push(identity);
+    let result = constraints_exclude_xml(
+        &shape.constraints,
+        &shape.constraint_annotations,
+        &shape.severity,
+        XmlConstraintPosition::Member,
+        disallowed,
+        model,
+        active,
+    );
+    active.pop();
+    result
 }
 
 /// A conservative proof over value constraints that the emitter actually keeps.
@@ -4736,8 +5001,16 @@ fn constraint_excludes_xml(
     constraint: &Constraint,
     position: XmlConstraintPosition,
     disallowed: &ConformanceDisallows,
-) -> bool {
-    match constraint {
+    model: Option<&ModelOwner>,
+    active: &mut ShapeProofStack,
+) -> Result<bool, crate::PreparationRefusal> {
+    Ok(match constraint {
+        Constraint::Reference(target) => {
+            let definition = model
+                .ok_or(crate::PreparationRefusal::UnboundReference)?
+                .definition_required(target)?;
+            member_excludes_xml(definition, disallowed, model, active)?
+        }
         Constraint::Datatype(datatypes) => datatypes
             .iter()
             .all(|datatype| datatype.as_str() != rdf::XML_LITERAL),
@@ -4755,18 +5028,32 @@ fn constraint_excludes_xml(
         }),
         Constraint::LanguageIn(_) => true,
         Constraint::MaxCount(0) => matches!(position, XmlConstraintPosition::Property),
-        Constraint::Node(shape) => member_excludes_xml(shape, disallowed),
-        Constraint::And(shapes) => shapes
-            .iter()
-            .any(|shape| member_excludes_xml(shape, disallowed)),
-        Constraint::Or(shapes) => shapes
-            .iter()
-            .all(|shape| member_excludes_xml(shape, disallowed)),
+        Constraint::Node(shape) => member_excludes_xml(shape, disallowed, model, active)?,
+        Constraint::And(shapes) => {
+            let mut witness = false;
+            for shape in shapes {
+                if member_excludes_xml(shape, disallowed, model, active)? {
+                    witness = true;
+                    break;
+                }
+            }
+            witness
+        }
+        Constraint::Or(shapes) => {
+            let mut all = true;
+            for shape in shapes {
+                if !member_excludes_xml(shape, disallowed, model, active)? {
+                    all = false;
+                    break;
+                }
+            }
+            all
+        }
         // Xone and negation are emitted only after their members' exactness and
         // projection-loss checks. Raw source membership cannot certify that
         // those checks retained the constraint, so it supplies no proof here.
         _ => false,
-    }
+    })
 }
 
 /// Record what a property shape carries besides its constraints that its value
@@ -4944,11 +5231,24 @@ fn compile_property(
 
     for c in constraints {
         match c {
-            Constraint::Reference(_) => {
+            Constraint::Reference(target) => {
+                shape_conjuncts.push(ctx.catalog_ref(target, Some((shape_iri, key))));
+            }
+            Constraint::PropertyReference(edge) => {
+                if let Err(error) = ctx
+                    .model
+                    .as_ref()
+                    .ok_or(crate::PreparationRefusal::UnboundReference)
+                    .and_then(|model| model.property_definition(&edge.target))
+                {
+                    ctx.pattern_error
+                        .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                    continue;
+                }
                 ctx.record(
-                    "shape-reference",
+                    "sh:property",
                     shape_iri,
-                    "shared shape identity requires a catalog-aware projection",
+                    "a value shape's property shapes judge the value's separate @graph node, beyond the projected value schema",
                 );
             }
             Constraint::MinCount(n) => min_count = Some(min_count.map_or(*n, |m| m.max(*n))),
@@ -6945,10 +7245,31 @@ impl<'s> ListComponents<'s> {
 /// value-position constraints is inlined once: its inner occurrence accepts any
 /// value, recorded.
 fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
+    let previous = ctx.model.clone();
+    if let Some(model) = &shape.owner {
+        ctx.model = Some(Arc::clone(model));
+    }
+    let result = compile_member_schema_in_model(shape, shape_iri, key, ctx);
+    ctx.model = previous;
+    result
+}
+
+fn compile_member_schema_in_model(
+    shape: &Shape,
+    shape_iri: &str,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     if shape.deactivated {
         return json!({});
     }
-    if ctx.member_stack.contains(&shape.id) {
+    let identity = (
+        ctx.model
+            .as_ref()
+            .map_or(0, |model| Arc::as_ptr(model).addr()),
+        std::ptr::from_ref(shape).addr(),
+    );
+    if ctx.member_stack.contains(&identity) {
         ctx.record(
             "sh:node",
             shape_iri,
@@ -6960,7 +7281,7 @@ fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ct
         );
         return json!({});
     }
-    ctx.member_stack.push(shape.id.clone());
+    ctx.member_stack.push(identity);
     let schema = compile_member_schema_body(shape, shape_iri, key, ctx);
     ctx.member_stack.pop();
     schema
@@ -6981,8 +7302,17 @@ fn exact_member_schemas(
     key: &str,
     ctx: &mut Ctx<'_>,
 ) -> Option<Vec<Value>> {
-    if !shapes.iter().all(value_shape_exact) {
-        return None;
+    let mut active = ShapeProofStack::new();
+    for shape in shapes {
+        match value_shape_exact(shape, ctx.model.as_deref(), &mut active) {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(error) => {
+                ctx.pattern_error
+                    .get_or_insert_with(|| SchemaCompileError::Materialization(error.into()));
+                return None;
+            }
+        }
     }
     let before = ctx.loss_count();
     let schemas: Vec<Value> = shapes
@@ -6994,39 +7324,95 @@ fn exact_member_schemas(
 
 /// Whether `shape`, judging one value node, compiles to a value schema accepting
 /// exactly the values that conform to it (see [`exact_member_schemas`]).
-fn value_shape_exact(shape: &Shape) -> bool {
+fn value_shape_exact(
+    shape: &Shape,
+    model: Option<&ModelOwner>,
+    active: &mut ShapeProofStack,
+) -> Result<bool, crate::PreparationRefusal> {
+    if purrdf_stack::is_low() {
+        return Err(crate::PreparationRefusal::StackMargin);
+    }
     if shape.deactivated {
         // Every node conforms, and the value schema is `{}`.
-        return true;
+        return Ok(true);
     }
+    let model = shape.owner.as_deref().or(model);
+    let identity = (
+        model.map_or(0, |model| std::ptr::from_ref(model).addr()),
+        std::ptr::from_ref(shape).addr(),
+    );
+    if active.contains(&identity) {
+        return Ok(false);
+    }
+    active.push(identity);
     let disallowed = ConformanceDisallows::default();
-    disallowed.contains(&shape.severity)
-        && !undecisive_annotation(&shape.constraint_annotations, &disallowed)
-        && shape
-            .property_shapes
-            .iter()
-            .all(|nested| nested.deactivated)
-        && shape.constraints.iter().all(value_constraint_exact)
+    let result = (|| {
+        if !(disallowed.contains(&shape.severity)
+            && !undecisive_annotation(&shape.constraint_annotations, &disallowed)
+            && shape.deactivated_when.is_empty()
+            && shape
+                .constraint_annotations
+                .iter()
+                .all(|annotation| annotation.deactivated_when.is_empty())
+            && shape
+                .property_shapes
+                .iter()
+                .all(|nested| nested.deactivated))
+        {
+            return Ok(false);
+        }
+        for constraint in &shape.constraints {
+            if !value_constraint_exact(constraint, model, active)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })();
+    active.pop();
+    result
 }
 
 /// Whether a node-shape constraint's value schema is exactly its test of one value
 /// node: the value-type constraints `sh:datatype`, `sh:nodeKind`, `sh:in` and
 /// `sh:hasValue`, and the shape-based constraints over shapes that are themselves
 /// exact.
-fn value_constraint_exact(constraint: &Constraint) -> bool {
-    match constraint {
+fn value_constraint_exact(
+    constraint: &Constraint,
+    model: Option<&ModelOwner>,
+    active: &mut ShapeProofStack,
+) -> Result<bool, crate::PreparationRefusal> {
+    Ok(match constraint {
+        Constraint::Reference(target) => {
+            let definition = model
+                .ok_or(crate::PreparationRefusal::UnboundReference)?
+                .definition_required(target)?;
+            value_shape_exact(definition, model, active)?
+        }
+        Constraint::PropertyReference(edge) => {
+            let property = model
+                .ok_or(crate::PreparationRefusal::UnboundReference)?
+                .property_definition(&edge.target)?;
+            edge.deactivated || property.deactivated
+        }
         Constraint::Datatype(_)
         | Constraint::NodeKind(_)
         | Constraint::In(_)
         | Constraint::HasValue(_) => true,
         Constraint::Node(inner) | Constraint::Not(inner) | Constraint::SomeValue(inner) => {
-            value_shape_exact(inner)
+            value_shape_exact(inner, model, active)?
         }
         Constraint::And(members) | Constraint::Or(members) | Constraint::Xone(members) => {
-            members.iter().all(value_shape_exact)
+            let mut exact = true;
+            for member in members {
+                if !value_shape_exact(member, model, active)? {
+                    exact = false;
+                    break;
+                }
+            }
+            exact
         }
         _ => false,
-    }
+    })
 }
 
 /// [`compile_member_schema`] for a shape not already being compiled.
