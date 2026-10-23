@@ -166,7 +166,7 @@ pub(crate) fn resolve(
             .iter()
             .map(|node| node.references.iter().map(|edge| edge.target).collect())
             .collect();
-        purrdf_core::graph::scc_component_index(&adjacency)
+        purrdf_core::graph::scc_component_index::<Vec<usize>>(&adjacency)
             .into_iter()
             .collect()
     };
