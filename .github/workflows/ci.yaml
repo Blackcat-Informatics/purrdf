@@ -1179,7 +1179,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     name: cross-arch-riscv64 (${{ matrix.part }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Toolchain installation can consume most of 30 minutes before QEMU starts.
+    # Leave the complete selected suite time to finish under emulation.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
