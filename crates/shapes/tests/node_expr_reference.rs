@@ -984,7 +984,13 @@ fn holder_expression(shapes: &Shapes) -> Result<NodeExpr, String> {
         .node_shapes
         .iter()
         .filter(|shape| shape.id == iri("Holder"))
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .find_map(|constraint| match constraint {
             Constraint::Expression { expr, .. } => Some(NodeExpr::Owned {
                 expr: Box::new(expr.clone()),
@@ -1355,7 +1361,13 @@ fn every_arm_declares_the_contract_its_clause_defines() {
     let mut stack: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .filter_map(|constraint| match constraint {
             Constraint::Expression { expr, .. } => Some(expr.clone()),
             _ => None,

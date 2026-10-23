@@ -2014,7 +2014,9 @@ fn iri_valued_property_pairs_answer_as_before() {
     assert!(conforming.conforms, "{:?}", conforming.results);
     // The parsed constraint is the predicate path of the IRI.
     let parsed = turtle::loads_neighbour(PREFIXES, shapes);
-    let property = &parsed.node_shapes[0].property_shapes[0];
+    let property = turtle::properties(&parsed, &parsed.node_shapes[0])
+        .next()
+        .unwrap();
     assert!(property.constraints.iter().any(|c| matches!(
         c,
         purrdf_shapes::shapes::Constraint::Equals(purrdf_shapes::shapes::Path::Predicate(n))

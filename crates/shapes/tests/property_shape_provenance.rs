@@ -6,6 +6,9 @@
 #[path = "support/terms.rs"]
 mod terms;
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 use terms::example_org as ex;
 
@@ -54,7 +57,13 @@ fn property_sources_match_the_declaring_graph_nodes() {
         .expect("declared property shape")
         .2;
         let shapes = from_dataset(&source).expect("valid shapes");
-        assert_eq!(shapes.node_shapes[0].property_shapes[0].id, property_id);
+        assert_eq!(
+            turtle::properties(&shapes, &shapes.node_shapes[0])
+                .next()
+                .unwrap()
+                .id,
+            property_id
+        );
         let report = validate_dataset(&data, &shapes).expect("validation");
         assert_eq!(report.results.len(), 1);
         assert_eq!(report.results[0].source_shape, property_id);

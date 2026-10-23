@@ -211,7 +211,9 @@ fn resolve_element_kind(
         .expect("resolve_element_kind receives an existing key");
     let kind = match definition {
         Value::Object(object) if is_enum_definition(object) => ElementKind::Enum,
-        Value::Object(object) if is_object_schema(object) => ElementKind::Class,
+        Value::Object(object) if is_object_schema(object) || is_object_choice(object) => {
+            ElementKind::Class
+        }
         Value::Object(object) if is_alias_only(object) => {
             let reference = object
                 .get("$ref")
@@ -263,6 +265,23 @@ fn is_object_schema(object: &Object) -> bool {
         ]
         .iter()
         .any(|keyword| object.contains_key(keyword))
+}
+
+/// A shared definition of object alternatives needs the same class-expression
+/// carrier as its inline form. A scalar TypeDefinition would discard its fields.
+fn is_object_choice(object: &Object) -> bool {
+    object.len() == 1
+        && ["anyOf", "oneOf"].iter().any(|keyword| {
+            object
+                .get(keyword)
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    !branches.is_empty()
+                        && branches
+                            .iter()
+                            .all(|branch| branch.as_object().is_some_and(is_object_schema))
+                })
+        })
 }
 
 fn is_alias_only(object: &Object) -> bool {

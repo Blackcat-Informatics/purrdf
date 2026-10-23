@@ -884,8 +884,13 @@ fn a_product_restore_keeps_the_authored_spelling() {
         .expect("the product opens")
         .rebuild(&ShapesProfile::CORE, &HostBindings::empty())
         .expect("the product rebuilds");
-    let Some(Constraint::Expression { expr, .. }) =
-        restored.shapes().node_shapes[0].constraints.first()
+    let Some(Constraint::Expression { expr, .. }) = restored
+        .shapes()
+        .owner
+        .definition(&restored.shapes().node_shapes[0].id)
+        .expect("original definition")
+        .constraints
+        .first()
     else {
         panic!("the restored shape keeps its expression constraint");
     };

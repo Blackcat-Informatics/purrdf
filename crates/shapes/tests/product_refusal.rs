@@ -1943,15 +1943,12 @@ fn unknown_tag_product() -> Vec<u8> {
     repack(&product_of(PLAIN_SHAPES), |sections| {
         let ast = &mut sections[2];
         assert_eq!(
-            &ast[..10],
-            &[1, 0, 2, 0, 0, 0, 1, 1, 0, 0],
-            "one index, no functions, global owner 0/index 0, initialized index with one bare definition",
+            &ast[..9],
+            &[1, 0, 2, 0, 0, 0, 1, 2, 0],
+            "one index, no functions, global owner 0/index 0, initialized index with node and property definitions",
         );
-        assert!(
-            ast[10] < 4,
-            "the definition id term tag must be implemented before mutation",
-        );
-        ast[10] = 4;
+        assert_eq!(ast[9], 0, "the first definition id is a named-node term");
+        ast[9] = 4;
     })
 }
 
@@ -2062,8 +2059,8 @@ fn nesting_tag() -> (Vec<u8>, usize, u8) {
     let deep = section(&two, SECTION_AST);
     assert_eq!(
         deep.len(),
-        shallow.len() + 2,
-        "the retained definition and exported root each gain one tag",
+        shallow.len() + 1,
+        "only the retained definition gains a tag; the exported root is an identity reference",
     );
     let mut source = 0;
     let mut insertions = Vec::new();
@@ -2079,8 +2076,11 @@ fn nesting_tag() -> (Vec<u8>, usize, u8) {
         shallow.len(),
         "the original stream must survive intact"
     );
-    assert_eq!(insertions.len(), 2, "only the two nesting tags may change");
-    assert_eq!(insertions[0].1, insertions[1].1);
+    assert_eq!(
+        insertions.len(),
+        1,
+        "only the retained nesting tag may change"
+    );
     (one, insertions[0].0, insertions[0].1)
 }
 
