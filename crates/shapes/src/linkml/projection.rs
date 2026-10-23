@@ -211,7 +211,10 @@ fn resolve_element_kind(
         .expect("resolve_element_kind receives an existing key");
     let kind = match definition {
         Value::Object(object) if is_enum_definition(object) => ElementKind::Enum,
-        Value::Object(object) if is_object_schema(object) || is_object_choice(object) => {
+        Value::Object(object)
+            if is_object_schema(object)
+                || is_object_choice(object, definitions, resolved, visiting)? =>
+        {
             ElementKind::Class
         }
         Value::Object(object) if is_alias_only(object) => {
@@ -269,19 +272,49 @@ fn is_object_schema(object: &Object) -> bool {
 
 /// A shared definition of object alternatives needs the same class-expression
 /// carrier as its inline form. A scalar TypeDefinition would discard its fields.
-fn is_object_choice(object: &Object) -> bool {
-    object.len() == 1
-        && ["anyOf", "oneOf"].iter().any(|keyword| {
-            object
-                .get(keyword)
-                .and_then(Value::as_array)
-                .is_some_and(|branches| {
-                    !branches.is_empty()
-                        && branches
-                            .iter()
-                            .all(|branch| branch.as_object().is_some_and(is_object_schema))
-                })
-        })
+fn is_object_choice(
+    object: &Object,
+    definitions: &Object,
+    resolved: &mut BTreeMap<String, ElementKind>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<bool, LinkmlError> {
+    for keyword in ["anyOf", "oneOf"] {
+        if !object
+            .keys()
+            .all(|key| key == keyword || is_annotation_keyword(key))
+        {
+            continue;
+        }
+        let Some(branches) = object.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        if branches.is_empty() {
+            return Ok(false);
+        }
+        for branch in branches {
+            let Some(branch) = branch.as_object() else {
+                return Ok(false);
+            };
+            if is_object_schema(branch) {
+                continue;
+            }
+            if !is_alias_only(branch) {
+                return Ok(false);
+            }
+            let reference = branch["$ref"]
+                .as_str()
+                .expect("is_alias_only requires a string reference");
+            let target = reference_key(reference).ok_or_else(|| {
+                LinkmlError::new(format!("non-local choice reference {reference:?}"))
+            })?;
+            if resolve_element_kind(&target, definitions, resolved, visiting)? != ElementKind::Class
+            {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn is_alias_only(object: &Object) -> bool {
@@ -2766,6 +2799,66 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn annotated_object_choices_preserve_inline_and_referenced_classes() {
+        for keyword in ["anyOf", "oneOf"] {
+            let mut choice = json!({
+                "title": "Choice",
+                "description": "An annotated object choice."
+            });
+            choice.as_object_mut().unwrap().insert(
+                keyword.to_owned(),
+                json!([
+                    {"type": "object", "properties": {"ex:name": {"type": "string"}}},
+                    {"$ref": "#/$defs/Alias", "description": "A class reference."}
+                ]),
+            );
+            let schema = json!({"$defs": {
+                "Choice": choice,
+                "Alias": {"$ref": "#/$defs/Person"},
+                "Person": {"type": "object"}
+            }});
+            let emitted = emit(&compiled(&schema), &config()).expect("emit class choices");
+            assert!(
+                emitted.losses.is_empty(),
+                "{}",
+                emitted.losses.render_json()
+            );
+            let root = emitted.document.as_value();
+            let choice = &root["classes"]["Choice"];
+            assert_eq!(choice["description"], "An annotated object choice.");
+            let target = if keyword == "anyOf" {
+                "any_of"
+            } else {
+                "exactly_one_of"
+            };
+            let branches = choice[target].as_array().expect("class expressions");
+            assert_eq!(branches.len(), 2);
+            let inline = branches[0]["is_a"]
+                .as_str()
+                .expect("inline class reference");
+            assert_eq!(
+                root["classes"][inline]["attributes"]["ex:name"]["range"],
+                "string"
+            );
+            assert_eq!(branches[1]["is_a"], "Alias");
+            assert_eq!(root["classes"]["Alias"]["is_a"], "Person");
+        }
+    }
+
+    #[test]
+    fn object_choices_do_not_promote_scalar_or_enum_references_to_classes() {
+        let schema = json!({"$defs": {
+            "Scalar": {"type": "string"},
+            "Enum": {"enum": ["red", "blue"]},
+            "ScalarChoice": {"anyOf": [{"type": "object"}, {"$ref": "#/$defs/Scalar"}]},
+            "EnumChoice": {"oneOf": [{"type": "object"}, {"$ref": "#/$defs/Enum"}]}
+        }});
+        let elements = element_infos(schema["$defs"].as_object().unwrap()).expect("element kinds");
+        assert_eq!(elements["ScalarChoice"].kind, ElementKind::Type);
+        assert_eq!(elements["EnumChoice"].kind, ElementKind::Type);
     }
 
     #[test]
