@@ -1,0 +1,12 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1.43s
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 3 tests
+test head_observation_reports_actual_changes_and_reuses_an_unchanged_snapshot ... ok
+chronological head observation: [(128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9), (2048, SourceChangeWork { directory: SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9)]
+test changed_head_observation_work_grows_with_digest_prefixes ... ok
+test observations_preserve_sealing_overlap_and_compaction_without_rewalking_retained_rows ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+

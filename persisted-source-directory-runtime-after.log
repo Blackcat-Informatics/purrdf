@@ -1,0 +1,31 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2.73s
+     Running tests/source_directory.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/89e83ef6a330d2c6/out/source_directory-89e83ef6a330d2c6)
+
+running 3 tests
+test visitor_failure_keeps_its_admitted_output_owned_until_payload_drops ... ok
+test independent_native_directories_find_exact_changes_after_all_ids_move ... ok
+native directory work: [(128, SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }), (2048, SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }), (32768, SourceDifferenceWork { ranges: 171, members: 9739, changed: 6 })]
+test fixed_delta_directory_work_follows_prefixes_instead_of_source_population ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 8 tests
+test effective_removals_are_observed_and_readding_restores_only_the_original_rows ... ok
+test head_observation_reports_actual_changes_and_reuses_an_unchanged_snapshot ... ok
+chronological head observation: [(128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9), (2048, SourceChangeWork { directory: SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9)]
+test changed_head_observation_work_grows_with_digest_prefixes ... ok
+test stopped_observation_does_not_publish_a_partial_successor ... ok
+test successor_observation_releases_predecessor_head_and_retains_only_its_own_owner ... ok
+test observations_preserve_sealing_overlap_and_compaction_without_rewalking_retained_rows ... ok
+test full_compaction_with_the_same_resident_head_does_not_enumerate_that_head ... ok
+sealed source replacement work: [(false, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 254, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }), (false, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 103, members: 382, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }), (false, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 141, members: 524, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }), (true, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 254, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 }), (true, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 103, members: 382, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 }), (true, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 141, members: 524, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 })]
+test changed_sealed_replacements_and_compaction_skip_retained_physical_rows ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s
+

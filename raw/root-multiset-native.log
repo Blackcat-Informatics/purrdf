@@ -1,0 +1,11 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/hash)
+    Finished `test` profile [optimized] target(s) in 6.67s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c)
+
+running 3 tests
+test multiset::tests::combining_and_retracting_keeps_duplicate_members ... ok
+test multiset::tests::carry_and_borrow_wrap_the_full_256_bit_sum ... ok
+test multiset::tests::refused_population_changes_preserve_the_original_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 62 filtered out; finished in 0.00s
+

@@ -1,0 +1,65 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 3.81s
+     Running tests/scoring.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/527942d27d48647d/out/scoring-527942d27d48647d)
+
+running 21 tests
+test a_partition_filter_selects_without_changing_any_rank ... ok
+test a_needle_analyzing_to_zero_terms ... ok
+test a_bound_rank_applies_to_every_admitted_partition ... ok
+test a_bound_rank_selects_that_rank ... ok
+test an_out_of_range_rank_yields_nothing ... ok
+test an_unknown_partition_scores_nothing ... ok
+test bm25_matches_a_hand_computed_golden ... ok
+test each_term_contribution_matches_the_hand_computation ... ok
+test equal_scores_are_broken_by_document_id_deterministically ... ok
+test explain_reports_a_term_the_document_does_not_hold ... ok
+test explaining_an_unknown_document_is_a_data_error ... ok
+test matched_counts_distinct_needle_terms_present ... ok
+test order_by_score_and_order_by_rank_can_disagree_under_rounding ... ok
+test rank_is_per_partition_not_global ... ok
+test predicate_scope_precedes_depth_without_changing_score_weights ... ok
+test statistics_are_not_pooled_across_partitions ... ok
+test explain_contributions_sum_exactly_to_the_score ... ok
+test the_published_text_identities_are_frozen ... FAILED
+test two_independently_built_indexes_rank_identically ... ok
+test bounded_heap_equals_the_full_sort_prefix ... ok
+test score_is_a_pure_function_of_index_and_needle ... ok
+
+failures:
+
+---- the_published_text_identities_are_frozen stdout ----
+source identity v2: ec042d180577273650456f8232dec919530735be9078ec7d4fe086e1f883c2ac
+
+thread 'the_published_text_identities_are_frozen' (988839) panicked at crates/text/tests/scoring.rs:1159:5:
+assertion `left == right` failed: the index fingerprint
+  left: "1694dd7ec62771bb308768ca0ec78d0883177d35fff90069256d2780faaa862f"
+ right: "573a3db7a8a89832030eb4224ee172804b7dd05531173bbde521acaf1ffd79dd"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_published_text_identities_are_frozen
+
+test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-text --test scoring`
+     Running tests/wasm_determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/98c056c9940fe458/out/wasm_determinism-98c056c9940fe458)
+
+running 12 tests
+test scoped_text_preserves_original_constraint_failure ... ok
+test scoped_text_depth_preserves_original_unknown_rows_and_scores ... ok
+test the_integer_logarithm_agrees_with_its_hand_values_on_this_target ... ok
+test scoped_text_bound_candidates_retain_unknown_membership ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test the_pinned_ranking_is_reproduced_on_this_target ... ok
+test delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target ... ok
+test the_independent_fielded_reference_is_reproduced_on_this_target ... ok
+test thirty_two_index_fields_are_exact ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: 1 target failed:
+    `-p purrdf-text --test scoring`

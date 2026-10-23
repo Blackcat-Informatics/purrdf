@@ -1,0 +1,71 @@
+crates/text/src/index/delta.rs:204:        let mut old_ids = vec![None; self.documents.len()];
+crates/text/src/index/delta.rs:205:        let mut new_ids = vec![None; partial.documents.len()];
+crates/text/src/index/delta.rs:206:        let retained = std::mem::take(&mut self.documents)
+crates/text/src/index/delta.rs:212:        let added = std::mem::take(&mut partial.documents)
+crates/text/src/index/delta.rs:216:            check_document_count(self.documents.len() + 1)?;
+crates/text/src/index/delta.rs:217:            let id = self.documents.len() as u32;
+crates/text/src/index/delta.rs:231:            self.documents.push(document);
+crates/text/src/index/delta.rs:233:        let (partitions, partition_of) = build_partitions(self.documents.iter().map(|document| {
+crates/text/src/index/delta.rs:242:        for document in &mut self.documents {
+crates/text/src/index/delta.rs:243:            document.partition = partition_of[&document_key(
+crates/text/src/index/delta.rs:250:            std::mem::take(&mut self.terms),
+crates/text/src/index/delta.rs:251:            partial.terms,
+crates/text/src/index/delta.rs:254:            &self.documents,
+crates/text/src/index/delta.rs:256:        self.terms = merged.entries;
+crates/text/src/index/delta.rs:257:        let mut streams = vec![Vec::new(); self.documents.len()];
+crates/text/src/index/delta.rs:260:                std::mem::take(&mut self.token_streams),
+crates/text/src/index/delta.rs:264:            (partial.token_streams, &new_ids, &merged.added),
+crates/text/src/index/delta.rs:276:        self.token_streams = streams;
+crates/text/src/index/delta.rs:277:        self.subject_order = build_subject_order(&self.documents);
+crates/text/src/index/delta.rs:278:        self.occurrence_order = build_occurrence_order(&self.documents);
+crates/text/src/index/delta.rs:441:                    (documents[a.document as usize].partition, a.document)
+crates/text/src/index/delta.rs:442:                        .cmp(&(documents[b.document as usize].partition, b.document))
+crates/text/src/index/delta.rs:536:        assert_eq!(actual.documents, fresh.documents);
+crates/text/src/index/delta.rs:538:        assert_eq!(actual.terms, fresh.terms);
+crates/text/src/index/delta.rs:539:        assert_eq!(actual.token_streams, fresh.token_streams);
+crates/text/src/index/delta.rs:540:        assert_eq!(actual.field_lengths, fresh.field_lengths);
+crates/text/src/index/delta.rs:722:                .documents
+crates/text/src/index/delta.rs:726:            let buffer = index.token_streams[retained].as_ptr();
+crates/text/src/index/delta.rs:739:                .documents
+crates/text/src/index/delta.rs:743:            assert_eq!(updated.token_streams[retained].as_ptr(), buffer);
+crates/text/src/index.rs:789:            IndexProjection::Lexical => self.analyzer().terms(input),
+crates/text/src/index.rs:884:        self.token_streams.get(document as usize).map(Vec::as_slice)
+crates/text/src/index.rs:893:        for (document, stream) in self.documents.iter().zip(&self.token_streams) {
+crates/text/src/index.rs:924:        self.terms.get(term as usize).map(|term| term.term.as_str())
+crates/text/src/index.rs:932:        self.field_lengths.get(document as usize).map(Vec::as_slice)
+crates/text/src/index.rs:938:        self.documents
+crates/text/src/index.rs:961:        let partition = self.documents.get(document as usize)?.partition;
+crates/text/src/index.rs:999:            .field_lengths
+crates/text/src/index.rs:1045:        self.field_lengths = Vec::with_capacity(self.documents.len());
+crates/text/src/index.rs:1048:        for document in &self.documents {
+crates/text/src/index.rs:1056:            for ((total, population), &length) in self.field_totals[document.partition as usize]
+crates/text/src/index.rs:1058:                .zip(&mut self.field_populations[document.partition as usize])
+crates/text/src/index.rs:1064:            self.field_lengths.push(lengths);
+crates/text/src/index.rs:1087:        self.documents.len() as u64
+crates/text/src/index.rs:1097:        self.terms.len() as u64
+crates/text/src/index.rs:1127:        self.documents.iter()
+crates/text/src/index.rs:1132:        self.documents.get(id as usize)
+crates/text/src/index.rs:1146:        let compare = |id: &u32| self.documents[*id as usize].subject.cmp(subject);
+crates/text/src/index.rs:1177:                match workspace.terms_cmp(&index.documents[*id as usize].subject, subject) {
+crates/text/src/index.rs:1246:        let document = self.documents.get(id as usize)?;
+crates/text/src/index.rs:1248:            .get(document.partition as usize)
+crates/text/src/index.rs:1254:        self.documents
+crates/text/src/index.rs:1256:            .map(|document| document.partition as usize)
+crates/text/src/index.rs:1312:        self.documents.get(id as usize).map(Document::length)
+crates/text/src/index.rs:1317:        self.terms.iter().map(|entry| entry.term.as_str())
+crates/text/src/index.rs:1392:        let document = self.documents.get(id as usize)?;
+crates/text/src/index.rs:1394:        let postings = span_slice(entry, document.partition);
+crates/text/src/index.rs:1468:        self.terms
+crates/text/src/index.rs:1471:            .and_then(|at| self.terms.get(at))
+crates/text/src/index.rs:1633:                    digest.count(term.documents().len());
+crates/text/src/index.rs:1634:                    for &document in term.documents() {
+crates/text/src/index.rs:1641:        digest.count(self.documents.len());
+crates/text/src/index.rs:1642:        for document in &self.documents {
+crates/text/src/index.rs:1654:            digest.number(u64::from(document.partition));
+crates/text/src/index.rs:1657:        digest.count(self.terms.len());
+crates/text/src/index.rs:1658:        for entry in &self.terms {
+crates/text/src/index.rs:1713:        .binary_search_by_key(&partition, |span| span.partition)
+crates/text/src/index.rs:2241:            .then_with(|| a.partition.cmp(&b.partition))
+crates/text/src/index.rs:2327:        list.sort_by_key(|posting| table[posting.document as usize].partition);
+crates/text/src/index.rs:2344:        let partition = table[list[at].document as usize].partition;
+crates/text/src/index.rs:2346:        while at < list.len() && table[list[at].document as usize].partition == partition {

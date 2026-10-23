@@ -1,0 +1,194 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-eval)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error: function call inside of `map_or`
+   --> crates/text/src/index/token_streams.rs:494:20
+    |
+494 |           self.table.map_or(
+    |  ____________________^
+495 | |             Iter {
+496 | |                 pending: [None; PATH],
+497 | |                 depth: 0,
+...   |
+501 | |             |table| table.range(self.start, self.end),
+502 | |         )
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+    |
+494 ~         self.table.map_or_else(|| Iter {
+495 +                 pending: [None; PATH],
+496 +                 depth: 0,
+497 +                 leaf: [].iter(),
+498 +                 remaining: 0,
+499 +             }, |table| table.range(self.start, self.end))
+    |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/text/src/index.rs:1093:10
+     |
+1093 |       ) -> Result<
+     |  __________^
+1094 | |         impl Iterator<Item = Result<(u32, &'a [(u32, u64)]), purrdf_sparql_eval::EvalError>>
+1095 | |         + use<'a, P>,
+1096 | |         purrdf_sparql_eval::EvalError,
+1097 | |     > {
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: implicit borrow as raw pointer
+    --> crates/text/src/index.rs:1451:23
+     |
+1451 |         core::ptr::eq(&self.partitions[at].key, partition).then_some(at)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+     = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+     |
+1451 |         core::ptr::eq(&raw const self.partitions[at].key, partition).then_some(at)
+     |                        +++++++++
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/text/src/index.rs:2542:6
+     |
+2542 | ) -> Result<(Vec<Shared<TermEntry<P>>>, Vec<TokenStream>), TextError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/text/src/relation.rs:1158:26
+     |
+1158 |         for &document in documents.iter() {
+     |                          ^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&documents`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+     = note: `-D clippy::explicit-iter-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_iter_loop)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/text/src/relation.rs:2162:30
+     |
+2162 |             for &document in documents.iter() {
+     |                              ^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `documents`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/text/src/surface/delta.rs:176:51
+    |
+176 |     pub(crate) fn merge_disjoint(mut self, added: Self) -> Result<Self, TextDeltaError> {
+    |                                                   ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+176 |     pub(crate) fn merge_disjoint(mut self, added: &Self) -> Result<Self, TextDeltaError> {
+    |                                                   +
+
+error: redundant closure
+   --> crates/text/src/surface.rs:554:73
+    |
+554 |         for name in postings::join_by(primary.iter(), alternate.iter(), |a, b| a.cmp(b))
+    |                                                                         ^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::cmp::Ord::cmp`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: this argument (8 byte) is passed by reference, but would be more efficient if passed by value (limit: 8 byte)
+   --> crates/text/src/surface.rs:711:37
+    |
+711 | fn word_metadata(text: &str, coder: &DoubleMetaphone) -> Result<TermMetadata, TextError> {
+    |                                     ^^^^^^^^^^^^^^^^ help: consider passing by value instead: `DoubleMetaphone`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#trivially_copy_pass_by_ref
+    = note: `-D clippy::trivially-copy-pass-by-ref` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::trivially_copy_pass_by_ref)]`
+
+error: could not compile `purrdf-text` (lib) due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: implicit borrow as raw pointer
+   --> crates/text/src/index/delta.rs:569:43
+    |
+569 |                     assert!(core::ptr::eq(&*token.term, &*entry.term));
+    |                                           ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+569 |                     assert!(core::ptr::eq(&raw const *token.term, &*entry.term));
+    |                                            +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/text/src/index/delta.rs:569:57
+    |
+569 |                     assert!(core::ptr::eq(&*token.term, &*entry.term));
+    |                                                         ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+569 |                     assert!(core::ptr::eq(&*token.term, &raw const *entry.term));
+    |                                                          +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/text/src/index/delta.rs:877:21
+    |
+877 |                     &*old_bank.postings[count as usize - 1],
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+877 |                     &raw const *old_bank.postings[count as usize - 1],
+    |                      +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/text/src/index/delta.rs:878:21
+    |
+878 |                     &*next_bank.postings[count as usize]
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+878 |                     &raw const *next_bank.postings[count as usize]
+    |                      +++++++++
+
+error: using `chunks_exact` with a constant chunk size
+   --> crates/text/src/index/delta.rs:891:35
+    |
+891 |         for group in measurements.chunks_exact(3) {
+    |                                   ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<3>().0`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: implicit borrow as raw pointer
+    --> crates/text/src/index.rs:1451:23
+     |
+1451 |         core::ptr::eq(&self.partitions[at].key, partition).then_some(at)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1451 |         core::ptr::eq(&raw const self.partitions[at].key, partition).then_some(at)
+     |                        +++++++++
+
+error: could not compile `purrdf-text` (lib test) due to 14 previous errors

@@ -1,0 +1,91 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+  --> crates/text/tests/determinism.rs:82:25
+   |
+82 |         let s = builder.intern_value(&row.s).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+  ::: crates/rdf-core/src/backend.rs:31:8
+   |
+31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+   |        ------------ the method is available for `RdfDatasetBuilder` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+25 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+82 |         let s = builder.intern_iri_value(&row.s).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+  --> crates/text/tests/determinism.rs:83:25
+   |
+83 |         let p = builder.intern_value(&row.p).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+  ::: crates/rdf-core/src/backend.rs:31:8
+   |
+31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+   |        ------------ the method is available for `RdfDatasetBuilder` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+25 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+83 |         let p = builder.intern_iri_value(&row.p).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+  --> crates/text/tests/determinism.rs:84:25
+   |
+84 |         let o = builder.intern_value(&row.o).unwrap();
+   |                         ^^^^^^^^^^^^
+   |
+  ::: crates/rdf-core/src/backend.rs:31:8
+   |
+31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+   |        ------------ the method is available for `RdfDatasetBuilder` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+25 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+84 |         let o = builder.intern_iri_value(&row.o).unwrap();
+   |                                ++++
+
+error[E0599]: no method named `intern_value` found for struct `RdfDatasetBuilder` in the current scope
+  --> crates/text/tests/determinism.rs:85:48
+   |
+85 |         let g = row.g.as_ref().map(|g| builder.intern_value(g).unwrap());
+   |                                                ^^^^^^^^^^^^
+   |
+  ::: crates/rdf-core/src/backend.rs:31:8
+   |
+31 |     fn intern_value(&mut self, value: &TermValue) -> Result<TermId, StorageError>;
+   |        ------------ the method is available for `RdfDatasetBuilder` here
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+   |
+25 + use purrdf_core::TermFactory;
+   |
+help: there is a method `intern_iri_value` with a similar name
+   |
+85 |         let g = row.g.as_ref().map(|g| builder.intern_iri_value(g).unwrap());
+   |                                                       ++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-text` (test "determinism") due to 4 previous errors

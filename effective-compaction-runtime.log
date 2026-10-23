@@ -1,0 +1,30 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 57.57s
+     Running tests/source_directory.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/89e83ef6a330d2c6/out/source_directory-89e83ef6a330d2c6)
+
+running 3 tests
+test visitor_failure_keeps_its_admitted_output_owned_until_payload_drops ... ok
+test independent_native_directories_find_exact_changes_after_all_ids_move ... ok
+native directory work: [(128, SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }), (2048, SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }), (32768, SourceDifferenceWork { ranges: 171, members: 9739, changed: 6 })]
+test fixed_delta_directory_work_follows_prefixes_instead_of_source_population ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 9 tests
+test effective_removals_are_observed_and_readding_restores_only_the_original_rows ... ok
+chronological head observation: [(128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9), (2048, SourceChangeWork { directory: SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 9)]
+test changed_head_observation_work_grows_with_digest_prefixes ... ok
+test head_observation_reports_actual_changes_and_reuses_an_unchanged_snapshot ... ok
+test observations_preserve_sealing_overlap_and_compaction_without_rewalking_retained_rows ... ok
+test stopped_observation_does_not_publish_a_partial_successor ... ok
+test successor_observation_releases_predecessor_head_and_retains_only_its_own_owner ... ok
+test full_compaction_with_the_same_resident_head_does_not_enumerate_that_head ... ok
+sealed source replacement work: [(false, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 85, members: 720, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 1 }, 9900, 792000), (false, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 105, members: 1464, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 1 }, 19266, 1327872), (false, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 129, members: 1199, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 1 }, 28065, 1796160), (true, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 85, members: 720, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 10380, 840000), (true, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 105, members: 1464, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 19787, 1376704), (true, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 129, members: 1199, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 28620, 1846080)]
+test changed_sealed_replacements_and_compaction_skip_retained_physical_rows ... ok
+changed full compaction work: [(false, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 85, members: 720, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 20100, 1608000), (false, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 105, members: 1464, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 38844, 2677248), (false, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 129, members: 1199, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 0 }, 55410, 3546240), (true, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 156, members: 4651, changed: 12 }, candidates: 6, emitted: 6, physical: 12, descriptors: 0 }, 20060, 1604800), (true, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 208, members: 6821, changed: 12 }, candidates: 6, emitted: 6, physical: 12, descriptors: 0 }, 38649, 2663808), (true, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 270, members: 9503, changed: 12 }, candidates: 6, emitted: 6, physical: 12, descriptors: 0 }, 55050, 3523200)]
+test changed_full_compaction_folds_large_layers_and_heads_without_a_source_walk ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s
+

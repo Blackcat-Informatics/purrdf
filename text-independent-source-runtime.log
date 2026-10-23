@@ -1,0 +1,17 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo-kernel)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error[E0046]: not all trait items implemented, missing: `probe_plan`, `quads_for_pattern_with_plan`
+   --> crates/text/tests/determinism.rs:189:1
+    |
+189 | impl purrdf_core::DatasetView for UnobservedSource<'_> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `probe_plan`, `quads_for_pattern_with_plan` in implementation
+    |
+    = help: implement the missing item: `fn probe_plan(&self, _: bool, _: bool, _: bool, _: GraphMatch<<Self as DatasetView>::Id>) -> <Self as DatasetView>::ProbePlan { todo!() }`
+    = help: implement the missing item: `fn quads_for_pattern_with_plan(&self, _: &<Self as DatasetView>::ProbePlan, _: Option<<Self as DatasetView>::Id>, _: Option<<Self as DatasetView>::Id>, _: Option<<Self as DatasetView>::Id>, _: GraphMatch<<Self as DatasetView>::Id>) -> impl Iterator<Item = QuadIds<<Self as DatasetView>::Id>> + '_ { todo!() }`
+
+For more information about this error, try `rustc --explain E0046`.
+error: could not compile `purrdf-text` (test "determinism") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

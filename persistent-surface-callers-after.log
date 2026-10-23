@@ -1,0 +1,28 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = u32> + Clone`
+   --> crates/text/tests/chinese_retrieval.rs:385:5
+    |
+385 |     assert_eq!(evidence[0].term.documents(), [0]);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     impl ExactSizeIterator + Iterator<Item = u32> + Clone
+    |     [{integer}; 1]
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = u32> + Clone` doesn't implement `Debug`
+   --> crates/text/tests/chinese_retrieval.rs:385:5
+    |
+385 |     assert_eq!(evidence[0].term.documents(), [0]);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = u32> + Clone`
+
+Some errors have detailed explanations: E0277, E0369.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-text` (test "chinese_retrieval") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0608]: cannot index into a value of type `impl ExactSizeIterator + Iterator<Item = u32> + Clone`
+   --> crates/text/tests/index.rs:444:47
+    |
+444 |         .document(evidence[0].term.documents()[0])
+    |                                               ^^^
+
+For more information about this error, try `rustc --explain E0608`.
+error: could not compile `purrdf-text` (test "index") due to 1 previous error

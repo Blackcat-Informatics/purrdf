@@ -1,0 +1,68 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/rdf-core/src/ir/source_directory.rs:399:6
+    |
+399 | ) -> Result<Option<([u8; 32], [u8; 32])>, D::Error> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: an inclusive range would be more readable
+   --> crates/rdf-core/src/ir/segmented/query/changes/directory.rs:255:28
+    |
+255 |                     edited[at + 1..keys.len() + 1].copy_from_slice(&keys[at..]);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^ help: use: `(at + 1)..=keys.len()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#range_plus_one
+    = note: `-D clippy::range-plus-one` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::range_plus_one)]`
+
+error: this function has too many arguments (9/7)
+   --> crates/rdf-core/src/ir/segmented/query/changes.rs:345:5
+    |
+345 | /     fn compare_groups<A: DirectoryRead, B: DirectoryRead<Record = SourceRecord>>(
+346 | |         &self,
+347 | |         previous: &[A],
+348 | |         next: &[B],
+...   |
+356 | |     where
+357 | |         SegmentedError: From<A::Error> + From<B::Error>,
+    | |________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: implicit borrow as raw pointer
+   --> crates/rdf-core/src/ir/segmented/query/changes.rs:476:44
+    |
+476 |             !use_bag && std::ptr::eq(base, &previous.directory),
+    |                                            ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+476 |             !use_bag && std::ptr::eq(base, &raw const previous.directory),
+    |                                             +++++++++
+
+error: this function has too many arguments (8/7)
+   --> crates/rdf-core/src/ir/segmented/query/changes.rs:984:5
+    |
+984 | /     fn advance_records<B>(
+985 | |         &self,
+986 | |         before: &Self,
+987 | |         limits: (usize, usize),
+...   |
+992 | |         visit: &mut impl FnMut(SourceSide, SourceFamily, SourceRowRef<'_>) -> ControlFlow<B>,
+993 | |     ) -> Result<ControlFlow<B>, SegmentedError> {
+    | |_______________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: could not compile `purrdf-core` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 5 previous errors

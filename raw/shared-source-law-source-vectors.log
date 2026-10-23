@@ -1,0 +1,90 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 25.74s
+     Running tests/physical_shapes.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/154e111e68287b08/out/physical_shapes-154e111e68287b08)
+
+running 21 tests
+test expanded_dictionary_and_union ... ok
+test dictionary_projection_and_aliases ... ok
+test longest_first_reference ... ok
+test typed_series_property ... ok
+test registered_host_and_decline ... ok
+test prepared_and_query_forms ... ok
+test dictionary_property ... ok
+test dictionary_analyzer_identity ... ok
+test bucket_custom_and_parallel_order ... ok
+test host_refusal_and_governor_boundary ... ok
+test dictionary_long_phrase_and_determinism ... ok
+test bounded_shapes_keep_original_owners ... ok
+test original_evidence_and_empty_barriers ... ok
+test scoped_streams_and_update_where ... ok
+test window_barrier_property ... ok
+test false_expression_gaps_keep_original_traversal ... ok
+test graph_free_corpus_keys_ranking_and_query ... FAILED
+test graph_free_rdf12_partitions_and_named_refusal ... ok
+test cache_refusal_keeps_previous_owner ... ok
+test window_property ... ok
+test dictionary_cache_and_size ... ok
+
+failures:
+
+---- graph_free_corpus_keys_ranking_and_query stdout ----
+thread 'graph_free_corpus_keys_ranking_and_query' panicked at crates/text/tests/support/shape_cases.rs:134:5:
+assertion `left == right` failed: the graph-free source identity
+  left: "b857dde328bad38b1551da367e6a4991d2b2fa86e6efe1568573b9ca774ff7ed"
+ right: "448da81a07f819065be1d95cf39a7cf786b5cf40ca5f33dc07cf31f8e1ae3bad"
+
+
+failures:
+    graph_free_corpus_keys_ranking_and_query
+
+test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+error: test failed, to rerun pass `-p purrdf-text --test physical_shapes`
+     Running tests/scoring.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/527942d27d48647d/out/scoring-527942d27d48647d)
+
+running 21 tests
+test a_bound_rank_applies_to_every_admitted_partition ... ok
+test a_partition_filter_selects_without_changing_any_rank ... ok
+test a_needle_analyzing_to_zero_terms ... ok
+test a_bound_rank_selects_that_rank ... ok
+test an_unknown_partition_scores_nothing ... ok
+test an_out_of_range_rank_yields_nothing ... ok
+test bm25_matches_a_hand_computed_golden ... ok
+test equal_scores_are_broken_by_document_id_deterministically ... ok
+test each_term_contribution_matches_the_hand_computation ... ok
+test explain_reports_a_term_the_document_does_not_hold ... ok
+test explaining_an_unknown_document_is_a_data_error ... ok
+test matched_counts_distinct_needle_terms_present ... ok
+test order_by_score_and_order_by_rank_can_disagree_under_rounding ... ok
+test rank_is_per_partition_not_global ... ok
+test predicate_scope_precedes_depth_without_changing_score_weights ... ok
+test explain_contributions_sum_exactly_to_the_score ... ok
+test statistics_are_not_pooled_across_partitions ... ok
+test the_published_text_identities_are_frozen ... FAILED
+test two_independently_built_indexes_rank_identically ... ok
+test bounded_heap_equals_the_full_sort_prefix ... ok
+test score_is_a_pure_function_of_index_and_needle ... ok
+
+failures:
+
+---- the_published_text_identities_are_frozen stdout ----
+
+thread 'the_published_text_identities_are_frozen' (3447324) panicked at crates/text/tests/scoring.rs:1165:5:
+assertion `left == right` failed: the source fingerprint
+  left: "d8e8d6663daccffa8540bf69895cd42141a2afa08ad32e71fa06f4f1e52b3393"
+ right: "ec042d180577273650456f8232dec919530735be9078ec7d4fe086e1f883c2ac"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    the_published_text_identities_are_frozen
+
+test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-text --test scoring`
+error: 2 targets failed:
+    `-p purrdf-text --test physical_shapes`
+    `-p purrdf-text --test scoring`

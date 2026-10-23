@@ -1,0 +1,1 @@
+PASS: static cull inventory: 47 exact executions in 23 Makefile invocations; 312 removed. Three semantic-only WASM jobs removed. Mixed geographic replay selects only frozen digest records. Branch-added WASM test contents removed. Copied guide bodies and both instruction links verified. Expanded Makefile shell passed bash -n. No runtime tests executed.

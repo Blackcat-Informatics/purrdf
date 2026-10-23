@@ -1,0 +1,22 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 3.12s
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 1 test
+test sealed_regrouping_with_a_changed_large_head_skips_its_retained_rows ... FAILED
+
+failures:
+
+---- sealed_regrouping_with_a_changed_large_head_skips_its_retained_rows stdout ----
+
+thread 'sealed_regrouping_with_a_changed_large_head_skips_its_retained_rows' (2322161) panicked at crates/rdf-core/tests/source_observation.rs:217:9:
+retained head enumerated at 96: SourceChangeWork { directory: SourceDifferenceWork { ranges: 974, members: 24439, changed: 294 }, candidates: 291, emitted: 6, physical: 294, descriptors: 1 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sealed_regrouping_with_a_changed_large_head_skips_its_retained_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.21s
+
+error: test failed, to rerun pass `-p purrdf-core --test source_observation`

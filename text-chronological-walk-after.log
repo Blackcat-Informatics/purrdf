@@ -1,0 +1,9 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 10.51s
+     Running tests/determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/aab28c3067d73fee/out/determinism-aab28c3067d73fee)
+
+running 1 test
+test chronological_text_walk_matches_fresh_and_refuses_omitted_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.22s
+

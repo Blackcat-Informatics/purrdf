@@ -1,0 +1,14 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+error: method `find` is never used
+  --> crates/rdf-core/src/ir/source_directory.rs:24:8
+   |
+19 | pub(crate) trait DirectoryRead {
+   |                  ------------- method in this trait
+...
+24 |     fn find(&self, key: [u8; 32]) -> Result<Option<Self::Record>, Self::Error> {
+   |        ^^^^
+   |
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-core` (lib) due to 1 previous error

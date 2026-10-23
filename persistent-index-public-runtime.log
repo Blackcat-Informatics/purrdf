@@ -1,0 +1,61 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 16.34s
+     Running tests/character.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/9ec5c7b3db47283f/out/character-9ec5c7b3db47283f)
+
+running 9 tests
+test auxiliary_only_documents_remain_addressable_without_changing_lexical_scores ... ok
+test auxiliary_only_graph_and_language_partitions_allow_ranked_declaration ... ok
+test character_recall_is_independent_of_dictionary_boundaries_and_lexical_statistics ... ok
+test evidence_generation_distinguishes_original_forms_with_identical_character_keys ... ok
+test html_references_keep_original_contributors_in_character_evidence ... ok
+test supplementary_han_and_controls_have_exact_contributors_and_whole_cluster_highlight ... ok
+test prepend_scalars_do_not_hide_han_bases ... ok
+test repeated_grams_and_boundaries_preserve_counts_without_crossing_literals ... ok
+test long_han_runs_have_bounded_keys_without_losing_later_characters ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/aab28c3067d73fee/out/determinism-aab28c3067d73fee)
+
+running 11 tests
+test byte_identical_json_across_two_independently_built_datasets ... ok
+test blank_node_labels_are_the_documented_limit ... ok
+test invalid_corpus_shape_refuses_before_capturing_source_observation ... ok
+test golden_scores_are_exact_decimals ... ok
+test native_metadata_and_subject_probes_update_without_full_source_iterators ... ok
+test the_float_scan_refuses_floats_and_admits_their_neighbours ... ok
+test the_source_walk_descends_into_subdirectories ... ok
+test unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failures ... ok
+test byte_identical_json_across_repeated_runs ... ok
+test no_source_file_mentions_a_float_width ... ok
+test chronological_text_walk_matches_fresh_and_refuses_omitted_changes ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/index.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/6443d95357a074c6/out/index-6443d95357a074c6)
+
+running 21 tests
+test a_duplicate_predicate_is_a_config_error ... ok
+test a_non_iri_predicate_is_a_config_error ... ok
+test a_document_without_lexical_terms_retains_auxiliary_evidence ... ok
+test a_predicate_absent_from_the_dataset_contributes_no_rows ... ok
+test a_named_graph_selector_restricts_the_walk ... ok
+test a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean ... ok
+test an_empty_dataset_is_no_shortfall_and_still_attests_a_generation ... ok
+test an_annotation_only_predicate_is_found_by_the_coverage ... ok
+test an_empty_predicate_set_is_a_config_error ... ok
+test annotation_layer_literals_are_indexed ... ok
+test an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation ... ok
+test an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not ... ok
+test asserted_and_annotation_text_merge_into_one_document ... ok
+test blank_node_labels_change_the_fingerprint ... ok
+test blank_node_subjects_are_indexed ... ok
+test language_splits_documents_but_base_direction_does_not ... ok
+test non_literal_objects_are_skipped_not_errors ... ok
+test statistics_are_per_partition_not_pooled ... ok
+test untagged_literals_do_not_collide_with_a_real_language_tag ... ok
+test triple_term_subjects_are_indexed ... ok
+test two_independently_built_datasets_share_a_fingerprint ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

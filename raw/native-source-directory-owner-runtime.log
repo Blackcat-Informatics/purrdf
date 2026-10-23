@@ -1,0 +1,12 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 39.65s
+     Running tests/source_directory.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/89e83ef6a330d2c6/out/source_directory-89e83ef6a330d2c6)
+
+running 3 tests
+test visitor_failure_keeps_its_admitted_output_owned_until_payload_drops ... ok
+test independent_native_directories_find_exact_changes_after_all_ids_move ... ok
+native directory work: [(128, SourceDifferenceWork { ranges: 71, members: 3931, changed: 6 }), (2048, SourceDifferenceWork { ranges: 131, members: 6735, changed: 6 }), (32768, SourceDifferenceWork { ranges: 171, members: 9739, changed: 6 })]
+test fixed_delta_directory_work_follows_prefixes_instead_of_source_population ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+

@@ -1,0 +1,12 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 15.07s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/5fe461b80da47df4/out/purrdf_text-5fe461b80da47df4)
+
+running 4 tests
+test index::source_digest::tests::source_sum_carries_modulo_256_bits ... ok
+test index::source_digest::tests::empty_source_profiles_have_distinct_identities ... ok
+test index::source_digest::tests::every_source_coordinate_participates_in_the_row_identity ... ok
+test index::source_digest::tests::source_summary_reverses_changes_and_preserves_multiplicity ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.00s
+

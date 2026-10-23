@@ -1,0 +1,32 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/shapes)
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/text/src/surface/delta.rs:20:44
+   |
+20 |     pub fn with_documents(mut self, added: Self) -> Result<Self, TextDeltaError> {
+   |                                            ^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+20 |     pub fn with_documents(mut self, added: &Self) -> Result<Self, TextDeltaError> {
+   |                                            +
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/text/src/surface/delta.rs:65:16
+   |
+65 |         added: Self,
+   |                ^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+65 |         added: &Self,
+   |                +
+
+error: could not compile `purrdf-text` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-text` (lib test) due to 2 previous errors

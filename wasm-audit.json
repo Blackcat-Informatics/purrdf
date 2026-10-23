@@ -1,0 +1,1386 @@
+[
+  {
+    "package": "purrdf-core",
+    "target": "structured_inspection",
+    "filters": [
+      "embedding_attachment_failures_keep_original_pack_causes_after_input_drop",
+      "byte_cover_refusals_keep_original_ranges_and_nested_digest_finding",
+      "event_ingestion_retains_original_freeze_causes_and_cancellation",
+      "graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields",
+      "native_evidence_alignment_and_answer_state_failures_remain_structured",
+      "xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts",
+      "graph_refusal_keeps_original_invalid_edge_without_rendering"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "embedding_attachment_failures_keep_original_pack_causes_after_input_drop",
+      "byte_cover_refusals_keep_original_ranges_and_nested_digest_finding",
+      "event_ingestion_retains_original_freeze_causes_and_cancellation",
+      "graph_result_inspection_borrows_all_rdf_streams_and_private_dictionary_fields",
+      "native_evidence_alignment_and_answer_state_failures_remain_structured",
+      "xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts",
+      "graph_refusal_keeps_original_invalid_edge_without_rendering"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-core",
+    "target": "pack_certify",
+    "filters": [
+      "verify_pack_certifies_a_round_tripped_pack_against_the_source_digest",
+      "verify_pack_rejects_a_tampered_digest_header_field",
+      "verify_pack_defers_to_section_integrity_for_body_corruption",
+      "verify_pack_is_deterministic_across_two_builds",
+      "verify_pack_returns_err_when_reconstruction_fails_structural_validation",
+      "pack_digest_to_hex_is_64_lowercase_hex_chars"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "verify_pack_certifies_a_round_tripped_pack_against_the_source_digest",
+      "verify_pack_rejects_a_tampered_digest_header_field",
+      "verify_pack_defers_to_section_integrity_for_body_corruption",
+      "verify_pack_is_deterministic_across_two_builds",
+      "verify_pack_returns_err_when_reconstruction_fails_structural_validation",
+      "pack_digest_to_hex_is_64_lowercase_hex_chars"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-algebra",
+    "target": "lexer_owned_admission",
+    "filters": [
+      "escaped_tokens_keep_exact_original_storage_and_scanner_values",
+      "first_token_capacity_refuses_before_allocating",
+      "lexical_failure_releases_token_and_decoding_scratch_before_publication",
+      "original_iri_cause_is_borrowed_without_rendering_or_reparsing",
+      "native_lexical_reasons_keep_original_fields_and_messages",
+      "lexical_failure_preserves_the_callers_original_owner",
+      "native_refusals_need_no_message_allocation_and_caller_text_stays_message_data",
+      "cdt_refusals_retain_the_native_signature_and_full_width_counts",
+      "aggregate_refusals_move_the_original_key_without_allocating",
+      "aggregate_errors_expose_all_functions_and_private_fields"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "escaped_tokens_keep_exact_original_storage_and_scanner_values",
+      "first_token_capacity_refuses_before_allocating",
+      "lexical_failure_releases_token_and_decoding_scratch_before_publication",
+      "original_iri_cause_is_borrowed_without_rendering_or_reparsing",
+      "native_lexical_reasons_keep_original_fields_and_messages",
+      "lexical_failure_preserves_the_callers_original_owner",
+      "native_refusals_need_no_message_allocation_and_caller_text_stays_message_data",
+      "cdt_refusals_retain_the_native_signature_and_full_width_counts",
+      "aggregate_refusals_move_the_original_key_without_allocating",
+      "aggregate_errors_expose_all_functions_and_private_fields"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-slice",
+    "target": "structured_errors",
+    "filters": [
+      "native_io_ownership_conversion_never_renders_the_original_cause",
+      "artifact_json_retains_the_original_invalid_member_after_input_disposal",
+      "iri_and_rdf_producers_keep_original_causes_and_context",
+      "flat_canonicalization_returns_the_native_reserved_vocabulary_refusal"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "native_io_ownership_conversion_never_renders_the_original_cause",
+      "artifact_json_retains_the_original_invalid_member_after_input_disposal",
+      "iri_and_rdf_producers_keep_original_causes_and_context",
+      "flat_canonicalization_returns_the_native_reserved_vocabulary_refusal"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-json",
+    "target": "structured_errors",
+    "filters": [
+      "source_refusals_keep_offsets_and_declared_limits"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "source_refusals_keep_offsets_and_declared_limits"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-markdown",
+    "target": "structured_errors",
+    "filters": [
+      "source_iri_cause_survives_input_disposal",
+      "tampered_unit_keeps_original_embedding_cause"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "source_iri_cause_survives_input_disposal",
+      "tampered_unit_keeps_original_embedding_cause"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-mime",
+    "target": "structured_errors",
+    "filters": [
+      "attachment_refusal_keeps_part_and_absolute_offset"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "attachment_refusal_keeps_part_and_absolute_offset"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-gts",
+    "target": "structured_errors",
+    "filters": [
+      "nested_discovery_keeps_original_limits_and_child_failures",
+      "policy_findings_keep_native_counts_identifiers_and_vocabulary",
+      "reader_preserves_terminal_io_and_sequence_causes",
+      "replication_callers_keep_native_findings_heads_and_full_width_ranges",
+      "verification_errors_keep_original_key_integrity_and_signature_counts",
+      "reader_layout_findings_keep_counts_heads_and_roots",
+      "reader_file_and_chain_diagnostics_retain_native_inputs",
+      "reader_row_diagnostics_keep_native_widths_ids_and_term_kinds",
+      "tar_blob_sources_keep_observed_size_and_digest_refusals",
+      "tar_and_files_public_io_retain_unformattable_original_causes",
+      "tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes",
+      "proof_json_retains_rejected_values_without_formatting_or_number_rounding",
+      "proof_verification_keeps_native_bounds_and_reconstructed_hashes",
+      "file_proof_keeps_original_identity_faults_and_valid_proofs",
+      "compaction_keeps_timestamp_and_authoring_causes",
+      "compaction_provenance_lists_and_signature_failures_keep_native_fields",
+      "compaction_identifier_decoders_retain_original_rejected_values",
+      "memory_example_keeps_confidence_bits_and_original_io_cause",
+      "writer_catalog_and_frame_failures_keep_original_fields",
+      "append_and_header_failures_keep_native_values_and_sources",
+      "invalid_header_cause_survives_graph_and_streaming_diagnostics",
+      "transport_retains_native_source_errors_before_foreign_formatting",
+      "native_transport_framing_and_decoder_fields_survive",
+      "dictionary_and_key_envelope_errors_keep_native_fields",
+      "reader_causes_survive_input_graph_and_streaming_owners",
+      "reader_missing_catalog_keeps_ordered_native_cbor_fields",
+      "reader_blob_budget_keeps_original_counts_and_priority",
+      "diagnostic_native_owners_release_without_rendering_the_cause",
+      "codec_selection_and_configuration_retain_original_values",
+      "codec_native_corruption_and_budget_remain_distinct",
+      "ulid_native_counts_and_decoder_causes_are_exact",
+      "caller_messages_remain_message_data"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "nested_discovery_keeps_original_limits_and_child_failures",
+      "policy_findings_keep_native_counts_identifiers_and_vocabulary",
+      "reader_preserves_terminal_io_and_sequence_causes",
+      "replication_callers_keep_native_findings_heads_and_full_width_ranges",
+      "verification_errors_keep_original_key_integrity_and_signature_counts",
+      "reader_layout_findings_keep_counts_heads_and_roots",
+      "reader_file_and_chain_diagnostics_retain_native_inputs",
+      "reader_row_diagnostics_keep_native_widths_ids_and_term_kinds",
+      "tar_blob_sources_keep_observed_size_and_digest_refusals",
+      "tar_and_files_public_io_retain_unformattable_original_causes",
+      "tar_metadata_and_file_admission_keep_original_numbers_and_parser_causes",
+      "proof_json_retains_rejected_values_without_formatting_or_number_rounding",
+      "proof_verification_keeps_native_bounds_and_reconstructed_hashes",
+      "file_proof_keeps_original_identity_faults_and_valid_proofs",
+      "compaction_keeps_timestamp_and_authoring_causes",
+      "compaction_provenance_lists_and_signature_failures_keep_native_fields",
+      "compaction_identifier_decoders_retain_original_rejected_values",
+      "memory_example_keeps_confidence_bits_and_original_io_cause",
+      "writer_catalog_and_frame_failures_keep_original_fields",
+      "append_and_header_failures_keep_native_values_and_sources",
+      "invalid_header_cause_survives_graph_and_streaming_diagnostics",
+      "transport_retains_native_source_errors_before_foreign_formatting",
+      "native_transport_framing_and_decoder_fields_survive",
+      "dictionary_and_key_envelope_errors_keep_native_fields",
+      "reader_causes_survive_input_graph_and_streaming_owners",
+      "reader_missing_catalog_keeps_ordered_native_cbor_fields",
+      "reader_blob_budget_keeps_original_counts_and_priority",
+      "diagnostic_native_owners_release_without_rendering_the_cause",
+      "codec_selection_and_configuration_retain_original_values",
+      "codec_native_corruption_and_budget_remain_distinct",
+      "ulid_native_counts_and_decoder_causes_are_exact",
+      "caller_messages_remain_message_data"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-gts",
+    "target": "event_bridge",
+    "filters": [
+      "bridge_events_equal_offline_read",
+      "per_segment_blank_scopes_are_distinct",
+      "claimid_offset_index_single_pass",
+      "bridge_calls_finish_once",
+      "bridge_break_cancels_drive",
+      "stream_ids_are_file_order_deterministic",
+      "incremental_reindex_from_diff_fetch",
+      "graph_scoped_reifier_is_hard_error",
+      "original_sink_refusal_crosses_the_event_bridge_without_rendering",
+      "event_emitter_retains_full_width_resolution_reasons",
+      "literal_refusals_keep_original_tokens_and_accept_valid_neighbors",
+      "dangling_term_ref_real_bytes_is_err",
+      "dangling_term_ref_is_err",
+      "bounded_memory_across_many_segments"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "bridge_events_equal_offline_read",
+      "per_segment_blank_scopes_are_distinct",
+      "claimid_offset_index_single_pass",
+      "bridge_calls_finish_once",
+      "bridge_break_cancels_drive",
+      "stream_ids_are_file_order_deterministic",
+      "incremental_reindex_from_diff_fetch",
+      "graph_scoped_reifier_is_hard_error",
+      "original_sink_refusal_crosses_the_event_bridge_without_rendering",
+      "event_emitter_retains_full_width_resolution_reasons",
+      "literal_refusals_keep_original_tokens_and_accept_valid_neighbors",
+      "dangling_term_ref_real_bytes_is_err",
+      "dangling_term_ref_is_err",
+      "bounded_memory_across_many_segments"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-gts",
+    "target": "mmr_preimages",
+    "filters": [
+      "streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "streamed_mmr_roots_preserve_frozen_proofs_and_variable_frame_ids"
+    ],
+    "removed_filters": [],
+    "reason": "Frozen native MMR root and proof bytes"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "query_completion",
+    "filters": [
+      "governed_explain_matches_bound_query_receipts_and_original_ownership",
+      "governed_explain_preserves_remote_refusal_and_zero_request_limit",
+      "borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released",
+      "borrowed_producers_keep_frozen_snapshot_and_original_result_owners",
+      "borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence",
+      "borrowed_producers_discard_candidates_when_the_original_source_fails",
+      "borrowed_producers_refuse_unaffordable_rows_and_release_original_admission",
+      "borrowed_producers_keep_partial_rows_after_the_query_scope_ends"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "governed_explain_matches_bound_query_receipts_and_original_ownership",
+      "governed_explain_preserves_remote_refusal_and_zero_request_limit",
+      "borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released",
+      "borrowed_producers_keep_frozen_snapshot_and_original_result_owners",
+      "borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence",
+      "borrowed_producers_discard_candidates_when_the_original_source_fails",
+      "borrowed_producers_refuse_unaffordable_rows_and_release_original_admission",
+      "borrowed_producers_keep_partial_rows_after_the_query_scope_ends"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-text",
+    "target": "search_property_function",
+    "filters": [
+      "borrowed_native_ranked_and_positional_producers_keep_their_rows"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "borrowed_native_ranked_and_positional_producers_keep_their_rows"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-validate",
+    "target": "dl_proof_vectors",
+    "filters": [
+      "all_shared_dl_proof_vectors_match_the_current_native_boundary",
+      "imported_closure_proofs_check_against_the_consumers_native_snapshot"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "all_shared_dl_proof_vectors_match_the_current_native_boundary",
+      "imported_closure_proofs_check_against_the_consumers_native_snapshot"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-entail",
+    "target": "current_clash_support",
+    "filters": [
+      "public_dataset_views_preserve_source_identity_and_causal_verification",
+      "current_clash_preserves_named_and_scoped_blank_source_identity",
+      "current_clash_preserves_public_service_certificate_and_verification",
+      "current_clash_replays_generated_existential_witnesses",
+      "current_clash_checks_fresh_refutation_assumptions_without_a_source_name",
+      "current_clash_replays_equality_before_observing_role_premises",
+      "current_clash_borrows_the_independent_prepared_consumer",
+      "public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs",
+      "public_causal_service_binds_the_requested_question_and_query_assumptions",
+      "public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip",
+      "public_causal_service_checks_reserved_birth_and_generative_trigger",
+      "public_causal_service_checks_nested_reserved_origin",
+      "public_causal_service_preserves_literal_metadata_in_key_support",
+      "public_causal_service_checks_inverse_transitive_path_licenses"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "public_dataset_views_preserve_source_identity_and_causal_verification",
+      "current_clash_preserves_named_and_scoped_blank_source_identity",
+      "current_clash_preserves_public_service_certificate_and_verification",
+      "current_clash_replays_generated_existential_witnesses",
+      "current_clash_checks_fresh_refutation_assumptions_without_a_source_name",
+      "current_clash_replays_equality_before_observing_role_premises",
+      "current_clash_borrows_the_independent_prepared_consumer",
+      "public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs",
+      "public_causal_service_binds_the_requested_question_and_query_assumptions",
+      "public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip",
+      "public_causal_service_checks_reserved_birth_and_generative_trigger",
+      "public_causal_service_checks_nested_reserved_origin",
+      "public_causal_service_preserves_literal_metadata_in_key_support",
+      "public_causal_service_checks_inverse_transitive_path_licenses"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-entail",
+    "target": "recorded_stop",
+    "filters": [
+      "recorded_stop_preserves_complete_decisions_and_proof_identity",
+      "recorded_stop_refuses_before_identity_preparation",
+      "recorded_stop_retains_the_signal_after_identity",
+      "recorded_stop_covers_identity_digest_streaming",
+      "recorded_stop_reports_cancelled_search_without_a_semantic_verdict",
+      "recorded_stop_preserves_preparation_budget_selection",
+      "recorded_stop_covers_every_preparation_poll"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "recorded_stop_preserves_complete_decisions_and_proof_identity",
+      "recorded_stop_refuses_before_identity_preparation",
+      "recorded_stop_retains_the_signal_after_identity",
+      "recorded_stop_covers_identity_digest_streaming",
+      "recorded_stop_reports_cancelled_search_without_a_semantic_verdict",
+      "recorded_stop_preserves_preparation_budget_selection",
+      "recorded_stop_covers_every_preparation_poll"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-rdf",
+    "target": "turtle_chains",
+    "filters": [
+      "blank_chains_at_one_hundred_thousand",
+      "blank_chains_at_one_million",
+      "exact_guard_neighbors_and_permuted_interning",
+      "cycles_shared_and_quoted_blanks_preserve_statements",
+      "a_long_collection_keeps_every_member",
+      "tied_guarded_branches_keep_order_under_permutation",
+      "continuation_objects_saturate_at_the_same_indent_guard"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "blank_chains_at_one_hundred_thousand",
+      "blank_chains_at_one_million"
+    ],
+    "removed_filters": [
+      "exact_guard_neighbors_and_permuted_interning",
+      "cycles_shared_and_quoted_blanks_preserve_statements",
+      "a_long_collection_keeps_every_member",
+      "tied_guarded_branches_keep_order_under_permutation",
+      "continuation_objects_saturate_at_the_same_indent_guard"
+    ],
+    "reason": "Frozen native packed/Turtle/TriG byte receipts"
+  },
+  {
+    "package": "purrdf-entail",
+    "target": "regular_role_chains",
+    "filters": [
+      "role_refusals_keep_native_fields_after_the_source_drops",
+      "entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run",
+      "import_conflict_inspection_keeps_original_versions_and_default_graph",
+      "actual_collection_refusals_keep_original_terms_and_the_ordered_prefix",
+      "empty_collection_admission_checks_nil_structure",
+      "dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering",
+      "authored_cardinality_refusals_retain_the_original_operands_and_integer_cause",
+      "actual_rif_refusals_keep_original_scope_and_survive_the_document",
+      "class_expression_role_refusals_retain_original_source_terms",
+      "all_nine_consumer_shapes_are_exact_and_contradictions_are_detected",
+      "inverse_heads_nested_dependencies_and_simple_equivalence_cycles",
+      "universal_obligations_clash_after_recursive_paths_and_blocking",
+      "cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure",
+      "printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass",
+      "literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name",
+      "recorded_chain_consequence_replays_against_the_original_rbox",
+      "chain_derived_types_reach_all_query_services_and_materialization",
+      "fixed_top_is_universal_and_bottom_chain_clashes",
+      "fixed_top_aliases_without_a_chain_reach_query_only_individuals",
+      "non_simple_characteristics_and_malformed_chain_lists_hard_refuse",
+      "role_language_work_exhaustion_is_unknown_never_a_consistency_proof",
+      "cancelling_an_existing_regular_role_owner_cannot_publish_a_decision",
+      "nominal_merges_and_simple_functionality_preserve_role_obligations",
+      "top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling",
+      "stopping_during_regular_role_reads_never_publishes_a_completed_answer"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "role_refusals_keep_native_fields_after_the_source_drops",
+      "entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run",
+      "import_conflict_inspection_keeps_original_versions_and_default_graph",
+      "actual_collection_refusals_keep_original_terms_and_the_ordered_prefix",
+      "empty_collection_admission_checks_nil_structure",
+      "dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering",
+      "authored_cardinality_refusals_retain_the_original_operands_and_integer_cause",
+      "actual_rif_refusals_keep_original_scope_and_survive_the_document",
+      "class_expression_role_refusals_retain_original_source_terms",
+      "all_nine_consumer_shapes_are_exact_and_contradictions_are_detected",
+      "inverse_heads_nested_dependencies_and_simple_equivalence_cycles",
+      "universal_obligations_clash_after_recursive_paths_and_blocking",
+      "cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure",
+      "printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass",
+      "literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name",
+      "recorded_chain_consequence_replays_against_the_original_rbox",
+      "chain_derived_types_reach_all_query_services_and_materialization",
+      "fixed_top_is_universal_and_bottom_chain_clashes",
+      "fixed_top_aliases_without_a_chain_reach_query_only_individuals",
+      "non_simple_characteristics_and_malformed_chain_lists_hard_refuse",
+      "role_language_work_exhaustion_is_unknown_never_a_consistency_proof",
+      "cancelling_an_existing_regular_role_owner_cannot_publish_a_decision",
+      "nominal_merges_and_simple_functionality_preserve_role_obligations",
+      "top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling",
+      "stopping_during_regular_role_reads_never_publishes_a_completed_answer"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf",
+    "target": "reasoning_inspection",
+    "filters": [
+      "actual_query_and_entailment_failures_retain_their_original_owners",
+      "original_reader_failures_cross_both_generic_reasoning_boundaries"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "actual_query_and_entailment_failures_retain_their_original_owners",
+      "original_reader_failures_cross_both_generic_reasoning_boundaries"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "knn_wasm_reassociated",
+    "filters": [
+      "the_reassociated_path_is_the_one_this_build_was_made_for"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "the_reassociated_path_is_the_one_this_build_was_made_for"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM backend dispatch"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "stack_refusal",
+    "filters": [
+      "prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM shadow-stack floor"
+  },
+  {
+    "package": "purrdf-core",
+    "target": "model_traits",
+    "filters": [
+      "owned_term_walks_stay_inside_the_wasm_shadow_stack_floor"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "owned_term_walks_stay_inside_the_wasm_shadow_stack_floor"
+    ],
+    "removed_filters": [],
+    "reason": "Measured WASM shadow-stack floor and restoration"
+  },
+  {
+    "package": "purrdf-hnsw",
+    "target": "wasm_reassociated",
+    "filters": [
+      "an_image_recorded_on_another_wasm_path_is_refused_by_name",
+      "the_image_records_the_path_and_shape_this_build_was_made_for"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "an_image_recorded_on_another_wasm_path_is_refused_by_name",
+      "the_image_records_the_path_and_shape_this_build_was_made_for"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM arithmetic backend identity"
+  },
+  {
+    "package": "purrdf-hnsw",
+    "target": "structured_errors",
+    "filters": [
+      "matrix_and_parameter_producers_keep_original_operands",
+      "payload_producer_keeps_reserved_bits_after_input_disposal",
+      "guard_and_build_identities_keep_full_width_values",
+      "real_artifact_setup_retains_its_native_cause_after_owners_drop"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "matrix_and_parameter_producers_keep_original_operands",
+      "payload_producer_keeps_reserved_bits_after_input_disposal",
+      "guard_and_build_identities_keep_full_width_values",
+      "real_artifact_setup_retains_its_native_cause_after_owners_drop"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-datalog",
+    "target": "structured_errors",
+    "filters": [
+      "reachable_snapshot_preserves_sharing_binders_and_deep_source_death",
+      "actual_proof_decoder_preserves_rejected_bytes_and_native_lengths"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "reachable_snapshot_preserves_sharing_binders_and_deep_source_death",
+      "actual_proof_decoder_preserves_rejected_bytes_and_native_lengths"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-datalog",
+    "target": "never_derive",
+    "filters": [
+      "direct_and_transitive_refusals_name_authored_paths"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "direct_and_transitive_refusals_name_authored_paths"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-shex",
+    "target": "structured_errors",
+    "filters": [
+      "actual_shape_map_keeps_original_iri_cause_after_input_disposal",
+      "structural_refusals_keep_the_original_unresolved_label"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "actual_shape_map_keeps_original_iri_cause_after_input_disposal",
+      "structural_refusals_keep_the_original_unresolved_label"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-columnar",
+    "target": "structured_errors",
+    "filters": [
+      "original_parquet_bounds_survive_file_disposal_without_narrowing",
+      "public_projection_and_write_preserve_source_owners_and_fields",
+      "human_presentation_preserves_codec_and_source_messages",
+      "public_blob_read_preserves_original_integrity_cause",
+      "public_reconstruction_preserves_original_diagnostic",
+      "native_cause_transport_preserves_storage_and_full_width_rows"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "original_parquet_bounds_survive_file_disposal_without_narrowing",
+      "public_projection_and_write_preserve_source_owners_and_fields",
+      "human_presentation_preserves_codec_and_source_messages",
+      "public_blob_read_preserves_original_integrity_cause",
+      "public_reconstruction_preserves_original_diagnostic",
+      "native_cause_transport_preserves_storage_and_full_width_rows"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-columnar",
+    "target": "golden_bytes",
+    "filters": [
+      "seeded_files_are_the_pinned_bytes"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "seeded_files_are_the_pinned_bytes"
+    ],
+    "removed_filters": [],
+    "reason": "Frozen native Parquet bytes"
+  },
+  {
+    "package": "purrdf-hash-conformance",
+    "target": "blake3",
+    "filters": [
+      "required_backends_are_available",
+      "official_modes_and_extended_output",
+      "xof_large_output_and_seek_boundaries",
+      "derived_context_trees_match_across_backends"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "required_backends_are_available"
+    ],
+    "removed_filters": [
+      "official_modes_and_extended_output",
+      "xof_large_output_and_seek_boundaries",
+      "derived_context_trees_match_across_backends"
+    ],
+    "reason": "Actual WASM backend availability"
+  },
+  {
+    "package": "purrdf-testkit",
+    "target": "bench",
+    "filters": [
+      "the_store_options_are_refused_on_wasm32",
+      "a_measured_run_reports_its_estimates"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "the_store_options_are_refused_on_wasm32",
+      "a_measured_run_reports_its_estimates"
+    ],
+    "removed_filters": [],
+    "reason": "WASM host clock and unavailable filesystem"
+  },
+  {
+    "package": "purrdf-stack",
+    "target": "on_stack",
+    "filters": [
+      "an_in_floor_request_runs",
+      "a_scoped_in_floor_request_borrows_the_caller_s_locals",
+      "an_over_floor_request_is_refused",
+      "an_over_floor_scoped_request_is_refused"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "an_in_floor_request_runs",
+      "a_scoped_in_floor_request_borrows_the_caller_s_locals",
+      "an_over_floor_request_is_refused",
+      "an_over_floor_scoped_request_is_refused"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM shadow-stack floor"
+  },
+  {
+    "package": "purrdf-deflate",
+    "target": "deflate_conformance",
+    "filters": [
+      "selected_backend_is_reported",
+      "bad_crc_refused_in_first_and_second_member",
+      "decompressed_limit_refuses_bomb"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "selected_backend_is_reported"
+    ],
+    "removed_filters": [
+      "bad_crc_refused_in_first_and_second_member",
+      "decompressed_limit_refuses_bomb"
+    ],
+    "reason": "Actual WASM codec backend dispatch"
+  },
+  {
+    "package": "purrdf-xsd",
+    "target": "exact_wasm_determinism",
+    "filters": [
+      "the_hand_values_are_reproduced_on_this_target",
+      "the_transcript_digest_is_reproduced_on_this_target",
+      "the_oracle_vectors_replay_on_this_target",
+      "large_decimal_group_parse_replays_on_this_target",
+      "large_binary_products_match_the_schoolbook_oracle",
+      "large_binary_division_replays_exact_shift_equations",
+      "wide_gap_gcd_replays_on_this_target"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "the_transcript_digest_is_reproduced_on_this_target",
+      "large_binary_products_match_the_schoolbook_oracle"
+    ],
+    "removed_filters": [
+      "the_hand_values_are_reproduced_on_this_target",
+      "the_oracle_vectors_replay_on_this_target",
+      "large_decimal_group_parse_replays_on_this_target",
+      "large_binary_division_replays_exact_shift_equations",
+      "wide_gap_gcd_replays_on_this_target"
+    ],
+    "reason": "Pinned native wide-arithmetic transcript digests"
+  },
+  {
+    "package": "purrdf-xsd",
+    "target": "any_uri",
+    "filters": [
+      "lexical_mapping_preserves_everything_except_xml_whitespace",
+      "primitive_identity_is_disjoint_and_unordered",
+      "ranges_use_collapsed_character_lengths_and_primitive_identity"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "lexical_mapping_preserves_everything_except_xml_whitespace",
+      "primitive_identity_is_disjoint_and_unordered",
+      "ranges_use_collapsed_character_lengths_and_primitive_identity"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-xsd",
+    "target": "exact_governance",
+    "filters": [
+      "admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs",
+      "admitted_datetime_refusal_precedes_any_copy_allocation",
+      "canonical_decimal_reserves_one_exact_output_destination"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs",
+      "admitted_datetime_refusal_precedes_any_copy_allocation",
+      "canonical_decimal_reserves_one_exact_output_destination"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "query_coordinates",
+    "filters": [
+      "supplied_inputs_repeat_complete_results_without_host_reads",
+      "supplied_large_fraction_and_timezone_survive_repeated_now",
+      "prepared_executions_select_fresh_inputs_without_changing_the_plan",
+      "bounded_coordinate_owners_price_real_allocations_and_release_after_last_output"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "supplied_inputs_repeat_complete_results_without_host_reads",
+      "supplied_large_fraction_and_timezone_survive_repeated_now",
+      "prepared_executions_select_fresh_inputs_without_changing_the_plan",
+      "bounded_coordinate_owners_price_real_allocations_and_release_after_last_output"
+    ],
+    "removed_filters": [],
+    "reason": "Sealed WASM host clock and entropy imports"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "numeric_wasm_determinism",
+    "filters": [
+      "borrowed_value_equality_matches_the_query_operator_on_this_target",
+      "any_uri_casts_keep_their_primitive_domain_on_this_target",
+      "the_hand_answers_are_reproduced_on_this_target",
+      "the_numeric_transcript_digest_is_reproduced_on_this_target"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "the_hand_answers_are_reproduced_on_this_target",
+      "the_numeric_transcript_digest_is_reproduced_on_this_target"
+    ],
+    "removed_filters": [
+      "borrowed_value_equality_matches_the_query_operator_on_this_target",
+      "any_uri_casts_keep_their_primitive_domain_on_this_target"
+    ],
+    "reason": "Pinned native numeric answers and transcript digest"
+  },
+  {
+    "package": "purrdf-text",
+    "target": "wasm_determinism",
+    "filters": [
+      "delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target",
+      "scoped_text_bound_candidates_retain_unknown_membership",
+      "scoped_text_depth_preserves_original_unknown_rows_and_scores",
+      "scoped_text_preserves_original_constraint_failure",
+      "the_sentence_boundaries_are_reproduced_on_this_target",
+      "declared_large_corpora_are_exact",
+      "five_thousand_term_index",
+      "promoted_field_arithmetic_is_exact",
+      "thirty_two_index_fields_are_exact"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "the_sentence_boundaries_are_reproduced_on_this_target"
+    ],
+    "removed_filters": [
+      "delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target",
+      "scoped_text_bound_candidates_retain_unknown_membership",
+      "scoped_text_depth_preserves_original_unknown_rows_and_scores",
+      "scoped_text_preserves_original_constraint_failure",
+      "declared_large_corpora_are_exact",
+      "five_thousand_term_index",
+      "promoted_field_arithmetic_is_exact",
+      "thirty_two_index_fields_are_exact"
+    ],
+    "reason": "Pinned native UTF-8 segment bytes and offsets"
+  },
+  {
+    "package": "purrdf-core",
+    "target": "triple_carrier",
+    "filters": [
+      "compact_statement_probes_populate_only_the_requested_ordinal_arrays",
+      "compact_layout_and_all_bound_shapes",
+      "owned_transfer_preserves_lexical_owner_and_flat_statement_identity",
+      "conversion_refuses_every_named_role_including_empty_declarations",
+      "refused_child_stops_existing_streams_and_fresh_session_is_healthy",
+      "statement_mask_probes_preserve_frozen_order_and_graph_multiplicity"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "compact_statement_probes_populate_only_the_requested_ordinal_arrays",
+      "compact_layout_and_all_bound_shapes",
+      "owned_transfer_preserves_lexical_owner_and_flat_statement_identity",
+      "conversion_refuses_every_named_role_including_empty_declarations",
+      "refused_child_stops_existing_streams_and_fresh_session_is_healthy",
+      "statement_mask_probes_preserve_frozen_order_and_graph_multiplicity"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "statement_indexes",
+    "filters": [
+      "native_and_compact_statement_queries_keep_answers_and_candidate_work",
+      "named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "native_and_compact_statement_queries_keep_answers_and_candidate_work",
+      "named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-datalog",
+    "target": "rules_runtime",
+    "filters": [
+      "narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work",
+      "late_delta_seed_completes_under_a_prefix_independent_work_limit",
+      "ordered_guard_outputs_probe_later_atoms_without_intermediate_relations",
+      "ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms",
+      "native_integer_columns_and_indexes_preserve_wide_original_handles",
+      "native_integer_dictionary_runs_recursive_models_without_lexical_projection",
+      "native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier",
+      "native_inequality_needs_no_callback_and_is_independently_checked",
+      "native_inequality_in_a_negative_group_uses_the_same_filter",
+      "conjunctive_heads_share_joins_and_check_the_authored_head",
+      "conjunctive_heads_settle_at_each_predicates_actual_stratum",
+      "conjunctive_recursion_and_factor_projection_match_split_programs",
+      "predicate_rows_keep_native_identities_and_lexical_graph_order",
+      "model_only_and_recorded_models_have_explicit_evidence_and_equal_counts",
+      "interrupted_guarded_commit_counts_only_completed_generating_rounds",
+      "term_arena_limits_are_caller_selected_and_reach_contracts",
+      "stored_fact_admission_refuses_the_first_extra_fact_in_both_engines",
+      "public_sequential_execution_preserves_models_proofs_and_counters",
+      "triple_base_authority_survives_data_growth_and_layer_retraction",
+      "triple_negated_base_preserves_seminaive_work_and_limits",
+      "triple_no_output_runs_the_body_without_fabricating_a_fact",
+      "triple_store_has_predicate_only_keys_and_transactional_original_ids",
+      "triple_compiler_preserves_static_arity_and_original_admission"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "narrow_triple_recursion_preserves_models_proofs_and_linear_candidate_work",
+      "late_delta_seed_completes_under_a_prefix_independent_work_limit",
+      "ordered_guard_outputs_probe_later_atoms_without_intermediate_relations",
+      "ordered_guard_outputs_constrain_certified_cycles_and_unknown_terms",
+      "native_integer_columns_and_indexes_preserve_wide_original_handles",
+      "native_integer_dictionary_runs_recursive_models_without_lexical_projection",
+      "native_guard_identities_preserve_recursive_cycle_sources_at_every_barrier",
+      "native_inequality_needs_no_callback_and_is_independently_checked",
+      "native_inequality_in_a_negative_group_uses_the_same_filter",
+      "conjunctive_heads_share_joins_and_check_the_authored_head",
+      "conjunctive_heads_settle_at_each_predicates_actual_stratum",
+      "conjunctive_recursion_and_factor_projection_match_split_programs",
+      "predicate_rows_keep_native_identities_and_lexical_graph_order",
+      "model_only_and_recorded_models_have_explicit_evidence_and_equal_counts",
+      "interrupted_guarded_commit_counts_only_completed_generating_rounds",
+      "term_arena_limits_are_caller_selected_and_reach_contracts",
+      "stored_fact_admission_refuses_the_first_extra_fact_in_both_engines",
+      "public_sequential_execution_preserves_models_proofs_and_counters",
+      "triple_base_authority_survives_data_growth_and_layer_retraction",
+      "triple_negated_base_preserves_seminaive_work_and_limits",
+      "triple_no_output_runs_the_body_without_fabricating_a_fact",
+      "triple_store_has_predicate_only_keys_and_transactional_original_ids",
+      "triple_compiler_preserves_static_arity_and_original_admission"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "host_identity",
+    "filters": [
+      "triple_graph_support_precedes_empty_and_nested_query_shortcuts",
+      "triple_local_graph_support_stops_at_the_remote_service_boundary",
+      "triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "triple_graph_support_precedes_empty_and_nested_query_shortcuts",
+      "triple_local_graph_support_stops_at_the_remote_service_boundary",
+      "triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-shapes",
+    "target": "srl_language",
+    "filters": [
+      "triple_carrier_runs_the_public_rl_program_without_quad_storage",
+      "triple_rl_keeps_statement_roles_and_scoped_blank_identity"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "triple_carrier_runs_the_public_rl_program_without_quad_storage",
+      "triple_rl_keeps_statement_roles_and_scoped_blank_identity"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-shapes",
+    "target": "sparql_argument_failures",
+    "filters": [
+      "sparql_node_calls_mask_catchable_argument_failures",
+      "sparql_node_calls_preserve_unmasked_failures_and_empty_branches",
+      "sparql_argument_failures_follow_the_same_path_in_dated_validation",
+      "sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "sparql_node_calls_mask_catchable_argument_failures",
+      "sparql_node_calls_preserve_unmasked_failures_and_empty_branches",
+      "sparql_argument_failures_follow_the_same_path_in_dated_validation",
+      "sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-shapes",
+    "target": "rule_coordinates",
+    "filters": [
+      "shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes",
+      "parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes",
+      "parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal"
+    ],
+    "removed_filters": [],
+    "reason": "Sealed WASM host clock and entropy imports"
+  },
+  {
+    "package": "purrdf-text",
+    "target": "physical_shapes",
+    "filters": [
+      "graph_free_corpus_keys_ranking_and_query",
+      "graph_free_rdf12_partitions_and_named_refusal",
+      "dictionary_property",
+      "expanded_dictionary_and_union",
+      "dictionary_cache_and_size",
+      "dictionary_projection_and_aliases",
+      "longest_first_reference",
+      "window_property",
+      "typed_series_property",
+      "registered_host_and_decline",
+      "prepared_and_query_forms",
+      "window_barrier_property",
+      "dictionary_analyzer_identity",
+      "bucket_custom_and_parallel_order",
+      "host_refusal_and_governor_boundary",
+      "dictionary_long_phrase_and_determinism",
+      "bounded_shapes_keep_original_owners",
+      "original_evidence_and_empty_barriers",
+      "scoped_streams_and_update_where",
+      "cache_refusal_keeps_previous_owner",
+      "false_expression_gaps_keep_original_traversal"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "graph_free_corpus_keys_ranking_and_query",
+      "graph_free_rdf12_partitions_and_named_refusal",
+      "dictionary_property",
+      "expanded_dictionary_and_union",
+      "dictionary_cache_and_size",
+      "dictionary_projection_and_aliases",
+      "longest_first_reference",
+      "window_property",
+      "typed_series_property",
+      "registered_host_and_decline",
+      "prepared_and_query_forms",
+      "window_barrier_property",
+      "dictionary_analyzer_identity",
+      "bucket_custom_and_parallel_order",
+      "host_refusal_and_governor_boundary",
+      "dictionary_long_phrase_and_determinism",
+      "bounded_shapes_keep_original_owners",
+      "original_evidence_and_empty_barriers",
+      "scoped_streams_and_update_where",
+      "cache_refusal_keeps_previous_owner",
+      "false_expression_gaps_keep_original_traversal"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-retrieval",
+    "target": "real_producers",
+    "filters": [
+      "scoped_fused_acceptance_retains_original_two_stratum_scores_and_order",
+      "native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows",
+      "scoped_native_owner_refusal_precedes_original_producer_open",
+      "scoped_native_admission_refusal_invalidates_before_any_ranked_row",
+      "scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion",
+      "independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion",
+      "field_membership_precedes_each_real_stratum_depth_in_both_schedules",
+      "two_real_producers_fuse_into_one_ranking_over_real_data",
+      "each_real_producer_is_compiled_with_the_facet_it_declared",
+      "the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it",
+      "search_equals_the_hand_composed_pipeline_over_the_real_producers",
+      "both_real_producers_attest_the_generation_of_the_index_that_answered",
+      "two_runs_over_the_same_index_state_carry_one_evidence_id",
+      "the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat",
+      "the_text_producer_declares_unique_only_where_one_subject_can_appear_once",
+      "the_knn_producer_names_each_target_once_when_two_rows_share_one_vector",
+      "the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness",
+      "the_sole_text_producer_over_one_document_still_returns_that_document",
+      "a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness",
+      "a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores",
+      "fusion_trailer_names_reassociated_kernel"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "scoped_fused_acceptance_retains_original_two_stratum_scores_and_order",
+      "native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows",
+      "scoped_native_owner_refusal_precedes_original_producer_open",
+      "scoped_native_admission_refusal_invalidates_before_any_ranked_row",
+      "scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion",
+      "independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion",
+      "field_membership_precedes_each_real_stratum_depth_in_both_schedules",
+      "two_real_producers_fuse_into_one_ranking_over_real_data",
+      "each_real_producer_is_compiled_with_the_facet_it_declared",
+      "the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it",
+      "search_equals_the_hand_composed_pipeline_over_the_real_producers",
+      "both_real_producers_attest_the_generation_of_the_index_that_answered",
+      "two_runs_over_the_same_index_state_carry_one_evidence_id",
+      "the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat",
+      "the_text_producer_declares_unique_only_where_one_subject_can_appear_once",
+      "the_knn_producer_names_each_target_once_when_two_rows_share_one_vector",
+      "the_sole_text_producer_over_an_empty_corpus_reports_its_own_emptiness",
+      "the_sole_text_producer_over_one_document_still_returns_that_document",
+      "a_vector_space_over_half_the_corpus_stops_the_answer_claiming_wholeness",
+      "a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores",
+      "fusion_trailer_names_reassociated_kernel"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "evidence_ingress",
+    "filters": [
+      "verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities",
+      "actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims",
+      "service_rows_keep_signed_and_undecided_declarations_through_original_operators",
+      "empty_service_keeps_search_reason_without_inventing_an_answer_row",
+      "sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence",
+      "distinct_coalesces_both_polarities_without_changing_binding_identity",
+      "source_refusal_never_publishes_partial_or_undetermined_rows",
+      "unmatched_optional_preserves_information_and_declared_missing_scope",
+      "group_bounds_follow_whole_scope_and_declared_sum_domain",
+      "nested_projection_retains_only_visible_aggregate_aliases",
+      "registered_lossy_search_keeps_original_candidates_and_caller_reason",
+      "declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness",
+      "all_query_forms_publish_original_unknown_status_at_requested_count_tiers",
+      "minus_absence_requires_closure_but_disjoint_domains_are_decidable",
+      "minus_negates_all_original_witnesses_under_declared_closure",
+      "exists_transports_original_witnesses_through_vm_memos_and_deferred_sites",
+      "actual_unknown_answer_exposes_queryable_original_rdf_ledger",
+      "acceptance_merges_original_order_without_replaying_cells_or_losing_scores",
+      "native_paths_keep_derivation_polarity_and_complete_found_witnesses",
+      "native_property_rows_retain_original_declarations_through_normal_ingestion"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities",
+      "actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims",
+      "service_rows_keep_signed_and_undecided_declarations_through_original_operators",
+      "empty_service_keeps_search_reason_without_inventing_an_answer_row",
+      "sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence",
+      "distinct_coalesces_both_polarities_without_changing_binding_identity",
+      "source_refusal_never_publishes_partial_or_undetermined_rows",
+      "unmatched_optional_preserves_information_and_declared_missing_scope",
+      "group_bounds_follow_whole_scope_and_declared_sum_domain",
+      "nested_projection_retains_only_visible_aggregate_aliases",
+      "registered_lossy_search_keeps_original_candidates_and_caller_reason",
+      "declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness",
+      "all_query_forms_publish_original_unknown_status_at_requested_count_tiers",
+      "minus_absence_requires_closure_but_disjoint_domains_are_decidable",
+      "minus_negates_all_original_witnesses_under_declared_closure",
+      "exists_transports_original_witnesses_through_vm_memos_and_deferred_sites",
+      "actual_unknown_answer_exposes_queryable_original_rdf_ledger",
+      "acceptance_merges_original_order_without_replaying_cells_or_losing_scores",
+      "native_paths_keep_derivation_polarity_and_complete_found_witnesses",
+      "native_property_rows_retain_original_declarations_through_normal_ingestion"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-mime",
+    "target": "lossless",
+    "filters": [
+      "production_rdf_round_trip_is_deterministic_for_original_and_broken_messages"
+    ],
+    "simd": false,
+    "retained_filters": [
+      "production_rdf_round_trip_is_deterministic_for_original_and_broken_messages"
+    ],
+    "removed_filters": [],
+    "reason": "Pinned native MIME/transcoding byte transcript"
+  },
+  {
+    "package": "purrdf-retrieval",
+    "target": "structured_foundations",
+    "filters": [
+      "stack_refusals_borrow_original_native_causes_and_full_width_counts",
+      "scoped_bases_retain_the_original_iri_and_directive_provenance",
+      "fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits",
+      "attestations_preserve_original_generation_and_caller_message_owners",
+      "evaluator_conversion_retains_the_original_parser_cause_after_input_disposal",
+      "retrieval_actual_iri_failures_keep_original_nested_cause",
+      "retrieval_protocol_lists_preserve_order_and_full_width_counts",
+      "retrieval_request_views_keep_ieee_bits_and_optional_native_values",
+      "retrieval_native_failures_preserve_panicking_caller_cause"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "stack_refusals_borrow_original_native_causes_and_full_width_counts",
+      "scoped_bases_retain_the_original_iri_and_directive_provenance",
+      "fixed_values_binding_masks_and_registry_ids_keep_their_exact_native_bits",
+      "attestations_preserve_original_generation_and_caller_message_owners",
+      "evaluator_conversion_retains_the_original_parser_cause_after_input_disposal",
+      "retrieval_actual_iri_failures_keep_original_nested_cause",
+      "retrieval_protocol_lists_preserve_order_and_full_width_counts",
+      "retrieval_request_views_keep_ieee_bits_and_optional_native_values",
+      "retrieval_native_failures_preserve_panicking_caller_cause"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "structured_errors",
+    "filters": [
+      "erased_function_causes_keep_original_fields_and_identity_without_rendering",
+      "parsed_errors_and_optional_classifications_keep_their_native_shapes",
+      "service_categories_preserve_external_messages_and_governor_quantities",
+      "xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts",
+      "admitted_diagnostics_borrow_original_text_and_clone_the_same_owner",
+      "actual_service_builder_preserves_original_failure_under_its_admission"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "erased_function_causes_keep_original_fields_and_identity_without_rendering",
+      "parsed_errors_and_optional_classifications_keep_their_native_shapes",
+      "service_categories_preserve_external_messages_and_governor_quantities",
+      "xpath_actual_refusals_keep_profile_offsets_and_full_width_resource_counts",
+      "admitted_diagnostics_borrow_original_text_and_clone_the_same_owner",
+      "actual_service_builder_preserves_original_failure_under_its_admission"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-jsonschema",
+    "target": "api",
+    "filters": [
+      "native_output_keeps_cardinality_after_schema_and_input_destruction",
+      "content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal",
+      "public_schema_producers_retain_original_uri_and_pattern_causes",
+      "a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not",
+      "matcher_exhaustion_is_an_error_not_an_invalid_verdict"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "native_output_keeps_cardinality_after_schema_and_input_destruction",
+      "content_reports_retain_decoded_bytes_and_native_causes_after_input_disposal",
+      "public_schema_producers_retain_original_uri_and_pattern_causes",
+      "a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not",
+      "matcher_exhaustion_is_an_error_not_an_invalid_verdict"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-results",
+    "target": "structured_errors",
+    "filters": [
+      "native_syntax_causes_survive_input_disposal_and_clone",
+      "semantic_tokens_and_language_tags_keep_original_values",
+      "namespace_refusals_keep_spelling_and_original_iri_causes",
+      "egress_refusals_preserve_requested_form_and_full_width_counts",
+      "native_writer_causes_cross_serialization_without_formatting",
+      "utf8_and_xml_scalars_keep_exact_native_positions"
+    ],
+    "simd": false,
+    "retained_filters": [],
+    "removed_filters": [
+      "native_syntax_causes_survive_input_disposal_and_clone",
+      "semantic_tokens_and_language_tags_keep_original_values",
+      "namespace_refusals_keep_spelling_and_original_iri_causes",
+      "egress_refusals_preserve_requested_form_and_full_width_counts",
+      "native_writer_causes_cross_serialization_without_formatting",
+      "utf8_and_xml_scalars_keep_exact_native_positions"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "statement_indexes",
+    "filters": [
+      "native_and_compact_statement_queries_keep_answers_and_candidate_work",
+      "named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause"
+    ],
+    "simd": true,
+    "retained_filters": [],
+    "removed_filters": [
+      "native_and_compact_statement_queries_keep_answers_and_candidate_work",
+      "named_graph_refusal_precedes_index_allocation_and_keeps_the_first_cause"
+    ],
+    "reason": "General semantic, conformance, error or ownership checks; native coverage retained"
+  },
+  {
+    "package": "purrdf-sparql-eval",
+    "target": "knn_wasm_reassociated",
+    "filters": [
+      "the_reassociated_path_is_the_one_this_build_was_made_for",
+      "the_reassociated_distance_is_within_the_error_bound_of_the_exact_one"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "the_reassociated_path_is_the_one_this_build_was_made_for",
+      "the_reassociated_distance_is_within_the_error_bound_of_the_exact_one"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM dispatch and SIMD kernel"
+  },
+  {
+    "package": "purrdf-hnsw",
+    "target": "wasm_reassociated",
+    "filters": [
+      "an_image_recorded_on_another_wasm_path_is_refused_by_name",
+      "the_image_records_the_path_and_shape_this_build_was_made_for"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "an_image_recorded_on_another_wasm_path_is_refused_by_name",
+      "the_image_records_the_path_and_shape_this_build_was_made_for"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM arithmetic backend identity"
+  },
+  {
+    "package": "purrdf-hash-conformance",
+    "target": "hex",
+    "filters": [
+      "every_path_matches_portable"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "every_path_matches_portable"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM SIMD hex kernel"
+  },
+  {
+    "package": "purrdf-hash-conformance",
+    "target": "blake3",
+    "filters": [
+      "required_backends_are_available",
+      "official_modes_and_extended_output",
+      "xof_large_output_and_seek_boundaries",
+      "derived_context_trees_match_across_backends",
+      "random_inputs_cover_irregular_trees_and_alignment"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "required_backends_are_available",
+      "official_modes_and_extended_output",
+      "xof_large_output_and_seek_boundaries",
+      "derived_context_trees_match_across_backends",
+      "random_inputs_cover_irregular_trees_and_alignment"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM SIMD BLAKE3 kernels"
+  },
+  {
+    "package": "purrdf-core",
+    "target": "csv_scan_wasm",
+    "filters": [
+      "every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length",
+      "every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs",
+      "the_target_explicit_kernel_is_among_those_compared"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length",
+      "every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs",
+      "the_target_explicit_kernel_is_among_those_compared"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM SIMD CSV kernel"
+  },
+  {
+    "package": "purrdf-deflate",
+    "target": "deflate_conformance",
+    "filters": [
+      "selected_backend_is_reported",
+      "every_kernel_path_encodes_and_decodes_the_same_bytes",
+      "copy_kernels_match_portable",
+      "match_length_kernels_match_portable",
+      "hash_kernels_match_portable"
+    ],
+    "simd": true,
+    "retained_filters": [
+      "selected_backend_is_reported",
+      "every_kernel_path_encodes_and_decodes_the_same_bytes",
+      "copy_kernels_match_portable",
+      "match_length_kernels_match_portable",
+      "hash_kernels_match_portable"
+    ],
+    "removed_filters": [],
+    "reason": "Actual WASM SIMD DEFLATE kernels"
+  }
+]

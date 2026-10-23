@@ -1,0 +1,28 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/segmented/build.rs:1491:23
+     |
+1491 |         let content = crate::DatasetView::source_summary(
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1491 -         let content = crate::DatasetView::source_summary(
+1491 +         let content = DatasetView::source_summary(
+     |
+
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/segmented/build.rs:1564:21
+     |
+1564 |                     crate::DatasetView::source_summary(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1564 -                     crate::DatasetView::source_summary(
+1564 +                     DatasetView::source_summary(
+     |
+
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

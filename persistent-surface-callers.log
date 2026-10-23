@@ -1,0 +1,406 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error[E0432]: unresolved imports `super::merge_sources`, `super::term_ordinal`
+   --> crates/text/src/surface/delta.rs:177:31
+    |
+177 |     use super::{SurfaceIndex, merge_sources, term_ordinal};
+    |                               ^^^^^^^^^^^^^  ^^^^^^^^^^^^ no `term_ordinal` in `surface::delta`
+    |                               |
+    |                               no `merge_sources` in `surface::delta`
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface/delta.rs:218:43
+    |
+218 |             .position(|word| word.text == "smith")
+    |                              ---------    ^^^^^^^ expected `Spelling`, found `&str`
+    |                              |
+    |                              expected because this is `Spelling`
+
+error[E0609]: no field `canonical` on type `SurfaceIndex`
+   --> crates/text/src/surface/delta.rs:220:31
+    |
+220 |         let allocation = base.canonical[word].as_ref().unwrap().as_ptr();
+    |                               ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `analyzer`, `generation`, `coordinate_generation`, `document_order`, `words` ... and 5 others
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface/delta.rs:226:43
+    |
+226 |             .position(|word| word.text == "smith")
+    |                              ---------    ^^^^^^^ expected `Spelling`, found `&str`
+    |                              |
+    |                              expected because this is `Spelling`
+
+error[E0609]: no field `canonical` on type `SurfaceIndex`
+   --> crates/text/src/surface/delta.rs:229:21
+    |
+229 |             updated.canonical[word].as_ref().unwrap().as_ptr(),
+    |                     ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `analyzer`, `generation`, `coordinate_generation`, `document_order`, `words` ... and 5 others
+
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = u32> + Clone`
+   --> crates/text/src/surface/delta.rs:234:9
+    |
+234 |         assert_eq!(matches[0].term.documents(), [0, 1]);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         impl ExactSizeIterator + Iterator<Item = u32> + Clone
+    |         [{integer}; 2]
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = u32> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface/delta.rs:234:9
+    |
+234 |         assert_eq!(matches[0].term.documents(), [0, 1]);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = u32> + Clone`
+
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+   --> crates/text/src/surface.rs:490:13
+    |
+490 |             assert_eq!(current.words(), fresh.words());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+    |             impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:490:13
+    |
+490 |             assert_eq!(current.words(), fresh.words());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+   --> crates/text/src/surface.rs:491:13
+    |
+491 |             assert_eq!(current.spans(), fresh.spans());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+    |             impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:491:13
+    |
+491 |             assert_eq!(current.spans(), fresh.spans());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface.rs:522:47
+    |
+522 |             .find(|source| source.document == 3 && source.normalized.text.contains("smith"))
+    |                            ---------------    ^ expected `SurfaceDocument<GraphLanguage>`, found integer
+    |                            |
+    |                            expected because this is `SurfaceDocument<GraphLanguage>`
+    |
+    = note: expected enum `SurfaceDocument<GraphLanguage>`
+               found type `{integer}`
+help: try wrapping the expression in `surface::SurfaceDocument::Ordinal`
+    |
+522 |             .find(|source| source.document == surface::SurfaceDocument::Ordinal(3) && source.normalized.text.contains("smith"))
+    |                                               ++++++++++++++++++++++++++++++++++ +
+
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+   --> crates/text/src/surface.rs:537:9
+    |
+537 |         assert_eq!(updated.words(), fresh.words());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+    |         impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:537:9
+    |
+537 |         assert_eq!(updated.words(), fresh.words());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0369]: binary operation `==` cannot be applied to type `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+   --> crates/text/src/surface.rs:538:9
+    |
+538 |         assert_eq!(updated.spans(), fresh.spans());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+    |         impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:538:9
+    |
+538 |         assert_eq!(updated.spans(), fresh.spans());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface.rs:558:47
+    |
+558 |             .find(|source| source.document == 3 && source.normalized.text.contains("smith"))
+    |                            ---------------    ^ expected `SurfaceDocument<GraphLanguage>`, found integer
+    |                            |
+    |                            expected because this is `SurfaceDocument<GraphLanguage>`
+    |
+    = note: expected enum `SurfaceDocument<GraphLanguage>`
+               found type `{integer}`
+help: try wrapping the expression in `surface::SurfaceDocument::Ordinal`
+    |
+558 |             .find(|source| source.document == surface::SurfaceDocument::Ordinal(3) && source.normalized.text.contains("smith"))
+    |                                               ++++++++++++++++++++++++++++++++++ +
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface.rs:605:47
+    |
+605 |             .find(|source| source.document == 3 && source.normalized.text.contains("smith"))
+    |                            ---------------    ^ expected `SurfaceDocument<GraphLanguage>`, found integer
+    |                            |
+    |                            expected because this is `SurfaceDocument<GraphLanguage>`
+    |
+    = note: expected enum `SurfaceDocument<GraphLanguage>`
+               found type `{integer}`
+help: try wrapping the expression in `surface::SurfaceDocument::Ordinal`
+    |
+605 |             .find(|source| source.document == surface::SurfaceDocument::Ordinal(3) && source.normalized.text.contains("smith"))
+    |                                               ++++++++++++++++++++++++++++++++++ +
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface.rs:613:43
+    |
+613 |             .position(|word| word.text == "smith")
+    |                              ---------    ^^^^^^^ expected `Spelling`, found `&str`
+    |                              |
+    |                              expected because this is `Spelling`
+
+error[E0609]: no field `canonical` on type `SurfaceIndex`
+   --> crates/text/src/surface.rs:615:40
+    |
+615 |         let code_allocation = original.canonical[word].as_ref().unwrap().as_ptr();
+    |                                        ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `analyzer`, `generation`, `coordinate_generation`, `document_order`, `words` ... and 5 others
+
+error[E0599]: no method named `words` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:622:28
+    |
+622 |         assert_eq!(updated.words(), fresh.words());
+    |                            ^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `words` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface.rs:322:5
+    |
+322 |     pub fn words(&self) -> impl ExactSizeIterator<Item=SurfaceTerm<'_,P>> + Clone {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+622 |         assert_eq!(updated.expect("REASON").words(), fresh.words());
+    |                           +++++++++++++++++
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:622:9
+    |
+622 |         assert_eq!(updated.words(), fresh.words());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0599]: no method named `spans` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:623:28
+    |
+623 |         assert_eq!(updated.spans(), fresh.spans());
+    |                            ^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `spans` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface.rs:326:5
+    |
+326 |     pub fn spans(&self) -> impl ExactSizeIterator<Item=SurfaceTerm<'_,P>> + Clone {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+623 |         assert_eq!(updated.expect("REASON").spans(), fresh.spans());
+    |                           +++++++++++++++++
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:623:9
+    |
+623 |         assert_eq!(updated.spans(), fresh.spans());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0599]: no method named `generation` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:624:28
+    |
+624 |         assert_eq!(updated.generation(), fresh.generation());
+    |                            ^^^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `generation` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface.rs:320:5
+    |
+320 |     pub const fn generation(&self) -> [u8;32] { self.generation }
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+624 |         assert_eq!(updated.expect("REASON").generation(), fresh.generation());
+    |                           +++++++++++++++++
+
+error[E0599]: no method named `substring_report` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:627:25
+    |
+627 |                 updated.substring_report(needle),
+    |                         ^^^^^^^^^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `substring_report` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface/substring.rs:180:5
+    |
+180 |     pub fn substring_report(&self, fragment: &str) -> Result<SubstringReport<'_,P>, TextError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+627 |                 updated.expect("REASON").substring_report(needle),
+    |                        +++++++++++++++++
+
+error[E0599]: no method named `substring_exhaustive_report` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:632:25
+    |
+632 |                 updated.substring_exhaustive_report(needle),
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `substring_exhaustive_report` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface/substring.rs:201:5
+    |
+201 | /     pub fn substring_exhaustive_report(
+202 | |         &self,
+203 | |         fragment: &str,
+204 | |     ) -> Result<SubstringReport<'_,P>, TextError> {
+    | |_________________________________________________^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+632 |                 updated.expect("REASON").substring_exhaustive_report(needle),
+    |                        +++++++++++++++++
+
+error[E0599]: no method named `phonetic` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:638:32
+    |
+638 |             assert_eq!(updated.phonetic(needle), fresh.phonetic(needle), "{needle}");
+    |                                ^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `phonetic` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface.rs:349:5
+    |
+349 |     pub fn phonetic(&self,input:&str) -> Result<Vec<PhoneticMatch<'_,P>>,TextError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+638 |             assert_eq!(updated.expect("REASON").phonetic(needle), fresh.phonetic(needle), "{needle}");
+    |                               +++++++++++++++++
+
+error[E0609]: no field `sources` on type `Result<SurfaceIndex, TextError>`
+   --> crates/text/src/surface.rs:641:14
+    |
+641 |             .sources
+    |              ^^^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+641 |             .unwrap().sources
+    |              +++++++++
+
+error[E0609]: no field `words` on type `Result<SurfaceIndex, TextError>`
+   --> crates/text/src/surface.rs:647:14
+    |
+647 |             .words
+    |              ^^^^^ unknown field
+    |
+help: one of the expressions' fields has a field of the same name
+    |
+647 |             .unwrap().words
+    |              +++++++++
+
+error[E0609]: no field `canonical` on type `Result<SurfaceIndex, TextError>`
+   --> crates/text/src/surface.rs:652:21
+    |
+652 |             updated.canonical[word].as_ref().unwrap().as_ptr(),
+    |                     ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `analyzer`, `generation`, `coordinate_generation`, `document_order`, `words` ... and 5 others
+
+error[E0308]: mismatched types
+   --> crates/text/src/surface.rs:655:73
+    |
+655 |         assert!(snapshot.sources.iter().any(|source| source.document == 0));
+    |                                                      ---------------    ^ expected `SurfaceDocument<GraphLanguage>`, found integer
+    |                                                      |
+    |                                                      expected because this is `SurfaceDocument<GraphLanguage>`
+    |
+    = note: expected enum `SurfaceDocument<GraphLanguage>`
+               found type `{integer}`
+help: try wrapping the expression in `surface::SurfaceDocument::Ordinal`
+    |
+655 |         assert!(snapshot.sources.iter().any(|source| source.document == surface::SurfaceDocument::Ordinal(0)));
+    |                                                                         ++++++++++++++++++++++++++++++++++ +
+
+error[E0599]: no method named `generation` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:656:51
+    |
+656 |         assert_ne!(snapshot.generation(), updated.generation());
+    |                                                   ^^^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `generation` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface.rs:320:5
+    |
+320 |     pub const fn generation(&self) -> [u8;32] { self.generation }
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+656 |         assert_ne!(snapshot.generation(), updated.expect("REASON").generation());
+    |                                                  +++++++++++++++++
+
+error[E0599]: no method named `with_documents` found for enum `Result<T, E>` in the current scope
+   --> crates/text/src/surface.rs:666:14
+    |
+664 |         let unchanged = original
+    |                         -------- method `with_documents` is available on `SurfaceIndex`
+665 |             .without_documents([99])
+666 |             .with_documents(SurfaceIndex::from_texts(analyzer.clone(), []).unwrap())
+    |              ^^^^^^^^^^^^^^ method not found in `Result<SurfaceIndex, TextError>`
+    |
+note: the method `with_documents` exists on the type `SurfaceIndex`
+   --> crates/text/src/surface/delta.rs:18:5
+    |
+ 18 |     pub fn with_documents(mut self,added:Self)->Result<Self,TextDeltaError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `SurfaceIndex` value, panicking if the value is a `Result::Err`
+    |
+665 |             .without_documents([99]).expect("REASON")
+    |                                     +++++++++++++++++
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:671:9
+    |
+671 |         assert_eq!(empty.words(), fresh.words());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+error[E0277]: `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` doesn't implement `Debug`
+   --> crates/text/src/surface.rs:672:9
+    |
+672 |         assert_eq!(empty.spans(), fresh.spans());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone`
+
+Some errors have detailed explanations: E0277, E0308, E0369, E0432, E0599, E0609.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-text` (lib test) due to 40 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no method named `iter` found for opaque type `impl ExactSizeIterator + Iterator<Item = SurfaceTerm<'_>> + Clone` in the current scope
+   --> crates/text/tests/character.rs:157:14
+    |
+153 |         extra
+154 |             .surface_index()
+    |              --------------- method `iter` is available on `Option<&SurfaceIndex>`
+155 |             .expect("default surface index")
+156 |             .spans()
+157 |             .iter()
+    |              ^^^^
+    |
+help: there is a method `filter` with a similar name, but with different arguments
+   --> /rustc/21b707e3f97e0b522ebd2f277a862339625ad83f/library/core/src/iter/traits/iterator.rs:966:5
+    |
+966 | /     fn filter<P>(self, predicate: P) -> Filter<Self, P>
+967 | |     where
+968 | |         Self: Sized,
+969 | |         P: FnMut(&Self::Item) -> bool,
+    | |______________________________________^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-text` (test "character") due to 1 previous error

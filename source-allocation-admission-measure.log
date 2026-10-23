@@ -1,0 +1,51 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/jsonschema)
+   Compiling structured-zstd v0.0.49
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling ctutils v0.4.2
+   Compiling universal-hash v0.6.1
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-results)
+   Compiling purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo-kernel)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/datalog)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/conformance-kit)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5m 36s
+     Running tests/change_path_alloc.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-shapes/9b5411e2ac4c1848/out/change_path_alloc-9b5411e2ac4c1848)
+
+running 1 test
+test admit_allocation_is_independent_of_dataset_size ... FAILED
+
+failures:
+
+---- admit_allocation_is_independent_of_dataset_size stdout ----
+
+thread 'admit_allocation_is_independent_of_dataset_size' (178558) panicked at crates/shapes/tests/change_path_alloc.rs:2558:5:
+assertion `left == right` failed: admit's constant term moved from 303 to 293; this is a determinism pin, so the question is what changed in admission, not what the number should be now
+  left: 293
+ right: 303
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    admit_allocation_is_independent_of_dataset_size
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.24s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test change_path_alloc`

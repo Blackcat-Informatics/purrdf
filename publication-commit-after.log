@@ -1,0 +1,17 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ea8b21c5e919 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/683-purrdf-text-a-textindex-delta-update b96089f88] Maintain text indexes incrementally and cull redundant WASM tests
+ 74 files changed, 10475 insertions(+), 2652 deletions(-)
+ create mode 100644 crates/hash/src/multiset.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/query/changes.rs
+ create mode 100644 crates/rdf-core/src/ir/segmented/query/changes/directory.rs
+ create mode 100644 crates/rdf-core/src/ir/source_directory.rs
+ create mode 100644 crates/rdf-core/src/ir/statistics/source.rs
+ create mode 100644 crates/rdf-core/src/ir/term/canonical.rs
+ create mode 100644 crates/rdf-core/src/source.rs
+ create mode 100644 crates/rdf-core/tests/source_directory.rs
+ create mode 100644 crates/rdf-core/tests/source_observation.rs
+ create mode 100644 crates/rdf-core/tests/support/source_snapshot.rs
+ create mode 100644 crates/text/src/index/source_digest.rs
+ create mode 100644 crates/text/src/index/token_streams.rs
+ create mode 100644 crates/text/tests/delta_resources.rs
+ create mode 100644 docs/agents/RUST_GUIDELINES.md

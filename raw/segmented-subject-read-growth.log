@@ -1,0 +1,33 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+error: unnecessary qualification
+   --> crates/text/src/index/delta.rs:503:24
+    |
+503 |             let rows = super::super::collect_subject_rows(&query, &config(), &subjects).unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+503 -             let rows = super::super::collect_subject_rows(&query, &config(), &subjects).unwrap();
+503 +             let rows = collect_subject_rows(&query, &config(), &subjects).unwrap();
+    |
+
+error[E0308]: mismatched types
+   --> crates/text/src/index/delta.rs:489:17
+    |
+488 |             let layer = purrdf_core::SegmentedLayer::new(
+    |                         -------------------------------- arguments to this function are incorrect
+489 |                 image.provider(),
+    |                 ^^^^^^^^^^^^^^^^ expected `Arc<dyn SegmentedProvider>`, found `SegmentedBytes`
+    |
+    = note: expected struct `Arc<(dyn SegmentedProvider + 'static)>`
+               found struct `SegmentedBytes`
+note: associated function defined here
+   --> crates/rdf-core/src/ir/segmented/stack.rs:100:12
+    |
+100 |     pub fn new(
+    |            ^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-text` (lib test) due to 2 previous errors

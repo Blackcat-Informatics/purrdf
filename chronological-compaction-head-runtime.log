@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 41.34s
+     Running tests/source_directory.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/89e83ef6a330d2c6/out/source_directory-89e83ef6a330d2c6)
+
+running 3 tests
+test visitor_failure_keeps_its_admitted_output_owned_until_payload_drops ... ok
+test independent_native_directories_find_exact_changes_after_all_ids_move ... ok
+test fixed_delta_directory_work_follows_prefixes_instead_of_source_population ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.39s
+
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 7 tests
+test effective_removals_are_observed_and_readding_restores_only_the_original_rows ... ok
+test head_observation_reports_actual_changes_and_reuses_an_unchanged_snapshot ... ok
+test stopped_observation_does_not_publish_a_partial_successor ... ok
+test successor_observation_releases_predecessor_head_and_retains_only_its_own_owner ... ok
+test changed_head_observation_work_grows_with_digest_prefixes ... ok
+test observations_preserve_sealing_overlap_and_compaction_without_rewalking_retained_rows ... ok
+test full_compaction_with_the_same_resident_head_does_not_enumerate_that_head ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+

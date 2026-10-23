@@ -1,0 +1,18 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 14.29s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/5fe461b80da47df4/out/purrdf_text-5fe461b80da47df4)
+
+running 10 tests
+test surface::delta::tests::delta_capacity_refuses_before_allocating_an_unaddressable_table ... ok
+test surface::postings::tests::keyed_edits_match_fresh_union_and_retraction_and_preserve_prior_snapshots ... ok
+test surface::tests::conflicting_source_identity_and_invalid_projection_are_rejected ... ok
+test surface::delta::tests::conflicting_source_tables_retain_the_original_identity ... ok
+test surface::delta::tests::document_merge_retains_shared_word_code_allocations ... ok
+test surface::tests::document_delta_refuses_a_different_analyzer ... ok
+test surface::tests::retraction_handles_noop_bound_generation_and_the_last_document ... ok
+test surface::tests::document_retraction_matches_fresh_auxiliary_results_and_source_evidence ... ok
+test surface::tests::successive_document_deltas_preserve_fresh_generations_and_queries ... ok
+test surface::tests::document_delta_matches_fresh_insertion_and_replacement ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.00s
+

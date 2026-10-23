@@ -1,0 +1,38 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 27.27s
+     Running tests/determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/aab28c3067d73fee/out/determinism-aab28c3067d73fee)
+
+running 9 tests
+test byte_identical_json_across_two_independently_built_datasets ... ok
+test blank_node_labels_are_the_documented_limit ... ok
+test golden_scores_are_exact_decimals ... ok
+test the_float_scan_refuses_floats_and_admits_their_neighbours ... ok
+test the_source_walk_descends_into_subdirectories ... ok
+test unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failures ... ok
+test byte_identical_json_across_repeated_runs ... ok
+test no_source_file_mentions_a_float_width ... ok
+test chronological_text_walk_matches_fresh_and_refuses_omitted_changes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/wasm_determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/98c056c9940fe458/out/wasm_determinism-98c056c9940fe458)
+
+running 12 tests
+test scoped_text_preserves_original_constraint_failure ... ok
+test scoped_text_depth_preserves_original_unknown_rows_and_scores ... ok
+test the_integer_logarithm_agrees_with_its_hand_values_on_this_target ... ok
+test scoped_text_bound_candidates_retain_unknown_membership ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test the_pinned_ranking_is_reproduced_on_this_target ... ok
+test delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target ... ok
+test the_independent_fielded_reference_is_reproduced_on_this_target ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test thirty_two_index_fields_are_exact ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

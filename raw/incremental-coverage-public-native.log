@@ -1,0 +1,46 @@
+    Finished `test` profile [optimized] target(s) in 0.78s
+     Running tests/index.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/6443d95357a074c6/out/index-6443d95357a074c6)
+
+running 21 tests
+test a_duplicate_predicate_is_a_config_error ... ok
+test a_non_iri_predicate_is_a_config_error ... ok
+test a_document_without_lexical_terms_retains_auxiliary_evidence ... ok
+test a_named_graph_selector_restricts_the_walk ... ok
+test a_predicate_absent_from_the_dataset_contributes_no_rows ... ok
+test a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean ... ok
+test an_annotation_only_predicate_is_found_by_the_coverage ... ok
+test an_empty_predicate_set_is_a_config_error ... ok
+test an_empty_dataset_is_no_shortfall_and_still_attests_a_generation ... ok
+test an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation ... ok
+test annotation_layer_literals_are_indexed ... ok
+test an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not ... ok
+test asserted_and_annotation_text_merge_into_one_document ... ok
+test blank_node_subjects_are_indexed ... ok
+test language_splits_documents_but_base_direction_does_not ... ok
+test non_literal_objects_are_skipped_not_errors ... ok
+test blank_node_labels_change_the_fingerprint ... ok
+test triple_term_subjects_are_indexed ... ok
+test statistics_are_per_partition_not_pooled ... ok
+test two_independently_built_datasets_share_a_fingerprint ... ok
+test untagged_literals_do_not_collide_with_a_real_language_tag ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wasm_determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/98c056c9940fe458/out/wasm_determinism-98c056c9940fe458)
+
+running 12 tests
+test scoped_text_preserves_original_constraint_failure ... ok
+test scoped_text_depth_preserves_original_unknown_rows_and_scores ... ok
+test the_integer_logarithm_agrees_with_its_hand_values_on_this_target ... ok
+test scoped_text_bound_candidates_retain_unknown_membership ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test the_pinned_ranking_is_reproduced_on_this_target ... ok
+test delta_updates_reproduce_fresh_ranked_and_surface_answers_on_this_target ... ok
+test the_independent_fielded_reference_is_reproduced_on_this_target ... ok
+test thirty_two_index_fields_are_exact ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

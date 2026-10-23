@@ -1,0 +1,33 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+error[E0716]: temporary value dropped while borrowed
+  --> crates/rdf-core/tests/source_directory.rs:59:39
+   |
+59 |     let mut memory = Memory::new(&mut Resident);
+   |                                       ^^^^^^^^ - temporary value is freed at the end of this statement
+   |                                       |
+   |                                       creates a temporary value which is freed while still in use
+60 |     let mut changes = Vec::new();
+61 |     let work = old.visit_source_changes_with_memory(&next, &mut memory, |side, stream, row, memory| {
+   |                                                            ----------- borrow later used here
+   |
+help: consider using a `let` binding to create a longer lived value
+   |
+59 ~     let mut binding = Resident;
+60 ~     let mut memory = Memory::new(&mut binding);
+   |
+
+error[E0716]: temporary value dropped while borrowed
+  --> crates/rdf-core/tests/source_directory.rs:82:43
+   |
+82 |         let mut memory = Memory::new(&mut Resident);
+   |                                           ^^^^^^^^ - temporary value is freed at the end of this statement
+   |                                           |
+   |                                           creates a temporary value which is freed while still in use
+83 |         let mut visited = 0;
+84 |         let work = old.visit_source_changes_with_memory(&next, &mut memory,
+   |                                                                ----------- borrow later used here
+   |
+   = note: consider using a `let` binding to create a longer lived value
+
+For more information about this error, try `rustc --explain E0716`.
+error: could not compile `purrdf-core` (test "source_directory") due to 2 previous errors

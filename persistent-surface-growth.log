@@ -1,0 +1,10 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 15.79s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/5fe461b80da47df4/out/purrdf_text-5fe461b80da47df4)
+
+running 1 test
+index delta (surface enabled, retained documents, height, new table nodes, copied leaf values): [(false, 128, 3, 43, 196), (false, 4096, 8, 73, 196), (false, 16384, 10, 85, 196), (true, 128, 3, 109, 581), (true, 4096, 8, 164, 581), (true, 16384, 10, 186, 581)]
+test index::delta::tests::index_delta_and_snapshot_clone_preserve_retained_entries_with_logarithmic_edit_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 92 filtered out; finished in 3.20s
+

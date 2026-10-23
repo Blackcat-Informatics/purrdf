@@ -1,0 +1,25 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-results)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo-kernel)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/datalog)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/conformance-kit)
+error: using `chunks_exact` with a constant chunk size
+   --> crates/rdf-core/tests/source_observation.rs:598:31
+    |
+598 |     for group in measurements.chunks_exact(3) {
+    |                               ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<3>().0`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: using `chunks_exact` with a constant chunk size
+   --> crates/rdf-core/tests/source_observation.rs:708:31
+    |
+708 |     for group in measurements.chunks_exact(3) {
+    |                               ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<3>().0`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#chunks_exact_to_as_chunks
+
+error: could not compile `purrdf-core` (test "source_observation") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

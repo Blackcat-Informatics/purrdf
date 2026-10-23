@@ -1,0 +1,17 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 32s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 9 tests
+test dataset_view::tests::a_view_failed_at_first_sample_returns_the_before_checkpoint_error_without_draining ... ok
+test dataset_view::tests::a_view_that_faults_during_the_drain_returns_the_after_checkpoint_error_and_drops_the_output ... ok
+test dataset_view::tests::an_always_ready_view_publishes ... ok
+test dataset_view::tests::graph_match_three_way ... ok
+test dataset_view::tests::materialization_preserves_native_read_failure_before_and_after_drain ... ok
+test dataset_view::tests::graph_selector_resolves_against_the_dataset_without_minting ... ok
+test dataset_view::tests::objects_of_predicate_is_the_distinct_range_in_scope ... ok
+test dataset_view::tests::source_summary_distinguishes_unavailable_empty_and_direct_read_failure ... ok
+test dataset_view::tests::quads_for_pattern_filters_by_id_and_graph ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1382 filtered out; finished in 0.00s
+

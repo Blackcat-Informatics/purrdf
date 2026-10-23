@@ -1,0 +1,19 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 56.73s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 11 tests
+test ir::segmented::build::certification_tests::conservative_term_admission_does_not_authorize_unminted_ids ... ok
+test ir::segmented::build::certification_tests::freeze_storage_refusal_stays_distinct_from_malformed_rdf ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_pruning_bounds ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_an_underpriced_owned_term ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_source_union ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_foreign_quad_references ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_reverse_identifiers ... ok
+test ir::segmented::build::certification_tests::source_directory_rejects_an_overflowing_physical_population ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_false_statistics ... ok
+test ir::segmented::build::certification_tests::statistical_counts_are_selective_and_preserve_original_read_refusal ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_source_directory ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1385 filtered out; finished in 0.00s
+

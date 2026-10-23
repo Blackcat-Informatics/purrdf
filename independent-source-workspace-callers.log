@@ -1,0 +1,94 @@
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/alloc-probe)
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking inout v0.2.2
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/testkit)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/ed25519)
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking structured-zstd v0.0.49
+    Checking visual-hashing v1.0.0
+    Checking ctutils v0.4.2
+    Checking cipher v0.5.2
+    Checking aead v0.6.1
+    Checking unicode-ident v1.0.24
+    Checking universal-hash v0.6.1
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/jsonschema)
+    Checking polyval v0.7.3
+    Checking proc-macro2 v1.0.106
+    Checking ghash v0.6.0
+   Compiling quote v1.0.46
+    Checking aes-gcm v0.11.1
+    Checking syn v2.0.118
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking anstyle v1.0.14
+    Checking anstyle-parse v1.0.0
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking clap_lex v1.1.0
+    Checking anstream v1.0.0
+    Checking strsim v0.11.1
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking clap_builder v4.6.0
+   Compiling target-lexicon v0.13.5
+   Compiling rustversion v1.0.22
+    Checking once_cell v1.21.4
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/hash-conformance)
+   Compiling bumpalo v3.20.3
+   Compiling pyo3-build-config v0.29.0
+   Compiling wasm-bindgen v0.2.125
+   Compiling pyo3-ffi v0.29.0
+    Checking leb128fmt v0.1.0
+   Compiling pyo3 v0.29.0
+    Checking wasm-encoder v0.259.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/wasm-link)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/helper-census)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/gts)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/xsd)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/stack)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/deflate)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-algebra)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/cdt)
+    Checking purrdf-geo-kernel v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo-kernel)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/columnar)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/conformance-kit)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/mime)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/entail)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-eval)
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-events)
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling clap_derive v4.6.1
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/geo)
+    Checking clap v4.6.1
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/bench)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/shapes)
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/envelope-probe)
+   Compiling wasm-bindgen-macro v0.2.125
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 20s

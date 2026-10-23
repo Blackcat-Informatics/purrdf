@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 15.06s
+     Running tests/determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/aab28c3067d73fee/out/determinism-aab28c3067d73fee)
+
+running 7 tests
+test golden_scores_are_exact_decimals ... ok
+test byte_identical_json_across_two_independently_built_datasets ... ok
+test the_float_scan_refuses_floats_and_admits_their_neighbours ... ok
+test blank_node_labels_are_the_documented_limit ... ok
+test the_source_walk_descends_into_subdirectories ... ok
+test byte_identical_json_across_repeated_runs ... ok
+test no_source_file_mentions_a_float_width ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

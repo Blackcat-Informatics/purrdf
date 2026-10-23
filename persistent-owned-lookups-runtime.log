@@ -1,0 +1,58 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 23.67s
+     Running tests/determinism.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/aab28c3067d73fee/out/determinism-aab28c3067d73fee)
+
+running 11 tests
+test byte_identical_json_across_two_independently_built_datasets ... ok
+test blank_node_labels_are_the_documented_limit ... ok
+test invalid_corpus_shape_refuses_before_capturing_source_observation ... ok
+test golden_scores_are_exact_decimals ... ok
+test native_metadata_and_subject_probes_update_without_full_source_iterators ... ok
+test the_float_scan_refuses_floats_and_admits_their_neighbours ... ok
+test the_source_walk_descends_into_subdirectories ... ok
+test unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failures ... ok
+test byte_identical_json_across_repeated_runs ... ok
+test no_source_file_mentions_a_float_width ... ok
+test chronological_text_walk_matches_fresh_and_refuses_omitted_changes ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/exclusion_membership.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/49c91a3f0d5aed58/out/exclusion_membership-49c91a3f0d5aed58)
+
+running 10 tests
+test a_candidate_bound_invocation_is_a_point_lookup ... ok
+test an_observed_rank_is_still_ranked ... ok
+test an_unbound_document_is_not_a_lookup ... ok
+test membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one ... ok
+test every_document_agrees_with_the_stream_in_both_directions ... ok
+test the_declared_basis_is_membership_and_it_registers ... ok
+test the_point_score_is_the_streamed_score_exactly ... ok
+test a_rank_blank_shared_with_a_triple_is_observed_and_ranked ... ok
+test the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else ... ok
+test a_possible_lookup_scores_one_document_whatever_the_corpus_holds ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/search_property_function.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/2633ddd294d94385/out/search_property_function-2633ddd294d94385)
+
+running 17 tests
+test ranked_rows_for_a_needle ... ok
+test annotation_text_is_searchable_through_sparql ... ok
+test a_bound_language_filters_without_changing_rank ... ok
+test a_bound_doc_returns_its_single_row ... ok
+test values_rank_selects_those_ranks ... ok
+test borrowed_native_ranked_and_positional_producers_keep_their_rows ... ok
+test matched_expresses_conjunctive_retrieval ... ok
+test a_document_subject_joins_back_by_bgp ... ok
+test an_iri_declared_but_unregistered_is_a_hard_error ... ok
+test order_by_rank_is_the_reproducing_idiom ... ok
+test a_free_needle_has_no_feasible_evaluation_order ... ok
+test an_iri_in_neither_is_an_ordinary_triple_pattern ... ok
+test an_arity_mismatch_at_the_call_site_is_an_error ... ok
+test a_namespace_declared_with_an_unregistered_iri_is_a_hard_error ... ok
+test the_same_rows_under_a_different_ranking_law_attest_a_different_generation ... ok
+test an_empty_index_answers_with_no_rows_and_attests_its_own_generation ... ok
+test two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,27 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-events)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 2m 03s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 10 tests
+test ir::term::tests::canonical_bytes_agrees_with_to_canonical_bytes_and_appends ... ok
+test ir::term::tests::canonical_bytes_distinguishes_absent_options_from_empty_ones ... ok
+test ir::term::tests::canonical_bytes_frames_lengths_so_boundaries_cannot_slide ... ok
+test ir::term::tests::canonical_bytes_golden_encoding_is_pinned ... ok
+test ir::term::tests::canonical_bytes_distinguishes_every_direction_state ... ok
+test ir::term::tests::canonical_bytes_includes_blank_scope ... ok
+test ir::term::tests::canonical_bytes_separates_kinds_that_share_a_spelling ... ok
+test ir::term::tests::canonical_bytes_separates_triple_terms_from_flat_sequences ... ok
+test ir::term::tests::property_canonical_bytes_is_injective ... ok
+test ir::term::tests::property_canonical_bytes_is_position_independent ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1379 filtered out; finished in 0.00s
+

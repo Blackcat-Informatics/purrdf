@@ -1,0 +1,10 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 3.12s
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 1 test
+sealed source replacement work: [(false, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 254, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }, 10580, 846400), (false, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 103, members: 382, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }, 22217, 1531264), (false, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 141, members: 524, changed: 6 }, candidates: 6, emitted: 6, physical: 6, descriptors: 2 }, 34125, 2184000), (true, 128, SourceChangeWork { directory: SourceDifferenceWork { ranges: 71, members: 254, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 }, 17884, 1452608), (true, 1024, SourceChangeWork { directory: SourceDifferenceWork { ranges: 103, members: 382, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 }, 35600, 2484160), (true, 4096, SourceChangeWork { directory: SourceDifferenceWork { ranges: 141, members: 524, changed: 6 }, candidates: 9, emitted: 6, physical: 9, descriptors: 2 }, 52326, 3382272)]
+test changed_sealed_replacements_and_compaction_skip_retained_physical_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 2.22s
+

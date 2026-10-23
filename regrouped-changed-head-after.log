@@ -1,0 +1,30 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 40.60s
+     Running tests/source_directory.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/89e83ef6a330d2c6/out/source_directory-89e83ef6a330d2c6)
+
+running 3 tests
+test visitor_failure_keeps_its_admitted_output_owned_until_payload_drops ... ok
+test independent_native_directories_find_exact_changes_after_all_ids_move ... ok
+test fixed_delta_directory_work_follows_prefixes_instead_of_source_population ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+     Running tests/source_observation.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/4edb4e9f0a38a74f/out/source_observation-4edb4e9f0a38a74f)
+
+running 13 tests
+test changed_head_observation_work_grows_with_digest_prefixes ... ok
+test effective_removals_are_observed_and_readding_restores_only_the_original_rows ... ok
+test full_compaction_with_the_same_resident_head_does_not_enumerate_that_head ... ok
+test head_observation_reports_actual_changes_and_reuses_an_unchanged_snapshot ... ok
+test changed_prefix_compaction_retains_a_large_suffix_and_its_next_update ... ok
+test observations_preserve_sealing_overlap_and_compaction_without_rewalking_retained_rows ... ok
+test changed_sealed_replacements_and_compaction_skip_retained_physical_rows ... ok
+test sealed_regrouping_with_a_changed_large_head_skips_its_retained_rows ... ok
+test stopped_observation_does_not_publish_a_partial_successor ... ok
+test successor_observation_releases_predecessor_head_and_retains_only_its_own_owner ... ok
+test multiple_output_regrouping_and_lazy_prefix_compaction_follow_only_changed_keys ... ok
+test sealing_with_a_fresh_head_keeps_the_complete_prefix_for_later_compaction ... ok
+test changed_full_compaction_folds_large_layers_and_heads_without_a_source_walk ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s
+

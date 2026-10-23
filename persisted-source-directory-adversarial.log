@@ -1,0 +1,10 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 07s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 2 tests
+test ir::segmented::build::certification_tests::source_directory_rejects_an_overflowing_physical_population ... ok
+test ir::segmented::build::certification_tests::recomputed_hashes_cannot_certify_a_false_source_directory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1392 filtered out; finished in 0.00s
+

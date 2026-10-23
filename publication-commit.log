@@ -1,0 +1,9 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ea8b21c5e919 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: check-thread-locals failed:
+  FAIL: the thread-local ledger and the source disagree:
+    crates/rdf-core/src/ir/segmented/query/changes/directory.rs declares `thread_local!` static `BUILDS`, and crates/rdf-wasm/src/interleaving.rs does not list it: add an entry stating why it is safe under the asynchronous lane's interleaving
+    crates/rdf-core/src/ir/segmented/query/changes/directory.rs declares `thread_local!` static `COPIES`, and crates/rdf-wasm/src/interleaving.rs does not list it: add an entry stating why it is safe under the asynchronous lane's interleaving
+    crates/text/src/index.rs declares `thread_local!` static `DIGEST_BYTES`, and crates/rdf-wasm/src/interleaving.rs does not list it: add an entry stating why it is safe under the asynchronous lane's interleaving
+    crates/text/src/index/token_streams.rs declares `thread_local!` static `HANDLE_CLONES`, and crates/rdf-wasm/src/interleaving.rs does not list it: add an entry stating why it is safe under the asynchronous lane's interleaving
+    crates/text/src/index/token_streams.rs declares `thread_local!` static `NODE_BUILDS`, and crates/rdf-wasm/src/interleaving.rs does not list it: add an entry stating why it is safe under the asynchronous lane's interleaving
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

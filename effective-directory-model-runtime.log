@@ -1,0 +1,11 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 34s
+     Running unittests src/lib.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-core/ac5c38133f42596c/out/purrdf_core-ac5c38133f42596c)
+
+running 2 tests
+test ir::segmented::query::changes::directory::tests::persistent_effective_directory_matches_set_edits_and_old_snapshots ... ok
+effective source directory edits (population, nodes, copied keys): [(128, 7, 49), (4096, 17, 49), (65536, 27, 53)]
+test ir::segmented::query::changes::directory::tests::effective_directory_fixed_edits_copy_bounded_keys_and_paths ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1394 filtered out; finished in 0.33s
+

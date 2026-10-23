@@ -1,0 +1,20 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/text)
+    Finished `test` profile [optimized] target(s) in 5.06s
+     Running tests/delta_resources.rs (/opt/.cargo/88/faa530d9c7f647/debug/build/purrdf-text/1bfd7fb806cf7765/out/delta_resources-1bfd7fb806cf7765)
+
+running 1 test
+text delta allocations (Han, retained documents, prepare, clone, update, reads, I/O, fresh): [(false, 128, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 762, requested_bytes: 128124, retained_bytes: 46595, peak_working_bytes: 78733 }, 15, 12672, Measurement { allocations: 15466, requested_bytes: 3073677, retained_bytes: 918604, peak_working_bytes: 1018995 }), (false, 4096, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 886, requested_bytes: 218260, retained_bytes: 50955, peak_working_bytes: 164005 }, 99, 47872, Measurement { allocations: 477099, requested_bytes: 98088069, retained_bytes: 28992204, peak_working_bytes: 32187635 }), (false, 16384, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 938, requested_bytes: 266068, retained_bytes: 52763, peak_working_bytes: 205613 }, 165, 66240, Measurement { allocations: 1906382, requested_bytes: 392255661, retained_bytes: 115929804, peak_working_bytes: 128709875 }), (true, 128, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 860, requested_bytes: 134522, retained_bytes: 48855, peak_working_bytes: 81153 }, 15, 12672, Measurement { allocations: 24945, requested_bytes: 3733847, retained_bytes: 1120641, peak_working_bytes: 1221182 }), (true, 4096, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 989, requested_bytes: 224858, retained_bytes: 53415, peak_working_bytes: 166625 }, 99, 47872, Measurement { allocations: 776997, requested_bytes: 119037647, retained_bytes: 35404161, peak_working_bytes: 38599742 }), (true, 16384, Measurement { allocations: 44, requested_bytes: 4977, retained_bytes: 2054, peak_working_bytes: 2396 }, Measurement { allocations: 6, requested_bytes: 205, retained_bytes: 205, peak_working_bytes: 205 }, Measurement { allocations: 1043, requested_bytes: 272746, retained_bytes: 55303, peak_working_bytes: 208313 }, 165, 66240, Measurement { allocations: 3105612, requested_bytes: 476033783, retained_bytes: 141572481, peak_working_bytes: 154352702 })]
+
+thread 'fixed_batch_preparation_clone_and_complete_update_have_bounded_allocation_growth' (2102891) panicked at crates/text/tests/delta_resources.rs:165:9:
+assertion failed: last.5 < first.5 * 8
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test fixed_batch_preparation_clone_and_complete_update_have_bounded_allocation_growth ... FAILED
+
+failures:
+
+failures:
+    fixed_batch_preparation_clone_and_complete_update_have_bounded_allocation_growth
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.61s
+
+error: test failed, to rerun pass `-p purrdf-text --test delta_resources`

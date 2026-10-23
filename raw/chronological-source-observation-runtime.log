@@ -1,0 +1,25 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/683-purrdf-text-a-textindex-delta-update/crates/rdf-core)
+error: unused imports: `GraphMatch` and `TermValue`
+  --> crates/rdf-core/tests/source_observation.rs:14:32
+   |
+14 | use purrdf_core::{DatasetView, GraphMatch, QuadValues, RdfDataset, SegmentedLayerMetadata,
+   |                                ^^^^^^^^^^
+15 |     SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, SegmentedStackSnapshot, TermValue};
+   |                                                                                         ^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unreachable `pub` item
+ --> crates/rdf-core/tests/support/source_snapshot.rs:9:1
+  |
+9 | pub fn dataset(count: usize, changed: bool, reverse: bool) -> Arc<RdfDataset> {
+  | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | |
+  | help: consider restricting its visibility: `pub(crate)`
+  |
+  = help: or consider exporting it for use by other crates
+  = note: `-D unreachable-pub` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: could not compile `purrdf-core` (test "source_observation") due to 2 previous errors
