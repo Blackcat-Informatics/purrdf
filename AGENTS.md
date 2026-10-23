@@ -377,6 +377,8 @@ the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
 repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the
 parameters, the knobs and the comparison rules.
 
+Read [Rust guidelines](docs/RUST_GUIDELINES.md) before writing or reviewing Rust.
+
 Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
 for every CI gate. That is an analysis decision, not a licence: nightly clippy
 and rustdoc carry lints stable lacks, and its default borrow checker is the
