@@ -44,9 +44,9 @@ packages = [
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
 rlib_packages = ["purrdf-wasm"]
-# Compile the real generic text/retrieval consumer to assembly, without linking
-# or executing its report-only benchmark.
-consumer_benches = ["purrdf:multimodal_on_demand_read"]
+# Compile the real generic text and retrieval consumers to assembly, without
+# linking or executing their report-only benchmarks.
+consumer_benches = ["purrdf:multimodal_on_demand_read", "purrdf-text:surface"]
 
 [[site]]
 id = "lex.find-byte2-sparql-string"
