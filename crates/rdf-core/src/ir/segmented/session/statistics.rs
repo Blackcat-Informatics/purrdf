@@ -53,7 +53,7 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
         }
         Ok(crate::ir::source_directory::SourceRecord {
             digest: bytes[..32].try_into().expect("fixed source digest"),
-            ordinal: u32::from_le_bytes(bytes[32..36].try_into().expect("fixed source ordinal")),
+            ordinal: crate::bytes::read_u32_le(&bytes, 32).expect("fixed source ordinal"),
             stream,
         })
     }
@@ -76,7 +76,7 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
             )?;
         work.members += 1;
         let population =
-            u128::from_le_bytes(bytes[40..56].try_into().expect("fixed source population"));
+            u128::from_le_bytes(*bytes[40..].first_chunk().expect("fixed source population"));
         if population != end as u128 {
             return Err(SegmentedError::Corrupt(
                 "false source directory prefix population",

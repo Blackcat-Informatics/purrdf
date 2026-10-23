@@ -1,7 +1,10 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-Here is a comprehensive, state-of-the-art Rust style and architecture guide designed for both human engineers and AI coding agents. You can drop this directly into your repository as `STYLE_GUIDE.md` or use it as a system prompt/cursor rules file (`.cursorrules` / `CLAUDE.md`) for your agents.
+Generic Rust style and architecture guidance for engineers and coding agents.
+Repository constraints in `AGENTS.md` and the root `Cargo.toml` take precedence,
+including dependency bans and workspace lints. Examples using other libraries
+illustrate patterns; they do not authorize adding those dependencies.
 
 ---
 
@@ -61,7 +64,7 @@ pub fn init_telemetry() -> WorkerGuard {
         .json() // Structured JSON for log aggregators
         .with_writer(non_blocking_writer)
         .with_target(true)
-        .with_CurrentSpan(true);
+        .with_current_span(true);
 
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
@@ -73,7 +76,7 @@ pub fn init_telemetry() -> WorkerGuard {
 
 // GOOD: Skip large payloads/secrets, attach key identifiers as structured fields
 #[instrument(skip(db_pool, payload), fields(user_id = %user.id, payload_len = payload.len()))]
-pub async fn process_Upload(db_pool: &DbPool, user: &User, payload: &[u8]) -> Result<(), AppError> {
+pub async fn process_upload(db_pool: &DbPool, user: &User, payload: &[u8]) -> Result<(), AppError> {
     info!(status = "started", "Processing user upload");
     // ...
     Ok(())
@@ -102,7 +105,7 @@ Write code where invalid states fail to compile. Leverage zero-cost abstractions
 Do not pass raw `String`, `u64`, or `Uuid` across module boundaries when they have domain meaning.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserId(uuid::Uuid);
 
 #[derive(Debug, Clone, PartialEq, Eq)]

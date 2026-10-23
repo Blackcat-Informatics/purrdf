@@ -174,14 +174,20 @@ impl SourceDirectory {
                 .insert(record.digest)
                 .expect("directory population fits u128");
             bytes[..32].copy_from_slice(&record.digest);
-            bytes[32..36].copy_from_slice(&record.ordinal.to_le_bytes());
+            bytes[32..]
+                .first_chunk_mut::<4>()
+                .expect("fixed source ordinal")
+                .copy_from_slice(&record.ordinal.to_le_bytes());
             bytes[36] = match record.stream {
                 StatisticsStream::Asserted => 0,
                 StatisticsStream::Reifiers => 1,
                 StatisticsStream::Annotations => 2,
             };
             bytes[37..40].fill(0);
-            bytes[40..56].copy_from_slice(&prefix.population().to_le_bytes());
+            bytes[40..]
+                .first_chunk_mut::<16>()
+                .expect("fixed source population")
+                .copy_from_slice(&prefix.population().to_le_bytes());
             bytes[56..].copy_from_slice(prefix.sum());
         }
     }
