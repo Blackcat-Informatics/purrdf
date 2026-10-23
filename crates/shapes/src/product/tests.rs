@@ -704,7 +704,10 @@ fn box_roles(shapes: &Shapes) -> Vec<Vec<String>> {
         .node_shapes
         .iter()
         .map(|shape| {
-            shape
+            shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
                 .box_roles
                 .iter()
                 .map(|role| role.as_str().to_owned())

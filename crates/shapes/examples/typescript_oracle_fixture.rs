@@ -1446,7 +1446,10 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
     check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
-    let members = "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items";
+    let members = oracle::referenced_location(
+        &schema,
+        "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items",
+    )?;
     let expected_losses = [
         (
             "unique-repeated",

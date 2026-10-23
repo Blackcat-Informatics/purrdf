@@ -1745,12 +1745,13 @@ fn pack_twice(
     (a_path, b_path)
 }
 
-/// THE FALSIFIABLE CORE: two products differing in EXACTLY one identity component —
-/// here, `box-role-vocab` — are diffed to name that component and NO other. A diff
+/// Changing box-role configuration moves its diagnostic identity component and
+/// the digest of the complete carried model. The diff names exactly those rows.
+/// A diff
 /// that reported the whole identity, or a diff that missed the one row that moved,
 /// would be exactly as useless as running `explain` twice and comparing by eye.
 #[test]
-fn diff_names_exactly_the_one_component_that_differs() {
+fn diff_names_the_changed_configuration_and_its_carried_model() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let (plain, with_vocab) =
         pack_twice(dir.path(), SHAPES, &[], &["--box-role-vocab", BOX_ROLE_NS]);
@@ -1764,8 +1765,8 @@ fn diff_names_exactly_the_one_component_that_differs() {
     );
     let text = stdout(&diff);
     assert!(
-        text.starts_with("diff-count 1\n"),
-        "exactly one component must be reported as differing: {text:?}"
+        text.starts_with("diff-count 2\n"),
+        "configuration and model must be reported as differing: {text:?}"
     );
     let diff_lines: Vec<&str> = text
         .lines()
@@ -1773,12 +1774,16 @@ fn diff_names_exactly_the_one_component_that_differs() {
         .collect();
     assert_eq!(
         diff_lines.len(),
-        1,
+        2,
         "no OTHER component may be reported as differing: {text:?}"
     );
     assert!(
         diff_lines[0].starts_with("diff box-role-vocab "),
-        "the ONE differing component must be named: {text:?}"
+        "the configuration component must be named: {text:?}"
+    );
+    assert!(
+        diff_lines[1].starts_with("diff model "),
+        "the carried model must be named: {text:?}"
     );
 }
 

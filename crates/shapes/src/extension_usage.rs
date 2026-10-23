@@ -195,6 +195,10 @@ fn parse(text: &str, env: &ExtensionEnv<'_>) -> Result<Query, String> {
 pub(crate) trait SparqlSink {
     /// One SPARQL text, under the label of the site that carries it.
     fn record(&mut self, site: String, text: &str);
+    /// A constraint text, distinguished from a target or function with the same text.
+    fn constraint(&mut self, site: String, text: &str) {
+        self.record(site, text);
+    }
     /// A node-expression call to the declared function `iri` (`FnCall::UserDefined`),
     /// whose body is not a text this walk reads.
     fn user_function_called(&mut self, _iri: &str) {}
@@ -242,6 +246,37 @@ pub(crate) fn walk_reachable(
         walk_rule(rule, &format!("global rule {}", rule.id), sink, &mut flight);
     }
     flight.finish()
+}
+
+/// Apply compatibility pre-binding restrictions to the same constraints the
+/// production reference walk reaches, including private function domains.
+pub(crate) fn reachable_constraint_refusal(
+    shapes: &Shapes,
+    refusals: &BTreeMap<String, crate::shapes::QueryRefusal>,
+) -> Result<Option<(String, crate::shapes::QueryRefusal)>, crate::PreparationRefusal> {
+    if refusals.is_empty() {
+        return Ok(None);
+    }
+    struct Refusals<'a> {
+        declarations: &'a BTreeMap<String, crate::shapes::QueryRefusal>,
+        first: Option<(String, crate::shapes::QueryRefusal)>,
+    }
+    impl SparqlSink for Refusals<'_> {
+        fn record(&mut self, _site: String, _text: &str) {}
+        fn constraint(&mut self, site: String, text: &str) {
+            if self.first.is_none()
+                && let Some(refusal) = self.declarations.get(text)
+            {
+                self.first = Some((site, refusal.clone()));
+            }
+        }
+    }
+    let mut sink = Refusals {
+        declarations: refusals,
+        first: None,
+    };
+    walk_reachable(shapes, &mut sink)?;
+    Ok(sink.first)
 }
 
 /// The first SPARQL-based node expression a shape reaches — at any depth, through the
@@ -624,7 +659,7 @@ fn walk_constraints(
     for constraint in constraints {
         match constraint {
             Constraint::Sparql { select, .. } => {
-                sink.record(format!("sh:sparql on {owner}"), select);
+                sink.constraint(format!("sh:sparql on {owner}"), select);
             }
             Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
                 walk_node_expr(expr, owner, sink, flight);

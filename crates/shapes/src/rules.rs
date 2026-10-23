@@ -2621,12 +2621,17 @@ mod tests {
         assert!((rule.order.expect("order").value() - 3.0).abs() < f64::EPSILON);
         assert!(rule.deactivated);
         assert_eq!(rule.conditions.len(), 1);
-        // The condition is a RESOLVED shape, not the node term it was written as:
-        // it carries the property shape `ex:HasName` declares, so the rule holds
-        // everything it needs to evaluate the condition without a later lookup.
+        // The condition retains its original catalog identity and property edge.
         assert_eq!(rule.conditions[0].id.to_string(), ex("HasName"));
         assert_eq!(
-            rule.conditions[0].property_shapes.len(),
+            shapes
+                .owner
+                .definition(&rule.conditions[0].id)
+                .unwrap()
+                .properties_in(Some(&shapes.owner))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("original property definitions")
+                .len(),
             1,
             "the referenced shape's sh:property was parsed into the condition"
         );
@@ -3846,7 +3851,12 @@ mod tests {
                 panic!("expected a sh:TripleRule head for {position}");
             };
             assert!(
-                matches!(subject, Some(NodeExpr::Empty)) || matches!(object, Some(NodeExpr::Empty)),
+                subject
+                    .as_ref()
+                    .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty))
+                    || object
+                        .as_ref()
+                        .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty)),
                 "a bare blank head position is an empty expression for {position}"
             );
             let out = entail("ex:alice a ex:Person .", &body);

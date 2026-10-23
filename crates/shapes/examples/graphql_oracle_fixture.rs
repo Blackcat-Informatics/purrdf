@@ -868,7 +868,21 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
         let divergence = LIST_DIVERGENCES
             .iter()
             .find(|(label, _, _)| *label == case.label)
-            .map(|(_, code, location)| (*code, format!("#/$defs/Holder/properties/{location}")));
+            .map(|(_, code, location)| {
+                let location = if case.label == "member-negative" {
+                    format!(
+                        "{}/minimum",
+                        oracle::referenced_location(
+                            &schema,
+                            "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items"
+                        )?
+                    )
+                } else {
+                    format!("#/$defs/Holder/properties/{location}")
+                };
+                Ok::<_, Box<dyn Error>>((*code, location))
+            })
+            .transpose()?;
         if divergence.is_some() && case.conforms {
             return Err(format!("conforming list probe {:?} cannot diverge", case.label).into());
         }

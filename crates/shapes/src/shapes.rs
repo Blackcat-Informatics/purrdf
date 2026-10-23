@@ -1918,6 +1918,9 @@ pub(crate) fn from_dataset_with_scoped_node_expressions(
 enum Preparation {
     LinkedModel,
     SourceOccurrences,
+    /// The bundled path meta-schema recurses over the input RDF path structure.
+    /// Evaluation still refuses exhausted depth/stack; it assumes no fixed point.
+    StructuralMetaSchema,
 }
 
 /// A parse currently on the parser's stack.
@@ -1974,6 +1977,9 @@ pub(crate) struct Parser<'s> {
     unsupported_target: std::cell::RefCell<Option<crate::error::UnsupportedTargetRefusal>>,
     /// The original static-analysis refusal, retained across textual parser context.
     recursion_refusal: std::cell::RefCell<Option<ShapesError>>,
+    /// Compatibility restrictions apply to reached constraints, although the
+    /// complete catalog retains declarations that exported roots never execute.
+    constraint_refusals: std::cell::RefCell<std::collections::BTreeMap<String, QueryRefusal>>,
     /// The pre-binding violation of every well-formed `sh:SPARQLFunction` body that
     /// has one, by IRI. Filled by `check_sparql_function_declarations`; a call a shape
     /// reaches refuses the load, and the rest are unexecuted (see
@@ -2147,7 +2153,7 @@ fn shacl_js_or_invalid(
 }
 
 impl<'s> Parser<'s> {
-    fn new(
+    pub(crate) fn new(
         data: &'s RdfDataset,
         base: Option<String>,
         doc_prefixes: &[(String, String)],
@@ -2165,6 +2171,7 @@ impl<'s> Parser<'s> {
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
             recursion_refusal: std::cell::RefCell::new(None),
+            constraint_refusals: std::cell::RefCell::default(),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
@@ -2194,6 +2201,14 @@ impl<'s> Parser<'s> {
 
     fn parse(&mut self) -> Result<Shapes, ShapesError> {
         self.parse_with_expressions(&[], &[])
+            .map(|(shapes, _)| shapes)
+            .map_err(|message| self.load_error(message))
+    }
+
+    /// Preserve the bundled structural meta-schema's existing bounded evaluation.
+    /// This is private to lint; caller-authored recursive schemas remain refused.
+    pub(crate) fn parse_structural_meta_schema(&mut self) -> Result<Shapes, ShapesError> {
+        self.prepare_with_expressions(&[], &[], Preparation::StructuralMetaSchema)
             .map(|(shapes, _)| shapes)
             .map_err(|message| self.load_error(message))
     }
@@ -2404,7 +2419,9 @@ impl<'s> Parser<'s> {
         // value, is a load error rather than a silent no-op.
         self.check_well_formed()?;
         self.refuse_rec_declarations()?;
-        if let Err(refusal) = self.check_shape_recursion() {
+        if preparation != Preparation::StructuralMetaSchema
+            && let Err(refusal) = self.check_shape_recursion()
+        {
             let message = refusal.to_string();
             *self.recursion_refusal.borrow_mut() = Some(refusal);
             return Err(message);
@@ -2468,7 +2485,7 @@ impl<'s> Parser<'s> {
         // the part no downstream test could observe. See `shapes::link`.
         let declarations: Vec<Arc<crate::expression::CustomFunction>> =
             custom_fns.iter().map(Arc::clone).collect();
-        let owner = if preparation == Preparation::LinkedModel {
+        let owner = if preparation != Preparation::SourceOccurrences {
             let owner = link::link_shapes(
                 definitions,
                 &self.node_shape_index,
@@ -2513,7 +2530,7 @@ impl<'s> Parser<'s> {
             self.box_role_vocab.clone(),
             self.shapes_graph.clone(),
         );
-        let sources = if preparation == Preparation::LinkedModel {
+        let sources = if preparation != Preparation::SourceOccurrences {
             if self.profile != crate::profile::ShaclProfile::LEGACY {
                 self.sparql_sources.get_mut().admission = Some(SourceAdmission {
                     profile: self.profile,
@@ -2551,6 +2568,14 @@ impl<'s> Parser<'s> {
         };
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
+        if let Some((site, refusal)) = crate::extension_usage::reachable_constraint_refusal(
+            &shapes,
+            &self.constraint_refusals.borrow(),
+        )
+        .map_err(|error| error.to_string())?
+        {
+            return Err(self.refuse_query(site, refusal));
+        }
         if let Some((site, violation)) =
             crate::extension_usage::reachable_select_expression_violation(
                 &shapes,

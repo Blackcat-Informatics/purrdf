@@ -347,7 +347,13 @@ mod tests {
         shapes
             .node_shapes
             .iter()
-            .flat_map(|shape| &shape.constraints)
+            .flat_map(|shape| {
+                &shapes
+                    .owner
+                    .definition(&shape.id)
+                    .expect("original definition")
+                    .constraints
+            })
             .filter_map(|constraint| match constraint {
                 Constraint::Sparql { select, .. } => Some(select.clone()),
                 _ => None,

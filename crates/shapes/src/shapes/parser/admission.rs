@@ -135,6 +135,12 @@ impl Parser<'_> {
                     },
                 ) && refusal.requires_parse_failure()
                 {
+                    if self.profile == ShaclProfile::LEGACY {
+                        self.constraint_refusals
+                            .borrow_mut()
+                            .insert(select.clone(), refusal);
+                        return Ok(select);
+                    }
                     return Err(self.refuse_query(
                         format!("sh:sparql constraint {constraint} on shape {owner}"),
                         refusal,
@@ -528,12 +534,17 @@ mod tests {
             provenance.shapes_graph().map(ToOwned::to_owned),
             DATED[1],
         );
-        parser
+        let (occurrences, _) = parser
             .prepare_with_expressions(&[], &[], Preparation::SourceOccurrences)
             .unwrap();
+        assert_eq!(
+            occurrences.owner.definitions().count(),
+            restored.shapes().owner.definitions().count(),
+            "occurrence admission retains the same complete original definition domain"
+        );
         assert!(
-            parser.node_shape_index.get().is_none(),
-            "occurrence admission must not install the shared model index"
+            !Arc::ptr_eq(&occurrences.owner, &restored.shapes().owner),
+            "source readmission must not mutate or relink the restored model"
         );
         assert!(!parser.sparql_sources.borrow().constraints.is_empty());
         let sources = restored
