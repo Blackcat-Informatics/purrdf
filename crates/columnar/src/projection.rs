@@ -73,13 +73,10 @@ impl ColumnarProjection {
     ///
     /// Returns an error if a Parquet encoding bound is exceeded.
     pub fn to_parquet(&self, compression: Compression) -> Result<ColumnarWrite, ColumnarError> {
-        let mut encoded = Vec::with_capacity(Table::ALL.len());
-        for table in &self.tables {
-            encoded.push(write_table(table, compression)?);
+        let mut files = std::array::from_fn(|_| Vec::new());
+        for (file, table) in files.iter_mut().zip(&self.tables) {
+            *file = write_table(table, compression)?;
         }
-        let files: [Vec<u8>; 5] = encoded.try_into().map_err(|_| {
-            ColumnarError::malformed("table set", "writer did not produce exactly five files")
-        })?;
         Ok(ColumnarWrite {
             files: ParquetFiles::from_array(files),
             losses: LossLedger::default(),

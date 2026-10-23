@@ -837,11 +837,16 @@ fn parse_file_metadata(bytes: &[u8]) -> Result<ParsedFileMeta, ColumnarError> {
                 let pairs = parse_struct_list(&mut reader, field, parse_key_value)?;
                 let mut map = BTreeMap::new();
                 for (key, value) in pairs {
-                    if map.insert(key.clone(), value).is_some() {
-                        return Err(ColumnarError::malformed(
-                            "file key/value metadata",
-                            format!("duplicate key {key}"),
-                        ));
+                    match map.entry(key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                        std::collections::btree_map::Entry::Occupied(entry) => {
+                            return Err(ColumnarError::malformed(
+                                "file key/value metadata",
+                                format!("duplicate key {}", entry.key()),
+                            ));
+                        }
                     }
                 }
                 set_once(&mut metadata, map, "file key/value metadata")?;
@@ -1153,11 +1158,17 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
             value: i64::from(metadata.version),
         });
     }
-    let expected_metadata = BTreeMap::from([
-        (META_SCHEMA_VERSION.to_owned(), SCHEMA_VERSION.to_owned()),
-        (META_TABLE.to_owned(), table.name().to_owned()),
-    ]);
-    if metadata.metadata != expected_metadata {
+    let expected_metadata = [
+        (META_SCHEMA_VERSION, SCHEMA_VERSION),
+        (META_TABLE, table.name()),
+    ];
+    if !metadata
+        .metadata
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .eq(expected_metadata)
+    {
+        let expected_metadata = BTreeMap::from(expected_metadata);
         return Err(ColumnarError::malformed(
             "Parquet key/value metadata",
             format!(
@@ -1245,10 +1256,10 @@ fn validate_file_metadata(metadata: &ParsedFileMeta, table: Table) -> Result<(),
     }
     for (column, expected) in row_group.columns.iter().zip(expected_schema.columns) {
         let metadata = &column.metadata;
-        let expected_encodings = if expected.repetition == Repetition::Optional {
-            vec![ENCODING_PLAIN, ENCODING_RLE]
+        let expected_encodings: &[i32] = if expected.repetition == Repetition::Optional {
+            &[ENCODING_PLAIN, ENCODING_RLE]
         } else {
-            vec![ENCODING_PLAIN]
+            &[ENCODING_PLAIN]
         };
         if column.file_offset != 0
             || metadata.physical_type != parquet_physical_type(expected.physical_type)
@@ -1666,6 +1677,38 @@ fn nonnegative_usize(value: i64, context: &'static str) -> Result<usize, Columna
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
+
+    #[test]
+    fn parsed_profile_validation_borrows_all_expected_fields() {
+        for table in Table::ALL {
+            let columns = table
+                .schema()
+                .columns
+                .iter()
+                .map(|column| match column.physical_type {
+                    PhysicalType::Int64 => ints(&[Some(0)]),
+                    PhysicalType::ByteArray => ColumnValues::bytes(vec![Some(b"v".to_vec())]),
+                })
+                .collect();
+            let data = TableData::new(table, columns).unwrap();
+            for compression in [Compression::Uncompressed, Compression::Zstd] {
+                let bytes = write_table(&data, compression).unwrap();
+                let (_, footer) = split_parquet_file(&bytes).unwrap();
+                let metadata = parse_file_metadata(footer).unwrap();
+                let window = CurrentThreadWindow::open();
+                let result = validate_file_metadata(&metadata, table);
+                let measured = window.close();
+                result.unwrap();
+                assert_eq!(measured.allocations, 0, "{table:?}/{compression:?}");
+                assert_eq!(measured.requested_bytes, 0, "{table:?}/{compression:?}");
+                assert_eq!(read_table(&bytes, table).unwrap(), data);
+            }
+        }
+    }
 
     fn ints(rows: &[Option<i64>]) -> ColumnValues {
         ColumnValues::int64(rows.iter().copied().collect())
