@@ -26,6 +26,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://doi.org/10.67342/pkg8gpp4no/v1"><img src="https://img.shields.io/badge/DOI-10.67342%2Fpkg8gpp4no%2Fv1-blue" alt="DOI: 10.67342/pkg8gpp4no/v1"></a>
   <a href="./LICENSING.md"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg" alt="License: MIT OR Apache-2.0 OR MulanPSL-2.0"></a>
   <img src="https://img.shields.io/badge/MSRV-1.98-orange.svg" alt="MSRV 1.98">
+  <a href="https://coderabbit.com"><img src="https://img.shields.io/coderabbit/prs/github/Blackcat-Informatics/purrdf?utm_source=oss&utm_medium=github&utm_campaign=Blackcat-Informatics%2Fpurrdf&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews"></a>
 </p>
 
 <p align="center">
